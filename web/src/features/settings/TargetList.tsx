@@ -33,6 +33,11 @@ import { TABLE_ROW } from "@/components/table/tableStyles";
 import { IdText } from "@/components/text/IdText";
 import { cn } from "@/lib/cn";
 import { useNow } from "@/live/useNow";
+import {
+  dialogBody,
+  dialogContent,
+  dialogOverlay,
+} from "@/components/overlay/dialogStyles";
 import { ErrorNote } from "../workers/parts";
 import {
   TEST_NOTE_MS,
@@ -224,51 +229,56 @@ function RemoveTarget({
         </Button>
       </RadixDialog.Trigger>
       <RadixDialog.Portal>
-        <RadixDialog.Overlay className="fixed inset-0 z-dialog bg-scrim" />
-        <RadixDialog.Content className="fixed top-1/2 left-1/2 z-dialog flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog outline-none">
-          <div className="flex items-center justify-between gap-12 pt-18 pr-16 pb-6 pl-24">
-            <RadixDialog.Title className="min-w-0 font-title text-21 leading-tight font-semibold text-text">
-              Remove {target.name}?
-            </RadixDialog.Title>
-            <RadixDialog.Close asChild>
-              <IconButton
-                aria-label="Close"
-                variant="ghost"
-                disabled={remove.isPending}
+        <RadixDialog.Overlay className={dialogOverlay}>
+          <RadixDialog.Content
+            className={cn(dialogContent, "w-request-dialog")}
+          >
+            <div className="flex shrink-0 items-center justify-between gap-12 pt-18 pr-16 pb-6 pl-24">
+              <RadixDialog.Title className="min-w-0 font-title text-21 leading-tight font-semibold text-text">
+                Remove {target.name}?
+              </RadixDialog.Title>
+              <RadixDialog.Close asChild>
+                <IconButton
+                  aria-label="Close"
+                  variant="ghost"
+                  disabled={remove.isPending}
+                >
+                  <X aria-hidden="true" size={16} />
+                </IconButton>
+              </RadixDialog.Close>
+            </div>
+            <div className={dialogBody}>
+              <div className="flex flex-col gap-12 px-24 pt-8 pb-4">
+                <RadixDialog.Description className="max-w-measure text-15 text-text">
+                  {target.host
+                    ? "fold stops sending notices to it from every project and deletes its URL"
+                    : "fold stops sending this project's notices to it and deletes its URL"}
+                  {target.kind === "webhook" ? " and its signing secret" : ""}.
+                  To send to it again, add it again with its URL.
+                </RadixDialog.Description>
+                {remove.isError ? (
+                  <ErrorNote failure={notifyFailure(remove.error)} />
+                ) : null}
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center justify-end gap-8 px-24 pt-18 pb-20">
+              <Button disabled={remove.isPending} onClick={close}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                pending={remove.isPending}
+                pendingLabel="Removing…"
+                icon={<Trash2 aria-hidden="true" size={16} />}
+                onClick={() => {
+                  remove.mutate();
+                }}
               >
-                <X aria-hidden="true" size={16} />
-              </IconButton>
-            </RadixDialog.Close>
-          </div>
-          <div className="flex flex-col gap-12 px-24 pt-8 pb-4">
-            <RadixDialog.Description className="max-w-measure text-15 text-text">
-              {target.host
-                ? "fold stops sending notices to it from every project and deletes its URL"
-                : "fold stops sending this project's notices to it and deletes its URL"}
-              {target.kind === "webhook" ? " and its signing secret" : ""}. To
-              send to it again, add it again with its URL.
-            </RadixDialog.Description>
-            {remove.isError ? (
-              <ErrorNote failure={notifyFailure(remove.error)} />
-            ) : null}
-          </div>
-          <div className="flex items-center justify-end gap-8 px-24 pt-18 pb-20">
-            <Button disabled={remove.isPending} onClick={close}>
-              Cancel
-            </Button>
-            <Button
-              variant="danger"
-              pending={remove.isPending}
-              pendingLabel="Removing…"
-              icon={<Trash2 aria-hidden="true" size={16} />}
-              onClick={() => {
-                remove.mutate();
-              }}
-            >
-              Remove target
-            </Button>
-          </div>
-        </RadixDialog.Content>
+                Remove target
+              </Button>
+            </div>
+          </RadixDialog.Content>
+        </RadixDialog.Overlay>
       </RadixDialog.Portal>
     </RadixDialog.Root>
   );

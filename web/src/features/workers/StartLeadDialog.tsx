@@ -16,6 +16,11 @@ import { menuContent, menuItem } from "@/components/overlay/menuStyles";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { MentionTextarea } from "@/mentions/MentionTextarea";
+import {
+  dialogBody,
+  dialogContent,
+  dialogOverlay,
+} from "@/components/overlay/dialogStyles";
 import { ErrorNote } from "./parts";
 import {
   LEAD_DESCRIPTIONS,
@@ -91,215 +96,231 @@ export function StartLeadDialog({
       }}
     >
       <RadixDialog.Portal>
-        <RadixDialog.Overlay className="fixed inset-0 z-dialog bg-scrim" />
-        <RadixDialog.Content className="fixed top-1/2 left-1/2 z-dialog flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog outline-none">
-          <div className="flex items-center justify-between pt-16 pr-16 pb-4 pl-24">
-            <RadixDialog.Title className="text-16 leading-tight font-semibold text-text">
-              Start a lead
-            </RadixDialog.Title>
-            <RadixDialog.Close asChild>
-              <IconButton aria-label="Close" size="sm" disabled={isSubmitting}>
-                <X aria-hidden="true" size={13} />
-              </IconButton>
-            </RadixDialog.Close>
-          </div>
-          <form
-            noValidate
-            onSubmit={(event) => void submit(event)}
-            className="flex flex-col"
+        <RadixDialog.Overlay className={dialogOverlay}>
+          <RadixDialog.Content
+            className={cn(dialogContent, "w-request-dialog")}
           >
-            <div className="flex flex-col gap-16 px-24 pt-18 pb-20">
-              <RadixDialog.Description className="text-14 text-text-2">
-                {LEAD_DESCRIPTIONS[role]}
-              </RadixDialog.Description>
-              <Controller
-                control={control}
-                name="role"
-                render={({ field }) => (
-                  <fieldset className="flex flex-col gap-6">
-                    <legend className={cn(FIELD_LABEL, "mb-6")}>Role</legend>
-                    <div className="flex gap-2 self-start rounded-m bg-sunken p-3">
-                      {ROLES.map((option) => (
-                        <label
-                          key={option.value}
-                          className={cn(
-                            "cursor-pointer rounded-s px-12 py-5 text-14 has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-accent",
-                            field.value === option.value
-                              ? "bg-surface font-semibold text-text shadow-pop"
-                              : "font-medium text-text-2",
-                          )}
-                        >
-                          <input
-                            type="radio"
-                            name={field.name}
-                            value={option.value}
-                            checked={field.value === option.value}
-                            disabled={isSubmitting}
-                            onChange={() => {
-                              field.onChange(option.value);
-                            }}
-                            className="sr-only"
-                          />
-                          {option.label}
-                        </label>
-                      ))}
-                    </div>
-                  </fieldset>
-                )}
-              />
-              {role === "area_lead" ? (
-                <Controller
-                  control={control}
-                  name="area"
-                  render={({ field }) => {
-                    const chosen = areaLabel(areas, labels, field.value);
-                    return (
-                      <div className="flex flex-col gap-6">
-                        <span id={`${ids}-area`} className={FIELD_LABEL}>
-                          Area
-                        </span>
-                        <DropdownMenu.Root>
-                          <DropdownMenu.Trigger asChild>
-                            <button
-                              type="button"
-                              aria-labelledby={`${ids}-area`}
-                              aria-invalid={errors.area ? true : undefined}
-                              disabled={isSubmitting || areas.length === 0}
+            <div className="flex shrink-0 items-center justify-between pt-16 pr-16 pb-4 pl-24">
+              <RadixDialog.Title className="text-16 leading-tight font-semibold text-text">
+                Start a lead
+              </RadixDialog.Title>
+              <RadixDialog.Close asChild>
+                <IconButton
+                  aria-label="Close"
+                  size="sm"
+                  disabled={isSubmitting}
+                >
+                  <X aria-hidden="true" size={13} />
+                </IconButton>
+              </RadixDialog.Close>
+            </div>
+            <form
+              noValidate
+              onSubmit={(event) => void submit(event)}
+              className="flex min-h-0 flex-col"
+            >
+              <div className={dialogBody}>
+                <div className="flex flex-col gap-16 px-24 pt-18 pb-20">
+                  <RadixDialog.Description className="text-14 text-text-2">
+                    {LEAD_DESCRIPTIONS[role]}
+                  </RadixDialog.Description>
+                  <Controller
+                    control={control}
+                    name="role"
+                    render={({ field }) => (
+                      <fieldset className="flex flex-col gap-6">
+                        <legend className={cn(FIELD_LABEL, "mb-6")}>
+                          Role
+                        </legend>
+                        <div className="flex gap-2 self-start rounded-m bg-sunken p-3">
+                          {ROLES.map((option) => (
+                            <label
+                              key={option.value}
                               className={cn(
-                                controlClasses,
-                                focusRing,
-                                "flex items-center gap-8 py-8 text-left",
+                                "cursor-pointer rounded-s px-12 py-5 text-14 has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-accent",
+                                field.value === option.value
+                                  ? "bg-surface font-semibold text-text shadow-pop"
+                                  : "font-medium text-text-2",
                               )}
                             >
-                              {chosen ? (
-                                <Label color={chosen.color}>
-                                  {chosen.name}
-                                </Label>
-                              ) : (
-                                <span className="text-text-2">
-                                  {areas.length === 0
-                                    ? "No area yet: ask the main agent to define one"
-                                    : "Choose an area"}
-                                </span>
-                              )}
-                              <span className="flex-1" />
-                              <ChevronDown
-                                aria-hidden="true"
-                                size={14}
-                                className="text-text-2"
+                              <input
+                                type="radio"
+                                name={field.name}
+                                value={option.value}
+                                checked={field.value === option.value}
+                                disabled={isSubmitting}
+                                onChange={() => {
+                                  field.onChange(option.value);
+                                }}
+                                className="sr-only"
                               />
-                            </button>
-                          </DropdownMenu.Trigger>
-                          <DropdownMenu.Portal>
-                            <DropdownMenu.Content
-                              align="start"
-                              sideOffset={4}
-                              className={cn(menuContent, "min-w-max")}
-                            >
-                              <DropdownMenu.RadioGroup
-                                value={field.value}
-                                onValueChange={field.onChange}
-                              >
-                                {areas.map((area) => {
-                                  const label = areaLabel(
-                                    areas,
-                                    labels,
-                                    area.name,
-                                  );
-                                  return (
-                                    <DropdownMenu.RadioItem
-                                      key={area.name}
-                                      value={area.name}
-                                      className={menuItem}
-                                    >
-                                      {label ? (
-                                        <Label color={label.color}>
-                                          {label.name}
-                                        </Label>
-                                      ) : null}
-                                      <span className="text-text-2">
-                                        {area.name}
-                                      </span>
-                                    </DropdownMenu.RadioItem>
-                                  );
-                                })}
-                              </DropdownMenu.RadioGroup>
-                            </DropdownMenu.Content>
-                          </DropdownMenu.Portal>
-                        </DropdownMenu.Root>
-                        <p className="text-13 text-text-2">
-                          The lead owns every task with this area label.
-                        </p>
-                        {errors.area ? (
-                          <p className="text-13 font-medium text-bad">
-                            {errors.area.message}
-                          </p>
-                        ) : null}
-                      </div>
-                    );
-                  }}
-                />
-              ) : null}
-              <Controller
-                control={control}
-                name="model"
-                render={({ field }) => (
-                  <Select
-                    label="Model"
-                    value={field.value}
-                    onChange={field.onChange}
-                    onBlur={field.onBlur}
-                    disabled={isSubmitting}
-                  >
-                    <option value="">{defaultModelText(roles, role)}</option>
-                    {MODELS.map((model) => (
-                      <option key={model} value={model}>
-                        {model}
-                      </option>
-                    ))}
-                  </Select>
-                )}
-              />
-              <div className="flex flex-col gap-6">
-                <label htmlFor={`${ids}-instructions`} className={FIELD_LABEL}>
-                  Instructions
-                </label>
-                <Controller
-                  control={control}
-                  name="instructions"
-                  render={({ field }) => (
-                    <MentionTextarea
-                      id={`${ids}-instructions`}
-                      slug={slug}
-                      rows={4}
-                      ref={field.ref}
-                      value={field.value}
-                      onValueChange={field.onChange}
-                      onBlur={field.onBlur}
-                      readOnly={isSubmitting}
-                      className="resize-y"
+                              {option.label}
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
+                    )}
+                  />
+                  {role === "area_lead" ? (
+                    <Controller
+                      control={control}
+                      name="area"
+                      render={({ field }) => {
+                        const chosen = areaLabel(areas, labels, field.value);
+                        return (
+                          <div className="flex flex-col gap-6">
+                            <span id={`${ids}-area`} className={FIELD_LABEL}>
+                              Area
+                            </span>
+                            <DropdownMenu.Root>
+                              <DropdownMenu.Trigger asChild>
+                                <button
+                                  type="button"
+                                  aria-labelledby={`${ids}-area`}
+                                  aria-invalid={errors.area ? true : undefined}
+                                  disabled={isSubmitting || areas.length === 0}
+                                  className={cn(
+                                    controlClasses,
+                                    focusRing,
+                                    "flex items-center gap-8 py-8 text-left",
+                                  )}
+                                >
+                                  {chosen ? (
+                                    <Label color={chosen.color}>
+                                      {chosen.name}
+                                    </Label>
+                                  ) : (
+                                    <span className="text-text-2">
+                                      {areas.length === 0
+                                        ? "No area yet: ask the main agent to define one"
+                                        : "Choose an area"}
+                                    </span>
+                                  )}
+                                  <span className="flex-1" />
+                                  <ChevronDown
+                                    aria-hidden="true"
+                                    size={14}
+                                    className="text-text-2"
+                                  />
+                                </button>
+                              </DropdownMenu.Trigger>
+                              <DropdownMenu.Portal>
+                                <DropdownMenu.Content
+                                  align="start"
+                                  sideOffset={4}
+                                  className={cn(menuContent, "min-w-max")}
+                                >
+                                  <DropdownMenu.RadioGroup
+                                    value={field.value}
+                                    onValueChange={field.onChange}
+                                  >
+                                    {areas.map((area) => {
+                                      const label = areaLabel(
+                                        areas,
+                                        labels,
+                                        area.name,
+                                      );
+                                      return (
+                                        <DropdownMenu.RadioItem
+                                          key={area.name}
+                                          value={area.name}
+                                          className={menuItem}
+                                        >
+                                          {label ? (
+                                            <Label color={label.color}>
+                                              {label.name}
+                                            </Label>
+                                          ) : null}
+                                          <span className="text-text-2">
+                                            {area.name}
+                                          </span>
+                                        </DropdownMenu.RadioItem>
+                                      );
+                                    })}
+                                  </DropdownMenu.RadioGroup>
+                                </DropdownMenu.Content>
+                              </DropdownMenu.Portal>
+                            </DropdownMenu.Root>
+                            <p className="text-13 text-text-2">
+                              The lead owns every task with this area label.
+                            </p>
+                            {errors.area ? (
+                              <p className="text-13 font-medium text-bad">
+                                {errors.area.message}
+                              </p>
+                            ) : null}
+                          </div>
+                        );
+                      }}
                     />
-                  )}
-                />
+                  ) : null}
+                  <Controller
+                    control={control}
+                    name="model"
+                    render={({ field }) => (
+                      <Select
+                        label="Model"
+                        value={field.value}
+                        onChange={field.onChange}
+                        onBlur={field.onBlur}
+                        disabled={isSubmitting}
+                      >
+                        <option value="">
+                          {defaultModelText(roles, role)}
+                        </option>
+                        {MODELS.map((model) => (
+                          <option key={model} value={model}>
+                            {model}
+                          </option>
+                        ))}
+                      </Select>
+                    )}
+                  />
+                  <div className="flex flex-col gap-6">
+                    <label
+                      htmlFor={`${ids}-instructions`}
+                      className={FIELD_LABEL}
+                    >
+                      Instructions
+                    </label>
+                    <Controller
+                      control={control}
+                      name="instructions"
+                      render={({ field }) => (
+                        <MentionTextarea
+                          id={`${ids}-instructions`}
+                          slug={slug}
+                          rows={4}
+                          ref={field.ref}
+                          value={field.value}
+                          onValueChange={field.onChange}
+                          onBlur={field.onBlur}
+                          readOnly={isSubmitting}
+                          className="resize-y"
+                        />
+                      )}
+                    />
+                  </div>
+                  {failure ? <ErrorNote failure={failure} /> : null}
+                </div>
               </div>
-              {failure ? <ErrorNote failure={failure} /> : null}
-            </div>
-            <div className="flex items-center justify-end gap-8 px-24 pt-4 pb-20">
-              <Button disabled={isSubmitting} onClick={close}>
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                variant="primary"
-                pending={isSubmitting}
-                pendingLabel="Starting lead…"
-                icon={<Play aria-hidden="true" size={15} />}
-              >
-                Start lead
-              </Button>
-            </div>
-          </form>
-        </RadixDialog.Content>
+              <div className="flex shrink-0 items-center justify-end gap-8 px-24 pt-4 pb-20">
+                <Button disabled={isSubmitting} onClick={close}>
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  pending={isSubmitting}
+                  pendingLabel="Starting lead…"
+                  icon={<Play aria-hidden="true" size={15} />}
+                >
+                  Start lead
+                </Button>
+              </div>
+            </form>
+          </RadixDialog.Content>
+        </RadixDialog.Overlay>
       </RadixDialog.Portal>
     </RadixDialog.Root>
   );

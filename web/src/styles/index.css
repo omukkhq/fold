@@ -176,7 +176,6 @@
   --height-bar: var(--height-bar);
   --height-bar-compact: var(--height-bar-compact);
   --height-chart: var(--height-chart);
-  --height-review-dialog: var(--height-review-dialog);
 }
 
 @layer base {

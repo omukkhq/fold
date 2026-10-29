@@ -57,6 +57,91 @@ describe("Dialog", () => {
   });
 });
 
+describe("Dialog layout", () => {
+  const longText = "A long review line. ".repeat(400);
+
+  it("names itself from its title and description", () => {
+    render(
+      <Dialog open title="Changes requested on v1" description="By backend">
+        <p>{longText}</p>
+      </Dialog>,
+    );
+    const dialog = screen.getByRole("dialog", {
+      name: "Changes requested on v1",
+    });
+    expect(dialog.getAttribute("aria-describedby")).toBe(
+      screen.getByText("By backend").id,
+    );
+  });
+
+  it("keeps the title and Close outside the one scroll container that holds the body", () => {
+    render(
+      <Dialog open title="Changes requested on v1">
+        <p>{longText}</p>
+        <a href="/x">T-12</a>
+      </Dialog>,
+    );
+    const dialog = screen.getByRole("dialog");
+    const scrollers = [...dialog.querySelectorAll(".overflow-y-auto")];
+    expect(scrollers).toHaveLength(1);
+    const body = scrollers[0];
+    expect(body?.contains(screen.getByText(longText.trim()))).toBe(true);
+    expect(body?.contains(screen.getByRole("link", { name: "T-12" }))).toBe(
+      true,
+    );
+    expect(body?.contains(screen.getByText("Changes requested on v1"))).toBe(
+      false,
+    );
+    expect(body?.contains(screen.getByRole("button", { name: "Close" }))).toBe(
+      false,
+    );
+    expect(body?.classList.contains("min-h-0")).toBe(true);
+    expect(dialog.classList.contains("max-h-full")).toBe(true);
+    expect(dialog.classList.contains("overflow-hidden")).toBe(true);
+  });
+
+  it("sits inside its scrim on the dialog layer, which pads it inside the window", () => {
+    render(<Dialog open title="Rename" />);
+    const scrim = screen.getByRole("dialog").parentElement;
+    expect(scrim?.classList.contains("fixed")).toBe(true);
+    expect(scrim?.classList.contains("inset-0")).toBe(true);
+    expect(scrim?.classList.contains("z-dialog")).toBe(true);
+    expect(scrim?.classList.contains("p-16")).toBe(true);
+    expect(scrim?.classList.contains("max-md:p-0")).toBe(false);
+  });
+
+  it("takes the reading width when wide, and the whole screen of a phone", () => {
+    render(<Dialog open wide title="Changes requested on v1" />);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.classList.contains("w-dialog")).toBe(true);
+    expect(dialog.classList.contains("max-md:h-full")).toBe(true);
+    expect(dialog.parentElement?.classList.contains("max-md:p-0")).toBe(true);
+  });
+});
+
+describe("overlay layers", () => {
+  it("draws popovers and menus on the pop layer", async () => {
+    render(
+      <>
+        <Popover trigger={<Button>Filter</Button>}>
+          <p>Only mine</p>
+        </Popover>
+        <Menu
+          trigger={<Button>Actions</Button>}
+          items={[{ label: "Rename", onSelect: () => {} }]}
+        />
+      </>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Filter" }));
+    const panel = screen.getByText("Only mine").parentElement;
+    expect(panel?.classList.contains("z-pop")).toBe(true);
+    await userEvent.keyboard("{Escape}");
+    screen.getByRole("button", { name: "Actions" }).focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByRole("menu").classList.contains("z-pop")).toBe(true);
+  });
+});
+
 describe("Menu", () => {
   it("opens with the keyboard, runs an item and restores focus to the trigger", async () => {
     const onSelect = vi.fn();
@@ -100,7 +185,7 @@ describe("Popover", () => {
 });
 
 describe("Tooltip", () => {
-  it("describes its trigger on keyboard focus", async () => {
+  it("describes its trigger on keyboard focus, on the tooltip layer", async () => {
     render(
       <Tooltip content="Copy the id">
         <Button>Copy</Button>
@@ -111,5 +196,6 @@ describe("Tooltip", () => {
       0,
     );
     expect(screen.getByRole("tooltip").textContent).toBe("Copy the id");
+    expect(screen.getByRole("tooltip").closest(".z-tooltip")).not.toBeNull();
   });
 });
