@@ -100,6 +100,63 @@ describe("Dialog layout", () => {
     expect(dialog.classList.contains("overflow-hidden")).toBe(true);
   });
 
+  it("keeps the footer in view under the scrolling body, and a form in the body submits from it", async () => {
+    const onSubmit = vi.fn((event: { preventDefault: () => void }) => {
+      event.preventDefault();
+    });
+    render(
+      <Dialog
+        open
+        title="Send feedback"
+        footer={
+          <Button type="submit" form="feedback">
+            Send
+          </Button>
+        }
+      >
+        <form id="feedback" onSubmit={onSubmit}>
+          <p>{longText}</p>
+        </form>
+      </Dialog>,
+    );
+    const dialog = screen.getByRole("dialog");
+    const body = dialog.querySelector(".overflow-y-auto");
+    const send = screen.getByRole("button", { name: "Send" });
+    expect(body?.contains(send)).toBe(false);
+    expect(send.closest(".shrink-0")?.parentElement).toBe(dialog);
+    await userEvent.click(send);
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it("pads the scrolling body on every side by at least a focus ring's reach", () => {
+    const pad = (classes: string[], names: string[]) =>
+      Math.max(
+        0,
+        ...classes.map((c) => {
+          const [name, size] = c.split("-");
+          return names.includes(name ?? "") ? Number(size) : 0;
+        }),
+      );
+    for (const footer of [undefined, <Button key="f">Done</Button>]) {
+      const { unmount } = render(
+        <Dialog open title="Archive T-2?" footer={footer}>
+          <Button>Archive task</Button>
+        </Dialog>,
+      );
+      const inner = screen
+        .getByRole("dialog")
+        .querySelector(".overflow-y-auto")?.firstElementChild;
+      const classes = [...(inner?.classList ?? [])];
+      for (const names of [
+        ["p", "py", "pt"],
+        ["p", "py", "pb"],
+        ["p", "px"],
+      ])
+        expect(pad(classes, names), names.join()).toBeGreaterThanOrEqual(4);
+      unmount();
+    }
+  });
+
   it("sits inside its scrim on the dialog layer, which pads it inside the window", () => {
     render(<Dialog open title="Rename" />);
     const scrim = screen.getByRole("dialog").parentElement;

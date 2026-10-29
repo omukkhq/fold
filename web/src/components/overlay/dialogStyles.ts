@@ -9,6 +9,7 @@ export const dialogOverlay =
 export const dialogContent =
   "flex max-h-full min-h-0 max-w-full flex-col overflow-hidden rounded-l bg-surface shadow-dialog outline-none";
 
+/** It clips what it scrolls, so its content keeps at least 4px of padding on every side, the reach of a focus ring. */
 export const dialogBody = "min-h-0 overflow-y-auto";
 
 /** A wide dialog takes the whole screen of a phone: the scrim drops its gutter and the box its corners. */

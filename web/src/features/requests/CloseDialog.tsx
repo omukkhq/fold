@@ -1,5 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { X } from "lucide-react";
+import { useId } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { Button } from "@/components/button/Button";
 import { Dialog } from "@/components/overlay/Dialog";
@@ -43,6 +44,7 @@ export function CloseDialog({
       // The dialog shows the failure it was handed.
     }
   });
+  const formId = useId();
   return (
     <Dialog
       open={open}
@@ -51,8 +53,32 @@ export function CloseDialog({
       }}
       title={`Close ${id}`}
       description="A closed request only reads. Say why, so the orchestrator and the others know."
+      footer={
+        <div className="flex justify-end gap-8">
+          <Button
+            variant="ghost"
+            disabled={isSubmitting}
+            onClick={() => {
+              onOpenChange(false);
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            form={formId}
+            variant="danger"
+            pending={isSubmitting}
+            pendingLabel="Closing request…"
+            icon={<X aria-hidden="true" size={15} />}
+          >
+            Close request
+          </Button>
+        </div>
+      }
     >
       <form
+        id={formId}
         noValidate
         onSubmit={(event) => void submit(event)}
         className="flex w-thread-list max-w-full flex-col gap-10"
@@ -97,26 +123,6 @@ export function CloseDialog({
             ) : null}
           </p>
         ) : null}
-        <div className="flex justify-end gap-8">
-          <Button
-            variant="ghost"
-            disabled={isSubmitting}
-            onClick={() => {
-              onOpenChange(false);
-            }}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            variant="danger"
-            pending={isSubmitting}
-            pendingLabel="Closing request…"
-            icon={<X aria-hidden="true" size={15} />}
-          >
-            Close request
-          </Button>
-        </div>
       </form>
     </Dialog>
   );

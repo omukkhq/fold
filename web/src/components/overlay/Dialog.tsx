@@ -21,6 +21,8 @@ interface DialogProps {
   children?: ReactNode;
   /** The dialog takes the reading width of a long text, and on a phone the whole screen. */
   wide?: boolean;
+  /** The action row, which stays in view under the scrolling body; a form in the body reaches its buttons through their `form` attribute. */
+  footer?: ReactNode;
 }
 
 export function Dialog({
@@ -31,6 +33,7 @@ export function Dialog({
   description,
   children,
   wide = false,
+  footer,
 }: DialogProps) {
   return (
     <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
@@ -47,7 +50,7 @@ export function Dialog({
               wide ? cn("w-dialog", dialogFill) : "w-max",
             )}
           >
-            <div className="flex shrink-0 items-start justify-between gap-12 px-20 pt-20 pb-12">
+            <div className="flex shrink-0 items-start justify-between gap-12 px-20 pt-20 pb-8">
               <div className="flex min-w-0 flex-col gap-4">
                 <RadixDialog.Title className="text-16 font-semibold text-text">
                   {title}
@@ -65,8 +68,18 @@ export function Dialog({
               </RadixDialog.Close>
             </div>
             <div className={dialogBody}>
-              <div className="flex flex-col gap-12 px-20 pb-20">{children}</div>
+              <div
+                className={cn(
+                  "flex flex-col gap-12 px-20 pt-4",
+                  footer ? "pb-8" : "pb-20",
+                )}
+              >
+                {children}
+              </div>
             </div>
+            {footer ? (
+              <div className="shrink-0 px-20 pt-8 pb-20">{footer}</div>
+            ) : null}
           </RadixDialog.Content>
         </RadixDialog.Overlay>
       </RadixDialog.Portal>
