@@ -1,5 +1,5 @@
 use fold_core::events::types;
-use fold_core::reviews::{missing_intent, proposal_intent};
+use fold_core::reviews::{ProposalIntent, missing_intent, proposal_intent};
 use fold_core::{
     Actor, CheckpointId, FoldError, HumanName, NewEvent, ProposalId, WorkerState, codes, policy,
 };
@@ -29,7 +29,7 @@ pub struct HumanEdit {
 impl ReviewService {
     /// A human's change of one text file of the current version of an open proposal, in a human review only (`policy::can_edit_as_human`). `version` is the version the human read; another current version is `stale_version`. `content` replaces the whole file. A human made the change, so no proposal check runs on the new version; its integration checks run when it integrates.
     ///
-    /// The edit is a new version authored by `human:<name>` on the same base, with the version's evidence and `intent`, checked as for `create_proposal`; `None` keeps the version's intent, and a version made before intents existed has none to keep, so its edit is `invalid_intent` with the reason `missing`. Versions never change. It keeps the agent approvals that stood on the version it was made from, the one exception to a new version starting without approvals, until the human sends it for review again. No human approval is kept, so a human approves the edit again and it never integrates on a human's earlier approval. It is recorded in the task workspace as a changeset and as a `human_edit` checkpoint marked as the workspace's pending write, without touching the files: fold writes into a workspace only on create, sync and restore. The worker's next sync writes the edit into the files first, and until then `record_changes` and `update_proposal` refuse with `workspace_write_unfinished`; the worker gets a push notice to sync.
+    /// The edit is a new version authored by `human:<name>` on the same base, with the version's evidence and `intent`, checked as for `create_proposal`; `None` keeps the version's intent, and a version made before intents existed has none to keep, so its edit is `invalid_intent` with the reason `missing`. The parts of the intent the edit carries or keeps must cover the files of the edited tree, so an edit of a file outside the diff, or one that undoes a file's whole change, needs an intent that says so. Versions never change. It keeps the agent approvals that stood on the version it was made from, the one exception to a new version starting without approvals, until the human sends it for review again. No human approval is kept, so a human approves the edit again and it never integrates on a human's earlier approval. It is recorded in the task workspace as a changeset and as a `human_edit` checkpoint marked as the workspace's pending write, without touching the files: fold writes into a workspace only on create, sync and restore. The worker's next sync writes the edit into the files first, and until then `record_changes` and `update_proposal` refuse with `workspace_write_unfinished`; the worker gets a push notice to sync.
     ///
     /// The edit is refused with `worker_busy` while the task worker may be changing the workspace: its worker process is starting, working or stopping, the workspace waits for an unfinished sync or restore other than the human edit the version came from, or it holds work the version does not (another base or a later changeset). Changes the worker made in the files without recording them stay in the safety checkpoint its sync takes.
     pub async fn edit_as_human(
@@ -39,11 +39,11 @@ impl ReviewService {
         version: u32,
         path: &str,
         content: &str,
-        intent: Option<&str>,
+        intent: Option<ProposalIntent>,
     ) -> Result<HumanEdit, ReviewError> {
         let path = file_path(path)?;
         let intent = intent
-            .map(|text| proposal_intent(text, "edit_proposal_file"))
+            .map(|intent| proposal_intent(intent, "edit_proposal_file"))
             .transpose()?;
         let mut conn = self
             .store
@@ -72,6 +72,11 @@ impl ReviewService {
                 content.as_bytes().to_vec(),
             )
             .await?;
+        let kept = intent.as_ref().or(current.intent.as_ref());
+        if let Some(kept) = kept {
+            self.check_coverage(kept, current.base, edited.tree, "edit_proposal_file")
+                .await?;
+        }
         let now = edited.taken_at;
         let mut buffer = EventBuffer::new();
         let (made, kept, checkpoint) = self
@@ -132,7 +137,7 @@ impl ReviewService {
                     tree: edited.tree,
                     head_changeset: changeset.id,
                     evidence: current.evidence.as_deref(),
-                    intent: intent.as_deref().or(current.intent.as_deref()),
+                    intent: intent.as_ref().or(current.intent.as_ref()),
                     created_by: by.as_str(),
                     fixed_in_checkout: None,
                 };

@@ -1,5 +1,6 @@
 use fold_core::object::ObjectHash;
 use fold_core::reviews::checks::{Outcome, Purpose, RunReason, RunState, Stage};
+use fold_core::reviews::{IntentPart, ProposalIntent};
 use fold_core::{CheckRunId, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId};
 use fold_store::reviews::checks::{self, NewCheckResult, NewCheckRun};
 use fold_store::{Store, StoreError};
@@ -251,10 +252,19 @@ async fn the_columns_match_the_stage_and_purpose() {
         ..workspace_run(2)
     };
     assert!(insert(&store, &untitled).await.is_err());
+    let board = ProposalIntent {
+        summary: "The board reads the cards by status.".to_owned(),
+        parts: vec![IntentPart {
+            name: "Board".to_owned(),
+            does: "Reads the cards.".to_owned(),
+            files: vec!["src/board.rs".to_owned()],
+        }],
+        ..ProposalIntent::default()
+    };
     let titled = NewCheckRun {
         purpose: Purpose::CreateProposal,
         title: Some("Add the board"),
-        intent: Some("Adds the board; the cards stay as they are."),
+        intent: Some(&board),
         ..workspace_run(3)
     };
     insert(&store, &titled).await.unwrap();
@@ -262,13 +272,10 @@ async fn the_columns_match_the_stage_and_purpose() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(
-        stored.intent.as_deref(),
-        Some("Adds the board; the cards stay as they are.")
-    );
+    assert_eq!(stored.intent.as_ref(), Some(&board));
     let changed = exec(
         &store,
-        "UPDATE check_runs SET intent = 'other' WHERE number = 3",
+        "UPDATE check_runs SET intent = json_set(intent, '$.summary', 'other') WHERE number = 3",
     )
     .await
     .unwrap_err();
@@ -280,8 +287,15 @@ async fn the_columns_match_the_stage_and_purpose() {
         .write(async |tx| checks::finish_run(tx, run_id(3), RunState::Running, None, at(2)).await)
         .await;
     assert!(missing.is_err(), "a run never ends as running");
-    let long = "x".repeat(2001);
-    for (number, intent) in [(4, ""), (5, long.as_str())] {
+    let long = ProposalIntent {
+        summary: "x".repeat(1201),
+        ..board.clone()
+    };
+    let partless = ProposalIntent {
+        parts: Vec::new(),
+        ..board.clone()
+    };
+    for (number, intent) in [(4, &long), (5, &partless)] {
         let refused = insert(
             &store,
             &NewCheckRun {
@@ -294,7 +308,7 @@ async fn the_columns_match_the_stage_and_purpose() {
         .await
         .unwrap_err();
         assert!(
-            refused.to_string().contains("check_runs_intent_size"),
+            refused.to_string().contains("check_runs_intent_shape"),
             "{refused}"
         );
     }

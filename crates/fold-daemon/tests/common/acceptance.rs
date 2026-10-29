@@ -22,7 +22,7 @@ use fold_store::workspaces::{self, RevisionRow, create_initial_revision, initial
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 use http_body_util::BodyExt;
-use rmcp::model::{CallToolRequestParams, CallToolResult};
+use rmcp::model::CallToolResult;
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::{Value, json};
@@ -387,8 +387,7 @@ impl Harness {
         let Value::Object(arguments) = arguments else {
             panic!("arguments must be an object");
         };
-        let params = CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments);
-        self.client(agent).call_tool(params).await.unwrap()
+        crate::common::intents::call_tool(self.client(agent), tool, arguments).await
     }
 
     /// Gives `agent` the `main` tag, as `fld claude` gives it to the session it starts, so that agent does the main agent's work. Only a handshake carries the tag, so this opens one more session for `agent` with the tag in its handshake line and closes it again; the agent's own session stays.

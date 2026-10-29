@@ -1,3 +1,6 @@
+use crate::common::intents::Covering as _;
+use crate::common::intents::{covering_with, whole_change};
+use fold_core::reviews::ProposalIntent;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -159,13 +162,7 @@ impl Fixture {
         workspaces.create_workspace(&author, t(1)).await.unwrap();
         std::fs::write(Self::file_in(&project), "pub fn y() {}\n").unwrap();
         reviews
-            .create_proposal(
-                &author,
-                t(1),
-                "Add auth",
-                "Make the change the task asks for.",
-                Some("tests pass"),
-            )
+            .create_proposal_covering(&author, t(1), "Add auth", Some("tests pass"))
             .await
             .unwrap()
             .detail()
@@ -694,20 +691,46 @@ async fn a_human_edit_keeps_the_intent_unless_the_human_writes_one() {
     let fx = Fixture::new().await;
     fx.mark(Some("tanim")).await;
     let tanim = human("tanim");
+    let blank = ProposalIntent {
+        summary: " ".to_owned(),
+        ..whole_change(&["src/lib.rs"])
+    };
     let error = refusal(
         fx.reviews
-            .edit_as_human(&tanim, p(1), 1, "src/lib.rs", EDITED, Some(" "))
+            .edit_as_human(&tanim, p(1), 1, "src/lib.rs", EDITED, Some(blank))
             .await,
     );
     assert_eq!(error.code(), codes::INVALID_INTENT);
-    assert_eq!(error.details().unwrap()["reason"], json!("empty"));
+    assert_eq!(
+        serde_json::Value::Object(error.details().unwrap().clone()),
+        json!({"field": "intent.summary", "reason": "empty"})
+    );
     let kept = fx.edit(&tanim, 1, "src/lib.rs", EDITED).await.unwrap();
     let (first, second) = (&kept.detail.versions[0], &kept.detail.versions[1]);
     assert_eq!(second.intent, first.intent);
-    assert_eq!(
-        second.intent.as_deref(),
-        Some("Make the change the task asks for.")
+    let mut decided = second.intent.clone().unwrap();
+    assert_eq!(decided.summary, "Make the change the task asks for.");
+    let files = decided.parts[0].files.clone();
+    decided.summary = "Returns 3, the value the product decided.".to_owned();
+    decided.parts[0].files.clear();
+    let uncovered = refusal(
+        fx.reviews
+            .edit_as_human(
+                &tanim,
+                p(1),
+                2,
+                "src/lib.rs",
+                "pub fn x() -> u8 { 3 }\n",
+                Some(decided.clone()),
+            )
+            .await,
     );
+    assert_eq!(
+        uncovered.details().unwrap()["reason"],
+        json!("part_files_uncovered")
+    );
+    assert_eq!(uncovered.details().unwrap()["uncovered"], json!(files));
+    decided.parts[0].files = files;
     let written = fx
         .reviews
         .edit_as_human(
@@ -716,14 +739,29 @@ async fn a_human_edit_keeps_the_intent_unless_the_human_writes_one() {
             2,
             "src/lib.rs",
             "pub fn x() -> u8 { 3 }\n",
-            Some("Returns 3, the value the product decided."),
+            Some(decided.clone()),
         )
         .await
         .unwrap();
+    assert_eq!(written.detail.selected.intent, Some(decided));
+}
+
+#[tokio::test]
+async fn a_kept_intent_must_match_the_files_of_the_edit() {
+    let fx = Fixture::new().await;
+    fx.mark(Some("tanim")).await;
+    let tanim = human("tanim");
+    let before = fx.head().await;
+    // The edit gives src/lib.rs its base content back, so the version no longer changes it.
+    let error = refusal(fx.edit(&tanim, 1, "src/lib.rs", "pub fn x() {}\n").await);
+    assert_eq!(error.code(), codes::INVALID_INTENT);
     assert_eq!(
-        written.detail.selected.intent.as_deref(),
-        Some("Returns 3, the value the product decided.")
+        error.details().unwrap()["reason"],
+        json!("part_file_outside_diff")
     );
+    assert_eq!(error.details().unwrap()["outside"], json!(["src/lib.rs"]));
+    assert!(error.hint().unwrap().contains("src/lib.rs"));
+    assert_eq!(fx.head().await, before, "a refused edit writes nothing");
 }
 
 #[tokio::test]
@@ -735,7 +773,7 @@ async fn a_human_edit_of_a_version_without_an_intent_needs_one() {
         .write(async |tx| {
             for statement in [
                 "DROP TRIGGER proposal_versions_no_update",
-                "UPDATE proposal_versions SET intent = NULL",
+                "UPDATE proposal_versions SET intent_summary = NULL",
             ] {
                 sqlx::query(statement).execute(tx.conn()).await?;
             }
@@ -755,21 +793,25 @@ async fn a_human_edit_of_a_version_without_an_intent_needs_one() {
             .starts_with("call edit_proposal_file again with `intent`")
     );
     assert_eq!(fx.head().await, before, "a refused edit writes nothing");
-    let written = fx
-        .reviews
-        .edit_as_human(
-            &tanim,
-            p(1),
-            1,
-            "src/lib.rs",
-            EDITED,
-            Some("Adds the check a human asked for."),
-        )
-        .await
-        .unwrap();
+    let asked = ProposalIntent {
+        summary: "Adds the check a human asked for.".to_owned(),
+        ..whole_change(&[])
+    };
+    let written = covering_with(asked, async |intent| {
+        fx.reviews
+            .edit_as_human(&tanim, p(1), 1, "src/lib.rs", EDITED, Some(intent))
+            .await
+    })
+    .await
+    .unwrap();
     assert_eq!(written.detail.versions[0].intent, None);
     assert_eq!(
-        written.detail.selected.intent.as_deref(),
+        written
+            .detail
+            .selected
+            .intent
+            .as_ref()
+            .map(|intent| intent.summary.as_str()),
         Some("Adds the check a human asked for.")
     );
 }

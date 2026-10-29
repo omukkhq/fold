@@ -1,4 +1,5 @@
 use fold_core::events::types;
+use fold_core::reviews::ProposalIntent;
 use fold_core::tree::empty_tree_hash;
 use fold_core::{Actor, Clock, FoldError, NewEvent, ProjectPaths, RevisionId, Timestamp, codes};
 use fold_store::workspaces::{
@@ -295,7 +296,7 @@ fn merge_parents(row: &RevisionRow) -> Result<Vec<CommitId>, StoreError> {
     Ok(parents)
 }
 
-/// The message of the commit a revision becomes, ending in Git trailers that name it by public ids and never name an agent or a human: fold's names stay in fold. An integrated proposal gives its title as the subject and the intent of the integrated version as the body, so the history says what each change is for; a version made before intents existed gives its task's title. Each member of a review batch becomes its own revision and so its own commit with its own intent. A direct change gives the message the main agent wrote, as it wrote it. A pull that merged a remote commit names that commit; an imported `r1` names its source; any other revision is `fold r<n>`.
+/// The message of the commit a revision becomes, ending in Git trailers that name it by public ids and never name an agent or a human: fold's names stay in fold. An integrated proposal gives its title as the subject and the intent of the integrated version as the body, so the history says how each change works: the summary, then one `<name>: <what it does>` line per part, then one `<Kind>: <entry>; <entry>` line per contract kind it touches, and never its decisions, what it does not change or its file lists; a version made before intents existed gives its task's title. Each member of a review batch becomes its own revision and so its own commit with its own intent. A direct change gives the message the main agent wrote, as it wrote it. A pull that merged a remote commit names that commit; an imported `r1` names its source; any other revision is `fold r<n>`.
 pub fn commit_message(row: &RevisionRow) -> String {
     let revision = row.number;
     let Some(integration) = &row.integration else {
@@ -310,8 +311,8 @@ pub fn commit_message(row: &RevisionRow) -> String {
             one_line(&proposal.title),
             proposal
                 .intent
-                .as_deref()
-                .map(paragraphs)
+                .as_ref()
+                .map(intent_body)
                 .filter(|body| !body.is_empty())
                 .unwrap_or_else(|| one_line(&proposal.task_title)),
             proposal.number,
@@ -355,7 +356,37 @@ pub fn commit_message(row: &RevisionRow) -> String {
     }
 }
 
-/// The intent as a commit body: its lines without trailing space and without the runs of blank lines that would split it into more paragraphs than it has.
+/// The intent as a commit body: the summary's paragraphs, a blank line, a line per part, and a blank line and a line per contract kind when it names contracts.
+fn intent_body(intent: &ProposalIntent) -> String {
+    let mut body = paragraphs(&intent.summary);
+    let parts: Vec<String> = intent
+        .parts
+        .iter()
+        .map(|part| format!("{}: {}", one_line(&part.name), one_line(&part.does)))
+        .collect();
+    let contracts: Vec<String> = intent
+        .contracts
+        .by_kind()
+        .iter()
+        .filter(|(_, entries)| !entries.is_empty())
+        .map(|(kind, entries)| {
+            let entries: Vec<String> = entries.iter().map(|entry| one_line(entry)).collect();
+            format!("{}: {}", kind.title(), entries.join("; "))
+        })
+        .collect();
+    for block in [parts, contracts] {
+        if block.is_empty() {
+            continue;
+        }
+        if !body.is_empty() {
+            body.push_str("\n\n");
+        }
+        body.push_str(&block.join("\n"));
+    }
+    body
+}
+
+/// A text's lines without trailing space and without the runs of blank lines that would split it into more paragraphs than it has.
 fn paragraphs(text: &str) -> String {
     let mut body = String::new();
     let mut blank = false;
@@ -379,6 +410,7 @@ fn paragraphs(text: &str) -> String {
 /// A subject or body line is one line whatever the stored text holds.
 fn one_line(text: &str) -> String {
     text.split(['\n', '\r'])
+        .map(str::trim)
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
@@ -392,6 +424,7 @@ pub(crate) fn error_code(error: &ProjectError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use fold_core::object::ObjectHash;
+    use fold_core::reviews::{Contracts, IntentPart};
     use fold_core::{IntegrationId, ProposalId, TaskId};
     use fold_store::workspaces::{IntegratedProposal, IntegrationInfo};
 
@@ -442,16 +475,35 @@ mod tests {
         }
     }
 
-    fn with_intent(intent: &str) -> IntegrationInfo {
+    fn with_intent(intent: ProposalIntent) -> IntegrationInfo {
         let mut info = integration(
             IntegrationKind::Proposal,
             Some(("Add the reports schema", 12)),
             None,
         );
         if let Some(proposal) = info.proposal.as_mut() {
-            proposal.intent = Some(intent.to_owned());
+            proposal.intent = Some(intent);
         }
         info
+    }
+
+    fn reports_intent(summary: &str) -> ProposalIntent {
+        ProposalIntent {
+            summary: summary.to_owned(),
+            parts: vec![
+                IntentPart {
+                    name: "Reports table".to_owned(),
+                    does: "Adds the reports table\nwith one row per task.".to_owned(),
+                    files: vec!["migrations/0003.sql".to_owned()],
+                },
+                IntentPart {
+                    name: "Tests".to_owned(),
+                    does: "Insert and read a report.".to_owned(),
+                    files: vec!["tests/reports.rs".to_owned()],
+                },
+            ],
+            ..ProposalIntent::default()
+        }
     }
 
     fn direct(message: &str) -> IntegrationInfo {
@@ -495,15 +547,28 @@ mod tests {
                 row(
                     14,
                     None,
-                    Some(with_intent(
-                        "  Adds the reports schema.  \n\n\n\nWhy: admins need it.\r\nIt does not change the users table.\n",
-                    )),
+                    Some(with_intent(ProposalIntent {
+                        contracts: Contracts {
+                            database: vec!["New table reports".to_owned()],
+                            errors: vec!["report_missing".to_owned(), "report_locked".to_owned()],
+                            ..Contracts::default()
+                        },
+                        decisions: vec!["One report per task.".to_owned()],
+                        not_changed: vec!["The users table.".to_owned()],
+                        ..reports_intent(
+                            "  The report job writes one row per task.  \n\n\n\nAdmins read it.\n",
+                        )
+                    })),
                 ),
-                "Add the reports schema\n\nAdds the reports schema.\n\nWhy: admins need it.\nIt does not change the users table.\n\nFold-Proposal: P-4\nFold-Version: 2\nFold-Task: T-12\nFold-Revision: r14\n",
+                "Add the reports schema\n\nThe report job writes one row per task.\n\nAdmins read it.\n\nReports table: Adds the reports table with one row per task.\nTests: Insert and read a report.\n\nDatabase: New table reports\nErrors: report_missing; report_locked\n\nFold-Proposal: P-4\nFold-Version: 2\nFold-Task: T-12\nFold-Revision: r14\n",
             ),
             (
-                row(15, None, Some(with_intent(" \n "))),
-                "Add the reports schema\n\nReports for admins\n\nFold-Proposal: P-4\nFold-Version: 2\nFold-Task: T-12\nFold-Revision: r15\n",
+                row(
+                    15,
+                    None,
+                    Some(with_intent(reports_intent("The report job writes rows."))),
+                ),
+                "Add the reports schema\n\nThe report job writes rows.\n\nReports table: Adds the reports table with one row per task.\nTests: Insert and read a report.\n\nFold-Proposal: P-4\nFold-Version: 2\nFold-Task: T-12\nFold-Revision: r15\n",
             ),
             (
                 row(1, Some("/home/ana/src/app"), None),

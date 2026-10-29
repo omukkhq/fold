@@ -94,6 +94,17 @@ fn edit(version: u32, content: &str) -> Option<Value> {
     Some(json!({"version": version, "path": "src/lib.rs", "content": content}))
 }
 
+/// An intent of one part as the edit route takes it and as a version gives it back: every section present, the empty ones as empty lists.
+fn http_intent(summary: &str, files: &[&str]) -> Value {
+    json!({
+        "summary": summary,
+        "parts": [{"name": "Edit", "does": "Applies the human's edit.", "files": files}],
+        "contracts": {"routes": [], "database": [], "rights": [], "config": [], "errors": [], "events": [], "commands": []},
+        "decisions": [],
+        "not_changed": [],
+    })
+}
+
 #[tokio::test]
 async fn the_marked_human_reads_edits_and_sends_a_file_for_review_again() {
     let fx = marked().await;
@@ -113,13 +124,16 @@ async fn the_marked_human_reads_edits_and_sends_a_file_for_review_again() {
         &fx,
         Method::POST,
         "/proposals/P-1/edits",
-        Some(json!({"version": 1, "path": "src/lib.rs", "content": EDITED, "intent": "  The human's own intent.  "})),
+        Some(json!({"version": 1, "path": "src/lib.rs", "content": EDITED, "intent": http_intent("  The human's own intent.  ", &["src/lib.rs"])})),
         Some(TANIM),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{version}");
     assert_eq!(version["version"], 2);
-    assert_eq!(version["intent"], "The human's own intent.");
+    assert_eq!(
+        version["intent"],
+        http_intent("The human's own intent.", &["src/lib.rs"])
+    );
     assert_eq!(version["created_by"], "human:tanim");
     assert_eq!(version["human_edit"], true);
     assert_eq!(version["review_again"], false);
@@ -131,7 +145,7 @@ async fn the_marked_human_reads_edits_and_sends_a_file_for_review_again() {
     assert_eq!(detail["agent_approved"], true);
     assert_eq!(detail["versions"][0]["human_edit"], false);
     assert_eq!(
-        detail["versions"][0]["intent"], "Make the change the task asks for.",
+        detail["versions"][0]["intent"]["summary"], "Make the change the task asks for.",
         "the edited version keeps its own intent"
     );
     let kept = &detail["reviews"][1];
@@ -237,7 +251,9 @@ async fn edit_refusals_carry_their_declared_status() {
             "human_name_required",
         ),
         (
-            Some(json!({"version": 1, "path": "src/lib.rs", "content": EDITED, "intent": " "})),
+            Some(
+                json!({"version": 1, "path": "src/lib.rs", "content": EDITED, "intent": http_intent(" ", &["src/lib.rs"])}),
+            ),
             Some(TANIM),
             StatusCode::BAD_REQUEST,
             "invalid_intent",

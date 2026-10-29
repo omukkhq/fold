@@ -1,4 +1,5 @@
 use fold_core::object::ObjectHash;
+use fold_core::reviews::ProposalIntent;
 use fold_core::reviews::checks::{Outcome, Purpose, RunReason, RunState, Stage};
 use fold_core::{
     CheckRunId, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId,
@@ -27,7 +28,8 @@ pub struct NewCheckRun<'a> {
     pub actor: &'a str,
     pub title: Option<&'a str>,
     pub evidence: Option<&'a str>,
-    pub intent: Option<&'a str>,
+    /// The checked intent of the version the run waits to make.
+    pub intent: Option<&'a ProposalIntent>,
     /// The submitted review batch whose ready members an integration run checks together.
     pub batch: Option<ReviewBatchId>,
 }
@@ -48,7 +50,7 @@ pub struct CheckRunRow {
     pub actor: String,
     pub title: Option<String>,
     pub evidence: Option<String>,
-    pub intent: Option<String>,
+    pub intent: Option<ProposalIntent>,
     pub state: RunState,
     pub reason: Option<RunReason>,
     pub created_at: Timestamp,
@@ -102,6 +104,7 @@ pub async fn insert_run(
     let (stage, purpose) = (new.stage.as_str(), new.purpose.as_str());
     let (base, tree, now) = (new.base.to_db(), new.tree.to_string(), now.as_millis());
     let batch = new.batch.map(ReviewBatchId::to_db);
+    let intent = new.intent.map(super::intents::encode).transpose()?;
     let inserted = sqlx::query!(
         "INSERT INTO check_runs (number, stage, purpose, task_id, workspace_id, worker_id, proposal_id,
                                  version_id, base_revision_id, tree_hash, actor, title, evidence, created_at,
@@ -130,7 +133,7 @@ pub async fn insert_run(
         now,
         task,
         batch,
-        new.intent
+        intent
     )
     .execute(tx.conn())
     .await?
@@ -301,7 +304,7 @@ impl RawRun {
             actor: row.actor,
             title: row.title,
             evidence: row.evidence,
-            intent: row.intent,
+            intent: super::intents::decode(row.intent.as_deref(), "check_runs.intent")?,
             state: RunState::parse(&row.state).ok_or(StoreError::Corrupt("check_runs.state"))?,
             reason: row
                 .reason

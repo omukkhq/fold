@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT v.version, r.number AS \"base!: i64\", v.tree_hash,\n                  c.number AS \"changeset!: i64\", c.stats, v.evidence, v.intent, v.created_by, v.created_at,\n                  EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = v.id) AS \"review_again!: bool\",\n                  f.number AS \"fixed_in?: i64\"\n           FROM proposal_versions v\n           JOIN proposals p ON p.id = v.proposal_id\n           JOIN revisions r ON r.id = v.base_revision_id\n           JOIN changesets c ON c.id = v.head_changeset_id\n           LEFT JOIN workspaces f ON f.id = v.fixed_in_checkout_id\n           WHERE p.number = ?\n           ORDER BY v.version",
+  "query": "SELECT v.version, r.number AS \"base!: i64\", v.tree_hash,\n                  c.number AS \"changeset!: i64\", c.stats, v.evidence, vi.intent AS \"intent?: String\", v.created_by, v.created_at,\n                  EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = v.id) AS \"review_again!: bool\",\n                  f.number AS \"fixed_in?: i64\"\n           FROM proposal_versions v\n           JOIN proposals p ON p.id = v.proposal_id\n           JOIN revisions r ON r.id = v.base_revision_id\n           JOIN changesets c ON c.id = v.head_changeset_id\n           LEFT JOIN workspaces f ON f.id = v.fixed_in_checkout_id\n           LEFT JOIN proposal_version_intents vi ON vi.version_id = v.id\n           WHERE p.number = ?\n           ORDER BY v.version",
   "describe": {
     "columns": [
       {
@@ -70,15 +70,10 @@
         }
       },
       {
-        "name": "intent",
+        "name": "intent?: String",
         "ordinal": 6,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "proposal_versions",
-            "name": "intent"
-          }
-        }
+        "type_info": "Null",
+        "origin": "Expression"
       },
       {
         "name": "created_by",
@@ -130,12 +125,12 @@
       false,
       false,
       true,
-      true,
+      null,
       false,
       false,
       false,
-      true
+      false
     ]
   },
-  "hash": "e6cc82d68b1c77ff583483dd05b1a8945357d1ded8bc81471fa6bd120fdb529b"
+  "hash": "d3261fb4c953f6ba580a6bc0e1e24cf877b124e14a50de8730090926af671e15"
 }

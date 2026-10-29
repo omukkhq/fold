@@ -1,12 +1,13 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use crate::common::roles::{give_batch, give_main_tag, give_role};
 use crate::proposal_tools_support::{Fixture, t};
 use fold_core::roles::Role;
 use fold_daemon::mcp::FoldServer;
 use fold_daemon::services::events::EventService;
 use fold_daemon::services::messages::MessageService;
-use rmcp::model::{CallToolRequestParams, CallToolResult};
+use rmcp::model::CallToolResult;
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::{Value, json};
@@ -51,10 +52,7 @@ async fn call(client: &Client, tool: &str, arguments: Value) -> CallToolResult {
     let Value::Object(arguments) = arguments else {
         panic!("arguments must be an object");
     };
-    client
-        .call_tool(CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments))
-        .await
-        .unwrap()
+    crate::common::intents::call_tool(client, tool, arguments).await
 }
 
 fn body(result: &CallToolResult) -> Value {
@@ -89,13 +87,7 @@ async fn two_proposals(fx: &Fixture) {
             .unwrap();
         fx.write(task, path, "first\nsecond\n");
         fx.reviews()
-            .create_proposal(
-                &author,
-                t(task),
-                "Add a file",
-                "Make the change the task asks for.",
-                None,
-            )
+            .create_proposal_covering(&author, t(task), "Add a file", None)
             .await
             .unwrap()
             .detail()
@@ -210,10 +202,9 @@ async fn an_omitted_batch_version_gets_a_new_checkout_and_its_own_review() {
     ok(&delegate, "create_batch_checkout", json!({"id": "rb-1"})).await;
     fx.write(2, "src/two.rs", "corrected\n");
     fx.reviews()
-        .update_proposal(
+        .update_proposal_covering(
             &fx.agent("backend").await,
             fold_core::ProposalId::from_number(2).unwrap(),
-            "Make the change the task asks for.",
             Some("Checked new content"),
         )
         .await
@@ -342,10 +333,9 @@ async fn the_main_agent_batches_checks_out_and_reviews_two_proposals_through_the
     fx.write(2, "src/two.rs", "first\n");
     let backend = fx.agent("backend").await;
     fx.reviews()
-        .update_proposal(
+        .update_proposal_covering(
             &backend,
             fold_core::ProposalId::from_number(2).unwrap(),
-            "Make the change the task asks for.",
             None,
         )
         .await
@@ -398,10 +388,9 @@ async fn a_member_synced_with_a_newer_main_counts_only_its_own_change() {
     assert_eq!(synced.conflicted, Vec::<String>::new());
     fx.write(2, "src/two.rs", "first\n");
     fx.reviews()
-        .update_proposal(
+        .update_proposal_covering(
             &backend,
             fold_core::ProposalId::from_number(2).unwrap(),
-            "Make the change the task asks for.",
             None,
         )
         .await

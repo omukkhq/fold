@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use crate::common::roles::give_role;
 use crate::reviews_support::{Fixture, LIB, README, by, human, names, p, refusal, t, ws};
 use fold_core::events::types;
@@ -118,7 +119,7 @@ async fn resolve_and_update(fx: &Fixture) -> ProposalDetail {
     fx.workspaces.sync_workspace(&author, ws(1)).await.unwrap();
     fx.write("src/lib.rs", RESOLVED_LIB);
     fx.reviews
-        .update_proposal(&author, p(1), "Make the change the task asks for.", None)
+        .update_proposal_covering(&author, p(1), None)
         .await
         .unwrap()
         .detail()
@@ -335,7 +336,7 @@ async fn update_proposal_refuses_while_markers_remain() {
 
     let error = refusal(
         fx.reviews
-            .update_proposal(&author, p(1), "Make the change the task asks for.", None)
+            .update_proposal_covering(&author, p(1), None)
             .await,
     );
 
@@ -383,13 +384,7 @@ async fn binary_and_delete_versus_edit_conflicts_are_reported_by_kind() {
     fx.write("src/new.rs", "pub fn version() {}\n");
     std::fs::write(fx.task_dir().join("README.md"), b"\0version").unwrap();
     fx.reviews
-        .create_proposal(
-            &author,
-            t(1),
-            "Change every file",
-            "Make the change the task asks for.",
-            None,
-        )
+        .create_proposal_covering(&author, t(1), "Change every file", None)
         .await
         .unwrap()
         .detail()

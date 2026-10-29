@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -129,13 +130,7 @@ async fn propose(fx: &Fixture, author: &Actor, task: u32, path: &str, content: &
         .unwrap();
     fx.write(task, path, content);
     fx.reviews()
-        .create_proposal(
-            author,
-            t(task),
-            "Change it",
-            "Make the change the task asks for.",
-            None,
-        )
+        .create_proposal_covering(author, t(task), "Change it", None)
         .await
         .unwrap()
         .detail()

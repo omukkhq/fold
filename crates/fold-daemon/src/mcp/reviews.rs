@@ -3,7 +3,8 @@ use std::str::FromStr;
 use fold_core::policy::{Gate, GateState, GateStatus};
 use fold_core::reviews::plans::{PlanCandidate, plan_hint};
 use fold_core::reviews::{
-    HumanReviewMark, ReviewScope, ReviewScopeRecord, ScopeChoice, Side, Verdict, missing_intent,
+    Contracts, HumanReviewMark, IntentPart, ProposalIntent, ReviewScope, ReviewScopeRecord,
+    ScopeChoice, Side, Verdict, missing_intent,
 };
 use fold_core::text::shorten;
 use fold_core::{
@@ -58,13 +59,138 @@ pub struct CreateProposalInput {
     pub task: String,
     /// The proposal title: one line of at most 200 characters.
     pub title: String,
-    /// What the change is for, 1 to 2000 characters, for the humans who read it instead of every line and the reviewer who checks the diff against it: what it does, why, what it does not change, and its risks. It becomes the body of the Git commit when the version integrates.
-    // serde reads a missing `Option` as `None`, so a missing intent reaches `missing_intent` while the schema lists it as a required string.
-    #[schemars(required, with = "String")]
-    pub intent: Option<String>,
+    /// How the change works in the code, so a human understands and judges it without reading every line and the reviewer checks every hunk against it: a summary and the parts of the diff, each with its files, so every file the version changes is in exactly one part; contracts, decisions and not_changed only when they apply. Its summary, parts and contracts become the body of the Git commit when the version integrates.
+    // serde reads a missing `Option` as `None`, so a missing intent reaches `missing_intent` while the schema lists it as required.
+    #[schemars(required, with = "IntentInput")]
+    pub intent: Option<IntentInput>,
     /// What shows the work is done, such as the tests you ran and their result. Leave it out for none. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub evidence: Option<String>,
+}
+
+/// The intent of a proposal version as an agent writes it.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct IntentInput {
+    /// How the change works in the code, in 2 to 4 sentences of at most 1200 characters: the flow, the states and the rules it adds or changes, in the terms of the code (functions, tables, routes), not the task's words.
+    pub summary: String,
+    /// The parts of the diff, 1 to 12, in reading order. Every file the version changes against its base, generated files too, belongs to exactly one part, and no part names another file. A small fix has one part.
+    pub parts: Vec<IntentPartInput>,
+    /// Only the kinds of contract the change adds or changes, each a list of entries, such as routes ["POST /v1/cases"] or errors ["case_open"]. Leave out a kind, or the whole field, that the change does not touch.
+    #[serde(default)]
+    pub contracts: Option<ContractsInput>,
+    /// The choices you made and why, and the open questions with the message that asks them (m-12): up to 20 one-line entries of at most 300 characters. Leave it out when there are none.
+    #[serde(default)]
+    pub decisions: Vec<String>,
+    /// What a reader may think the change touches but it does not: up to 20 one-line entries of at most 300 characters. Leave it out when nothing applies.
+    #[serde(default)]
+    pub not_changed: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct IntentPartInput {
+    /// A short name of the part, one line of at most 80 characters, such as "Case model and migration" or "Generated API client". Each part has its own name.
+    pub name: String,
+    /// What this part of the code does, at most 800 characters: the functions, tables and rules it adds or changes.
+    pub does: String,
+    /// The changed files of this part, as get_proposal_diff or the workspace diff lists them (a renamed file by its new path).
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ContractsInput {
+    /// HTTP or other routes added or changed, such as "POST /v1/cases (staff only)".
+    #[serde(default)]
+    pub routes: Vec<String>,
+    /// Tables, columns, indexes, migrations and enum values added or changed.
+    #[serde(default)]
+    pub database: Vec<String>,
+    /// Rights or roles added or changed, and who may now do what.
+    #[serde(default)]
+    pub rights: Vec<String>,
+    /// Configuration keys or environment variables added or changed, with their defaults.
+    #[serde(default)]
+    pub config: Vec<String>,
+    /// Error codes added or changed.
+    #[serde(default)]
+    pub errors: Vec<String>,
+    /// Events or messages added or changed.
+    #[serde(default)]
+    pub events: Vec<String>,
+    /// CLI commands, tools or scripts added or changed.
+    #[serde(default)]
+    pub commands: Vec<String>,
+}
+
+impl From<IntentInput> for ProposalIntent {
+    fn from(input: IntentInput) -> Self {
+        let contracts = input.contracts.unwrap_or_default();
+        ProposalIntent {
+            summary: input.summary,
+            parts: input
+                .parts
+                .into_iter()
+                .map(|part| IntentPart {
+                    name: part.name,
+                    does: part.does,
+                    files: part.files,
+                })
+                .collect(),
+            contracts: Contracts {
+                routes: contracts.routes,
+                database: contracts.database,
+                rights: contracts.rights,
+                config: contracts.config,
+                errors: contracts.errors,
+                events: contracts.events,
+                commands: contracts.commands,
+            },
+            decisions: input.decisions,
+            not_changed: input.not_changed,
+        }
+    }
+}
+
+/// An intent as `get_proposal` gives it. The short form holds the summary and each part's name with its file count; the full form adds what each part does, its files, and the contracts, decisions and not_changed the intent has. A section without entries is left out.
+pub(super) fn intent_json(intent: &ProposalIntent, full: bool) -> Value {
+    if !full {
+        return json!({
+            "summary": intent.summary,
+            "parts": intent.parts.iter().map(|part| json!({
+                "name": part.name,
+                "files": part.files.len(),
+            })).collect::<Vec<_>>(),
+        });
+    }
+    let mut value = json!({
+        "summary": intent.summary,
+        "parts": intent.parts.iter().map(|part| json!({
+            "name": part.name,
+            "does": part.does,
+            "files": part.files,
+        })).collect::<Vec<_>>(),
+    });
+    let contracts: serde_json::Map<String, Value> = intent
+        .contracts
+        .by_kind()
+        .iter()
+        .filter(|(_, entries)| !entries.is_empty())
+        .map(|(kind, entries)| (kind.as_str().to_owned(), json!(entries)))
+        .collect();
+    if !contracts.is_empty() {
+        value["contracts"] = Value::Object(contracts);
+    }
+    for (name, entries) in [
+        ("decisions", &intent.decisions),
+        ("not_changed", &intent.not_changed),
+    ] {
+        if !entries.is_empty() {
+            value[name] = json!(entries);
+        }
+    }
+    value
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -99,7 +225,7 @@ pub struct GetProposalInput {
     /// A version number, such as 2 for v2. Leave it out for the current version.
     #[serde(default)]
     pub version: Option<u32>,
-    /// full adds the evidence text, the whole intent, the task description and the whole body of each review of an earlier version. Leave it out for the short form, which gives evidence_chars, the first 200 characters of the intent with intent_chars, and the first 200 characters of those bodies with body_chars.
+    /// full adds the evidence text, the whole intent (what each part does, its files, and the contracts, decisions and not_changed it has), the task description and the whole body of each review of an earlier version. Leave it out for the short form, which gives evidence_chars, the intent's summary with each part's name and file count, and the first 200 characters of those bodies with body_chars.
     #[serde(default)]
     pub detail: Option<String>,
 }
@@ -125,9 +251,9 @@ pub struct GetProposalDiffInput {
 pub struct UpdateProposalInput {
     /// The proposal, such as P-3. Only its author's worker can add a version.
     pub id: String,
-    /// The intent of the new version, written for it: what the change is for, 1 to 2000 characters, for the humans who read it instead of every line and the reviewer who checks the diff against it: what it does, why, what it does not change, and its risks. It becomes the body of the Git commit when the version integrates.
-    #[schemars(required, with = "String")]
-    pub intent: Option<String>,
+    /// The intent of the new version as a whole, written for it as for create_proposal: the summary and the parts covering every file the version changes against its base, and only the sections that apply.
+    #[schemars(required, with = "IntentInput")]
+    pub intent: Option<IntentInput>,
     /// New evidence for the new version. Leave it out to keep the current evidence. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub evidence: Option<String>,
@@ -309,16 +435,16 @@ pub struct SubmitReviewFixInput {
     pub fixes: Vec<ReviewFixInput>,
     /// The commands you ran on the fixed files, such as the narrow tests of each fix, the build and the required checks, with their results.
     pub checks: String,
-    /// The intent of the fixed version as a whole, 1 to 2000 characters: what the change now does, why, what it does not change, and its risks. Start from the intent of the version you fixed and say what your fix changes in it. It becomes the body of the Git commit when the version integrates.
-    #[schemars(required, with = "String")]
-    pub intent: Option<String>,
+    /// The intent of the fixed version as a whole, as for create_proposal: start from the intent of the version you fixed (get_proposal with detail full), say what your fix changes in the summary and in the part it touches, and keep every file the fixed version changes against its base in exactly one part.
+    #[schemars(required, with = "IntentInput")]
+    pub intent: Option<IntentInput>,
 }
 
 pub fn tools() -> Vec<Tool> {
     let mut tools = vec![
         Tool::new(
             CREATE_PROPOSAL,
-            "Send the work in your task workspace for review as a new proposal (v1), with its intent: what the change does, why, what it does not change and its risks (invalid_intent when it is missing, empty, longer than 2000 characters or holds a control character other than a line break or a tab). You must hold the task's claim. The task moves to Review. When fold-checks.toml has proposal checks for your change and no passed run_checks of the same files stands, it returns at once with checks running and a run id: fold runs the checks and opens the proposal only when they pass; the result comes as a message from fold. Wait for checks.finished with wait_for_events. A change of fold-checks.toml puts the human review mark on the task.",
+            "Send the work in your task workspace for review as a new proposal (v1), with its intent: a summary of how the change works in the code and the parts of the diff, each with what it does and its files, so every changed file is in exactly one part; contracts, decisions and not_changed only when they apply. invalid_intent names the field and the reason in its details: missing, empty, too_long, control_character, no_parts, too_many_parts, too_many_entries, duplicate_part, file_in_two_parts, part_without_files, part_files_uncovered (details.uncovered lists the changed files no part names) or part_file_outside_diff (details.outside lists the files the version does not change). You must hold the task's claim. The task moves to Review. When fold-checks.toml has proposal checks for your change and no passed run_checks of the same files stands, it returns at once with checks running and a run id: fold runs the checks and opens the proposal only when they pass; the result comes as a message from fold. Wait for checks.finished with wait_for_events. A change of fold-checks.toml puts the human review mark on the task.",
             schema_for_type::<CreateProposalInput>(),
         ),
         Tool::new(
@@ -328,7 +454,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_PROPOSAL,
-            "Read one proposal: versions, the intent of the version (what it does, why, what it does not change and its risks; check the diff against it), the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related open proposals without a review, each with its proposal, and the related tasks that can still open proposals, strongest link first, with the create_review_plan or start_worker call that has one reviewer review them together), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. The short form gives evidence_chars for the evidence, the first 200 characters of the intent with intent_chars, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the whole intent, the task description and every whole body, such as before a review or when the task description matters.",
+            "Read one proposal: versions, the intent of the version (its summary of how the change works and the parts of the diff with their files; check every hunk against its part), the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related open proposals without a review, each with its proposal, and the related tasks that can still open proposals, strongest link first, with the create_review_plan or start_worker call that has one reviewer review them together), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. The short form gives evidence_chars for the evidence, the intent's summary with each part's name and file count, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the whole intent (what each part does, its files, contracts, decisions and not_changed), the task description and every whole body, such as before a review or when the task description matters.",
             schema_for_type::<GetProposalInput>(),
         ),
         Tool::new(
@@ -338,7 +464,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             UPDATE_PROPOSAL,
-            "Send the current state of your task workspace as the next version of your open proposal, after a change request or a conflict, with the intent of the new version (invalid_intent when it is missing, empty, longer than 2000 characters or holds a control character other than a line break or a tab). The proposal checks gate the version as for create_proposal: checks running means fold adds the version only when they pass.",
+            "Send the current state of your task workspace as the next version of your open proposal, after a change request or a conflict, with the intent of the new version, written as for create_proposal and covering every file the new version changes (invalid_intent with the reasons of create_proposal). The proposal checks gate the version as for create_proposal: checks running means fold adds the version only when they pass.",
             schema_for_type::<UpdateProposalInput>(),
         ),
         Tool::new(
@@ -391,7 +517,7 @@ pub fn tools() -> Vec<Tool> {
     ));
     tools.push(Tool::new(
         SUBMIT_REVIEW_FIX,
-        "Reviewer only: send the fixes you made in your review checkout as the next version of the proposal, under your name, with each changed file and its reason, the checks you ran and the intent of the fixed version. Fix only what the task's agreed scope settles. Send work that the task still misses back with request_changes, describe new work outside the task with create_request (the proposal can still be approved), and ask the humans with asks_human for a product decision or a conflict with a settled decision. When fold-checks.toml has proposal checks for the fixed files, it returns at once with checks running and a run id: fold runs them in your checkout and makes the version only when they pass; the result comes as a message from fold. Until the run ends, an approve or an integration of the version you fixed is refused with update_checks_running. The version starts without approvals and your checkout then holds it: build it, run the required checks, then approve it with submit_review. The author's agent gets a push to sync its workspace. A batch checkout never becomes a version: fix a member in its own create_review_checkout. Refusals: review_claim_required, author_cannot_review, review_lead_delegates (the review lead never reviews), stale_version, version_unchanged, worker_busy, workspace_not_found (no checkout of that version) and invalid_request with reason fixes_mismatch (details list the unlisted and unchanged files).",
+        "Reviewer only: send the fixes you made in your review checkout as the next version of the proposal, under your name, with each changed file and its reason, the checks you ran and the intent of the fixed version, written as for create_proposal and covering every file the fixed version changes against its base. Fix only what the task's agreed scope settles. Send work that the task still misses back with request_changes, describe new work outside the task with create_request (the proposal can still be approved), and ask the humans with asks_human for a product decision or a conflict with a settled decision. When fold-checks.toml has proposal checks for the fixed files, it returns at once with checks running and a run id: fold runs them in your checkout and makes the version only when they pass; the result comes as a message from fold. Until the run ends, an approve or an integration of the version you fixed is refused with update_checks_running. The version starts without approvals and your checkout then holds it: build it, run the required checks, then approve it with submit_review. The author's agent gets a push to sync its workspace. A batch checkout never becomes a version: fix a member in its own create_review_checkout. Refusals: review_claim_required, author_cannot_review, review_lead_delegates (the review lead never reviews), stale_version, version_unchanged, worker_busy, workspace_not_found (no checkout of that version), invalid_request with reason fixes_mismatch (details list the unlisted and unchanged files) and invalid_intent with the reasons of create_proposal.",
         schema_for_type::<SubmitReviewFixInput>(),
     ));
     tools.extend(checks::tools());
@@ -557,10 +683,7 @@ fn scope_record_json(scope: &ReviewScopeRecord) -> Value {
 /// How much of a review body of an earlier version the short form of `get_proposal` shows: enough to see what the review was about. The reviews of the selected version keep their whole body, which is what its author acts on.
 const EARLIER_REVIEW_HEAD_CHARS: usize = 200;
 
-/// How much of the selected version's intent the short form of `get_proposal` shows.
-const INTENT_HEAD_CHARS: usize = 200;
-
-/// The answer of `get_proposal`. Without `full` it leaves out the evidence text, most of the intent, the task description and most of each earlier version's review bodies, the largest parts of a proposal that a caller rarely needs on every read.
+/// The answer of `get_proposal`. Without `full` it leaves out the evidence text, all of the intent but its summary and its parts' names and file counts, the task description and most of each earlier version's review bodies, the largest parts of a proposal that a caller rarely needs on every read.
 fn view_json(view: &ProposalView, full: bool) -> Value {
     let detail = &view.detail;
     let summary = &detail.summary;
@@ -700,14 +823,14 @@ fn view_json(view: &ProposalView, full: bool) -> Value {
             "purpose": update.purpose.as_str(),
         });
     }
-    let intent = selected.intent.as_deref();
+    value["intent"] = selected
+        .intent
+        .as_ref()
+        .map_or(Value::Null, |intent| intent_json(intent, full));
     if full {
-        value["intent"] = json!(intent);
         value["evidence"] = json!(selected.evidence);
         value["task"]["description"] = json!(view.task.description.as_str());
     } else {
-        value["intent"] = json!(intent.map(|text| shorten(text, INTENT_HEAD_CHARS)));
-        value["intent_chars"] = json!(intent.map_or(0, |text| text.chars().count()));
         value["evidence_chars"] = json!(
             selected
                 .evidence
@@ -789,7 +912,7 @@ async fn create_proposal(
             &input.title,
             input
                 .intent
-                .as_deref()
+                .map(ProposalIntent::from)
                 .ok_or_else(|| missing_intent(CREATE_PROPOSAL))?,
             input.evidence.as_deref(),
         )
@@ -948,7 +1071,7 @@ async fn update_proposal(
             proposal_id(&input.id)?,
             input
                 .intent
-                .as_deref()
+                .map(ProposalIntent::from)
                 .ok_or_else(|| missing_intent(UPDATE_PROPOSAL))?,
             input.evidence.as_deref(),
         )
@@ -1078,7 +1201,7 @@ async fn submit_review_fix(
             &input.checks,
             input
                 .intent
-                .as_deref()
+                .map(ProposalIntent::from)
                 .ok_or_else(|| missing_intent(SUBMIT_REVIEW_FIX))?,
         )
         .await

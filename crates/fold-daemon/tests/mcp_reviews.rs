@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::whole_change_json;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -97,10 +98,7 @@ async fn call_raw(client: &Client, tool: &str, arguments: Value) -> CallToolResu
     let Value::Object(arguments) = arguments else {
         panic!("arguments must be an object");
     };
-    client
-        .call_tool(CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments))
-        .await
-        .unwrap()
+    crate::common::intents::call_tool(client, tool, arguments).await
 }
 
 #[cfg(test)]
@@ -768,7 +766,7 @@ async fn submit_review_fix_makes_the_reviewers_version_and_the_reviewer_approves
         "version": 1,
         "fixes": [{"path": "src/lib.rs", "reason": "y returns 1 as the task asks"}],
         "checks": "cargo test: 1 passed",
-        "intent": "Make y return 1 as the task asks; nothing else changes.",
+        "intent": {"summary": "Makes y return 1 as the task asks; nothing else changes.", "parts": [{"name": "Return 1", "does": "y returns 1.", "files": ["src/lib.rs"]}]},
     });
     let error = err(&frontend, "submit_review_fix", arguments.clone()).await;
     assert_eq!(error["code"], "author_cannot_review");
@@ -1030,7 +1028,9 @@ async fn every_result_ends_with_the_footer() {
     open_p1(&fx, &frontend).await;
     for tool in REVIEW_TOOLS {
         let arguments = match tool {
-            "create_proposal" => json!({"task": "T-1", "title": "again", "intent": "again"}),
+            "create_proposal" => {
+                json!({"task": "T-1", "title": "again", "intent": whole_change_json(&[])})
+            }
             "require_human_review" => json!({"task": "T-1", "reason": "check"}),
             "list_proposals" => json!({}),
             "close_proposal" => json!({"id": "P-1", "reason": "done"}),
@@ -1040,7 +1040,7 @@ async fn every_result_ends_with_the_footer() {
                 "version": 1,
                 "fixes": [{"path": "src/lib.rs", "reason": "r"}],
                 "checks": "ok",
-                "intent": "i",
+                "intent": whole_change_json(&[]),
             }),
             "set_review_scope" => {
                 json!({"id": "P-1", "version": 1, "scope": "full", "reason": "r"})
@@ -1105,7 +1105,8 @@ async fn two_transports_open_one_proposal() {
     let second = connect(&fx, "frontend").await;
     ok(&first, "create_workspace", json!({"task": "T-1"})).await;
     fx.write(1, "src/lib.rs", "pub fn y() {}\n");
-    let arguments = json!({"task": "T-1", "title": "Rename x", "intent": "Renames x."});
+    let arguments =
+        json!({"task": "T-1", "title": "Rename x", "intent": whole_change_json(&["src/lib.rs"])});
     let (a, b) = tokio::join!(
         call_raw(&first, "create_proposal", arguments.clone()),
         call_raw(&second, "create_proposal", arguments),
@@ -1438,7 +1439,9 @@ async fn every_proposal_version_tool_requires_an_intent_and_get_proposal_shows_i
                 .contains(&json!("intent")),
             "{name}: {schema}"
         );
-        assert_eq!(schema["properties"]["intent"]["type"], "string", "{name}");
+        let intent = &schema["properties"]["intent"];
+        assert_eq!(intent["type"], "object", "{name}");
+        assert_eq!(intent["required"], json!(["summary", "parts"]), "{name}");
     }
 
     ok(&frontend, "create_workspace", json!({"task": "T-1"})).await;
@@ -1477,19 +1480,21 @@ async fn every_proposal_version_tool_requires_an_intent_and_get_proposal_shows_i
             "{refused}"
         );
     }
+    let part = json!({"name": "Rename", "does": "Renames x to y.", "files": ["src/lib.rs"]});
     let control = err(
         &frontend,
         "create_proposal",
-        json!({"task": "T-1", "title": "Rename x", "intent": "Renames x.\u{1b}[2J"}),
+        json!({"task": "T-1", "title": "Rename x", "intent": {"summary": "Renames x.\u{1b}[2J", "parts": [part]}}),
     )
     .await;
     assert_eq!(control["code"], "invalid_intent");
+    assert_eq!(control["details"]["field"], "intent.summary");
     assert_eq!(control["details"]["reason"], "control_character");
-    let long = "x".repeat(2001);
+    let long = "x".repeat(1201);
     let refused = err(
         &frontend,
         "create_proposal",
-        json!({"task": "T-1", "title": "Rename x", "intent": long}),
+        json!({"task": "T-1", "title": "Rename x", "intent": {"summary": long, "parts": [part]}}),
     )
     .await;
     assert_eq!(refused["code"], "invalid_intent");
@@ -1504,8 +1509,26 @@ async fn every_proposal_version_tool_requires_an_intent_and_get_proposal_shows_i
             .unwrap()
             .starts_with("call create_proposal again")
     );
+    let uncovered = err(
+        &frontend,
+        "create_proposal",
+        json!({"task": "T-1", "title": "Rename x", "intent": {"summary": "Renames x.", "parts": [{"name": "Rename", "does": "Renames x.", "files": []}]}}),
+    )
+    .await;
+    assert_eq!(uncovered["code"], "invalid_intent");
+    assert_eq!(uncovered["details"]["reason"], "part_files_uncovered");
+    assert_eq!(uncovered["details"]["uncovered"], json!(["src/lib.rs"]));
+    assert!(
+        uncovered["hint"].as_str().unwrap().ends_with("src/lib.rs"),
+        "{uncovered}"
+    );
 
-    let intent = "Renames x to y so the name says what it holds. It changes no behaviour.";
+    let intent = json!({
+        "summary": "Renames x to y so the name says what it holds. It changes no behaviour.",
+        "parts": [part],
+        "contracts": {"commands": ["y replaces x in the library API"]},
+        "not_changed": ["The callers keep their names."],
+    });
     ok(
         &frontend,
         "create_proposal",
@@ -1513,19 +1536,24 @@ async fn every_proposal_version_tool_requires_an_intent_and_get_proposal_shows_i
     )
     .await;
     let short = ok(&frontend, "get_proposal", json!({"id": "P-1"})).await;
-    assert_eq!(short["intent"], intent);
-    assert_eq!(short["intent_chars"], intent.chars().count());
+    assert_eq!(
+        short["intent"],
+        json!({"summary": intent["summary"], "parts": [{"name": "Rename", "files": 1}]})
+    );
     let full = ok(
         &frontend,
         "get_proposal",
         json!({"id": "P-1", "detail": "full"}),
     )
     .await;
-    assert_eq!(full["intent"], intent);
+    assert_eq!(
+        full["intent"], intent,
+        "the full form leaves out the empty sections"
+    );
     let blank = err(
         &frontend,
         "update_proposal",
-        json!({"id": "P-1", "intent": "  "}),
+        json!({"id": "P-1", "intent": {"summary": "  ", "parts": [part]}}),
     )
     .await;
     assert_eq!(blank["code"], "invalid_intent");

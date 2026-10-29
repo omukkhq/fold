@@ -62,9 +62,17 @@ async fn revise(harness: &Harness, proposal: &str, work: &Work, file: &str, roun
         .call(
             "backend",
             "update_proposal",
-            json!({"id": proposal, "intent": prose("revised intent", 1200), "evidence": prose("revised evidence", 1500)}),
+            json!({"id": proposal, "intent": revised_intent(), "evidence": prose("revised evidence", 1500)}),
         )
         .await;
+}
+
+/// The intent of every revised version: the longest summary and one part with the longest text.
+fn revised_intent() -> Value {
+    json!({
+        "summary": prose("revised intent", 1200),
+        "parts": [{"name": "Report", "does": prose("report part", 800), "files": ["src/report.rs"]}],
+    })
 }
 
 /// The numbers of the lines of one compact hunk, counted from its header: `(mark, old, new, text)` for each line. Each line's own number must be the counted number of its side.
@@ -235,11 +243,12 @@ async fn the_default_reads_of_a_reviewed_proposal_are_smaller_and_keep_what_an_a
     assert_eq!(short.get("evidence"), None);
     assert_eq!(short["evidence_chars"], 1500);
     assert_eq!(full["evidence"], prose("revised evidence", 1500));
-    assert_eq!(short["intent_chars"], 1200);
-    assert_eq!(short["intent"].as_str().unwrap().chars().count(), 200);
-    assert!(short["intent"].as_str().unwrap().ends_with('…'));
-    assert_eq!(full["intent"], prose("revised intent", 1200));
-    assert_eq!(full.get("intent_chars"), None);
+    assert_eq!(
+        short["intent"],
+        json!({"summary": prose("revised intent", 1200), "parts": [{"name": "Report", "files": 1}]}),
+        "the short form names each part and counts its files"
+    );
+    assert_eq!(full["intent"], revised_intent());
     assert_eq!(
         short["task"],
         json!({"id": "T-3", "title": "Report", "status": "review"})

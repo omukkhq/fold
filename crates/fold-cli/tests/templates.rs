@@ -378,7 +378,7 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 53] = [
+const NON_TOOL_NAMES: [&str; 62] = [
     "human_review",
     "fold_failed",
     "left_out",
@@ -432,6 +432,15 @@ const NON_TOOL_NAMES: [&str; 53] = [
     "plan_hint",
     "too_long",
     "control_character",
+    "not_changed",
+    "no_parts",
+    "too_many_parts",
+    "too_many_entries",
+    "duplicate_part",
+    "file_in_two_parts",
+    "part_without_files",
+    "part_files_uncovered",
+    "part_file_outside_diff",
 ];
 
 /// The sections of the index before the shared ones.

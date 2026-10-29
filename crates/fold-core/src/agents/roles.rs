@@ -469,7 +469,7 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
             facts.name
         ),
         (Role::TaskWorker, _) => format!(
-            "fold started you as {}, a task worker for {}, and gave you the claim on each of them. Read each task with get_task and reuse its workspace when present. For a proposal task, work only in its task workspace and send create_proposal or update_proposal with an intent: what the change does, why, what it does not change and its risks. For a no_proposal task, create no workspace and send report_task with verifiable evidence.",
+            "fold started you as {}, a task worker for {}, and gave you the claim on each of them. Read each task with get_task and reuse its workspace when present. For a proposal task, work only in its task workspace and send create_proposal or update_proposal with an intent: a summary of how the change works in the code and parts that cover every changed file, with contracts, decisions and not_changed only when they apply. For a no_proposal task, create no workspace and send report_task with verifiable evidence.",
             facts.name,
             ids(facts.tasks.iter().map(ToString::to_string).collect())
         ),
@@ -481,11 +481,11 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
             let proposals = ids(facts.proposals.iter().map(ToString::to_string).collect());
             match facts.batch {
                 Some(batch) => format!(
-                    "fold started you as {}, a reviewer for {proposals}, and gave you their review claims in batch {batch}. Review only these proposals: check out the batch with create_batch_checkout, check each diff against its version's intent and submit each verdict with submit_batch_review. Read current versions before starting.",
+                    "fold started you as {}, a reviewer for {proposals}, and gave you their review claims in batch {batch}. Review only these proposals: check out the batch with create_batch_checkout, check each diff against its version's intent part by part and submit each verdict with submit_batch_review. Read current versions before starting.",
                     facts.name
                 ),
                 None => format!(
-                    "fold started you as {}, a reviewer for {proposals}, and gave you its review claim. Review only this proposal: check it out with create_review_checkout, check the diff against the version's intent and submit its verdict with submit_review. Read its current version before starting.",
+                    "fold started you as {}, a reviewer for {proposals}, and gave you its review claim. Review only this proposal: check it out with create_review_checkout, check the diff against the version's intent part by part and submit its verdict with submit_review. Read its current version before starting.",
                     facts.name
                 ),
             }
@@ -1086,15 +1086,15 @@ mod tests {
         assert!(
             Role::Reviewer
                 .prompt()
-                .contains("check them against the version's intent")
+                .contains("check them against the version's intent part by part")
         );
         let worker = Role::TaskWorker.prompt();
         assert!(worker.contains("call `run_checks` for the task before `create_proposal`"));
-        assert!(worker.contains("Its intent says, in at most 2000 characters"));
+        assert!(worker.contains("so every changed file is in exactly one part"));
         assert!(
             Role::AreaLead
                 .prompt()
-                .contains("what each proposal's intent must say")
+                .contains("parts that cover every changed file")
         );
         assert!(worker.contains("Wait for `checks.finished` with `wait_for_events`"));
         assert!(worker.contains("fold ends a `wait_for_events` after at most 270 s"));
@@ -1202,7 +1202,7 @@ mod tests {
         };
         let worker = first_turn(&facts(Role::TaskWorker, None));
         assert!(
-            worker.contains("update_proposal with an intent: what the change does, why, what it does not change and its risks"),
+            worker.contains("update_proposal with an intent: a summary of how the change works in the code and parts that cover every changed file"),
             "{worker}"
         );
         for batch in [None, ReviewBatchId::from_number(1)] {

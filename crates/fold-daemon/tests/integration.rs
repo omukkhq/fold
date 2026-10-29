@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use crate::common::roles::give_role;
 use fold_core::roles::Role;
 use std::fs::Permissions;
@@ -175,13 +176,7 @@ async fn second_proposal(fx: &Fixture) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, "second\n").unwrap();
     fx.reviews
-        .create_proposal(
-            &author,
-            t(2),
-            "Add the second page",
-            "Make the change the task asks for.",
-            None,
-        )
+        .create_proposal_covering(&author, t(2), "Add the second page", None)
         .await
         .unwrap()
         .detail()
