@@ -267,6 +267,29 @@ pub fn flatten(root: &ObjectHash, load: TreeLoader<'_>) -> Result<FlatTree, Fold
     Ok(flat)
 }
 
+/// The files and symlinks of `root` below the folder `dir`, with their full paths; empty when the tree holds no folder at `dir`. Only the trees on the way to `dir` and below it are loaded, so a check of one folder costs the same in any size of tree.
+pub fn flatten_below(
+    root: &ObjectHash,
+    dir: &[u8],
+    load: TreeLoader<'_>,
+) -> Result<FlatTree, FoldError> {
+    let mut flat = FlatTree::new();
+    let mut hash = *root;
+    for name in dir.split(|&byte| byte == b'/') {
+        let tree = load(&hash)?;
+        match tree
+            .entries
+            .into_iter()
+            .find(|entry| entry.name == name && entry.kind == EntryKind::Directory)
+        {
+            Some(entry) => hash = entry.hash,
+            None => return Ok(flat),
+        }
+    }
+    flatten_into(&hash, dir, load, &mut flat)?;
+    Ok(flat)
+}
+
 fn flatten_into(
     hash: &ObjectHash,
     prefix: &[u8],
@@ -774,6 +797,29 @@ mod tests {
             ]
         );
         assert_eq!(flat[&b"src/main.rs"[..]], file("main"));
+    }
+
+    #[test]
+    fn flatten_below_returns_the_files_of_one_folder_with_their_full_paths() {
+        let mut store = Store::default();
+        let build = sample(&mut store);
+        let deep = flatten_below(&build.root, b"src/deep", &|hash| store.load(hash)).unwrap();
+        let paths: Vec<&[u8]> = deep.keys().map(Vec::as_slice).collect();
+        assert_eq!(paths, [&b"src/deep/a/b.rs"[..], b"src/deep/c.rs"]);
+        for missing in [
+            &b"lib"[..],
+            b"src/deep/none",
+            b"README.md",
+            b"src/main.rs/x",
+        ] {
+            assert!(
+                flatten_below(&build.root, missing, &|hash| store.load(hash))
+                    .unwrap()
+                    .is_empty(),
+                "{}",
+                String::from_utf8_lossy(missing)
+            );
+        }
     }
 
     #[test]

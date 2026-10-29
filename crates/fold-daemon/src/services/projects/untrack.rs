@@ -1,22 +1,33 @@
 use std::sync::Arc;
 
+use fold_core::layout::{SKILLS_DIR, is_fold_skill_file};
+use fold_core::object::ObjectHash;
 use fold_core::{Actor, FoldError, RevisionId, codes, policy};
 use fold_store::StoreError;
-use fold_store::workspaces;
-use fold_vcs::compare::load_flat;
+use fold_store::workspaces::{
+    self, StashState, conflicted_human_change, open_unstash, stash_stack,
+};
+use fold_vcs::compare::{load_flat, load_flat_below};
 use fold_vcs::git::{CommitId, Git};
+use fold_vcs::git_remote::{BranchState, exclude_claude_files};
 use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::ignore::IgnoreRules;
+#[cfg(doc)]
+use fold_vcs::ignore::{EXCLUDE_NOTE, claude_excludes};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::RepoPath;
 use fold_vcs::revision_store::write_initial_tree;
 use serde_json::json;
 
+use super::folder::FolderFollowed;
+use super::pull::project_error;
 use super::record::{HumanFolderChange, OnConflict, RecordOutcome, integrate_change, sync};
 use super::remote::blocking;
 use super::stash::{AfterUnstash, Finish, finish_open_unstash, refuse_branch, spawned};
 use super::{ProjectError, TouchedTask, load_config};
 use crate::projects::ProjectHandle;
+use crate::services::reviews::{PullOutcome, RecordAuthor, RecordIntegration, ReviewService};
+use crate::services::workspaces::WorkspaceService;
 
 /// What `fld untrack` recorded.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,6 +201,191 @@ async fn run(
         },
         unstash,
     })
+}
+
+/// The title of fold's own revision that stops tracking its skill files.
+pub const FOLD_SKILLS_TITLE: &str = "Stop tracking fold's skill files";
+
+/// What [`keep_fold_skills_out`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FoldSkills {
+    /// Main tracks none of fold's skill files that the ignore rules leave out.
+    Untracked,
+    /// fold's revision stopped tracking `files`, in path order.
+    Stopped {
+        revision: RevisionId,
+        /// The Git commit of `revision` while Git sync is on.
+        commit: Option<CommitId>,
+        files: Vec<String>,
+    },
+    /// The project folder is not ready for the revision, for the reason named; main still tracks the files and the next open tries again.
+    Waits(&'static str),
+}
+
+/// Keeps the Claude Code files that belong to no revision out of main, as fold itself when the daemon opens a project (`policy::can_untrack_fold_skills`). `.fold/exclude` first gets [`EXCLUDE_NOTE`] at its top when it does not hold it, and each line of [`claude_excludes`] it does not list after the lines already there, so a line a person removed comes back at the next open. Then, when main tracks files below a folder of fold's own skills (`layout::is_fold_skill_file`), which reads only main's `.claude/skills` folder, that the ignore rules leave out now, so not one that a `!` line of a `.foldignore` brings back, fold makes one revision titled [`FOLD_SKILLS_TITLE`] that stops tracking them, as `fld untrack` stops tracking the files a human names: under the project's remote lock and folder lock, after the folder follows main, the change goes from the checkout record to the record without the files and merges onto main through the integration procedure as an integration of kind `record` of `fold`. No human made it, so it records no human change; its transaction gives the checkout record the change's tree instead, so the follow after it leaves the files in the folder, and while Git sync is on, the revision's commit removes them from the branch and the index only. A tracked `.claude/settings.local.json` or any other file of `.claude` stays tracked.
+///
+/// A folder that is not ready is left as it is, with [`FoldSkills::Waits`]: a branch or `HEAD` that shows a change fold did not make, commits of the human that wait, paths held by main, a stash conflict or an unstash that stopped part-way, a human change that waits for the main agent, a folder that did not follow, or a file whose entry in the record is not main's. Once main tracks none of the files, the next open finds nothing to do.
+pub async fn keep_fold_skills_out(
+    handle: &Arc<ProjectHandle>,
+    actor: &Actor,
+    git: &Git,
+) -> Result<FoldSkills, ProjectError> {
+    policy::can_untrack_fold_skills(actor).map_err(FoldError::from)?;
+    let fold_dir = handle.paths.fold_dir();
+    let added = blocking(move || exclude_claude_files(&fold_dir)).await?;
+    if !added.is_empty() {
+        tracing::info!(
+            added = added.len(),
+            "fold's Claude Code lines added to .fold/exclude"
+        );
+    }
+    let head = workspaces::head(handle.store.read())
+        .await?
+        .ok_or(StoreError::Corrupt("refs.main"))?;
+    if fold_skill_files(handle, head.tree_hash).await?.is_empty() {
+        return Ok(FoldSkills::Untracked);
+    }
+    let (handle, git) = (Arc::clone(handle), git.clone());
+    spawned(async move { stop_tracking_fold_skills(&handle, &git).await }).await
+}
+
+/// The files of main's tree `tree` below a folder of fold's own skills that the folder's ignore rules leave out.
+async fn fold_skill_files(
+    handle: &ProjectHandle,
+    tree: ObjectHash,
+) -> Result<Vec<Vec<u8>>, ProjectError> {
+    let objects_guard = handle.objects.clone().read_owned().await;
+    let paths = handle.paths.clone();
+    blocking(move || {
+        let _objects = objects_guard;
+        let objects = ObjectStore::open_existing(&paths.fold_dir())?;
+        let skills = load_flat_below(&objects, &tree, SKILLS_DIR.as_bytes())?;
+        let rules = IgnoreRules::new(paths.root());
+        Ok(skills
+            .keys()
+            .filter(|path| is_fold_skill_file(path))
+            .filter(|path| RepoPath::parse(path).is_ok_and(|path| rules.is_ignored(&path, false)))
+            .cloned()
+            .collect())
+    })
+    .await
+}
+
+async fn stop_tracking_fold_skills(
+    handle: &Arc<ProjectHandle>,
+    git: &Git,
+) -> Result<FoldSkills, ProjectError> {
+    let _remote = handle.remote_lock.clone().lock_owned().await;
+    let _folder = handle.folder_lock.clone().lock_owned().await;
+    let (followed, _) = sync(handle, git, false).await?;
+    if let Some(waits) = folder_waits(handle, &followed).await? {
+        return Ok(FoldSkills::Waits(waits));
+    }
+    let checkout = workspaces::checkout(handle.store.read())
+        .await?
+        .ok_or(StoreError::Corrupt("checkout"))?;
+    let head = workspaces::head(handle.store.read())
+        .await?
+        .ok_or(StoreError::Corrupt("refs.main"))?;
+    let wanted = fold_skill_files(handle, head.tree_hash).await?;
+    if wanted.is_empty() {
+        return Ok(FoldSkills::Untracked);
+    }
+    let objects_guard = handle.objects.clone().read_owned().await;
+    let paths = handle.paths.clone();
+    let (record_tree, head_tree) = (checkout.tree, head.tree_hash);
+    let removal = blocking(move || {
+        let _objects = objects_guard;
+        let objects = ObjectStore::open_existing(&paths.fold_dir())?;
+        let mut record = load_flat(&objects, &record_tree)?;
+        let main = load_flat(&objects, &head_tree)?;
+        // The removal is based on the record, so it removes main's version of each file only where the record holds that version.
+        if wanted.iter().any(|path| record.get(path) != main.get(path)) {
+            return Ok(None);
+        }
+        for path in &wanted {
+            record.remove(path);
+        }
+        let files: Vec<String> = wanted
+            .iter()
+            .map(|path| String::from_utf8_lossy(path).into_owned())
+            .collect();
+        Ok(Some((write_initial_tree(&objects, record)?, files)))
+    })
+    .await?;
+    let Some((tree, files)) = removal else {
+        return Ok(FoldSkills::Waits("main_changed"));
+    };
+    let reviews = ReviewService::new(
+        handle.store.clone(),
+        handle.bus.clone(),
+        handle.clock.clone(),
+        WorkspaceService::for_project(handle),
+        handle.integration.clone(),
+    );
+    let request = RecordIntegration {
+        commit: None,
+        base_tree: record_tree,
+        tree,
+        by: RecordAuthor::Fold { checkout },
+        title: Some(FOLD_SKILLS_TITLE.to_owned()),
+    };
+    let revision = match reviews
+        .integrate_record(&Actor::System, request)
+        .await
+        .map_err(project_error)?
+    {
+        PullOutcome::Succeeded { revision } => revision,
+        PullOutcome::Conflicted(_) => return Ok(FoldSkills::Waits("main_changed")),
+    };
+    sync(handle, git, false).await?;
+    let fold_dir = handle.paths.fold_dir();
+    let commit = blocking(move || SyncMap::load(&fold_dir))
+        .await
+        .ok()
+        .and_then(|map| map.commit_of(revision).cloned());
+    tracing::info!(revision = %revision, files = files.len(), "fold stopped tracking its skill files");
+    Ok(FoldSkills::Stopped {
+        revision,
+        commit,
+        files,
+    })
+}
+
+/// Why the project folder is not ready for fold's own change after its follow, if it is not.
+async fn folder_waits(
+    handle: &ProjectHandle,
+    followed: &FolderFollowed,
+) -> Result<Option<&'static str>, ProjectError> {
+    match &followed.branch {
+        Some(BranchState::Moved(_)) => return Ok(Some("head_moved")),
+        Some(BranchState::Ahead { .. }) => return Ok(Some("commits_waiting")),
+        _ => {}
+    }
+    if !followed.held.is_empty() {
+        return Ok(Some("folder_held"));
+    }
+    if followed.at.is_none() {
+        return Ok(Some("folder_behind"));
+    }
+    let mut conn = handle
+        .store
+        .read()
+        .acquire()
+        .await
+        .map_err(StoreError::from)?;
+    if open_unstash(&mut conn).await?.is_some()
+        || stash_stack(&mut conn)
+            .await?
+            .iter()
+            .any(|entry| entry.state == StashState::Conflicted)
+    {
+        return Ok(Some("unstash"));
+    }
+    if conflicted_human_change(&mut conn).await?.is_some() {
+        return Ok(Some("human_change"));
+    }
+    Ok(None)
 }
 
 /// The longest title that names the files; a longer list is counted.
