@@ -91,7 +91,7 @@ To run the tests of one file in `crates/<crate>/tests/`, select its module: `car
 ## Web
 
 1. **Keep the application static.** Vite + React with no SSR; routing with TanStack Router, server state with TanStack Query.
-2. **`web/src/styles/tokens.css` is the source of truth for the look.** Colour, type, spacing and radii come only from its tokens, in light and dark; never a raw colour or an off-scale size. Gold (`warn`) marks only what waits for a person or needs attention, groups separate by surface steps and space instead of outlines, ids use the body face with tabular numbers, and mono is only for code, diffs and paths.
+2. **`web/src/styles/tokens.css` is the source of truth for the look.** Colour, type, spacing and radii come only from its tokens, in light and dark; never a raw colour or an off-scale size. Stacking comes only from the named layer utilities (`z-sticky`, `z-toast`, `z-dialog`, `z-pop`, `z-tooltip`), never a numeric z-index. Gold (`warn`) marks only what waits for a person or needs attention, groups separate by surface steps and space instead of outlines, ids use the body face with tabular numbers, and mono is only for code, diffs and paths.
 3. **Build on Radix primitives** for menus, dialogs, popovers, tabs and tooltips. Don't hand-roll focus management.
 4. **Use Lucide icons** (`lucide-react`).
 5. **Call the API only through `web/src/api/client.ts`.** Type data with the generated schema types, never a hand-written copy. Branch on the error `code`, never the message.
