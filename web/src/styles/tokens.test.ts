@@ -80,6 +80,7 @@ const DESIGN_OTHER = [
   "r-pill",
   "measure",
   "tracking-wordmark",
+  ...["sticky", "toast", "dialog", "pop", "tooltip"].map((n) => `layer-${n}`),
   "height-bar",
   "height-bar-compact",
   "width-skeleton-s",
@@ -156,6 +157,16 @@ describe("token contract", () => {
       expect(set.has("elevation-pop")).toBe(false);
       expect(set.has("elevation-dialog")).toBe(false);
     }
+  });
+  it("stacks the layers in one order, outside the theme blocks", () => {
+    const order = ["sticky", "toast", "dialog", "pop", "tooltip"].map((n) =>
+      Number(root.get(`layer-${n}`)),
+    );
+    expect(order.every(Number.isInteger)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(new Set(order).size).toBe(order.length);
+    for (const set of [light, dark, auto])
+      expect([...set.keys()].some((k) => k.startsWith("layer-"))).toBe(false);
   });
   it("keeps the type scale to nine sizes, 12px only for count badges", () => {
     const sizes = [...root.keys()].filter((k) => k.startsWith("fs-"));

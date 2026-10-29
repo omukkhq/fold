@@ -60,8 +60,8 @@ export function RestartWorker({
         </Button>
       </RadixDialog.Trigger>
       <RadixDialog.Portal>
-        <RadixDialog.Overlay className="fixed inset-0 bg-scrim" />
-        <RadixDialog.Content className="fixed top-1/2 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog outline-none">
+        <RadixDialog.Overlay className="fixed inset-0 z-dialog bg-scrim" />
+        <RadixDialog.Content className="fixed top-1/2 left-1/2 z-dialog flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog outline-none">
           <div className="flex items-center justify-between pt-16 pr-16 pb-4 pl-24">
             <RadixDialog.Title className="text-16 leading-tight font-semibold text-text">
               Start {name} in a new session

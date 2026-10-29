@@ -103,6 +103,13 @@
   --shadow-pop: var(--elevation-pop);
   --shadow-dialog: var(--elevation-dialog);
 
+  --z-index-*: initial;
+  --z-index-sticky: var(--layer-sticky);
+  --z-index-toast: var(--layer-toast);
+  --z-index-dialog: var(--layer-dialog);
+  --z-index-pop: var(--layer-pop);
+  --z-index-tooltip: var(--layer-tooltip);
+
   --spacing-*: initial;
   --spacing-0: var(--space-0);
   --spacing-2: var(--space-2);
