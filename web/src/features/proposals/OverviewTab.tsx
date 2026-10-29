@@ -49,6 +49,12 @@ import {
 import { IdLink } from "@/components/id/IdLink";
 import type { IntegrationView } from "./integration";
 import {
+  NO_INTENT,
+  intentCard,
+  versionIntent,
+  type IntentCardModel,
+} from "./intent";
+import {
   currentVersion,
   evidenceLines,
   evidenceSource,
@@ -207,6 +213,106 @@ function IntegrationCard({
       {proposal.conflict ? (
         <ConflictBlock report={proposal.conflict} proposal={proposal} />
       ) : null}
+    </section>
+  );
+}
+
+/** What the current version is for, beside the reviewer's summary of it: a person reads these two instead of every line. */
+function IntentCard({
+  slug,
+  model,
+  entry,
+  now,
+}: {
+  slug: string;
+  model: IntentCardModel;
+  entry: HistoryEntry;
+  now: number;
+}) {
+  const summary = model.summary;
+  const spec = summary === null ? null : VERDICT_ICONS[summary.review.verdict];
+  const Icon = spec?.icon;
+  return (
+    <section
+      aria-label="Intent"
+      className={cn(CARD, "flex flex-col gap-12 px-16 py-14")}
+    >
+      <div className="flex flex-wrap items-baseline gap-x-12 gap-y-4">
+        <h2 className="text-18 leading-tight font-semibold text-text">
+          Intent
+        </h2>
+        <span className="text-13 text-text-2 tabular-nums">
+          v{model.version} · {ORIGIN_WORDS[model.origin]}{" "}
+          <PersonName name={model.by} />
+        </span>
+      </div>
+      <div className="flex min-w-0 flex-col gap-16 lg:flex-row lg:items-start">
+        <div className="min-w-0 flex-1">
+          {model.intent === null ? (
+            <p className="text-15 leading-normal text-text-2">{NO_INTENT}</p>
+          ) : (
+            <MentionText
+              text={model.intent}
+              slug={slug}
+              className={cn(
+                "max-w-measure text-15 leading-normal text-text",
+                textFlow("prose"),
+              )}
+            />
+          )}
+        </div>
+        <section
+          aria-label="Reviewer's summary"
+          className="flex min-w-0 flex-col gap-6 rounded-s bg-sunken px-12 py-10 lg:w-side-panel lg:shrink-0"
+        >
+          <h3 className={LABEL}>Reviewer's summary</h3>
+          {summary === null || spec === null || Icon === undefined ? (
+            <p className="text-14 text-text-2">
+              No reviewer has reviewed v{model.version} yet.
+            </p>
+          ) : (
+            <div
+              data-verdict={summary.review.verdict}
+              className="flex min-w-0 flex-col gap-4"
+            >
+              <p className="flex flex-wrap items-center gap-x-8 text-14">
+                <Icon
+                  aria-hidden="true"
+                  size={14}
+                  className={cn("shrink-0", spec.className)}
+                />
+                <span className={cn("font-semibold", spec.className)}>
+                  {summary.head}
+                </span>
+                <PersonName name={summary.review.reviewer} />
+                <span className="text-13 text-text-2">
+                  {formatAsOfMinute(now, summary.review.created_at)}
+                </span>
+              </p>
+              {summary.excerpt.text === "" ? null : (
+                <MentionText
+                  text={summary.excerpt.text}
+                  slug={slug}
+                  className={cn(
+                    "text-14 leading-normal text-text",
+                    textFlow("lines"),
+                  )}
+                />
+              )}
+              {summary.excerpt.cut ||
+              summary.review.comments > 0 ||
+              summary.comments.length > 0 ? (
+                <FullReview
+                  slug={slug}
+                  entry={entry}
+                  item={summary}
+                  now={now}
+                />
+              ) : null}
+            </div>
+          )}
+        </section>
+      </div>
     </section>
   );
 }
@@ -404,6 +510,20 @@ function VersionCard({
         </HrefLink>
       </header>
       <dl className="grid grid-cols-[var(--width-fact-label)_minmax(0,1fr)] gap-x-14 gap-y-10 px-16 pt-8 pb-14 text-14">
+        <VersionFact label="Intent">
+          {versionIntent(v) === null ? (
+            <p className="text-text-2">{NO_INTENT}</p>
+          ) : (
+            <MentionText
+              text={versionIntent(v) ?? ""}
+              slug={slug}
+              className={cn(
+                "max-w-measure text-15 leading-normal text-text",
+                textFlow("prose"),
+              )}
+            />
+          )}
+        </VersionFact>
         <VersionFact label="Checks">
           {entry.runsFailed ? (
             <p role="alert" className="font-medium text-bad">
@@ -699,9 +819,19 @@ export function OverviewTab({
     comments,
     failed: failedVersions,
   });
+  const intent = intentCard(entries);
+  const currentEntry = entries.find((entry) => entry.current) ?? entries[0];
   return (
     <div className="flex min-w-0 flex-col gap-20 px-16 pt-20 pb-28 md:px-24 lg:flex-row lg:items-start">
       <div className="flex min-w-0 flex-1 flex-col gap-20">
+        {intent === null || currentEntry === undefined ? null : (
+          <IntentCard
+            slug={slug}
+            model={intent}
+            entry={currentEntry}
+            now={now}
+          />
+        )}
         <IntegrationCard
           slug={slug}
           proposal={proposal}

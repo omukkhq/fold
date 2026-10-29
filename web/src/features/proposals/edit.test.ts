@@ -10,11 +10,13 @@ import {
   canEdit,
   canSendForReviewAgain,
   changed,
+  editIntent,
   editNotice,
   editRequest,
   editSource,
   editableFile,
   inHumanReview,
+  intentProblem,
   keptApprovalsNote,
   savedContent,
 } from "./edit";
@@ -166,5 +168,57 @@ describe("a human edit's approvals", () => {
     );
     expect(keptApprovalsNote(edited(), 1)).toBeNull();
     expect(keptApprovalsNote(edited(), 9)).toBeNull();
+  });
+});
+
+describe("the intent of a human edit", () => {
+  const source = {
+    kind: "text" as const,
+    text: "a\n",
+    lineEnding: "\n" as const,
+  };
+
+  it("starts as the edited version's intent", () => {
+    const p = proposalDetail(proposalSummary("P-4", { current_version: 2 }), {
+      versions: [
+        proposalVersion(1),
+        proposalVersion(2, { intent: " Adds the table. " }),
+      ],
+    });
+    expect(editIntent(p, 2)).toBe("Adds the table.");
+    expect(editIntent(p, 1)).toBe("");
+    expect(editIntent(p, 9)).toBe("");
+  });
+
+  it("sends the intent only when the human changed it", () => {
+    const base = { version: 2, path: "a.txt", content: "b\n" };
+    expect(
+      editRequest({ version: 2 }, "a.txt", "b\n", source, " Kept. ", "Kept."),
+    ).toEqual(base);
+    expect(
+      editRequest({ version: 2 }, "a.txt", "b\n", source, " ", ""),
+    ).toEqual(base);
+    expect(
+      editRequest(
+        { version: 2 },
+        "a.txt",
+        "b\n",
+        source,
+        " Returns 3. ",
+        "Kept.",
+      ),
+    ).toEqual({ ...base, intent: "Returns 3." });
+  });
+
+  it("names what keeps Save off", () => {
+    expect(intentProblem("Adds it.", "Adds it.")).toBeNull();
+    expect(intentProblem("", "")).toBeNull();
+    expect(intentProblem("  ", "Adds it.")).toBe(
+      "Say what the new version does, why, what it does not change and its risks.",
+    );
+    expect(intentProblem("é".repeat(2000), "")).toBeNull();
+    expect(intentProblem("x".repeat(2001), "")).toBe(
+      "The intent can hold at most 2000 characters; it has 2001.",
+    );
   });
 });

@@ -2068,7 +2068,8 @@ describe("Human edit", () => {
       ),
     ).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "Overview" }));
-    expect(await screen.findByText("Approved (kept from v2)")).toBeTruthy();
+    const v3 = await screen.findByRole("article", { name: "Version v3" });
+    expect(within(v3).getByText("Approved (kept from v2)")).toBeTruthy();
     expect(writes(EDITS)[0]?.body).toEqual({
       version: 2,
       path: SCHEMA,
@@ -2138,6 +2139,52 @@ describe("Human edit", () => {
     ).toBeTruthy();
     await user.click(within(editor).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("region", { name: `Edit ${SCHEMA}` })).toBeNull();
+  });
+
+  it("starts the intent of the edit from the edited version and sends the one the human writes", async () => {
+    editRoutes();
+    update("P-4", (p) => ({
+      ...p,
+      versions: p.versions.map((v) =>
+        v.version === 2 ? { ...v, intent: "Adds the reports table." } : v,
+      ),
+    }));
+    const user = userEvent.setup();
+    renderAt("/p/demo/proposals/P-4?tab=changes");
+    await user.click(
+      await screen.findByRole("button", { name: `Edit ${SCHEMA}` }),
+    );
+    const editor = await screen.findByRole("region", {
+      name: `Edit ${SCHEMA}`,
+    });
+    fireEvent.change(within(editor).getByLabelText(`Content of ${SCHEMA}`), {
+      target: { value: "CREATE TABLE reports (\n);\n-- checked\n" },
+    });
+    const intent = within(editor).getByLabelText("Intent of v3");
+    expect((intent as HTMLTextAreaElement).value).toBe(
+      "Adds the reports table.",
+    );
+    const save = within(editor).getByRole("button", { name: "Save as v3" });
+    fireEvent.change(intent, { target: { value: " " } });
+    expect(save).toHaveProperty("disabled", true);
+    expect(
+      within(editor).getByText(
+        "Say what the new version does, why, what it does not change and its risks.",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(intent, {
+      target: { value: "Adds the reports table, checked by a human." },
+    });
+    await user.click(save);
+    await waitFor(() => {
+      expect(writes(EDITS)).toHaveLength(1);
+    });
+    expect(writes(EDITS)[0]?.body).toEqual({
+      version: 2,
+      path: SCHEMA,
+      content: "CREATE TABLE reports (\r\n);\r\n-- checked\r\n",
+      intent: "Adds the reports table, checked by a human.",
+    });
   });
 
   it("offers no edit box outside a human review", async () => {
@@ -2361,5 +2408,59 @@ describe("Checks", () => {
     expect(
       within(bar).getByRole("button", { name: "Integrate" }),
     ).toHaveProperty("disabled", false);
+  });
+});
+
+describe("Intent", () => {
+  it("shows the current version's intent and the reviewer's summary above the integration, and each version's intent in the history", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      versions: p.versions.map((v) => ({
+        ...v,
+        intent:
+          v.version === 2
+            ? "Adds the reports table with an index on #T-9.\n\nIt does not change the users table."
+            : "Adds the reports table.",
+      })),
+      reviews: p.reviews.map((r) =>
+        r.version === 2 ? { ...r, body: "The diff matches the intent." } : r,
+      ),
+    }));
+    renderAt("/p/demo/proposals/P-4");
+    const card = await screen.findByRole("region", { name: "Intent" });
+    expect(
+      within(card).getByText(/Adds the reports table with an index on/),
+    ).toBeTruthy();
+    expect(
+      within(card).getByRole("link", { name: "T-9" }).getAttribute("href"),
+    ).toBe("/p/demo/t/T-9");
+    const summary = within(card).getByRole("region", {
+      name: "Reviewer's summary",
+    });
+    expect(within(summary).getByText("Approved")).toBeTruthy();
+    expect(
+      within(summary).getByText("The diff matches the intent."),
+    ).toBeTruthy();
+    const integration = screen.getByRole("region", { name: "Integration" });
+    expect(
+      card.compareDocumentPosition(integration) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const v1 = screen.getByRole("article", { name: "Version v1" });
+    expect(within(v1).getByText("Adds the reports table.")).toBeTruthy();
+  });
+
+  it("says when a version has no intent and nobody reviewed it", async () => {
+    update("P-4", (p) => ({ ...p, reviews: [] }));
+    renderAt("/p/demo/proposals/P-4");
+    const card = await screen.findByRole("region", { name: "Intent" });
+    expect(
+      within(card).getByText(
+        "This version has no intent: fold made it before it asked for one.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(card).getByText("No reviewer has reviewed v2 yet."),
+    ).toBeTruthy();
   });
 });

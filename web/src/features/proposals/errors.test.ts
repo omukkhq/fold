@@ -103,6 +103,13 @@ describe("describeFailure", () => {
       "Only a text file can be edited here.",
     );
     expect(text("version_unchanged").place).toBe("inline");
+    expect(text("invalid_intent", { reason: "too_long" }).text).toBe(
+      "The intent is too long. Keep it to 2000 characters.",
+    );
+    expect(text("invalid_intent", { reason: "empty" })).toMatchObject({
+      place: "inline",
+      text: "Say what the new version does, why, what it does not change and its risks.",
+    });
   });
 
   it("reads the gate details it names", () => {
