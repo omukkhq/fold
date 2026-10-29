@@ -2789,7 +2789,7 @@ export interface components {
         EditFileBody: {
             /** @description The whole new content of the file, as UTF-8 text. */
             content: string;
-            /** @description The intent of the new version: 1 to 2000 characters on what the change does, why, what it leaves as it is and its risks. Leave it out to keep the intent of the version the human edited. */
+            /** @description The intent of the new version: 1 to 2000 characters on what the change does, why, what it leaves as it is and its risks. Leave it out to keep the intent of the version the human edited; a version made before intents existed has none, so its edit needs one. */
             intent?: string | null;
             /** @description The file, such as `src/lib.rs`: a text file of that version. */
             path: string;
@@ -4241,7 +4241,7 @@ export interface components {
             end_line: number;
             /** @description The lines as the tree held them when the request was made, joined by newlines. */
             excerpt: string;
-            /** @description The excerpt holds only the first of the lines. */
+            /** @description The excerpt was cut: it holds only the first lines, or the first characters of a first line that is too long. */
             excerpt_cut: boolean;
             /** @example web/src/board.ts */
             path: string;
@@ -10000,7 +10000,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProposalVersion"];
                 };
             };
-            /** @description `invalid_request`, `invalid_path`, `invalid_id`, `invalid_name` or `invalid_intent` (`details.reason`: `empty` or `too_long`) */
+            /** @description `invalid_request`, `invalid_path`, `invalid_id`, `invalid_name` or `invalid_intent` (`details.reason`: `missing` for no intent on a version that has none, `empty`, `too_long` or `control_character`) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -11127,7 +11127,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `unknown_comment_path`: the tree has no text file at the path; `invalid_comment_range`: the lines are not in the file */
+            /** @description `unknown_comment_path`: the tree has no text file at the path, with `details.reason` `missing`, `not_a_file` (a directory or a symlink), `binary` or `too_large`; `invalid_comment_range`: the lines are not in the file */
             422: {
                 headers: {
                     [name: string]: unknown;
