@@ -725,3 +725,51 @@ async fn a_human_edit_keeps_the_intent_unless_the_human_writes_one() {
         Some("Returns 3, the value the product decided.")
     );
 }
+
+#[tokio::test]
+async fn a_human_edit_of_a_version_without_an_intent_needs_one() {
+    let fx = Fixture::new().await;
+    fx.mark(Some("tanim")).await;
+    fx.project
+        .store()
+        .write(async |tx| {
+            for statement in [
+                "DROP TRIGGER proposal_versions_no_update",
+                "UPDATE proposal_versions SET intent = NULL",
+            ] {
+                sqlx::query(statement).execute(tx.conn()).await?;
+            }
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
+    let tanim = human("tanim");
+    let before = fx.head().await;
+    let error = refusal(fx.edit(&tanim, 1, "src/lib.rs", EDITED).await);
+    assert_eq!(error.code(), codes::INVALID_INTENT);
+    assert_eq!(error.details().unwrap()["reason"], json!("missing"));
+    assert!(
+        error
+            .hint()
+            .unwrap()
+            .starts_with("call edit_proposal_file again with `intent`")
+    );
+    assert_eq!(fx.head().await, before, "a refused edit writes nothing");
+    let written = fx
+        .reviews
+        .edit_as_human(
+            &tanim,
+            p(1),
+            1,
+            "src/lib.rs",
+            EDITED,
+            Some("Adds the check a human asked for."),
+        )
+        .await
+        .unwrap();
+    assert_eq!(written.detail.versions[0].intent, None);
+    assert_eq!(
+        written.detail.selected.intent.as_deref(),
+        Some("Adds the check a human asked for.")
+    );
+}

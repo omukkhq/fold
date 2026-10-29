@@ -1019,7 +1019,7 @@ pub struct EditFileBody {
     pub path: String,
     /// The whole new content of the file, as UTF-8 text.
     pub content: String,
-    /// The intent of the new version: 1 to 2000 characters on what the change does, why, what it leaves as it is and its risks. Leave it out to keep the intent of the version the human edited.
+    /// The intent of the new version: 1 to 2000 characters on what the change does, why, what it leaves as it is and its risks. Leave it out to keep the intent of the version the human edited; a version made before intents existed has none, so its edit needs one.
     #[serde(default)]
     pub intent: Option<String>,
 }
@@ -1513,7 +1513,7 @@ pub async fn read_proposal_file(
     request_body = EditFileBody,
     responses(
         (status = 201, description = "The new version", body = ProposalVersion),
-        (status = 400, description = "`invalid_request`, `invalid_path`, `invalid_id`, `invalid_name` or `invalid_intent` (`details.reason`: `empty` or `too_long`)", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request`, `invalid_path`, `invalid_id`, `invalid_name` or `invalid_intent` (`details.reason`: `missing` for no intent on a version that has none, `empty`, `too_long` or `control_character`)", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 403, description = "`human_edit_denied`: the task has no human review mark, or the mark names another human (`details.reviewer`)", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
