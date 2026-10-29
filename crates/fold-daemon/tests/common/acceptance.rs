@@ -13,7 +13,7 @@ use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::socket_router;
 use fold_daemon::mcp::handshake::{self, Answer, PROTOCOL_VERSION};
-use fold_daemon::projects::{ProjectHandle, Projects};
+use fold_daemon::projects::{FolderFiles, ProjectHandle, Projects};
 use fold_daemon::services::agents::Launcher;
 use fold_daemon::services::projects::{DEFAULT_SESSION_LIFETIME, InitializedProject, init_project};
 use fold_store::projects::{self, ProjectRow};
@@ -77,6 +77,8 @@ pub struct Harness {
     work_labels: Vec<&'static str>,
     /// The programs the project's worker processes run, kept for [`Harness::start_again`].
     launcher: Launcher,
+    /// The files [`Harness::start_again`] writes into the project folder as it opens the project, as `fld serve` writes fold's skills.
+    pub folder_files: FolderFiles,
 }
 
 impl Harness {
@@ -160,7 +162,7 @@ impl Harness {
             .write(async |tx| projects::insert_project(tx, &row, project.now()).await)
             .await
             .unwrap();
-        let (state, handle) = open(&project, &row, &launcher).await;
+        let (state, handle) = open(&project, &row, &launcher, &FolderFiles::default()).await;
         let mut harness = Self {
             project,
             dir: TempDir::new().unwrap(),
@@ -171,6 +173,7 @@ impl Harness {
             next_pid: 4000,
             work_labels: Vec::new(),
             launcher,
+            folder_files: FolderFiles::default(),
         };
         for agent in AGENTS {
             harness.connect(agent).await;
@@ -197,7 +200,7 @@ impl Harness {
             root: initialized.root.to_string_lossy().into_owned(),
         };
         let launcher = no_claude();
-        let (state, handle) = open(&project, &row, &launcher).await;
+        let (state, handle) = open(&project, &row, &launcher, &FolderFiles::default()).await;
         let mut harness = Self {
             project,
             dir: TempDir::new().unwrap(),
@@ -208,6 +211,7 @@ impl Harness {
             next_pid: 4000,
             work_labels: Vec::new(),
             launcher,
+            folder_files: FolderFiles::default(),
         };
         for agent in AGENTS {
             harness.connect(agent).await;
@@ -370,7 +374,8 @@ impl Harness {
 
     /// Opens the same files again the way a starting daemon does, through the project's start-up sequence, with no session connected.
     pub async fn start_again(&mut self) {
-        let (state, handle) = open(&self.project, &self.row, &self.launcher).await;
+        let (state, handle) =
+            open(&self.project, &self.row, &self.launcher, &self.folder_files).await;
         self.state = state;
         self.handle = handle;
     }
@@ -828,12 +833,14 @@ async fn open(
     project: &TestProject,
     row: &ProjectRow,
     launcher: &Launcher,
+    folder_files: &FolderFiles,
 ) -> (AppState, Arc<ProjectHandle>) {
     let clock = Arc::new(project.clock().clone());
     let state: AppState = Arc::new(DaemonState {
         registry: project.registry().clone(),
         projects: Projects::default()
             .with_launcher(launcher.clone())
+            .with_folder_files(folder_files.clone())
             .with_registry(project.registry().clone())
             .with_notify_dir(project.paths().root().parent().unwrap().join("notices")),
         clock: clock.clone(),

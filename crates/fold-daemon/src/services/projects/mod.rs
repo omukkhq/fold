@@ -32,8 +32,8 @@ use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_discovery::Enclosing;
 use fold_vcs::git_import::{GitImportOptions, import_commit};
 use fold_vcs::git_remote::{
-    FOLD_BRANCH_REF, FOLD_STASH_REF, STASH_REF, checked_out_branch, exclude_fold_dir, folder_clean,
-    set_ref,
+    FOLD_BRANCH_REF, FOLD_STASH_REF, STASH_REF, checked_out_branch, exclude_claude_files,
+    exclude_fold_dir, folder_clean, set_ref,
 };
 use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::ignore::{FOLDIGNORE, GITIGNORE, IgnoreRules};
@@ -84,7 +84,7 @@ pub use stash::{
     AfterUnstash, StashEntry, StashOutcome, UnstashConflict, UnstashOutcome, stash, stash_list,
     unstash,
 };
-pub use untrack::{UntrackOutcome, untrack};
+pub use untrack::{FOLD_SKILLS_TITLE, FoldSkills, UntrackOutcome, keep_fold_skills_out, untrack};
 pub use web_auth::{
     DEFAULT_SESSION_LIFETIME, SIGN_IN_LINK_LIFETIME, SignInLink, SignedIn, WEB_TOUCH_INTERVAL,
     check_web_session, create_sign_in_link, create_web_session, create_web_token, end_web_session,
@@ -140,7 +140,7 @@ pub struct InitializedProject {
     pub restored: bool,
 }
 
-/// Files a caller writes into a new project's folder before init records it, so they are part of `r1`. It returns the files and folders it created, which a failed init removes; a file it changed stays changed. Blocking.
+/// Files a caller writes into a new project's folder before init records it, so they are part of `r1` unless an ignore rule leaves them out. It returns the files and folders it created, which a failed init removes; a file it changed stays changed. Blocking.
 pub type FolderFiles = Box<dyn FnOnce(&Path) -> Result<Vec<PathBuf>, FoldError> + Send>;
 
 /// Work a caller does in a new project's folder right after init creates its Git repository and before the commits are written, such as giving the repository's own config the Git identity that every commit fold writes takes. Blocking.
@@ -166,7 +166,7 @@ struct Created {
     restore: Vec<(PathBuf, Vec<u8>)>,
 }
 
-/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, writes an empty `.foldignore` when the folder has none, and in one transaction makes the genesis `r0` with the empty tree and records the folder's files, less the ignore rules, as `r1`, the change of the human `human` (an integration of kind `record` with its human change and events), then registers the project under a free slug. It needs no `git` and writes no Git data: Git sync stays off. A folder that is a Git repository, or inside another repository's working tree, is refused with a hint to use `--with-git` at the repository's top, and a folder in a Git directory, the `.git` of a repository or a bare repository, with a hint to choose a folder outside it. A failure after `.fold/` exists removes `.fold/` and what init created beside it and writes back the bytes of a file that init changed, never touching another file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way, or a project that fold removed while its `.fold/` was away: when its database is complete the init finishes it and registers it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`, or with `project_incomplete` when `.fold/` holds project content without a database, or a database without `main`; a registered folder without `.fold/`, or whose `.fold/` holds only what a daemon that still had the project open wrote after it was deleted, holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
+/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, writes an empty `.foldignore` when the folder has none and fold's lines into `.fold/exclude`, so neither the skills fold writes nor `.claude/settings.local.json` become part of `r1`, and in one transaction makes the genesis `r0` with the empty tree and records the folder's files, less the ignore rules, as `r1`, the change of the human `human` (an integration of kind `record` with its human change and events), then registers the project under a free slug. It needs no `git` and writes no Git data: Git sync stays off. A folder that is a Git repository, or inside another repository's working tree, is refused with a hint to use `--with-git` at the repository's top, and a folder in a Git directory, the `.git` of a repository or a bare repository, with a hint to choose a folder outside it. A failure after `.fold/` exists removes `.fold/` and what init created beside it and writes back the bytes of a file that init changed, never touching another file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way, or a project that fold removed while its `.fold/` was away: when its database is complete the init finishes it and registers it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`, or with `project_incomplete` when `.fold/` holds project content without a database, or a database without `main`; a registered folder without `.fold/`, or whose `.fold/` holds only what a daemon that still had the project open wrote after it was deleted, holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
 pub async fn init_project(
     host: &HostPaths,
     root: &Path,
@@ -281,7 +281,7 @@ pub async fn init_new_project(
     init_with(host, &root, name, human, git, start, clock).await
 }
 
-/// Makes the Git repository whose top is `root` a fold project whose folder is main, as [`init_project`] does, keeping the repository and its history: the genesis `r0` is the committed tree at `HEAD`, free of ignore rules, and its commit is `HEAD` itself, which `.fold/git-sync.map` records as its first line. Git sync is on from the start, turned on by `human`. The folder must be the top of a repository whose `.git` is a directory, with a branch checked out that has a commit and no change in the index or a tracked file; anything else is refused with a hint. The `[git]` branch becomes the checked-out branch. Nothing in the repository changes but `info/exclude`, which becomes the link to `.fold/exclude` with `/.fold/` in it.
+/// Makes the Git repository whose top is `root` a fold project whose folder is main, as [`init_project`] does, keeping the repository and its history: the genesis `r0` is the committed tree at `HEAD`, free of ignore rules, and its commit is `HEAD` itself, which `.fold/git-sync.map` records as its first line. Git sync is on from the start, turned on by `human`. The folder must be the top of a repository whose `.git` is a directory, with a branch checked out that has a commit and no change in the index or a tracked file; anything else is refused with a hint. The `[git]` branch becomes the checked-out branch. Nothing in the repository changes but `info/exclude`, which becomes the link to `.fold/exclude` with `/.fold/` and fold's Claude Code lines in it; files below fold's skill folders that `HEAD` tracks stay in `r0`, and the daemon's first open of the project stops tracking them.
 pub async fn init_project_from_git(
     host: &HostPaths,
     root: &Path,
@@ -631,6 +631,8 @@ impl Init<'_> {
         if let Some(foldignore) = blocking(move || write_foldignore(&root)).await? {
             created.files.push(foldignore);
         }
+        let fold_dir = paths.fold_dir();
+        blocking(move || Ok(exclude_claude_files(&fold_dir).map(drop)?)).await?;
         if let Some(files) = files {
             let root = paths.root().to_owned();
             let written = blocking(move || Ok(files(&root)?)).await?;
@@ -745,6 +747,7 @@ impl Init<'_> {
             let paths = paths_owned;
             let objects = ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)?;
             exclude_fold_dir(&paths.git_dir())?;
+            exclude_claude_files(&paths.fold_dir())?;
             // A stash the repository holds already is the human's, and only a change of it counts as one fold did not make.
             let repo = paths.git_dir();
             let stash = git.ref_commit(&repo, STASH_REF)?;

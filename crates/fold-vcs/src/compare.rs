@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use fold_core::merge::carry_change;
 use fold_core::object::{ObjectHash, ObjectKind, hash_object};
 pub use fold_core::tree::ChangeKind;
-use fold_core::tree::{EntryKind, FlatEntry, FlatTree, flatten};
+use fold_core::tree::{EntryKind, FlatEntry, FlatTree, flatten, flatten_below};
 use fold_core::{FoldError, codes};
 use serde_json::json;
 
@@ -150,6 +150,15 @@ pub fn carried_state(
 /// Every file and symlink of a stored tree.
 pub fn load_flat(objects: &ObjectStore, tree: &ObjectHash) -> Result<FlatTree, FoldError> {
     flatten(tree, &|hash| load_tree(objects, hash))
+}
+
+/// The files and symlinks of a stored tree below the folder `dir`, loading only the trees on the way there and below it.
+pub fn load_flat_below(
+    objects: &ObjectStore,
+    tree: &ObjectHash,
+    dir: &[u8],
+) -> Result<FlatTree, FoldError> {
+    flatten_below(tree, dir, &|hash| load_tree(objects, hash))
 }
 
 /// The working side of a comparison and the files the scan could not read, sorted by path. Each such file keeps its base entry, so it never shows as deleted.

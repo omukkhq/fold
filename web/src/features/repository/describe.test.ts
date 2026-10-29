@@ -140,6 +140,23 @@ describe("describeRevision", () => {
     ]);
   });
 
+  it("says fold made its own record instead of naming the project folder", () => {
+    const lines = describeRevision(
+      revision({
+        origin: "record",
+        author: "fold",
+        title: "Stop tracking fold's skill files",
+      }),
+      NOW,
+    );
+    expect(lines.title).toBe("Stop tracking fold's skill files");
+    expect(lines.what).toEqual(["a change of main made by fold"]);
+    expect(
+      describeRevision(revision({ origin: "record", author: "fold" }), NOW)
+        .title,
+    ).toBe("r8");
+  });
+
   it("puts the date before the time of a revision from another day", () => {
     expect(
       describeRevision(revision({ created_at: NOW - 2 * 86_400_000 }), NOW)

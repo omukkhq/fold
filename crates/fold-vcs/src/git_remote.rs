@@ -112,6 +112,27 @@ fn write_exclude(fold_dir: &Path, text: &str) -> io::Result<()> {
     written
 }
 
+/// Keeps fold's lines in `.fold/exclude` in `fold_dir`: [`EXCLUDE_NOTE`](crate::ignore::EXCLUDE_NOTE) at the top when the file does not hold it, and each of [`claude_excludes`](crate::ignore::claude_excludes) it does not list yet at its end, as [`add_exclude_patterns`] adds them. Returns the patterns it added, without the note. Blocking.
+pub fn exclude_claude_files(fold_dir: &Path) -> Result<Vec<String>, FoldError> {
+    let io = |error: io::Error| repository_io(&error);
+    let _writing = crate::lock(&EXCLUDE_WRITES);
+    let current = match fs::read_to_string(fold_dir.join("exclude")) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(io(error)),
+    };
+    let mut lines: Vec<String> = current.lines().map(str::to_owned).collect();
+    if !lines.iter().any(|line| line == crate::ignore::EXCLUDE_NOTE) {
+        lines.insert(0, crate::ignore::EXCLUDE_NOTE.to_owned());
+    }
+    let added = push_missing(&mut lines, &crate::ignore::claude_excludes());
+    let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+    if text != current {
+        write_exclude(fold_dir, &text).map_err(io)?;
+    }
+    Ok(added)
+}
+
 /// Adds each of `patterns` that `.fold/exclude` in `fold_dir` does not list yet at its end, keeping [`EXCLUDE_LINE`] in it, and returns the patterns it added. Blocking.
 pub fn add_exclude_patterns(
     fold_dir: &Path,
@@ -125,6 +146,16 @@ pub fn add_exclude_patterns(
         Err(error) => return Err(io(error)),
     };
     let mut lines: Vec<String> = current.lines().map(str::to_owned).collect();
+    let added = push_missing(&mut lines, patterns);
+    let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+    if text != current {
+        write_exclude(fold_dir, &text).map_err(io)?;
+    }
+    Ok(added)
+}
+
+/// Pushes [`EXCLUDE_LINE`] and each of `patterns` that `lines` does not hold yet, and returns the patterns it pushed.
+fn push_missing(lines: &mut Vec<String>, patterns: &[String]) -> Vec<String> {
     let mut added = Vec::new();
     for pattern in [EXCLUDE_LINE.to_owned()].iter().chain(patterns) {
         if !lines.contains(pattern) {
@@ -134,11 +165,7 @@ pub fn add_exclude_patterns(
             }
         }
     }
-    let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
-    if text != current {
-        write_exclude(fold_dir, &text).map_err(io)?;
-    }
-    Ok(added)
+    added
 }
 
 /// Moves `branch` of `repo` to `new`, only while it points to `old`, or only while it does not exist when `old` is `None`. Blocking.

@@ -16,7 +16,7 @@ export interface RevisionLines {
   when: string;
 }
 
-/** A revision in the shape of `fld log`: a proposal integration is titled by its proposal's title and names the proposal, its task and its author; a pull, a direct change of the main agent, a record of the project folder and the genesis say what they are and who made them. */
+/** A revision in the shape of `fld log`: a proposal integration is titled by its proposal's title and names the proposal, its task and its author; a pull, a direct change of the main agent, a record of the project folder and the genesis say what they are and who made them, and fold's own record says fold made it. */
 export function describeRevision(
   revision: Revision,
   now: number,
@@ -52,6 +52,14 @@ export function describeRevision(
         when,
       };
     case "record":
+      // fold's own record, such as the one that stops tracking its skill files, changes main but records nothing from the folder.
+      if (revision.author === "fold") {
+        return {
+          title: revision.title ?? revision.id,
+          what: seg`a change of main made by fold`,
+          when,
+        };
+      }
       return {
         title: revision.title ?? "Changes of the project folder",
         what: seg`recorded from the project folder${by}`,

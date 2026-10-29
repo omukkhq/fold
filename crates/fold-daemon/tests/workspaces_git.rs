@@ -218,6 +218,14 @@ async fn from_git_makes_the_repository_the_project_and_head_its_first_commit() {
             .ends_with("[git]\nbranch = \"trunk\"\n")
     );
     assert_eq!(git(&repo, &["status", "--porcelain"]), "");
+    let exclude = fs::read_to_string(paths.fold_dir().join("exclude")).unwrap();
+    for line in fold_vcs::ignore::claude_excludes() {
+        assert_eq!(
+            exclude.lines().filter(|found| *found == line).count(),
+            1,
+            "{line}"
+        );
+    }
     assert!(!repo.join(".foldignore").exists());
     assert!(!repo.join(".gitignore").exists());
     assert_eq!(fs::read(repo.join("README.md")).unwrap(), b"# app\n");

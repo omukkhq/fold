@@ -51,7 +51,7 @@ pub use human_edits::HumanEdit;
 pub use human_review::{AwaitingHumanReview, awaiting_human_review, awaiting_human_review_in};
 pub use integrate::{
     AutomaticIntegration, DirectChange, DirectOutcome, HumanRecord, IntegrationOutcome,
-    PullIntegration, PullOutcome, RecordIntegration,
+    PullIntegration, PullOutcome, RecordAuthor, RecordIntegration,
 };
 pub use plans::{
     AwaitedTask, DEFAULT_PLAN_LIST, MAX_PLAN_LIST, PlanChange, ProposalPlan, RelatedTaskView,
