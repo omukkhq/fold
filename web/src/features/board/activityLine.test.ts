@@ -13,12 +13,18 @@ function card(
   blocked = false,
 ): Pick<
   BoardCard,
-  "activity" | "attention" | "blocked" | "proposal" | "edits_after_version"
+  | "activity"
+  | "attention"
+  | "blocked"
+  | "check_run"
+  | "proposal"
+  | "edits_after_version"
 > {
   return {
     activity,
     attention,
     blocked,
+    check_run: null,
     proposal: null,
     edits_after_version: null,
   };
@@ -44,6 +50,7 @@ function live(at: number, files: number): LiveWorkspace {
     proposal: null,
     stalled: false,
     edits_after_version: null,
+    check_run: null,
   };
 }
 
@@ -63,6 +70,7 @@ describe("activityLine", () => {
       text: "Editing src/routes/login.tsx",
       since: "12 s ago",
       stalled: false,
+      run: null,
       files: null,
     });
   });
@@ -165,6 +173,7 @@ describe("activityLine", () => {
       text: "Sent P-1 v2 · waits for human review",
       since: "6 min ago",
       stalled: false,
+      run: null,
       files: null,
     });
     const frame = { ...live(NOW - SECOND, 1), proposal: "P-1" };
@@ -203,6 +212,7 @@ describe("activityLine", () => {
       text: "No edits for 6 min",
       since: "6 min ago",
       stalled: true,
+      run: null,
       files: null,
     });
     expect(activityLine({ ...back, attention: [] }, undefined, NOW)?.text).toBe(
@@ -210,11 +220,54 @@ describe("activityLine", () => {
     );
   });
 
+  it("says the checks run instead of a stall or a sent version while a run goes", () => {
+    const run = {
+      run: "cr-4",
+      purpose: "update_proposal" as const,
+      proposal: "P-1",
+      started_at: NOW - 2 * MINUTE,
+    };
+    const waiting = {
+      ...card({ path: "a.ts", at: NOW - 9 * MINUTE }, [
+        { kind: "stalled", closable: false },
+      ]),
+      check_run: run,
+      proposal: {
+        id: "P-1",
+        state: "changes_requested" as const,
+        version: 1,
+        checks_failed: false,
+        revision: null,
+        review_plan: null,
+      },
+      edits_after_version: true,
+    };
+    expect(activityLine(waiting, undefined, NOW)).toEqual({
+      text: "Running checks for v2",
+      since: "2 min ago",
+      stalled: false,
+      run: "cr-4",
+      files: null,
+    });
+    const frame = live(NOW - 9 * MINUTE, 1);
+    expect(
+      activityLine(
+        { ...waiting, check_run: null },
+        { ...frame, check_run: run },
+        NOW,
+      )?.text,
+    ).toBe("Running checks for v2");
+    const ended = activityLine(waiting, { ...frame, check_run: null }, NOW);
+    expect(ended?.text).toBe("No edits for 9 min");
+    expect(ended?.run).toBeNull();
+  });
+
   it("works from a card whose payload has no activity", () => {
     const bare = {
       activity: null,
       attention: [],
       blocked: false,
+      check_run: null,
       proposal: null,
       edits_after_version: null,
     };
@@ -227,13 +280,19 @@ describe("activityLine", () => {
       text: "Editing",
       since: "1 min ago",
       stalled: false,
+      run: null,
       files: 2,
     });
   });
 });
 
 describe("liveFilesText", () => {
-  const base = { text: "Editing", since: "12 s ago", stalled: false };
+  const base = {
+    text: "Editing",
+    since: "12 s ago",
+    stalled: false,
+    run: null,
+  };
 
   it("counts the changed files", () => {
     expect(liveFilesText({ ...base, files: 4 })).toBe("4 files");

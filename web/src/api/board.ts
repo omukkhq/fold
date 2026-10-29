@@ -17,6 +17,7 @@ export type HumanReviewMark = Schemas["HumanReviewMark"];
 export type CardProposalState = Schemas["ProposalState"];
 export type BoardProposal = Schemas["BoardProposal"];
 export type BoardActivity = Schemas["BoardActivity"];
+export type LiveCheckRun = Schemas["LiveCheckRun"];
 export type BoardCard = Schemas["BoardCard"];
 
 export type BoardColumn = Schemas["BoardColumn"];

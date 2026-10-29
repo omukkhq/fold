@@ -248,6 +248,7 @@ fn live_workspace(number: u32, summary: &str) -> LiveWorkspace {
         proposal: None,
         stalled: false,
         edits_after_version: None,
+        check_run: None,
     }
 }
 

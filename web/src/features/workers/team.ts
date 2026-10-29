@@ -371,6 +371,29 @@ export function workspaceOf(
   return null;
 }
 
+/** Whether a check run goes in a workspace of the worker `name`: it waits for the result, which is no stall. */
+export function runsChecks(
+  agents: readonly AgentView[],
+  name: string,
+): boolean {
+  return agents.some((agent) =>
+    agent.workers.some(
+      (worker) =>
+        worker.name === name &&
+        worker.workspaces.some((ws) => ws.check_run !== null),
+    ),
+  );
+}
+
+/** The step with `running checks` after its text while a check run goes in the worker's workspace. */
+export function withChecks(step: Step, running: boolean): Step {
+  if (!running) return step;
+  return {
+    tool: step.tool,
+    text: step.text ? `${step.text} · running checks` : "running checks",
+  };
+}
+
 /** The batch a reviewer holds: its open one, else the newest it held. */
 export function heldBatch(
   batches: readonly ReviewBatch[],
@@ -485,10 +508,15 @@ function runningRow(
     turns: String(worker.turns),
     cost: costText(worker.cost_micro_usd),
     context: contextText(worker.context_tokens),
-    step: workerStep(
-      worker,
-      input.steps,
-      waitsForTaskWorkers(worker, input.workers.workers),
+    step: withChecks(
+      workerStep(
+        worker,
+        input.steps,
+        waitsForTaskWorkers(worker, input.workers.workers),
+      ),
+      worker.state !== "stopped" &&
+        worker.state !== "failed" &&
+        runsChecks(input.agents, worker.name),
     ),
     error: rowError(worker),
     errorInStep: worker.last_error !== null,

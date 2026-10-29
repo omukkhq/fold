@@ -24,6 +24,7 @@ use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::BusMessage;
 use fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME;
 use fold_daemon::services::reviews::ReviewService;
+use fold_daemon::services::reviews::checks::Started;
 use fold_daemon::services::tasks::{CreateTask, sweep_leases};
 use fold_daemon::services::workspaces::{WorkspaceService, check_stalls};
 use fold_store::agents::WorkerRow;
@@ -886,4 +887,124 @@ async fn requested_changes_stall_the_author_from_the_verdict_without_an_edit() {
     );
     fx.handle.live.rescan(id).await.unwrap();
     assert!(fx.stalled(id), "a rescan without an edit leaves the flag");
+}
+
+/// The `check_run` of the task card `task` on `GET /board`.
+#[cfg(test)]
+async fn card_check_run(fx: &Fixture, task: &str) -> Value {
+    let board = fx.get_json("/api/v1/projects/demo/board").await;
+    board["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|column| column["cards"].as_array().unwrap().iter())
+        .find(|card| card["task"] == task)
+        .unwrap()["check_run"]
+        .clone()
+}
+
+/// The `check_run` of the first workspace of the first worker of `agent` on `GET /agents`.
+#[cfg(test)]
+async fn agent_check_run(fx: &Fixture, agent: &str) -> Value {
+    let body = fx.get_json("/api/v1/projects/demo/agents").await;
+    body["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == agent)
+        .unwrap()["workers"][0]["workspaces"][0]["check_run"]
+        .clone()
+}
+
+#[tokio::test]
+async fn a_worker_that_waits_for_its_checks_stalls_only_a_window_after_the_run() {
+    let fx = Fixture::new().await;
+    let (id, dir) = fx.create(&fx.frontend, 1).await;
+    let gate = tempfile::tempdir().unwrap();
+    let gate = gate.path().join("go");
+    let checks = format!(
+        "[[check]]\nname = \"slow\"\nrun = \"until [ -e '{}' ]; do sleep 0.05; done\"\n",
+        gate.display()
+    );
+    fs::write(dir.join("fold-checks.toml"), checks).unwrap();
+    fx.handle.live.rescan(id).await.unwrap();
+    fx.advance(STALL);
+    assert_eq!(fx.check().await, 1);
+    assert!(fx.stalled(id));
+
+    let reviews = fx.handle.reviews(fx.project.registry());
+    let started = fx.project.now();
+    let run = match reviews
+        .run_checks(&by(&fx.frontend.worker), t(1))
+        .await
+        .unwrap()
+    {
+        Started::Running { run, .. } => run,
+        Started::NoChecks => panic!("expected a run"),
+    };
+    assert!(!fx.stalled(id), "the start of the run clears the flag");
+    let expected = json!({
+        "run": run.to_string(),
+        "purpose": "check",
+        "proposal": null,
+        "started_at": started.as_millis(),
+    });
+    let live = fx.handle.live.get(id).unwrap();
+    assert_eq!(serde_json::to_value(live.view.check_run).unwrap(), expected);
+    assert!(fx.attention("T-1").await.is_empty());
+    assert_eq!(card_check_run(&fx, "T-1").await, expected);
+    assert_eq!(agent_check_run(&fx, "frontend").await, expected);
+    assert_eq!(fx.agent_attention().await["frontend"], json!([]));
+
+    let quiet = live.view.last_activity_at;
+    fx.handle.live.set_check_run(id, None);
+    assert!(fx.handle.live.set_stalled(id, quiet, true));
+    assert_eq!(
+        fx.check().await,
+        1,
+        "a tick that finds the run first counts the flag it clears"
+    );
+    assert!(!fx.stalled(id));
+    assert_eq!(
+        serde_json::to_value(fx.handle.live.get(id).unwrap().view.check_run).unwrap(),
+        expected
+    );
+
+    fx.advance(3 * STALL);
+    assert_eq!(fx.check().await, 0, "a worker that waits for its run");
+    assert!(!fx.stalled(id));
+    assert!(fx.attention("T-1").await.is_empty());
+    assert_eq!(fx.agent_attention().await["frontend"], json!([]));
+
+    let end = fx.project.now();
+    fs::write(&gate, "").unwrap();
+    let ended = eventually(WAIT, async || {
+        let view = reviews.get_check_run(run, false).await.unwrap();
+        view.run.finished_at.ok_or(view.run.state)
+    })
+    .await;
+    assert_eq!(ended, end);
+    eventually(WAIT, async || {
+        let live = fx.handle.live.get(id).unwrap();
+        live.view.check_run.map_or(Ok(()), Err)
+    })
+    .await;
+    assert_eq!(card_check_run(&fx, "T-1").await, Value::Null);
+    assert_eq!(agent_check_run(&fx, "frontend").await, Value::Null);
+
+    fx.advance(STALL - Duration::from_millis(1));
+    assert_eq!(
+        fx.check().await,
+        0,
+        "the window starts again at the run's end"
+    );
+    assert!(!fx.stalled(id));
+    fx.advance(Duration::from_millis(1));
+    assert_eq!(fx.check().await, 1, "no edit for the window after the run");
+    assert!(fx.stalled(id));
+    assert_eq!(fx.attention("T-1").await, ["stalled"]);
+    assert_eq!(
+        fx.agent_attention().await["frontend"],
+        json!([{"kind": "stalled", "task": "T-1"}])
+    );
 }

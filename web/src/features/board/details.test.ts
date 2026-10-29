@@ -54,7 +54,13 @@ describe("cardDetails", () => {
     });
     const details = cardDetails(
       card,
-      { text: "Editing", since: "1 min ago", stalled: false, files: 3 },
+      {
+        text: "Running checks",
+        since: "1 min ago",
+        stalled: false,
+        run: "cr-4",
+        files: 3,
+      },
       10,
     );
     expect(details.rows.map((row) => row.name)).toEqual([
@@ -65,6 +71,7 @@ describe("cardDetails", () => {
       "Blocks",
       "Proposal",
       "Report",
+      "Checks",
       "Files",
       "Messages",
       "Human review",
@@ -91,6 +98,11 @@ describe("cardDetails", () => {
       kind: "person",
       name: "Human review",
       person: "dev",
+    });
+    expect(details.rows).toContainEqual({
+      kind: "text",
+      name: "Checks",
+      text: "cr-4 running",
     });
     expect(details.rows).toContainEqual({
       kind: "text",

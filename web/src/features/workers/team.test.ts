@@ -48,6 +48,8 @@ import {
   waitsForTaskWorkers,
   workerStep,
   workspaceOf,
+  runsChecks,
+  withChecks,
   type TeamInput,
 } from "./team";
 
@@ -370,6 +372,46 @@ describe("lookups", () => {
     expect(workspaceOf(agents, "web-worker", "T-12")).toBe("ws-7");
     expect(workspaceOf(agents, "web-worker", "T-99")).toBeNull();
     expect(workspaceOf(agents, "other", "T-12")).toBeNull();
+  });
+
+  it("adds running checks to the step of a live worker whose workspace runs them", () => {
+    const run = {
+      run: "cr-4",
+      purpose: "check" as const,
+      proposal: null,
+      started_at: 0,
+    };
+    const agents = [
+      agent("web-lead", {
+        workers: [
+          worker("web-lead", {
+            workspaces: [workspace(), workspace({ check_run: run })],
+          }),
+        ],
+      }),
+    ];
+    expect(runsChecks(agents, "web-lead")).toBe(true);
+    expect(runsChecks(agents, "other")).toBe(false);
+    const rows = (state: "idle" | "stopped") =>
+      teamGroups(
+        input({
+          agents,
+          workers: workerList({
+            workers: [workerProcess("web-lead", { state })],
+          }),
+        }),
+      ).flatMap((group) => group.rows);
+    expect(rows("idle")[0]?.step).toEqual({
+      tool: null,
+      text: "waiting for its next turn · running checks",
+    });
+    expect(rows("stopped")[0]?.step.text).not.toContain("running checks");
+    expect(withChecks({ tool: "Bash", text: "" }, true)).toEqual({
+      tool: "Bash",
+      text: "running checks",
+    });
+    const step = { tool: null, text: "in a turn" };
+    expect(withChecks(step, false)).toBe(step);
   });
 
   it("picks the open batch of a holder, else its newest", () => {

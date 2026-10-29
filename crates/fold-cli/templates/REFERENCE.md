@@ -74,7 +74,7 @@ rescan_seconds = 60                  # time between full rescans of a workspace
 auto_checkpoint_quiet_seconds = 120  # quiet time before an automatic checkpoint
 auto_checkpoints_kept = 20           # automatic checkpoints each workspace keeps
 max_file_bytes = 52428800            # a larger file keeps its recorded version and gives a warning
-stall_minutes = 5                    # a claimed task without a file change for this long counts as stalled
+stall_minutes = 5                    # a claimed task without a file change for this long counts as stalled; never while its workspace runs checks, and counted from the end of its last run
 closed_workspace_days = 14           # how long `fld gc` keeps the checkpoints of a closed workspace, a record only
 
 [git]

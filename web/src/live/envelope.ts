@@ -71,6 +71,17 @@ function isCheckpoint(value: unknown): boolean {
   );
 }
 
+/** A purpose this build does not know passes, because the daemon can be newer than the web build. */
+function isCheckRun(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.run === "string" &&
+    typeof value.purpose === "string" &&
+    isNullableString(value.proposal) &&
+    typeof value.started_at === "number"
+  );
+}
+
 export function isLiveWorkspace(value: unknown): value is LiveWorkspace {
   return (
     isRecord(value) &&
@@ -86,7 +97,8 @@ export function isLiveWorkspace(value: unknown): value is LiveWorkspace {
     value.checkpoints.every(isCheckpoint) &&
     isNullableString(value.proposal) &&
     typeof value.stalled === "boolean" &&
-    isNullableBoolean(value.edits_after_version)
+    isNullableBoolean(value.edits_after_version) &&
+    (value.check_run === null || isCheckRun(value.check_run))
   );
 }
 
@@ -163,5 +175,6 @@ export function liveWorkspaceOf(frame: WorkspaceChanged): LiveWorkspace {
     proposal: frame.proposal,
     stalled: frame.stalled,
     edits_after_version: frame.edits_after_version,
+    check_run: frame.check_run,
   };
 }

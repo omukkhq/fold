@@ -480,6 +480,30 @@ pub async fn running_runs(
     rows(raw)
 }
 
+/// The end time of the newest ended proposal-stage run of each active or missing workspace that has one, in workspace order: the start of the stall window after a worker's checks. A closed workspace never stalls, so its runs are left out.
+pub async fn last_proposal_run_ends(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<(WorkspaceId, Timestamp)>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT w.number AS "workspace!: i64", MAX(c.finished_at) AS "ended_at!: i64"
+           FROM check_runs c
+           JOIN workspaces w ON w.id = c.workspace_id
+           WHERE c.stage = 'proposal' AND c.finished_at IS NOT NULL
+             AND w.state IN ('active', 'missing')
+           GROUP BY c.workspace_id
+           ORDER BY w.number"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let workspace = WorkspaceId::try_from_db(row.workspace)
+                .ok_or(StoreError::Corrupt("workspaces.number"))?;
+            Ok((workspace, time(row.ended_at, "check_runs.finished_at")?))
+        })
+        .collect()
+}
+
 /// The results of a run in run order, with their logs when `logs` is true.
 pub async fn list_results(
     executor: impl SqliteExecutor<'_>,

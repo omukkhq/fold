@@ -441,11 +441,14 @@ function invalidationKeys(
       const nextVersion =
         event.data.purpose === "update_proposal" ||
         event.data.purpose === "review_fix";
+      // The agents and the workers name the run that goes in each worker's workspace.
       return [
         keys.proposals(slug),
         ...pages,
         ...taskKey,
         board,
+        keys.agents(slug),
+        keys.workers(slug),
         ...(run === null ? [] : [keys.checkRun(slug, run)]),
         ...(nextVersion ? [keys.reviewBatches(slug)] : []),
       ];

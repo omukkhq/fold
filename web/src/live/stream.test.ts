@@ -44,6 +44,7 @@ const live = () =>
     proposal: null,
     stalled: false,
     edits_after_version: null,
+    check_run: null,
   })}\n\n`;
 /** An `agent_presence_changed` frame is live too: no `seq`, no `id` line. */
 const presence = () =>
