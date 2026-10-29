@@ -1,12 +1,14 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup build fmt dev dev-daemon dev-web seed-dev dev-sign-in fmt-check-rust fmt-check-web fmt-check web-install web-build check-web-sources check-inner-allow clippy test test-fast test-default-features test-web check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api gen-languages release release-tools bench bench-smoke
+.PHONY: help setup build fmt dev dev-daemon dev-web seed-dev dev-sign-in fmt-check-rust fmt-check-web fmt-check web-install web-build check-web-sources check-inner-allow clippy test test-fast test-default-features test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api gen-languages release release-tools bench bench-smoke
 
 help: ## List the targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
 
 setup: ## Install the toolchain, components, cargo tools, web dependencies, prek and its git hook (once per clone)
 	rustup show
+	rustup component add llvm-tools-preview
 	cargo nextest --version >/dev/null 2>&1 || cargo install --locked cargo-nextest
+	cargo llvm-cov --version >/dev/null 2>&1 || cargo install --locked cargo-llvm-cov
 	cargo sqlx --version >/dev/null 2>&1 || cargo install --locked sqlx-cli --no-default-features --features sqlite,rustls
 	cargo watch --version >/dev/null 2>&1 || cargo install --locked cargo-watch
 	cd web && bun install --frozen-lockfile
@@ -89,7 +91,12 @@ test-fast: ## Run the Rust tests without the acceptance tests and failpoint test
 test-web: ## Run the web tests
 	cd web && bun run test
 
-check-rust: fmt-check-rust sqlx-check clippy test ## Run rustfmt, the query metadata check, clippy and the Rust tests
+# The instrumented build lives in the worktree so parallel coverage runs in several worktrees do not rebuild each other's test binaries; ordinary builds keep the shared target directory.
+coverage: export CARGO_LLVM_COV_TARGET_DIR := $(CURDIR)/target/llvm-cov-target
+coverage: ## Run every Rust test and fail under 85% line coverage
+	cargo llvm-cov nextest --workspace --all-features --ignore-filename-regex '/tests/' --fail-under-lines 85
+
+check-rust: fmt-check-rust sqlx-check clippy coverage test-default-features ## Run rustfmt, clippy and the Rust tests with coverage
 
 acceptance: ## Run only the acceptance tests
 	cargo nextest run --workspace --all-features -E 'test(/^acceptance_/)'
@@ -134,9 +141,9 @@ check-web-sources: web-install
 	cd web && bun run typecheck
 	cd web && bun run lint
 	cd web && bun run format:check
-	cd web && bun run test
+	cd web && bun run coverage
 
-check-web: check-web-sources web-build ## Run the web install, typecheck, lint, format check, tests and build
+check-web: check-web-sources web-build ## Run the web install, typecheck, lint, format check, coverage and build
 
 GEN_DIR := target/gen
 

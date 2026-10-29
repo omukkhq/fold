@@ -51,7 +51,7 @@ make build      # fast development build of the Rust workspace for your system, 
 make dev        # run the daemon on :7420 with reload, and the Vite dev server on :5173
 make seed-dev   # make a demo project through the dev daemon
 make dev-sign-in # print a one-time link that signs you in to the dev daemon; change its port to 5173 for the Vite dev server
-make check      # run all checks: format, clippy, tests, tsc, eslint, vitest and the builds
+make check      # run all checks: format, clippy, tests, coverage, tsc, eslint, vitest and the builds
 ```
 
 `make build`, `make dev`, the checks and the tests use the dev profile for your system, so they compile fast. Only `make release` does the slow static musl build.
