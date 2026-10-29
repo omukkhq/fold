@@ -344,7 +344,12 @@ async fn push_goes_to_the_review_lead_on_proposal_opened() {
     n.give_claim("review").await;
     n.fx.write("src/more.rs", "pub fn more() {}\n");
     n.fx.reviews
-        .update_proposal(&by(&n.fx.frontend.worker), p(1), None)
+        .update_proposal(
+            &by(&n.fx.frontend.worker),
+            p(1),
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap()
         .detail()

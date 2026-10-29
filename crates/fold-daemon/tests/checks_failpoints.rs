@@ -17,7 +17,13 @@ async fn a_stop_before_the_version_leaves_no_result_and_no_proposal() {
     let runner = CheckRunner::new(CheckPermits::new(1));
     let reviews = fx.service().with_checks(runner.clone());
     let proposed = reviews
-        .create_proposal(&by(&fx.frontend.worker), t(1), "Add checks", None)
+        .create_proposal(
+            &by(&fx.frontend.worker),
+            t(1),
+            "Add checks",
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap();
     let Proposed::Checking { run, .. } = proposed else {

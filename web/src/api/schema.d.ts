@@ -2745,6 +2745,8 @@ export interface components {
         EditFileBody: {
             /** @description The whole new content of the file, as UTF-8 text. */
             content: string;
+            /** @description The intent of the new version: 1 to 2000 characters on what the change does, why, what it leaves as it is and its risks. Leave it out to keep the intent of the version the human edited. */
+            intent?: string | null;
             /** @description The file, such as `src/lib.rs`: a text file of that version. */
             path: string;
             /**
@@ -4002,6 +4004,8 @@ export interface components {
             files_modified: number;
             /** @description A human made this version by editing the one before it in a human review. It keeps the agent approvals of that version until it is sent for review again; a human approves it again. */
             human_edit: boolean;
+            /** @description What the change does, why, what it leaves as it is and its risks, as the version's author, reviewer or human editor wrote it; `null` on a version made before intents existed. */
+            intent: string | null;
             /** @description A human sent this version for review again, so the approvals it kept no longer count. */
             review_again: boolean;
             /** @description The reviewer that holds the review claim made this version by fixing the one before it in its review checkout. It starts without approvals like every version. */
@@ -9916,7 +9920,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProposalVersion"];
                 };
             };
-            /** @description `invalid_request`, `invalid_path`, `invalid_id` or `invalid_name` */
+            /** @description `invalid_request`, `invalid_path`, `invalid_id`, `invalid_name` or `invalid_intent` (`details.reason`: `empty` or `too_long`) */
             400: {
                 headers: {
                     [name: string]: unknown;

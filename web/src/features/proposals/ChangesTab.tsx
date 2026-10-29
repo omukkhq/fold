@@ -245,6 +245,7 @@ function ChangeBody({
         <FileEditor
           slug={slug}
           id={id}
+          proposal={proposal}
           view={view}
           path={file.path}
           onCancel={() => {

@@ -27,6 +27,33 @@ pub fn human_review_reason(reason: &str) -> Result<String, crate::FoldError> {
     )
 }
 
+/// The longest intent a proposal version takes, in characters.
+pub const MAX_INTENT_CHARS: usize = 2000;
+
+/// The intent of a proposal version: what the change does, why, what it leaves as it is and its risks, which a human reads beside the reviewer's summary instead of every line. It is stored trimmed, with each line break as `\n`, and becomes the body of the version's Git commit. An empty or too long intent is `invalid_intent`, whose details name the reason and never repeat the text; `again` names the call that sends it again.
+pub fn proposal_intent(intent: &str, again: &str) -> Result<String, crate::FoldError> {
+    let intent = intent.trim().replace("\r\n", "\n").replace('\r', "\n");
+    let reason = if intent.is_empty() {
+        "empty"
+    } else if intent.chars().count() > MAX_INTENT_CHARS {
+        "too_long"
+    } else {
+        return Ok(intent);
+    };
+    Err(crate::FoldError::new(
+        crate::codes::INVALID_INTENT,
+        format!("the intent must be 1 to {MAX_INTENT_CHARS} characters of text"),
+    )
+    .with_details([
+        ("field", serde_json::json!("intent")),
+        ("reason", serde_json::json!(reason)),
+        ("max_chars", serde_json::json!(MAX_INTENT_CHARS)),
+    ])
+    .with_hint(format!(
+        "call {again} again with an intent of at most {MAX_INTENT_CHARS} characters: what the change does, why, what it does not change and its risks"
+    )))
+}
+
 define_names!(
     /// What a review says about one proposal version. `Comment` is not a verdict on the work: it leaves the turn where it was.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -398,6 +425,36 @@ fn last_request_changes(reviews: &[ReviewFact]) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_intent_is_trimmed_text_of_at_most_the_limit() {
+        assert_eq!(
+            proposal_intent("  Adds the report.\r\n\r\nRisk: none.\r", "create_proposal").unwrap(),
+            "Adds the report.\n\nRisk: none."
+        );
+        let longest = "é".repeat(MAX_INTENT_CHARS);
+        assert_eq!(
+            proposal_intent(&longest, "create_proposal").unwrap(),
+            longest
+        );
+        for (text, reason) in [
+            (" \n\t ".to_owned(), "empty"),
+            ("x".repeat(MAX_INTENT_CHARS + 1), "too_long"),
+        ] {
+            let error = proposal_intent(&text, "update_proposal").unwrap_err();
+            assert_eq!(error.code(), crate::codes::INVALID_INTENT);
+            assert_eq!(
+                serde_json::Value::Object(error.details().unwrap().clone()),
+                serde_json::json!({"field": "intent", "reason": reason, "max_chars": MAX_INTENT_CHARS})
+            );
+            assert!(
+                error
+                    .hint()
+                    .unwrap()
+                    .starts_with("call update_proposal again")
+            );
+        }
+    }
+
     #[test]
     fn standing_puts_integration_then_conflict_before_the_verdict() {
         use ProposalStanding::*;

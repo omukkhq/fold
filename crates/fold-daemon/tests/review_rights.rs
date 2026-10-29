@@ -390,7 +390,14 @@ async fn only_the_main_agent_claims_a_review_and_the_author_is_refused_first() {
                 }];
                 let fixed = fx
                     .reviews()
-                    .submit_review_fix(&acting, p(1), 1, &fixes, "cargo test: ok")
+                    .submit_review_fix(
+                        &acting,
+                        p(1),
+                        1,
+                        &fixes,
+                        "cargo test: ok",
+                        "Make the change the task asks for.",
+                    )
                     .await;
                 assert_eq!(
                     review_code(fixed.unwrap_err()),

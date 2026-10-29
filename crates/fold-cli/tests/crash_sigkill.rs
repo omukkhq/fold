@@ -75,7 +75,13 @@ async fn project(host: &Host) -> ProjectPaths {
         workspaces,
         Arc::new(tokio::sync::Mutex::new(())),
     )
-    .create_proposal(&author, task, "Add the page", None)
+    .create_proposal(
+        &author,
+        task,
+        "Add the page",
+        "Make the change the task asks for.",
+        None,
+    )
     .await
     .unwrap()
     .detail()

@@ -235,6 +235,7 @@ mod tests {
             actor: "backend".to_owned(),
             title: Some("Add".to_owned()),
             evidence: None,
+            intent: None,
             state: RunState::Failed,
             reason: Some(RunReason::CheckFailed),
             created_at: Timestamp::from_millis(0).unwrap(),

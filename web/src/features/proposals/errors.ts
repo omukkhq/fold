@@ -171,6 +171,13 @@ const ENTRIES: Record<string, Entry> = {
     place: "inline",
     text: "The file has no change yet. Change it, then save.",
   },
+  invalid_intent: {
+    place: "inline",
+    text: (d) =>
+      d.reason === "too_long"
+        ? "The intent is too long. Keep it to 2000 characters."
+        : "Say what the new version does, why, what it does not change and its risks.",
+  },
 };
 
 /** Where and how the screen shows a failed write. It branches on the error code; a code every screen words the same way shows its shared sentence as a banner, and the message shows only for a code without an entry. */

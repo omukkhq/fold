@@ -141,7 +141,13 @@ async fn a_takeover_hands_the_open_proposal_to_the_new_holder() {
     let dir = fx.dir(&created.path);
     fs::write(dir.join("src/lib.rs"), EDITED).unwrap();
     let proposal = reviews
-        .create_proposal(&by(&fx.frontend), t(1), "Edit the lib", None)
+        .create_proposal(
+            &by(&fx.frontend),
+            t(1),
+            "Edit the lib",
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap()
         .detail()
@@ -181,7 +187,12 @@ async fn a_takeover_hands_the_open_proposal_to_the_new_holder() {
 
     fs::write(dir.join("src/lib.rs"), b"pub fn x() { done() }\n").unwrap();
     let old = reviews
-        .update_proposal(&by(&fx.frontend), proposal, None)
+        .update_proposal(
+            &by(&fx.frontend),
+            proposal,
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap_err();
     let ReviewError::Fold(old) = old else {
@@ -189,7 +200,12 @@ async fn a_takeover_hands_the_open_proposal_to_the_new_holder() {
     };
     assert_eq!(old.code(), codes::NOT_PROPOSAL_AUTHOR);
     let updated = reviews
-        .update_proposal(&by(&fx.backend), proposal, Some("picked up"))
+        .update_proposal(
+            &by(&fx.backend),
+            proposal,
+            "Make the change the task asks for.",
+            Some("picked up"),
+        )
         .await
         .unwrap()
         .detail()

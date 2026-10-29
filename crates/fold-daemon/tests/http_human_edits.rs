@@ -113,12 +113,13 @@ async fn the_marked_human_reads_edits_and_sends_a_file_for_review_again() {
         &fx,
         Method::POST,
         "/proposals/P-1/edits",
-        edit(1, EDITED),
+        Some(json!({"version": 1, "path": "src/lib.rs", "content": EDITED, "intent": "  The human's own intent.  "})),
         Some(TANIM),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{version}");
     assert_eq!(version["version"], 2);
+    assert_eq!(version["intent"], "The human's own intent.");
     assert_eq!(version["created_by"], "human:tanim");
     assert_eq!(version["human_edit"], true);
     assert_eq!(version["review_again"], false);
@@ -129,6 +130,10 @@ async fn the_marked_human_reads_edits_and_sends_a_file_for_review_again() {
     assert_eq!(detail["summary"]["latest_verdict"], "approve");
     assert_eq!(detail["agent_approved"], true);
     assert_eq!(detail["versions"][0]["human_edit"], false);
+    assert_eq!(
+        detail["versions"][0]["intent"], "Make the change the task asks for.",
+        "the edited version keeps its own intent"
+    );
     let kept = &detail["reviews"][1];
     assert_eq!(kept["version"], 2);
     assert_eq!(kept["kept_from"], 1);
@@ -230,6 +235,12 @@ async fn edit_refusals_carry_their_declared_status() {
             None,
             StatusCode::UNAUTHORIZED,
             "human_name_required",
+        ),
+        (
+            Some(json!({"version": 1, "path": "src/lib.rs", "content": EDITED, "intent": " "})),
+            Some(TANIM),
+            StatusCode::BAD_REQUEST,
+            "invalid_intent",
         ),
     ];
     for (body, human, status, expected) in cases {

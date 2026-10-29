@@ -90,7 +90,7 @@ async fn acceptance_18_checks_gate_the_proposal_and_the_integration() {
         .call(
             "backend",
             "create_proposal",
-            json!({"task": task, "title": "Add the login endpoint", "evidence": "fold ran the checks"}),
+            json!({"intent": "Make the change the task asks for.", "task": task, "title": "Add the login endpoint", "evidence": "fold ran the checks"}),
         )
         .await;
     assert_eq!(created["checks"], "running", "{created}");

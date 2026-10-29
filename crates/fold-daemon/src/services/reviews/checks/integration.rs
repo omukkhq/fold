@@ -289,6 +289,7 @@ impl ReviewService {
                     actor: label.as_str(),
                     title: None,
                     evidence: None,
+                    intent: None,
                     batch: at.batch,
                 };
                 checks::insert_run(tx, &new, now).await?;
@@ -541,6 +542,7 @@ mod tests {
             actor: "fold".to_owned(),
             title: None,
             evidence: None,
+            intent: None,
             state: RunState::Running,
             reason: None,
             created_at: Timestamp::from_millis(0).unwrap(),

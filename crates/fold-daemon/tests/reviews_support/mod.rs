@@ -250,7 +250,13 @@ impl Fixture {
         std::fs::create_dir_all(link.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink("../README.md", link).unwrap();
         self.reviews
-            .create_proposal(&author, t(1), "Add the report", Some("tests pass"))
+            .create_proposal(
+                &author,
+                t(1),
+                "Add the report",
+                "Adds the report.\n\nIt does not change the schema.",
+                Some("tests pass"),
+            )
             .await
             .unwrap()
             .detail()

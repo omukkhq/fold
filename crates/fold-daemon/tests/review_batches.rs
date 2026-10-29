@@ -94,7 +94,13 @@ impl Scene {
                 fx.write(task, path, content);
             }
             fx.reviews()
-                .create_proposal(&author, t(task), "Change", Some("tests pass"))
+                .create_proposal(
+                    &author,
+                    t(task),
+                    "Change",
+                    "Make the change the task asks for.",
+                    Some("tests pass"),
+                )
                 .await
                 .unwrap()
                 .detail()
@@ -593,7 +599,12 @@ async fn a_member_that_gets_a_new_version_keeps_no_approval_from_the_batch() {
     let batch = scene.batch(&[2, 3]).await;
     scene.fx.write(2, "README.md", "# demo\nfrom two, again\n");
     reviews
-        .update_proposal(&scene.authors[1], p(2), None)
+        .update_proposal(
+            &scene.authors[1],
+            p(2),
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap()
         .detail()
@@ -639,7 +650,12 @@ async fn a_member_that_gets_a_new_version_keeps_no_approval_from_the_batch() {
     );
     scene.fx.write(1, "src/one.rs", "one a\n");
     reviews
-        .update_proposal(&scene.authors[0], p(1), None)
+        .update_proposal(
+            &scene.authors[0],
+            p(1),
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap()
         .detail()
@@ -663,7 +679,12 @@ async fn a_batch_approval_of_a_member_waits_while_its_update_runs_checks() {
         ),
     );
     let fold_daemon::services::reviews::Proposed::Checking { run, .. } = reviews
-        .update_proposal(&scene.authors[1], p(2), None)
+        .update_proposal(
+            &scene.authors[1],
+            p(2),
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap()
     else {

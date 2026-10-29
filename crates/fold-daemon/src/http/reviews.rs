@@ -339,6 +339,9 @@ pub struct ProposalVersion {
     /// The author's evidence that the work is done.
     #[schema(required = true)]
     pub evidence: Option<String>,
+    /// What the change does, why, what it leaves as it is and its risks, as the version's author, reviewer or human editor wrote it; `null` on a version made before intents existed.
+    #[schema(required = true)]
+    pub intent: Option<String>,
     /// The worker, the reviewer's worker for a reviewer's fix, or `human:<name>` for a human edit.
     pub created_by: String,
     /// UTC milliseconds.
@@ -363,6 +366,7 @@ impl From<service::VersionView> for ProposalVersion {
             files_deleted: version.stats.files_deleted,
             human_edit: version.human_edit,
             evidence: version.evidence,
+            intent: version.intent,
             created_by: version.created_by,
             created_at: version.created_at.as_millis(),
             review_again: version.review_again,
@@ -1015,6 +1019,9 @@ pub struct EditFileBody {
     pub path: String,
     /// The whole new content of the file, as UTF-8 text.
     pub content: String,
+    /// The intent of the new version: 1 to 2000 characters on what the change does, why, what it leaves as it is and its risks. Leave it out to keep the intent of the version the human edited.
+    #[serde(default)]
+    pub intent: Option<String>,
 }
 
 /// The human edit the human sends for review again.
@@ -1506,7 +1513,7 @@ pub async fn read_proposal_file(
     request_body = EditFileBody,
     responses(
         (status = 201, description = "The new version", body = ProposalVersion),
-        (status = 400, description = "`invalid_request`, `invalid_path`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request`, `invalid_path`, `invalid_id`, `invalid_name` or `invalid_intent` (`details.reason`: `empty` or `too_long`)", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 403, description = "`human_edit_denied`: the task has no human review mark, or the mark names another human (`details.reviewer`)", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
@@ -1530,6 +1537,7 @@ pub async fn edit_proposal_file(
             body.version,
             &body.path,
             &body.content,
+            body.intent.as_deref(),
         )
         .await?;
     Ok((StatusCode::CREATED, Json(edit.detail.selected.into())))

@@ -117,8 +117,12 @@ async fn a_plan_refuses_what_could_never_be_one_batch() {
             json!({"ws": work.workspace, "message": "Rename"}),
         )
         .await;
-        h.call("frontend", "update_proposal", json!({"id": p2}))
-            .await;
+        h.call(
+            "frontend",
+            "update_proposal",
+            json!({"intent": "Make the change the task asks for.", "id": p2}),
+        )
+        .await;
     };
     revise("pub fn b() {}\n").await;
     let planned = h

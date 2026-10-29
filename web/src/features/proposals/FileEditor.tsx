@@ -1,19 +1,31 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Pencil, Save } from "lucide-react";
 import { useState } from "react";
-import { editProposalFile, type NewEdit } from "@/api/proposals";
+import {
+  editProposalFile,
+  type NewEdit,
+  type ProposalDetail,
+} from "@/api/proposals";
 import { proposalFileQuery } from "@/api/queries";
 import { Button } from "@/components/button/Button";
 import { Textarea } from "@/components/form/controls";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
-import { changed, editNotice, editRequest, editSource } from "./edit";
+import {
+  changed,
+  editIntent,
+  editNotice,
+  editRequest,
+  editSource,
+  intentProblem,
+} from "./edit";
 import { describeFailure } from "./errors";
 import type { DetailView } from "./view";
 
 interface FileEditorProps {
   slug: string;
   id: string;
+  proposal: ProposalDetail;
   view: DetailView;
   path: string;
   onCancel: () => void;
@@ -25,6 +37,7 @@ interface FileEditorProps {
 export function FileEditor({
   slug,
   id,
+  proposal,
   view,
   path,
   onCancel,
@@ -32,6 +45,9 @@ export function FileEditor({
 }: FileEditorProps) {
   const file = useQuery(proposalFileQuery(slug, id, view.version, path));
   const [value, setValue] = useState<string | null>(null);
+  const started = editIntent(proposal, view.version);
+  const [intent, setIntent] = useState(started);
+  const problem = intentProblem(intent, started);
   const save = useMutation({
     mutationFn: (edit: NewEdit) => editProposalFile(slug, id, edit),
     onSuccess: onSaved,
@@ -78,6 +94,18 @@ export function FileEditor({
             }}
             className="resize-y font-mono text-13"
           />
+          <Textarea
+            label={`Intent of ${next}`}
+            hint={`What ${next} does, why, what it does not change and its risks. It starts as the intent of v${String(view.version)}; change what your edit changes.`}
+            error={problem ?? undefined}
+            rows={4}
+            readOnly={save.isPending}
+            value={intent}
+            onChange={(event) => {
+              setIntent(event.target.value);
+            }}
+            className="resize-y"
+          />
         </>
       )}
       {save.isError ? (
@@ -91,10 +119,12 @@ export function FileEditor({
             variant="primary"
             pending={save.isPending}
             pendingLabel={`Saving ${next}…`}
-            disabled={!changed(source, text)}
+            disabled={!changed(source, text) || problem !== null}
             icon={<Save aria-hidden="true" size={15} />}
             onClick={() => {
-              save.mutate(editRequest(view, path, text, source));
+              save.mutate(
+                editRequest(view, path, text, source, intent, started),
+              );
             }}
           >
             Save as {next}

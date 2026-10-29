@@ -1,5 +1,6 @@
 import type { ComparedFile } from "@/api/diff";
 import type { NewEdit, ProposalDetail, VersionFile } from "@/api/proposals";
+import { MAX_INTENT_CHARS, versionIntent } from "./intent";
 import type { DetailView } from "./view";
 
 /**
@@ -84,18 +85,43 @@ export function changed(
   return value !== source.text;
 }
 
-/** The edit of `path` on the version on screen, never the current version the cache holds at the click, so a newer version makes the daemon refuse with `stale_version`. */
+/** The edit of `path` on the version on screen, never the current version the cache holds at the click, so a newer version makes the daemon refuse with `stale_version`. The intent goes with it only when the human changed the one the box `started` with; otherwise the new version keeps the edited version's intent. */
 export function editRequest(
   view: Pick<DetailView, "version">,
   path: string,
   value: string,
   source: Extract<EditSource, { kind: "text" }>,
+  intent = "",
+  started = "",
 ): NewEdit {
+  const written = intent.trim();
   return {
     version: view.version,
     path,
     content: savedContent(value, source.lineEnding),
+    ...(written === "" || written === started.trim()
+      ? {}
+      : { intent: written }),
   };
+}
+
+/** The intent the edit box starts with: the edited version's, so the human changes what the edit changes instead of writing it again. */
+export function editIntent(proposal: ProposalDetail, version: number): string {
+  const edited = proposal.versions.find((v) => v.version === version);
+  return edited === undefined ? "" : (versionIntent(edited) ?? "");
+}
+
+/** Why Save cannot send the intent as it stands; null when it can. An empty intent of a version that had one would silently keep the old one, so the human writes one. */
+export function intentProblem(intent: string, started: string): string | null {
+  // The daemon counts Unicode code points, as Array.from does.
+  const length = Array.from(intent.trim()).length;
+  if (length > MAX_INTENT_CHARS) {
+    return `The intent can hold at most ${String(MAX_INTENT_CHARS)} characters; it has ${String(length)}.`;
+  }
+  if (length === 0 && started !== "") {
+    return "Say what the new version does, why, what it does not change and its risks.";
+  }
+  return null;
 }
 
 /** The line over the edit box: what a save writes, and that the approvals stay. */

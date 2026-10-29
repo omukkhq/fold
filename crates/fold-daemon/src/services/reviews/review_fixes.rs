@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
 use fold_core::policy::AgentStanding;
-use fold_core::reviews::MAX_REASON_CHARS;
 use fold_core::reviews::checks::{Purpose, RunReason, RunState};
+use fold_core::reviews::{MAX_REASON_CHARS, proposal_intent};
 use fold_core::{
     Actor, AgentActor, ChangesetId, CheckRunId, CheckpointId, FoldError, NewEvent, ProposalId,
     RevisionId, TaskId, WorkspaceId, codes, policy,
@@ -57,7 +57,7 @@ pub struct FixedVersion {
 }
 
 impl ReviewService {
-    /// Makes the files of the actor worker's active review checkout of `version` the next version of an open proposal, authored by the reviewer, when the reviewer fixed what it found there (`policy::can_fix_in_review`: only the agent that holds the review claim). `version` is the version the checkout holds and the reviewer fixed; another current version is `stale_version`. `fixes` names every file that differs from `version`, each once with its reason, and nothing else (`invalid_request` with the reason `fixes_mismatch`); `checks` gives the commands the reviewer ran on the fixed files and their results. Both make the new version's evidence.
+    /// Makes the files of the actor worker's active review checkout of `version` the next version of an open proposal, authored by the reviewer, when the reviewer fixed what it found there (`policy::can_fix_in_review`: only the agent that holds the review claim). `version` is the version the checkout holds and the reviewer fixed; another current version is `stale_version`. `fixes` names every file that differs from `version`, each once with its reason, and nothing else (`invalid_request` with the reason `fixes_mismatch`); `checks` gives the commands the reviewer ran on the fixed files and their results. Both make the new version's evidence. `intent` is the new version's own intent, checked as for `create_proposal`: what the fixed change does as a whole, why, what it leaves as it is and its risks.
     ///
     /// The new version keeps the base of `version`, so a main that moved meanwhile is merged at integration as for any version, and it starts without approvals: the reviewer approves it with `submit_review` after its checks pass, and the review claim stays with the reviewer. The fix is recorded in the task workspace as a changeset and as a `review_fix` checkpoint marked as the workspace's pending write, without touching its files: fold writes into a workspace only on create, sync and restore. The worker's next sync writes the fix into the files first, and until then `record_changes` and `update_proposal` refuse with `workspace_write_unfinished`; the author's agent gets a push notice to sync. The checkout then holds the new version, so the reviewer builds, tests and approves it there, or fixes it again. A batch checkout mixes every member's work and is never one member's version, so a fix of a member is made in that member's own checkout.
     ///
@@ -69,9 +69,11 @@ impl ReviewService {
         version: u32,
         fixes: &[ReviewFix],
         checks: &str,
+        intent: &str,
     ) -> Result<FixOutcome, ReviewError> {
         let fixes = check_fixes(fixes)?;
         let checks = check_checks(checks)?;
+        let intent = proposal_intent(intent, "submit_review_fix")?;
         let mut conn = self
             .store
             .read()
@@ -134,7 +136,14 @@ impl ReviewService {
                 drop(fixed);
                 job.fix = Some(fix);
                 return self
-                    .start_fix_run(actor, &row, &checkout, current.base, tree, &evidence, job)
+                    .start_fix_run(
+                        actor,
+                        &row,
+                        &checkout,
+                        (current.base, tree),
+                        (&evidence, &intent),
+                        job,
+                    )
                     .await;
             }
         };
@@ -144,6 +153,7 @@ impl ReviewService {
             workspace: workspace.id,
             fixed: &fixed,
             evidence: &evidence,
+            intent: Some(&intent),
             fix,
             checks_changed,
         };
@@ -169,20 +179,17 @@ impl ReviewService {
     }
 
     /// Writes the running `review_fix` run of the fixed `tree` in the reviewer's checkout and runs it in the background; the call answers at once.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the step of a command, with the inputs its earlier steps produced"
-    )]
+    /// `fixed` is the base and the fixed tree, `text` the evidence and the intent of the version the run waits to make.
     async fn start_fix_run(
         &self,
         actor: &Actor,
         row: &ProposalRow,
         checkout: &WorkspaceRow,
-        base: RevisionId,
-        tree: ObjectHash,
-        evidence: &str,
+        fixed: (RevisionId, ObjectHash),
+        text: (&str, &str),
         job: GateJob,
     ) -> Result<FixOutcome, ReviewError> {
+        let ((base, tree), (evidence, intent)) = (fixed, text);
         let fix = job.fix.ok_or(StoreError::Corrupt("check_runs.purpose"))?;
         let proposal = row.id;
         let now = self.clock.now();
@@ -217,6 +224,7 @@ impl ReviewService {
                         proposal: Some(proposal),
                         title: None,
                         evidence: Some(evidence),
+                        intent: Some(intent),
                     },
                 };
                 insert_proposal_run(tx, &mut buffer, &new, now).await
@@ -310,6 +318,7 @@ impl ReviewService {
             workspace: live.id,
             fixed: &snapshot,
             evidence: &evidence,
+            intent: run.intent.as_deref(),
             fix,
             checks_changed: job.checks_changed,
         };
@@ -386,6 +395,8 @@ struct FixInput<'a> {
     workspace: WorkspaceId,
     fixed: &'a ReviewFixTree,
     evidence: &'a str,
+    /// `None` keeps the fixed version's intent, as for a run started before intents existed.
+    intent: Option<&'a str>,
     fix: FixJob,
     checks_changed: bool,
 }
@@ -467,6 +478,7 @@ async fn fix_in_tx(
         tree: fixed.tree,
         head_changeset: changeset.id,
         evidence: Some(input.evidence),
+        intent: input.intent.or(current.intent.as_deref()),
         created_by: worker.name.as_str(),
         fixed_in_checkout: Some(checkout_id),
     };

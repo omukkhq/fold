@@ -3,9 +3,9 @@ use fold_core::claims::stale_cutoff;
 use fold_core::events::types;
 use fold_core::merge::ConflictReport;
 use fold_core::object::ObjectHash;
-use fold_core::reviews::MAX_REASON_CHARS;
 use fold_core::reviews::checks::Purpose;
 use fold_core::reviews::{HumanReviewMark, ReviewFact, Verdict, human_approval_standing};
+use fold_core::reviews::{MAX_REASON_CHARS, proposal_intent};
 use fold_core::status::ProposalFact;
 use fold_core::tree::ChangeCounts;
 use fold_core::{
@@ -121,7 +121,7 @@ impl ProposalSummary {
     }
 }
 
-/// One version: what it was based on, the tree it proposes with the file counts of its head changeset, and the author's evidence.
+/// One version: what it was based on, the tree it proposes with the file counts of its head changeset, what it is for, and the author's evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionView {
     pub version: u32,
@@ -130,6 +130,8 @@ pub struct VersionView {
     pub changeset: ChangesetId,
     pub stats: ChangeCounts,
     pub evidence: Option<String>,
+    /// What the change does, why, what it leaves as it is and its risks; `None` on a version made before intents existed.
+    pub intent: Option<String>,
     pub created_by: String,
     pub created_at: Timestamp,
     /// A human made this version by editing the one before it in a human review, so it keeps that version's agent approvals until it is sent for review again.
@@ -150,6 +152,7 @@ impl From<VersionRow> for VersionView {
             human_edit: is_human_edit(&row.created_by),
             stats: row.stats,
             evidence: row.evidence,
+            intent: row.intent,
             created_by: row.created_by,
             created_at: row.created_at,
             review_again: row.review_again,
@@ -264,6 +267,8 @@ pub(super) struct VersionInput<'a> {
     pub snapped: &'a WorkspaceRow,
     pub recorded: &'a ProposalSnapshot,
     pub evidence: Option<&'a str>,
+    /// The checked intent; `None` keeps the current version's, as for a run started before intents existed.
+    pub intent: Option<&'a str>,
     /// The version adds, changes or removes the checks file, so it needs a human.
     pub checks_changed: bool,
     pub now: Timestamp,
@@ -276,9 +281,11 @@ impl ReviewService {
         actor: &Actor,
         task: TaskId,
         title: &str,
+        intent: &str,
         evidence: Option<&str>,
     ) -> Result<Proposed, ReviewError> {
         let title = check_title(title)?;
+        let intent = proposal_intent(intent, "create_proposal")?;
         let evidence = check_evidence(evidence);
         let read = self.store.read();
         let facts = OpenFacts {
@@ -299,6 +306,7 @@ impl ReviewService {
                     proposal: None,
                     title: Some(title),
                     evidence: evidence.as_deref(),
+                    intent: Some(&intent),
                 };
                 return self
                     .start_gate(
@@ -317,6 +325,7 @@ impl ReviewService {
             snapped: &workspace,
             recorded: &recorded,
             evidence: evidence.as_deref(),
+            intent: Some(&intent),
             checks_changed,
             now: recorded.taken_at,
         };
@@ -333,13 +342,15 @@ impl ReviewService {
         Ok(Proposed::Made(Box::new(self.get_proposal(id, None).await?)))
     }
 
-    /// Adds the next version to an open proposal, by the author's worker: the task workspace is snapshotted as `create_proposal` does, and the version takes the workspace's current base; its automatic checkpoint has the reason `before_proposal_update`. `evidence` replaces the current version's evidence; `None` keeps it. A version whose base, tree and evidence all equal the current one is refused with `version_unchanged`. The proposal checks gate the version as they gate `create_proposal`. The conflict flag is cleared and the task returns to Review; earlier versions, their reviews and their approvals stay as they are.
+    /// Adds the next version to an open proposal, by the author's worker: the task workspace is snapshotted as `create_proposal` does, and the version takes the workspace's current base; its automatic checkpoint has the reason `before_proposal_update`. `intent` is the new version's own intent, checked as for `create_proposal`. `evidence` replaces the current version's evidence; `None` keeps it. A version whose base, tree, intent and evidence all equal the current one is refused with `version_unchanged`. The proposal checks gate the version as they gate `create_proposal`. The conflict flag is cleared and the task returns to Review; earlier versions, their reviews and their approvals stay as they are.
     pub async fn update_proposal(
         &self,
         actor: &Actor,
         proposal: ProposalId,
+        intent: &str,
         evidence: Option<&str>,
     ) -> Result<Proposed, ReviewError> {
+        let intent = proposal_intent(intent, "update_proposal")?;
         let evidence = check_evidence(evidence);
         let read = self.store.read();
         let row = update_checks(
@@ -360,6 +371,7 @@ impl ReviewService {
             workspace.base,
             recorded.tree,
             evidence.clone().or(current.evidence.clone()).as_deref(),
+            Some(&intent),
         )?;
         let gate = self.proposal_gate(&workspace, recorded.tree).await?;
         let checks_changed = match gate {
@@ -371,6 +383,7 @@ impl ReviewService {
                     proposal: Some(proposal),
                     title: None,
                     evidence: evidence.as_deref(),
+                    intent: Some(&intent),
                 };
                 return self
                     .start_gate(
@@ -389,6 +402,7 @@ impl ReviewService {
             snapped: &workspace,
             recorded: &recorded,
             evidence: evidence.as_deref(),
+            intent: Some(&intent),
             checks_changed,
             now: recorded.taken_at,
         };
@@ -565,6 +579,7 @@ pub(super) async fn open_in_tx(
         tree: recorded.tree,
         head_changeset: head,
         evidence: input.evidence,
+        intent: input.intent,
         created_by: worker.name.as_str(),
         fixed_in_checkout: None,
     };
@@ -615,12 +630,14 @@ pub(super) async fn add_version_in_tx(
         .evidence
         .map(str::to_owned)
         .or(current.evidence.clone());
+    let intent = input.intent.map(str::to_owned).or(current.intent.clone());
     unchanged_refusal(
         proposal,
         &current,
         live.base,
         recorded.tree,
         evidence.as_deref(),
+        intent.as_deref(),
     )?;
     let author = row.author.clone();
     let head = record_in_tx(
@@ -640,6 +657,7 @@ pub(super) async fn add_version_in_tx(
         tree: recorded.tree,
         head_changeset: head,
         evidence: evidence.as_deref(),
+        intent: intent.as_deref(),
         created_by: author.as_str(),
         fixed_in_checkout: None,
     };
@@ -656,15 +674,20 @@ pub(super) async fn add_version_in_tx(
     Ok(version)
 }
 
-/// `version_unchanged` when a new version would hold the current one's base, tree and evidence.
+/// `version_unchanged` when a new version would hold the current one's base, tree, evidence and intent.
 fn unchanged_refusal(
     proposal: ProposalId,
     current: &VersionRow,
     base: RevisionId,
     tree: ObjectHash,
     evidence: Option<&str>,
+    intent: Option<&str>,
 ) -> Result<(), ReviewError> {
-    if current.base != base || current.tree != tree || current.evidence.as_deref() != evidence {
+    if current.base != base
+        || current.tree != tree
+        || current.evidence.as_deref() != evidence
+        || current.intent.as_deref() != intent
+    {
         return Ok(());
     }
     Err(FoldError::new(
@@ -675,7 +698,7 @@ fn unchanged_refusal(
         ("proposal", json!(proposal.to_string())),
         ("version", json!(current.version)),
     ])
-    .with_hint("change the workspace or the evidence, then call update_proposal")
+    .with_hint("change the workspace, the intent or the evidence, then call update_proposal")
     .into())
 }
 

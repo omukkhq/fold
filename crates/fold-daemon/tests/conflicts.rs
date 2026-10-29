@@ -118,7 +118,7 @@ async fn resolve_and_update(fx: &Fixture) -> ProposalDetail {
     fx.workspaces.sync_workspace(&author, ws(1)).await.unwrap();
     fx.write("src/lib.rs", RESOLVED_LIB);
     fx.reviews
-        .update_proposal(&author, p(1), None)
+        .update_proposal(&author, p(1), "Make the change the task asks for.", None)
         .await
         .unwrap()
         .detail()
@@ -333,7 +333,11 @@ async fn update_proposal_refuses_while_markers_remain() {
     let marked = std::fs::read_to_string(fx.task_dir().join("src/lib.rs")).unwrap();
     assert!(marked.contains("<<<<<<< workspace"));
 
-    let error = refusal(fx.reviews.update_proposal(&author, p(1), None).await);
+    let error = refusal(
+        fx.reviews
+            .update_proposal(&author, p(1), "Make the change the task asks for.", None)
+            .await,
+    );
 
     assert_eq!(error.code(), codes::UNRESOLVED_CONFLICTS);
     let summary = detail(&fx, None).await.summary;
@@ -379,7 +383,13 @@ async fn binary_and_delete_versus_edit_conflicts_are_reported_by_kind() {
     fx.write("src/new.rs", "pub fn version() {}\n");
     std::fs::write(fx.task_dir().join("README.md"), b"\0version").unwrap();
     fx.reviews
-        .create_proposal(&author, t(1), "Change every file", None)
+        .create_proposal(
+            &author,
+            t(1),
+            "Change every file",
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap()
         .detail()

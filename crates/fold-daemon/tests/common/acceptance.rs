@@ -712,7 +712,7 @@ impl Harness {
             .call(
                 agent,
                 "create_proposal",
-                json!({"task": work.task, "title": title, "evidence": "tests pass"}),
+                json!({"intent": "Make the change the task asks for.", "task": work.task, "title": title, "evidence": "tests pass"}),
             )
             .await;
         assert_eq!(created["status"], "review", "{created}");

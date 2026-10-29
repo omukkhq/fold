@@ -67,7 +67,10 @@ pub async fn measure(
 /// Creates the proposal of `task` and returns its public id, such as `P-3`.
 async fn propose(session: &Session, task: &str, title: &str) -> BenchResult<String> {
     let created = session
-        .call("create_proposal", json!({ "task": task, "title": title }))
+        .call(
+            "create_proposal",
+            json!({"intent": "Make the change the task asks for.",  "task": task, "title": title }),
+        )
         .await?;
     match created["id"].as_str() {
         Some(id) => Ok(id.to_owned()),

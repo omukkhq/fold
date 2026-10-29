@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT c.number AS \"number!: i64\", c.stage, c.purpose,\n                      t.number AS \"task!: i64\",\n                      w.number AS \"workspace?: i64\",\n                      k.name AS \"worker?: String\",\n                      p.number AS \"proposal?: i64\",\n                      v.version AS \"version?: i64\",\n                      r.number AS \"base!: i64\",\n                      c.tree_hash, c.actor, c.title, c.evidence, c.state, c.reason,\n                      c.created_at, c.finished_at, b.number AS \"batch?: i64\"\n               FROM check_runs c\n               JOIN tasks t ON t.id = c.task_id\n               JOIN revisions r ON r.id = c.base_revision_id\n               LEFT JOIN workspaces w ON w.id = c.workspace_id\n               LEFT JOIN workers k ON k.id = c.worker_id\n               LEFT JOIN proposals p ON p.id = c.proposal_id\n               LEFT JOIN proposal_versions v ON v.id = c.version_id\n               LEFT JOIN review_batches b ON b.id = c.review_batch_id\n               WHERE w.number = ?1 AND c.stage = 'proposal' AND c.state <> 'running'\n         ORDER BY c.id DESC LIMIT 1",
+  "query": "SELECT c.number AS \"number!: i64\", c.stage, c.purpose,\n                      t.number AS \"task!: i64\",\n                      w.number AS \"workspace?: i64\",\n                      k.name AS \"worker?: String\",\n                      p.number AS \"proposal?: i64\",\n                      v.version AS \"version?: i64\",\n                      r.number AS \"base!: i64\",\n                      c.tree_hash, c.actor, c.title, c.evidence, c.intent, c.state, c.reason,\n                      c.created_at, c.finished_at, b.number AS \"batch?: i64\"\n               FROM check_runs c\n               JOIN tasks t ON t.id = c.task_id\n               JOIN revisions r ON r.id = c.base_revision_id\n               LEFT JOIN workspaces w ON w.id = c.workspace_id\n               LEFT JOIN workers k ON k.id = c.worker_id\n               LEFT JOIN proposals p ON p.id = c.proposal_id\n               LEFT JOIN proposal_versions v ON v.id = c.version_id\n               LEFT JOIN review_batches b ON b.id = c.review_batch_id\n               WHERE w.number = ?1 AND c.state = 'running'",
   "describe": {
     "columns": [
       {
@@ -147,8 +147,19 @@
         }
       },
       {
-        "name": "state",
+        "name": "intent",
         "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "check_runs",
+            "name": "intent"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 14,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -159,7 +170,7 @@
       },
       {
         "name": "reason",
-        "ordinal": 14,
+        "ordinal": 15,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -170,7 +181,7 @@
       },
       {
         "name": "created_at",
-        "ordinal": 15,
+        "ordinal": 16,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -181,7 +192,7 @@
       },
       {
         "name": "finished_at",
-        "ordinal": 16,
+        "ordinal": 17,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -192,7 +203,7 @@
       },
       {
         "name": "batch?: i64",
-        "ordinal": 17,
+        "ordinal": 18,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -219,6 +230,7 @@
       false,
       true,
       true,
+      true,
       false,
       true,
       false,
@@ -226,5 +238,5 @@
       true
     ]
   },
-  "hash": "2b2929b7be412d06b5001c019d33f5aab9698d548a4e3263a5c375765a45b60d"
+  "hash": "4e2dc43ead22344e6cf0b78935283e0098a05aed12e70309f4d8f871ac6a63bb"
 }

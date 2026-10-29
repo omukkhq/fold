@@ -190,6 +190,7 @@ fn version(changeset: u32, created_by: &str) -> NewVersion<'_> {
         tree: hash_object(ObjectKind::Tree, b"tree"),
         head_changeset: ChangesetId::from_number(changeset).unwrap(),
         evidence: Some("tests pass"),
+        intent: Some("Adds the report; the schema stays as it is."),
         created_by,
         fixed_in_checkout: None,
     }
@@ -255,6 +256,10 @@ async fn the_store_functions_open_version_and_retire_a_proposal() {
         [1, 2]
     );
     assert_eq!(versions[0].evidence.as_deref(), Some("tests pass"));
+    assert_eq!(
+        versions[0].intent.as_deref(),
+        Some("Adds the report; the schema stays as it is.")
+    );
     assert_eq!(versions[0].created_by, "backend");
     assert_eq!(
         (
@@ -491,4 +496,48 @@ async fn a_reviewer_fix_names_a_review_checkout_of_its_proposal_and_the_checkout
         .await,
         1
     );
+}
+
+#[tokio::test]
+async fn a_version_holds_an_intent_of_at_most_2000_characters_or_none() {
+    let (_dir, store) = seeded().await;
+    exec(&store, &proposal_sql(1, 1, "open", "NULL"))
+        .await
+        .unwrap();
+    let tree = hash_object(ObjectKind::Tree, b"tree");
+    exec(
+        &store,
+        &format!(
+            "INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (1, 1, 1, '{tree}', 1, 'backend', 0)"
+        ),
+    )
+    .await
+    .unwrap();
+    let at = Timestamp::from_millis(9).unwrap();
+    for (version, intent) in [(2, String::new()), (2, "x".repeat(2001))] {
+        let new = NewVersion {
+            intent: Some(&intent),
+            ..self::version(1, "backend")
+        };
+        let error = store
+            .write(async |tx| reviews::add_version(tx, p(1), version, &new, at).await)
+            .await
+            .unwrap_err();
+        assert!(
+            trigger(&error).contains("proposal_versions_intent_size"),
+            "{error}"
+        );
+    }
+    let longest = "é".repeat(2000);
+    let new = NewVersion {
+        intent: Some(&longest),
+        ..self::version(1, "backend")
+    };
+    store
+        .write(async |tx| reviews::add_version(tx, p(1), 2, &new, at).await)
+        .await
+        .unwrap();
+    let versions = reviews::list_versions(store.read(), p(1)).await.unwrap();
+    assert_eq!(versions[0].intent, None, "a version made before intents");
+    assert_eq!(versions[1].intent.as_deref(), Some(longest.as_str()));
 }

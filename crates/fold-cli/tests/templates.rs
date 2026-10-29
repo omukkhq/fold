@@ -171,7 +171,7 @@ const FOLD_TOOLS: [&str; 96] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 181] = [
+const FOLD_ERROR_CODES: [&str; 182] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -353,6 +353,7 @@ const FOLD_ERROR_CODES: [&str; 181] = [
     "plaintext_notify_target",
     "notify_send_not_found",
     "notify_target_inactive",
+    "invalid_intent",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
@@ -909,6 +910,7 @@ fn each_role_skill_has_its_frontmatter_its_sections_then_the_shared_ones() {
         "agent_not_registered",
         "worker_claim_denied",
         "review_plan_denied",
+        "invalid_intent",
     ] {
         assert!(errors.contains(&format!("| `{code}` |")), "{code}");
     }

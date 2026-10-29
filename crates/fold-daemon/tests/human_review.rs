@@ -154,7 +154,13 @@ impl Fixture {
         let file = project.paths().root().join(".fold/ws/t-1/src/lib.rs");
         std::fs::write(file, "pub fn y() {}\n").unwrap();
         reviews
-            .create_proposal(&author, t(1), "Add auth", None)
+            .create_proposal(
+                &author,
+                t(1),
+                "Add auth",
+                "Make the change the task asks for.",
+                None,
+            )
             .await
             .unwrap()
             .detail()

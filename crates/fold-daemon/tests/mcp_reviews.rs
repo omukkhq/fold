@@ -153,7 +153,7 @@ async fn open_p1(fx: &Fixture, frontend: &Client) -> Value {
     ok(
         frontend,
         "create_proposal",
-        json!({"task": "T-1", "title": "Rename x", "evidence": "tests pass"}),
+        json!({"intent": "Make the change the task asks for.", "task": "T-1", "title": "Rename x", "evidence": "tests pass"}),
     )
     .await
 }
@@ -199,7 +199,7 @@ async fn create_proposal_opens_v1_and_moves_the_task_to_review() {
     let error = err(
         &frontend,
         "create_proposal",
-        json!({"task": "T-2", "title": "Export"}),
+        json!({"intent": "Make the change the task asks for.", "task": "T-2", "title": "Export"}),
     )
     .await;
     assert_eq!(error["code"], "not_claim_holder");
@@ -343,7 +343,7 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
     ok(
         &frontend,
         "create_proposal",
-        json!({"task": "T-1", "title": "Rename x"}),
+        json!({"intent": "Make the change the task asks for.", "task": "T-1", "title": "Rename x"}),
     )
     .await;
     let first = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
@@ -355,7 +355,12 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
     )
     .await;
     fx.write(1, "src/lib.rs", "pub fn y() {}\npub fn z() {}\n");
-    ok(&frontend, "update_proposal", json!({"id": "P-1"})).await;
+    ok(
+        &frontend,
+        "update_proposal",
+        json!({"intent": "Make the change the task asks for.", "id": "P-1"}),
+    )
+    .await;
 
     let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
     assert_eq!(view["last_reviewed"], "v1");
@@ -494,7 +499,7 @@ async fn integrate_p2(fx: &Fixture, backend: &Client, review: &Client, files: &[
     ok(
         backend,
         "create_proposal",
-        json!({"task": "T-2", "title": "Export"}),
+        json!({"intent": "Make the change the task asks for.", "task": "T-2", "title": "Export"}),
     )
     .await;
     ok(
@@ -536,7 +541,12 @@ async fn a_change_since_an_earlier_version_leaves_out_what_main_gained() {
     assert_eq!(synced["conflicted"], json!([]));
     fx.write(1, "src/lib.rs", "pub fn y() {}\npub fn z() {}\n");
     fx.write(1, "src/extra.rs", "pub fn extra() {}\n");
-    ok(&frontend, "update_proposal", json!({"id": "P-1"})).await;
+    ok(
+        &frontend,
+        "update_proposal",
+        json!({"intent": "Make the change the task asks for.", "id": "P-1"}),
+    )
+    .await;
     let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
     assert_eq!(view["base"], "r2");
 
@@ -621,7 +631,12 @@ async fn a_change_since_an_earlier_version_names_the_files_merged_by_hand() {
         json!({"ws": "ws-1", "message": "Keep both functions"}),
     )
     .await;
-    ok(&frontend, "update_proposal", json!({"id": "P-1"})).await;
+    ok(
+        &frontend,
+        "update_proposal",
+        json!({"intent": "Make the change the task asks for.", "id": "P-1"}),
+    )
+    .await;
 
     let since = ok(
         &review,
@@ -650,14 +665,19 @@ async fn update_proposal_adds_the_next_version() {
     let updated = ok(
         &frontend,
         "update_proposal",
-        json!({"id": "P-1", "evidence": "all tests pass"}),
+        json!({"intent": "Make the change the task asks for.", "id": "P-1", "evidence": "all tests pass"}),
     )
     .await;
     assert_eq!(
         updated,
         json!({"id": "P-1", "version": "v2", "state": "open", "task": "T-1", "status": "review"})
     );
-    let error = err(&backend, "update_proposal", json!({"id": "P-1"})).await;
+    let error = err(
+        &backend,
+        "update_proposal",
+        json!({"intent": "Make the change the task asks for.", "id": "P-1"}),
+    )
+    .await;
     assert_eq!(error["code"], "not_proposal_author");
 }
 
@@ -748,6 +768,7 @@ async fn submit_review_fix_makes_the_reviewers_version_and_the_reviewer_approves
         "version": 1,
         "fixes": [{"path": "src/lib.rs", "reason": "y returns 1 as the task asks"}],
         "checks": "cargo test: 1 passed",
+        "intent": "Make y return 1 as the task asks; nothing else changes.",
     });
     let error = err(&frontend, "submit_review_fix", arguments.clone()).await;
     assert_eq!(error["code"], "author_cannot_review");
@@ -877,7 +898,12 @@ async fn get_review_comments_marks_outdated_comments() {
         }]})
     );
     fx.write(1, "src/lib.rs", "pub fn z() {}\n");
-    ok(&frontend, "update_proposal", json!({"id": "P-1"})).await;
+    ok(
+        &frontend,
+        "update_proposal",
+        json!({"intent": "Make the change the task asks for.", "id": "P-1"}),
+    )
+    .await;
     let outdated = ok(
         &frontend,
         "get_review_comments",
@@ -1004,7 +1030,7 @@ async fn every_result_ends_with_the_footer() {
     open_p1(&fx, &frontend).await;
     for tool in REVIEW_TOOLS {
         let arguments = match tool {
-            "create_proposal" => json!({"task": "T-1", "title": "again"}),
+            "create_proposal" => json!({"task": "T-1", "title": "again", "intent": "again"}),
             "require_human_review" => json!({"task": "T-1", "reason": "check"}),
             "list_proposals" => json!({}),
             "close_proposal" => json!({"id": "P-1", "reason": "done"}),
@@ -1014,6 +1040,7 @@ async fn every_result_ends_with_the_footer() {
                 "version": 1,
                 "fixes": [{"path": "src/lib.rs", "reason": "r"}],
                 "checks": "ok",
+                "intent": "i",
             }),
             "set_review_scope" => {
                 json!({"id": "P-1", "version": 1, "scope": "full", "reason": "r"})
@@ -1050,7 +1077,7 @@ async fn errors_carry_code_message_and_hint() {
         (
             &frontend,
             "create_proposal",
-            json!({"task": "T-1", "title": "twice"}),
+            json!({"intent": "Make the change the task asks for.", "task": "T-1", "title": "twice"}),
             "proposal_exists",
             "update_proposal",
         ),
@@ -1078,7 +1105,7 @@ async fn two_transports_open_one_proposal() {
     let second = connect(&fx, "frontend").await;
     ok(&first, "create_workspace", json!({"task": "T-1"})).await;
     fx.write(1, "src/lib.rs", "pub fn y() {}\n");
-    let arguments = json!({"task": "T-1", "title": "Rename x"});
+    let arguments = json!({"task": "T-1", "title": "Rename x", "intent": "Renames x."});
     let (a, b) = tokio::join!(
         call_raw(&first, "create_proposal", arguments.clone()),
         call_raw(&second, "create_proposal", arguments),
@@ -1238,7 +1265,7 @@ async fn get_proposal_lists_the_check_runs_of_the_version() {
     ok(
         &frontend,
         "create_proposal",
-        json!({"task": "T-1", "title": "Add checks"}),
+        json!({"intent": "Make the change the task asks for.", "task": "T-1", "title": "Add checks"}),
     )
     .await;
     let review = connect(&fx, "review").await;
@@ -1263,7 +1290,7 @@ async fn create_proposal_answers_with_the_run_and_wait_for_events_wakes_on_its_e
     let created = ok(
         &frontend,
         "create_proposal",
-        json!({"task": "T-1", "title": "Add checks"}),
+        json!({"intent": "Make the change the task asks for.", "task": "T-1", "title": "Add checks"}),
     )
     .await;
     assert_eq!(
@@ -1353,6 +1380,7 @@ async fn an_approve_waits_while_the_reviewers_fix_runs_and_the_reviewer_approves
         &review,
         "submit_review_fix",
         json!({
+            "intent": "Make the change the task asks for.",
             "id": "P-1",
             "version": 1,
             "fixes": [{"path": "src/lib.rs", "reason": "y returned nothing"}],
@@ -1393,4 +1421,79 @@ async fn an_approve_waits_while_the_reviewers_fix_runs_and_the_reviewer_approves
         json!({"id": "P-1", "version": 2, "verdict": "approve", "body": "Fixes: src/lib.rs (y returns 1). cargo test: ok"}),
     )
     .await;
+}
+
+#[tokio::test]
+async fn every_proposal_version_tool_requires_an_intent_and_get_proposal_shows_it() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    let tools = frontend.list_all_tools().await.unwrap();
+    for name in ["create_proposal", "update_proposal", "submit_review_fix"] {
+        let tool = tools.iter().find(|tool| tool.name == name).unwrap();
+        let schema = serde_json::to_value(tool.input_schema.as_ref()).unwrap();
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("intent")),
+            "{name}: {schema}"
+        );
+        assert_eq!(schema["properties"]["intent"]["type"], "string", "{name}");
+    }
+
+    ok(&frontend, "create_workspace", json!({"task": "T-1"})).await;
+    fx.write(1, "src/lib.rs", "pub fn y() {}\n");
+    let missing = call_raw(
+        &frontend,
+        "create_proposal",
+        json!({"task": "T-1", "title": "Rename x"}),
+    )
+    .await;
+    assert_eq!(missing.is_error, Some(true));
+    assert_eq!(body(&missing)["error"]["code"], "invalid_request");
+    let long = "x".repeat(2001);
+    let refused = err(
+        &frontend,
+        "create_proposal",
+        json!({"task": "T-1", "title": "Rename x", "intent": long}),
+    )
+    .await;
+    assert_eq!(refused["code"], "invalid_intent");
+    assert_eq!(refused["details"]["reason"], "too_long");
+    assert!(
+        !refused.to_string().contains(&long),
+        "an error never repeats the intent"
+    );
+    assert!(
+        refused["hint"]
+            .as_str()
+            .unwrap()
+            .starts_with("call create_proposal again")
+    );
+
+    let intent = "Renames x to y so the name says what it holds. It changes no behaviour.";
+    ok(
+        &frontend,
+        "create_proposal",
+        json!({"task": "T-1", "title": "Rename x", "intent": intent}),
+    )
+    .await;
+    let short = ok(&frontend, "get_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(short["intent"], intent);
+    assert_eq!(short["intent_chars"], intent.chars().count());
+    let full = ok(
+        &frontend,
+        "get_proposal",
+        json!({"id": "P-1", "detail": "full"}),
+    )
+    .await;
+    assert_eq!(full["intent"], intent);
+    let blank = err(
+        &frontend,
+        "update_proposal",
+        json!({"id": "P-1", "intent": "  "}),
+    )
+    .await;
+    assert_eq!(blank["code"], "invalid_intent");
+    assert_eq!(blank["details"]["reason"], "empty");
 }

@@ -312,7 +312,13 @@ async fn a_proposal_shows_the_runs_of_exactly_its_files() {
     let run = running(fx.reviews.run_checks(&actor, t(1)).await.unwrap());
     ended(&fx.reviews, run).await;
     fx.reviews
-        .create_proposal(&actor, t(1), "Add the checks", None)
+        .create_proposal(
+            &actor,
+            t(1),
+            "Add the checks",
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap()
         .detail()

@@ -89,7 +89,13 @@ async fn two_proposals(fx: &Fixture) {
             .unwrap();
         fx.write(task, path, "first\nsecond\n");
         fx.reviews()
-            .create_proposal(&author, t(task), "Add a file", None)
+            .create_proposal(
+                &author,
+                t(task),
+                "Add a file",
+                "Make the change the task asks for.",
+                None,
+            )
             .await
             .unwrap()
             .detail()
@@ -162,7 +168,7 @@ async fn the_review_lead_is_refused_every_review_command() {
         ),
         (
             "submit_review_fix",
-            json!({"id": "P-1", "version": 1, "fixes": [{"path": "src/one.rs", "reason": "a typo"}], "checks": "cargo test: ok"}),
+            json!({"intent": "Make the change the task asks for.", "id": "P-1", "version": 1, "fixes": [{"path": "src/one.rs", "reason": "a typo"}], "checks": "cargo test: ok"}),
         ),
         ("create_review_batch", json!({"proposals": ["P-1", "P-2"]})),
         ("create_batch_checkout", json!({"id": "rb-1"})),
@@ -207,6 +213,7 @@ async fn an_omitted_batch_version_gets_a_new_checkout_and_its_own_review() {
         .update_proposal(
             &fx.agent("backend").await,
             fold_core::ProposalId::from_number(2).unwrap(),
+            "Make the change the task asks for.",
             Some("Checked new content"),
         )
         .await
@@ -338,6 +345,7 @@ async fn the_main_agent_batches_checks_out_and_reviews_two_proposals_through_the
         .update_proposal(
             &backend,
             fold_core::ProposalId::from_number(2).unwrap(),
+            "Make the change the task asks for.",
             None,
         )
         .await
@@ -393,6 +401,7 @@ async fn a_member_synced_with_a_newer_main_counts_only_its_own_change() {
         .update_proposal(
             &backend,
             fold_core::ProposalId::from_number(2).unwrap(),
+            "Make the change the task asks for.",
             None,
         )
         .await

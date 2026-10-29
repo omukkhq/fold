@@ -58,6 +58,8 @@ pub struct CreateProposalInput {
     pub task: String,
     /// The proposal title: one line of at most 200 characters.
     pub title: String,
+    /// What the change is for, 1 to 2000 characters, for the humans who read it instead of every line and the reviewer who checks the diff against it: what it does, why, what it does not change, and its risks. It becomes the body of the Git commit when the version integrates.
+    pub intent: String,
     /// What shows the work is done, such as the tests you ran and their result. Leave it out for none. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub evidence: Option<String>,
@@ -95,7 +97,7 @@ pub struct GetProposalInput {
     /// A version number, such as 2 for v2. Leave it out for the current version.
     #[serde(default)]
     pub version: Option<u32>,
-    /// full adds the evidence text, the task description and the whole body of each review of an earlier version. Leave it out for the short form, which gives evidence_chars and the first 200 characters of those bodies with body_chars.
+    /// full adds the evidence text, the whole intent, the task description and the whole body of each review of an earlier version. Leave it out for the short form, which gives evidence_chars, the first 200 characters of the intent with intent_chars, and the first 200 characters of those bodies with body_chars.
     #[serde(default)]
     pub detail: Option<String>,
 }
@@ -121,6 +123,8 @@ pub struct GetProposalDiffInput {
 pub struct UpdateProposalInput {
     /// The proposal, such as P-3. Only its author's worker can add a version.
     pub id: String,
+    /// The intent of the new version, written for it: what the change is for, 1 to 2000 characters, for the humans who read it instead of every line and the reviewer who checks the diff against it: what it does, why, what it does not change, and its risks. It becomes the body of the Git commit when the version integrates.
+    pub intent: String,
     /// New evidence for the new version. Leave it out to keep the current evidence. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub evidence: Option<String>,
@@ -302,13 +306,15 @@ pub struct SubmitReviewFixInput {
     pub fixes: Vec<ReviewFixInput>,
     /// The commands you ran on the fixed files, such as the narrow tests of each fix, the build and the required checks, with their results.
     pub checks: String,
+    /// The intent of the fixed version as a whole, 1 to 2000 characters: what the change now does, why, what it does not change, and its risks. Start from the intent of the version you fixed and say what your fix changes in it. It becomes the body of the Git commit when the version integrates.
+    pub intent: String,
 }
 
 pub fn tools() -> Vec<Tool> {
     let mut tools = vec![
         Tool::new(
             CREATE_PROPOSAL,
-            "Send the work in your task workspace for review as a new proposal (v1). You must hold the task's claim. The task moves to Review. When fold-checks.toml has proposal checks for your change and no passed run_checks of the same files stands, it returns at once with checks running and a run id: fold runs the checks and opens the proposal only when they pass; the result comes as a message from fold. Wait for checks.finished with wait_for_events. A change of fold-checks.toml puts the human review mark on the task.",
+            "Send the work in your task workspace for review as a new proposal (v1), with its intent: what the change does, why, what it does not change and its risks (invalid_intent when it is empty or longer than 2000 characters). You must hold the task's claim. The task moves to Review. When fold-checks.toml has proposal checks for your change and no passed run_checks of the same files stands, it returns at once with checks running and a run id: fold runs the checks and opens the proposal only when they pass; the result comes as a message from fold. Wait for checks.finished with wait_for_events. A change of fold-checks.toml puts the human review mark on the task.",
             schema_for_type::<CreateProposalInput>(),
         ),
         Tool::new(
@@ -318,7 +324,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_PROPOSAL,
-            "Read one proposal: versions, the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related open proposals without a review, each with its proposal, and the related tasks that can still open proposals, strongest link first, with the create_review_plan or start_worker call that has one reviewer review them together), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. The short form gives evidence_chars for the evidence, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the task description and every whole body, such as before a review or when the task description matters.",
+            "Read one proposal: versions, the intent of the version (what it does, why, what it does not change and its risks; check the diff against it), the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related open proposals without a review, each with its proposal, and the related tasks that can still open proposals, strongest link first, with the create_review_plan or start_worker call that has one reviewer review them together), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. The short form gives evidence_chars for the evidence, the first 200 characters of the intent with intent_chars, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the whole intent, the task description and every whole body, such as before a review or when the task description matters.",
             schema_for_type::<GetProposalInput>(),
         ),
         Tool::new(
@@ -328,7 +334,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             UPDATE_PROPOSAL,
-            "Send the current state of your task workspace as the next version of your open proposal, after a change request or a conflict. The proposal checks gate the version as for create_proposal: checks running means fold adds the version only when they pass.",
+            "Send the current state of your task workspace as the next version of your open proposal, after a change request or a conflict, with the intent of the new version (invalid_intent when it is empty or longer than 2000 characters). The proposal checks gate the version as for create_proposal: checks running means fold adds the version only when they pass.",
             schema_for_type::<UpdateProposalInput>(),
         ),
         Tool::new(
@@ -381,7 +387,7 @@ pub fn tools() -> Vec<Tool> {
     ));
     tools.push(Tool::new(
         SUBMIT_REVIEW_FIX,
-        "Reviewer only: send the fixes you made in your review checkout as the next version of the proposal, under your name, with each changed file and its reason and the checks you ran. Fix only what the task's agreed scope settles. Send work that the task still misses back with request_changes, describe new work outside the task with create_request (the proposal can still be approved), and ask the humans with asks_human for a product decision or a conflict with a settled decision. When fold-checks.toml has proposal checks for the fixed files, it returns at once with checks running and a run id: fold runs them in your checkout and makes the version only when they pass; the result comes as a message from fold. Until the run ends, an approve or an integration of the version you fixed is refused with update_checks_running. The version starts without approvals and your checkout then holds it: build it, run the required checks, then approve it with submit_review. The author's agent gets a push to sync its workspace. A batch checkout never becomes a version: fix a member in its own create_review_checkout. Refusals: review_claim_required, author_cannot_review, review_lead_delegates (the review lead never reviews), stale_version, version_unchanged, worker_busy, workspace_not_found (no checkout of that version) and invalid_request with reason fixes_mismatch (details list the unlisted and unchanged files).",
+        "Reviewer only: send the fixes you made in your review checkout as the next version of the proposal, under your name, with each changed file and its reason, the checks you ran and the intent of the fixed version. Fix only what the task's agreed scope settles. Send work that the task still misses back with request_changes, describe new work outside the task with create_request (the proposal can still be approved), and ask the humans with asks_human for a product decision or a conflict with a settled decision. When fold-checks.toml has proposal checks for the fixed files, it returns at once with checks running and a run id: fold runs them in your checkout and makes the version only when they pass; the result comes as a message from fold. Until the run ends, an approve or an integration of the version you fixed is refused with update_checks_running. The version starts without approvals and your checkout then holds it: build it, run the required checks, then approve it with submit_review. The author's agent gets a push to sync its workspace. A batch checkout never becomes a version: fix a member in its own create_review_checkout. Refusals: review_claim_required, author_cannot_review, review_lead_delegates (the review lead never reviews), stale_version, version_unchanged, worker_busy, workspace_not_found (no checkout of that version) and invalid_request with reason fixes_mismatch (details list the unlisted and unchanged files).",
         schema_for_type::<SubmitReviewFixInput>(),
     ));
     tools.extend(checks::tools());
@@ -547,7 +553,10 @@ fn scope_record_json(scope: &ReviewScopeRecord) -> Value {
 /// How much of a review body of an earlier version the short form of `get_proposal` shows: enough to see what the review was about. The reviews of the selected version keep their whole body, which is what its author acts on.
 const EARLIER_REVIEW_HEAD_CHARS: usize = 200;
 
-/// The answer of `get_proposal`. Without `full` it leaves out the evidence text, the task description and most of each earlier version's review bodies, the largest parts of a proposal that a caller rarely needs on every read.
+/// How much of the selected version's intent the short form of `get_proposal` shows.
+const INTENT_HEAD_CHARS: usize = 200;
+
+/// The answer of `get_proposal`. Without `full` it leaves out the evidence text, most of the intent, the task description and most of each earlier version's review bodies, the largest parts of a proposal that a caller rarely needs on every read.
 fn view_json(view: &ProposalView, full: bool) -> Value {
     let detail = &view.detail;
     let summary = &detail.summary;
@@ -687,10 +696,14 @@ fn view_json(view: &ProposalView, full: bool) -> Value {
             "purpose": update.purpose.as_str(),
         });
     }
+    let intent = selected.intent.as_deref();
     if full {
+        value["intent"] = json!(intent);
         value["evidence"] = json!(selected.evidence);
         value["task"]["description"] = json!(view.task.description.as_str());
     } else {
+        value["intent"] = json!(intent.map(|text| shorten(text, INTENT_HEAD_CHARS)));
+        value["intent_chars"] = json!(intent.map_or(0, |text| text.chars().count()));
         value["evidence_chars"] = json!(
             selected
                 .evidence
@@ -770,6 +783,7 @@ async fn create_proposal(
             actor,
             task_id(&input.task)?,
             &input.title,
+            &input.intent,
             input.evidence.as_deref(),
         )
         .await
@@ -922,7 +936,12 @@ async fn update_proposal(
 ) -> Result<Value, FoldError> {
     let input: UpdateProposalInput = parse(arguments)?;
     let detail = reviews
-        .update_proposal(actor, proposal_id(&input.id)?, input.evidence.as_deref())
+        .update_proposal(
+            actor,
+            proposal_id(&input.id)?,
+            &input.intent,
+            input.evidence.as_deref(),
+        )
         .await
         .map_err(from_review)?;
     Ok(proposed_json(detail))
@@ -1047,6 +1066,7 @@ async fn submit_review_fix(
             input.version,
             &fixes,
             &input.checks,
+            &input.intent,
         )
         .await
         .map_err(from_review)?;

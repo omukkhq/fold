@@ -232,7 +232,7 @@ async fn the_proposal_diff_reads_the_change_since_an_earlier_version() {
     fx.write(1, "src/lib.rs", "pub fn y() {}\npub fn z() {}\n");
     let frontend = fx.agent("frontend").await;
     fx.reviews()
-        .update_proposal(&frontend, p1, None)
+        .update_proposal(&frontend, p1, "Make the change the task asks for.", None)
         .await
         .unwrap()
         .detail()
@@ -383,7 +383,13 @@ async fn the_proposal_diff_since_an_earlier_version_leaves_out_what_main_gained(
         .unwrap();
     fx.write(2, "docs/guide.md", "guide\n");
     fx.reviews()
-        .create_proposal(&backend, t(2), "Add a guide", None)
+        .create_proposal(
+            &backend,
+            t(2),
+            "Add a guide",
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap()
         .detail()
@@ -414,7 +420,7 @@ async fn the_proposal_diff_since_an_earlier_version_leaves_out_what_main_gained(
     assert_eq!(synced.base.to_string(), "r2");
     fx.write(1, "src/lib.rs", "pub fn y() {}\npub fn z() {}\n");
     fx.reviews()
-        .update_proposal(&frontend, p1, None)
+        .update_proposal(&frontend, p1, "Make the change the task asks for.", None)
         .await
         .unwrap()
         .detail()
@@ -490,6 +496,10 @@ async fn get_proposal_reports_the_gates_for_the_requesting_human() {
     assert_eq!(detail["selected"]["version"], 1);
     assert_eq!(detail["selected"]["base"], "r1");
     assert_eq!(detail["selected"]["evidence"], "tests pass");
+    assert_eq!(
+        detail["selected"]["intent"],
+        "Make the change the task asks for."
+    );
     assert_eq!(detail["versions"].as_array().unwrap().len(), 1);
     assert_eq!(detail["conflict"], Value::Null);
     assert_eq!(detail["review_claim"], Value::Null);
@@ -1057,7 +1067,13 @@ async fn a_check_run_is_read_with_its_logs_and_listed_on_its_proposal() {
     );
 
     reviews
-        .create_proposal(&author, t(1), "Add checks", None)
+        .create_proposal(
+            &author,
+            t(1),
+            "Add checks",
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap()
         .detail()

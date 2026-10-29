@@ -137,7 +137,13 @@ impl Fixture {
         fx.write("src/new.rs", "pub fn z() {}\npub fn w() {}\n");
         fx.write("logo.bin", "\0\u{1}\u{2}\0");
         fx.reviews
-            .create_proposal(&fx.author(), t(1), "Add the report", None)
+            .create_proposal(
+                &fx.author(),
+                t(1),
+                "Add the report",
+                "Make the change the task asks for.",
+                None,
+            )
             .await
             .unwrap()
             .detail()
@@ -163,7 +169,12 @@ impl Fixture {
     async fn new_version(&self, content: &str) {
         self.write("src/lib.rs", content);
         self.reviews
-            .update_proposal(&self.author(), p(1), None)
+            .update_proposal(
+                &self.author(),
+                p(1),
+                "Make the change the task asks for.",
+                None,
+            )
             .await
             .unwrap()
             .detail()
