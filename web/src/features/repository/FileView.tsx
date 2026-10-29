@@ -1,7 +1,7 @@
 import { Id } from "@/components/id/Id";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronsDown, FileX, Link2, Ruler } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Mono } from "@/components/mono/Mono";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
@@ -15,23 +15,31 @@ import { revisionRequestMarks } from "@/features/requests/codeLocation";
 import { CodeRequestComposer } from "@/features/requests/CodeRequestComposer";
 import { RequestMarker } from "@/features/requests/RequestMarker";
 import { fileState, formatSize } from "./describe";
-import { fileRows } from "./fileLines";
+import { fileRows, firstRowLimit, openedSelection } from "./fileLines";
 import { fileQuery } from "@/api/repositoryQueries";
 
 interface FileViewProps {
   slug: string;
   revision: string;
   path: string;
+  /** The line a link opened the file at: the view shows enough rows to hold it, selects it and puts focus on it. */
+  line?: number;
 }
 
-/** A read-only view of one file, highlighted when Shiki has a grammar for its name. Selected lines take a request, and the requests made on lines of this revision mark them. A binary or too-large file shows its size and hash and no content; a symlink shows its target text and is never followed. */
-export function FileView({ slug, revision, path }: FileViewProps) {
+/** A read-only view of one file, highlighted when Shiki has a grammar for its name. Selected lines take a request, and the requests made on lines of this revision mark them. A binary or too-large file shows its size and hash and no content; a symlink shows its target text and is never followed. The caller keys it by revision and path, so its selection and row count start again with each file. */
+export function FileView({ slug, revision, path, line }: FileViewProps) {
   const file = useQuery(fileQuery(slug, revision, path));
   const requests = useQuery(requestsQuery(slug));
-  const [selection, setSelection] = useState<DiffSelection | null>(null);
-  const [limit, setLimit] = useState(ROW_LIMIT);
+  // undefined until the reader selects: until then the line the link opened the file at stays selected.
+  const [chosen, setChosen] = useState<DiffSelection | null | undefined>(
+    undefined,
+  );
+  const [limit, setLimit] = useState(() => firstRowLimit(line));
   const shown = file.data ? fileState(file.data) : null;
-  const rows = shown?.kind === "text" ? fileRows(shown.text) : [];
+  const text = shown?.kind === "text" ? shown.text : null;
+  const rows = useMemo(() => (text === null ? [] : fileRows(text)), [text]);
+  const opened = openedSelection(path, line, rows);
+  const selection = chosen === undefined ? opened : chosen;
   const byId = new Map((requests.data ?? []).map((r) => [r.id, r]));
   return (
     <section
@@ -59,8 +67,11 @@ export function FileView({ slug, revision, path }: FileViewProps) {
             path={path}
             rows={rows.slice(0, limit)}
             selection={selection}
-            onSelect={setSelection}
+            onSelect={setChosen}
             onExpand={() => undefined}
+            focusOn={
+              opened === null ? null : { side: "new", line: opened.start_line }
+            }
             marks={revisionRequestMarks(requests.data ?? [], revision, "new")}
             renderMark={(mark, first) => {
               const request = byId.get(mark.id);
@@ -72,14 +83,15 @@ export function FileView({ slug, revision, path }: FileViewProps) {
                 />
               ) : null;
             }}
-            renderComposer={(sel) => (
+            renderComposer={(sel, focusLine) => (
               <CodeRequestComposer
                 key={`${String(sel.start_line)}:${String(sel.end_line)}`}
                 slug={slug}
                 anchor={{ kind: "revision", revision }}
                 selection={sel}
+                focusLine={focusLine}
                 onDone={() => {
-                  setSelection(null);
+                  setChosen(null);
                 }}
               />
             )}

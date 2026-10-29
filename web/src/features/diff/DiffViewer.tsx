@@ -9,7 +9,7 @@ import type { ComparedFile, FileDiff, FileWarning } from "@/api/diff";
 import { Button } from "@/components/button/Button";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
-import { DiffRows } from "./DiffRows";
+import { DiffRows, type DiffRowsProps } from "./DiffRows";
 import { FileList } from "./FileList";
 import {
   diffSides,
@@ -69,7 +69,7 @@ export interface DiffViewerProps {
   threads?: readonly DiffThread[];
   renderThread?: (thread: DiffThread) => ReactNode;
   /** Shown under the last selected line. */
-  renderComposer?: (selection: DiffSelection) => ReactNode;
+  renderComposer?: DiffRowsProps["renderComposer"];
   /** Ranges marked at each of their lines, such as questions to the author. */
   marks?: readonly DiffThread[];
   renderMark?: (mark: DiffThread, first: boolean) => ReactNode;

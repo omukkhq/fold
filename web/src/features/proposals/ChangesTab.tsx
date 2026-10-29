@@ -338,7 +338,7 @@ function ChangeBody({
               <ThreadBox slug={slug} thread={thread} now={now} />
             ) : null;
           }}
-          renderComposer={(sel) => {
+          renderComposer={(sel, focusLine) => {
             const menu = lineMenu(proposal, human, view, sel.side, sel.path);
             const key = `${sel.path}:${sel.side}:${String(sel.start_line)}:${String(sel.end_line)}`;
             if (mode === "ask" && menu.ask !== null) {
@@ -384,9 +384,11 @@ function ChangeBody({
                   key={key}
                   title={makeRequestTitle(anchor, sel)}
                   onCancel={() => {
+                    focusLine();
                     setMode("menu");
                   }}
                   onDone={() => {
+                    focusLine();
                     select(null);
                   }}
                   onSubmit={(body) => makeRequest(anchor, sel, body)}

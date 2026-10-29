@@ -12,6 +12,8 @@ import {
   requestMarks,
   revisionAnchor,
   revisionRequestMarks,
+  sidePath,
+  sideSelection,
 } from "./codeLocation";
 
 const onMain: RequestCode = {
@@ -85,7 +87,7 @@ describe("where the lines are", () => {
 
   it("links to the file at the revision, or to the file on the version's Changes tab", () => {
     expect(codeHref("demo", onMain)).toBe(
-      "/p/demo/repository?revision=r17&path=web%2Fsrc%2Fboard.ts",
+      "/p/demo/repository?revision=r17&path=web%2Fsrc%2Fboard.ts&line=2",
     );
     expect(codeHref("demo", onChange)).toBe(
       "/p/demo/proposals/P-3?tab=changes&version=2&path=web%2Fsrc%2Fboard.ts",
@@ -194,6 +196,53 @@ describe("marks", () => {
         to: { kind: "workspace", id: "ws-1" },
       }).map((m) => [m.id, m.range.side]),
     ).toEqual([["RQ-1", "old"]]);
+  });
+
+  it("draws the older revision's requests of a renamed file from its previous path", () => {
+    const at = (id: string, path: string, revision: string) =>
+      requestSummary(id, { code: { ...onMain, path, revision } });
+    const renamed = { path: "web/src/b.ts", previous_path: "web/src/a.ts" };
+    const marks = compareMarks(
+      [
+        at("RQ-1", "web/src/a.ts", "r16"),
+        at("RQ-2", "web/src/b.ts", "r16"),
+        at("RQ-3", "web/src/c.ts", "r16"),
+        at("RQ-4", "web/src/b.ts", "r17"),
+      ],
+      {
+        from: { kind: "revision", id: "r16" },
+        to: { kind: "revision", id: "r17" },
+      },
+      renamed,
+    );
+    expect(marks.map((m) => [m.id, m.range.side, m.range.path])).toEqual([
+      ["RQ-1", "old", "web/src/b.ts"],
+      ["RQ-3", "old", "web/src/c.ts"],
+      ["RQ-4", "new", "web/src/b.ts"],
+    ]);
+  });
+
+  it("names the old side of a renamed file by its previous path", () => {
+    const renamed = { path: "web/src/b.ts", previous_path: "web/src/a.ts" };
+    expect(sidePath(renamed, "old")).toBe("web/src/a.ts");
+    expect(sidePath(renamed, "new")).toBe("web/src/b.ts");
+    expect(sidePath({ ...renamed, previous_path: null }, "old")).toBe(
+      "web/src/b.ts",
+    );
+    const sel = {
+      path: "web/src/b.ts",
+      side: "old" as const,
+      start_line: 2,
+      end_line: 2,
+    };
+    expect(sideSelection(sel, renamed).path).toBe("web/src/a.ts");
+    expect(sideSelection({ ...sel, side: "new" }, renamed).path).toBe(
+      "web/src/b.ts",
+    );
+    expect(sideSelection(sel, null)).toBe(sel);
+    expect(
+      sideSelection({ ...sel, path: "web/src/other.ts" }, renamed).path,
+    ).toBe("web/src/other.ts");
   });
 
   it("names a marker and quiets it once the request is final", () => {

@@ -775,7 +775,7 @@ describe("Request detail", () => {
           name: "line 1 of README.md in r17",
         })
       ).getAttribute("href"),
-    ).toBe("/p/demo/repository?revision=r17&path=README.md");
+    ).toBe("/p/demo/repository?revision=r17&path=README.md&line=1");
     cleanup();
     renderAt("/p/demo/requests/RQ-4");
     await screen.findByRole("region", { name: "Request" });

@@ -17,11 +17,14 @@ export function CodeRequestComposer({
   slug,
   anchor,
   selection,
+  focusLine,
   onDone,
 }: {
   slug: string;
   anchor: CodeAnchor;
   selection: DiffSelection;
+  /** Puts focus back on the selected line as the box closes. */
+  focusLine: () => void;
   /** Clears the selection once the request is made or the box is closed. */
   onDone: () => void;
 }) {
@@ -56,9 +59,13 @@ export function CodeRequestComposer({
       slug={slug}
       title={makeRequestTitle(anchor, selection)}
       onCancel={() => {
+        focusLine();
         setOpen(false);
       }}
-      onDone={onDone}
+      onDone={() => {
+        focusLine();
+        onDone();
+      }}
       onSubmit={(body) => make(anchor, selection, body)}
     />
   );

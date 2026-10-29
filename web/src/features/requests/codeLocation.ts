@@ -48,12 +48,13 @@ export function codeText(code: RequestCode): string {
   return `${lines} in ${code.proposal ?? ""} v${String(code.version ?? 0)}${side}`;
 }
 
-/** The screen that shows the lines: the file in the repository at the revision, or the file on the Changes tab of the version. */
+/** The screen that shows the lines: the file in the repository at the revision, opened at the first line, or the file on the Changes tab of the version. */
 export function codeHref(slug: string, code: RequestCode): string {
   if (code.revision !== null) {
     return withQuery(projectPath(slug, "repository"), {
       revision: code.revision,
       path: code.path,
+      line: String(code.start_line),
     });
   }
   return detailHref(slug, code.proposal ?? "", {
@@ -119,20 +120,54 @@ export function requestMarks(
   });
 }
 
-/** The requests made on either revision of a comparison of two revisions; a workspace or a checkpoint side marks none. */
+/** A file of a comparison: a renamed file's old side holds its lines at `previous_path`. */
+export interface ComparedPaths {
+  path: string;
+  previous_path: string | null;
+}
+
+/** The path the tree of the selection's side holds the file at: the old side of a renamed file is at its previous path. */
+export function sidePath(file: ComparedPaths, side: "old" | "new"): string {
+  return side === "old" && file.previous_path !== null
+    ? file.previous_path
+    : file.path;
+}
+
+/** The selection as the tree of its side names it, so a request on the old side of a renamed file reads the file where that revision has it. */
+export function sideSelection(
+  selection: DiffSelection,
+  file: ComparedPaths | null,
+): DiffSelection {
+  return file === null || file.path !== selection.path
+    ? selection
+    : { ...selection, path: sidePath(file, selection.side) };
+}
+
+/** The requests made on either revision of a comparison of two revisions; a workspace or a checkpoint side marks none. With the file on screen, a request on the older revision at its previous path is drawn on the file, and one at the new path of a renamed file is not, because that path held another file there. */
 export function compareMarks(
   requests: readonly RequestSummary[],
   comparison: {
     from: { kind: string; id: string };
     to: { kind: string; id: string };
   },
+  file: ComparedPaths | null = null,
 ): DiffThread[] {
   const from = revisionAnchor(comparison.from);
   const to = revisionAnchor(comparison.to);
-  return [
-    ...(from?.kind === "revision"
+  const older =
+    from?.kind === "revision"
       ? revisionRequestMarks(requests, from.revision, "old")
-      : []),
+      : [];
+  return [
+    ...(file === null || file.previous_path === null
+      ? older
+      : older.flatMap((mark) =>
+          mark.range.path === file.previous_path
+            ? [{ ...mark, range: { ...mark.range, path: file.path } }]
+            : mark.range.path === file.path
+              ? []
+              : [mark],
+        )),
     ...(to?.kind === "revision"
       ? revisionRequestMarks(requests, to.revision, "new")
       : []),
