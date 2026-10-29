@@ -13,6 +13,9 @@ use crate::output::{self, Item};
 /// The most tracked files that ignore rules match the command lists; the rest are counted.
 const LISTED_PATHS: usize = 10;
 
+/// Claude Code's settings of one person on one machine, which `.fold/exclude` leaves out of every new project and which stays tracked where main holds it already.
+const LOCAL_SETTINGS: &str = ".claude/settings.local.json";
+
 #[derive(Args, Debug)]
 pub struct StatusArgs {
     /// Print the daemon's answer as JSON, with times in UTC milliseconds
@@ -99,6 +102,9 @@ fn status_lines(
         };
         format!("{files} {verb} ignore rules; `fld status --json` lists them")
     });
+    let settings_note = ignored_tracked.contains(&LOCAL_SETTINGS).then(|| {
+        format!("{LOCAL_SETTINGS} holds your own Claude Code settings; `fld untrack {LOCAL_SETTINGS}` stops tracking it and leaves it on disk")
+    });
     if at_main
         && changes.is_empty()
         && skipped.is_empty()
@@ -112,6 +118,9 @@ fn status_lines(
             clean.detail(synced);
         }
         if let Some(note) = &ignored_note {
+            clean.detail(note);
+        }
+        if let Some(note) = &settings_note {
             clean.detail(note);
         }
         return Ok(output::items(vec![clean]));
@@ -135,6 +144,9 @@ fn status_lines(
         place.detail(synced);
     }
     if let Some(note) = &ignored_note {
+        place.detail(note);
+    }
+    if let Some(note) = &settings_note {
         place.detail(note);
     }
     items.push(place);
@@ -450,6 +462,40 @@ mod tests {
                 "",
                 "2 files to record · 1 held by main · 2 stash entries",
             ]
+        );
+    }
+
+    #[test]
+    fn a_tracked_local_settings_file_names_the_untrack_that_stops_tracking_it() {
+        let hint = "  ↳ .claude/settings.local.json holds your own Claude Code settings; `fld untrack .claude/settings.local.json` stops tracking it and leaves it on disk";
+        assert_eq!(
+            lines(answer(
+                json!({"ignored_tracked": [".claude/settings.local.json"]})
+            )),
+            [
+                "Nothing to record: the project folder is at main r12",
+                "  ↳ 1 tracked file matches ignore rules; `fld status --json` lists them",
+                hint,
+            ]
+        );
+        let busy = lines(answer(json!({
+            "ignored_tracked": [".claude/settings.local.json", "app.env"],
+            "changes": [change("notes.md", "added", "file", false)],
+        })));
+        assert_eq!(
+            busy[..3],
+            [
+                "Project folder at main r12",
+                "  ↳ 2 tracked files match ignore rules; `fld status --json` lists them",
+                hint
+            ]
+        );
+        let other = lines(answer(json!({"ignored_tracked": ["app.env"]})));
+        assert!(
+            !other
+                .iter()
+                .any(|line| line.contains("settings.local.json")),
+            "{other:?}"
         );
     }
 
