@@ -597,7 +597,7 @@ pub async fn create_request(
         (status = 400, description = "`invalid_request` (no body, or the lines are not named by a revision or by a proposal version and side), `invalid_id` or `invalid_path`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`revision_not_found`, `proposal_not_found` (also for a version the proposal does not have) or `project_not_found`", body = ErrorEnvelope),
-        (status = 422, description = "`unknown_comment_path`: the tree has no text file at the path; `invalid_comment_range`: the lines are not in the file", body = ErrorEnvelope),
+        (status = 422, description = "`unknown_comment_path`: the tree has no text file at the path, with `details.reason` `missing`, `not_a_file` (a directory or a symlink), `binary` or `too_large`; `invalid_comment_range`: the lines are not in the file", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )

@@ -176,7 +176,7 @@ impl TaskService {
         self.create(actor, requester, body, attachments, None).await
     }
 
-    /// Creates an `open` request about lines a human selected in a revision of main or in one side of a proposal version, the same request as [`TaskService::create_request`] makes with the code location added. The path must be a relative, normalised path of a text file in that tree (`invalid_path`, `unknown_comment_path`), and the lines must exist there (`invalid_comment_range`); the request keeps a short excerpt of them, read from the tree.
+    /// Creates an `open` request about lines a human selected in a revision of main or in one side of a proposal version, the same request as [`TaskService::create_request`] makes with the code location added. The path must be a relative, normalised path of a text file in that tree (`invalid_path`; `unknown_comment_path` with the reason `missing`, `not_a_file`, `binary` or `too_large`), and the lines must exist there (`invalid_comment_range`); the request keeps a short excerpt of them, read from the tree.
     pub async fn create_code_request(
         &self,
         actor: &Actor,
@@ -300,17 +300,25 @@ impl TaskService {
         let access = self.object_access()?;
         let text = blocking(move || {
             let objects = ObjectStore::open_existing(&access.fold_dir)?;
-            match browse::read_file(&objects, &tree, &path) {
-                Ok(file) if file.kind == EntryKind::File && !file.binary && !file.too_large => {
-                    Ok(Some(String::from_utf8_lossy(&file.bytes).into_owned()))
+            let file = match browse::read_file(&objects, &tree, &path) {
+                Ok(file) => file,
+                Err(error) if error.code() == codes::NOT_FOUND => {
+                    let directory = browse::read_dir(&objects, &tree, Some(&path)).is_ok();
+                    return Ok(Err(if directory { "not_a_file" } else { "missing" }));
                 }
-                Ok(_) => Ok(None),
-                Err(error) if error.code() == codes::NOT_FOUND => Ok(None),
-                Err(error) => Err(error),
-            }
+                Err(error) => return Err(error),
+            };
+            Ok(match file.kind {
+                EntryKind::File | EntryKind::Executable if file.too_large => Err("too_large"),
+                EntryKind::File | EntryKind::Executable if file.binary => Err("binary"),
+                EntryKind::File | EntryKind::Executable => {
+                    Ok(String::from_utf8_lossy(&file.bytes).into_owned())
+                }
+                EntryKind::Symlink | EntryKind::Directory => Err("not_a_file"),
+            })
         })
         .await?
-        .ok_or_else(|| unknown_code_path(&selection))?;
+        .map_err(|reason| unknown_code_path(&selection, reason))?;
         let (excerpt, excerpt_cut) = line_excerpt(&text, selection.start_line, selection.end_line)
             .ok_or_else(|| {
                 let lines = u32::try_from(text_lines(&text).len()).unwrap_or(u32::MAX);
@@ -918,16 +926,20 @@ fn anchor_details(selection: &CodeSelection) -> Vec<(&'static str, serde_json::V
     details
 }
 
-fn unknown_code_path(selection: &CodeSelection) -> TaskError {
-    let mut details = vec![("field", json!("path"))];
+/// `reason` says why the path holds no lines to quote: `missing`, `not_a_file` (a directory or a symlink), `binary` or `too_large`.
+fn unknown_code_path(selection: &CodeSelection, reason: &str) -> TaskError {
+    let message = match reason {
+        "missing" => "the selected tree has no file at this path",
+        "not_a_file" => "the selected path is a directory or a symlink, not a file",
+        "binary" => "the selected file is binary, so it has no lines",
+        _ => "the selected file is too large to quote its lines",
+    };
+    let mut details = vec![("field", json!("path")), ("reason", json!(reason))];
     details.extend(anchor_details(selection));
-    FoldError::new(
-        codes::UNKNOWN_COMMENT_PATH,
-        "the selected code has no text file at this path",
-    )
-    .with_details(details)
-    .with_hint("select lines of a text file in that revision or version")
-    .into()
+    FoldError::new(codes::UNKNOWN_COMMENT_PATH, message)
+        .with_details(details)
+        .with_hint("select lines of a text file in that revision or version")
+        .into()
 }
 
 fn range_refusal(selection: &CodeSelection, lines: Option<u32>) -> TaskError {
@@ -956,15 +968,16 @@ fn range_refusal(selection: &CodeSelection, lines: Option<u32>) -> TaskError {
         .into()
 }
 
+/// The proposal does not exist, or has no such version: one lookup answers both.
 fn version_refusal(proposal: ProposalId, version: u32) -> TaskError {
     FoldError::new(
         codes::PROPOSAL_NOT_FOUND,
-        format!("{proposal} has no v{version}"),
+        format!("{proposal} v{version} does not exist"),
     )
     .with_details([
         ("proposal", json!(proposal.to_string())),
         ("version", json!(version)),
     ])
-    .with_hint("call get_proposal to see its versions")
+    .with_hint("call list_proposals for the proposals and get_proposal for the versions of one")
     .into()
 }

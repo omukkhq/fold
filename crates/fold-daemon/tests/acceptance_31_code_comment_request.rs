@@ -226,6 +226,22 @@ async fn acceptance_31_a_request_on_code_names_lines_that_exist() {
         );
     }
 
+    // A path refusal says why the path holds no lines; the proposal refusal says only that the version does not exist.
+    for (path, reason) in [("web/src/none.ts", "missing"), ("web/src", "not_a_file")] {
+        let (_, refused) = post(&h, &on_main(path, 1, 1)).await;
+        assert_eq!(refused["error"]["details"]["reason"], reason, "{refused}");
+    }
+    let (_, refused) = post(
+        &h,
+        &json!({"body": "Look here.", "path": FILE, "start_line": 1, "end_line": 1,
+                "proposal": "P-9", "version": 1, "side": "new"}),
+    )
+    .await;
+    assert_eq!(
+        refused["error"]["message"], "P-9 v1 does not exist",
+        "{refused}"
+    );
+
     // The range refusal says how long the file is; no refusal made a request.
     let (_, refused) = post(&h, &on_main(FILE, 3, 4)).await;
     assert_eq!(refused["error"]["details"]["line_count"], 3, "{refused}");
@@ -233,4 +249,50 @@ async fn acceptance_31_a_request_on_code_names_lines_that_exist() {
         .http(Method::GET, "/api/v1/projects/demo/requests", None, HUMAN)
         .await;
     assert_eq!(listed["items"], json!([]));
+}
+
+/// Acceptance 31: lines of an executable text file can be quoted; a binary file, a file too large to show, a symlink, a directory and an absent path cannot, and the refusal names which.
+#[tokio::test]
+async fn acceptance_31_a_request_on_code_quotes_only_a_text_file() {
+    let h = Harness::start().await;
+    let task = h.create_task("frontend", "tools").await;
+    let work = h.start_work("frontend", &task).await;
+    work.write(&[("bin/run.sh", "#!/bin/sh\necho run\n")]);
+    std::fs::write(work.dir.join("logo.png"), b"\x89PNG\0\x01\x02").unwrap();
+    std::fs::write(work.dir.join("big.txt"), "x\n".repeat(600 * 1024)).unwrap();
+    std::os::unix::fs::symlink("bin/run.sh", work.dir.join("run")).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let script = work.dir.join("bin/run.sh");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let proposal = h.propose("frontend", &work, "tools").await;
+    let on = |path: &str| json!({"body": "Look here.", "path": path, "start_line": 1, "end_line": 1, "proposal": proposal, "version": 1, "side": "new"});
+
+    let (status, created) = post(&h, &on("bin/run.sh")).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(
+        created["request"]["code"]["excerpt"], "#!/bin/sh",
+        "{created}"
+    );
+
+    for (path, reason) in [
+        ("logo.png", "binary"),
+        ("big.txt", "too_large"),
+        ("run", "not_a_file"),
+        ("bin", "not_a_file"),
+        ("bin/none.sh", "missing"),
+    ] {
+        let (status, refused) = post(&h, &on(path)).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{path}: {refused}"
+        );
+        let error = &refused["error"];
+        assert_eq!(error["code"], "unknown_comment_path", "{path}: {refused}");
+        assert_eq!(error["details"]["reason"], reason, "{path}: {refused}");
+        assert_eq!(error["details"]["proposal"], proposal.as_str(), "{refused}");
+        assert!(!refused.to_string().contains("echo run"), "{refused}");
+    }
 }
