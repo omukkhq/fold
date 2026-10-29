@@ -32,8 +32,17 @@ export interface ReplyTarget {
   answers: MessageView | null;
 }
 
+/** A free ask the reply box answers: a marked ask or a worker's question with one question and no choices. A set of several, or a question with choices, takes its answers on the set's card. */
+function freeAsk(message: MessageView): boolean {
+  return (
+    (message.asks_human || message.worker_question) &&
+    !isQuestion(message) &&
+    message.questions.length <= 1
+  );
+}
+
 /**
- * The reply box answers the newest waiting ask to the signed-in human when that ask has no choices; otherwise it replies to the newest message.
+ * The reply box answers the newest waiting ask to the signed-in human when it is a free ask; otherwise it replies to the newest message.
  */
 export function replyTarget(
   thread: ThreadView,
@@ -44,7 +53,7 @@ export function replyTarget(
   const newest = thread.messages.findLast(
     (m) => askWaits(thread, m) && asksYou(m, you),
   );
-  if (newest && !isQuestion(newest)) {
+  if (newest && freeAsk(newest)) {
     return { replyTo: newest.id, answers: newest };
   }
   return { replyTo: last.id, answers: null };

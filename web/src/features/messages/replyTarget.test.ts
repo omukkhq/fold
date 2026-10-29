@@ -93,4 +93,28 @@ describe("replyTarget", () => {
       answers: null,
     });
   });
+
+  it("leaves a set of several questions and a worker's question with choices to the card", () => {
+    const set = message("m-5", {
+      sender: "backend",
+      recipients: toYou,
+      questions: [
+        { text: "Connected?", header: null, choices: [] },
+        { text: "Keys?", header: null, choices: [] },
+      ],
+    });
+    const shown = thread("m-5", { awaiting_human: true, messages: [set] });
+    expect(replyTarget(shown, "tanim")).toEqual({
+      replyTo: "m-5",
+      answers: null,
+    });
+    const worker = message("m-6", {
+      sender: "backend",
+      recipients: toYou,
+      worker_question: true,
+      questions: [{ text: "Why?", header: null, choices: [] }],
+    });
+    const asked = thread("m-6", { awaiting_human: true, messages: [worker] });
+    expect(replyTarget(asked, "tanim")?.answers).toBe(worker);
+  });
 });

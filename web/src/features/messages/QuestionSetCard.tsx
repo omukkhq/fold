@@ -309,24 +309,26 @@ export function QuestionSetCard({
             )}
           </li>
         </ul>
-        <div className="flex min-h-24 items-center justify-between gap-12 text-13 text-text-2">
-          {draft.step > 0 && !pending ? (
-            <button
-              type="button"
-              onClick={back}
-              className={cn(
-                "inline-flex items-center gap-6 rounded-s hover:text-text",
-                focusRing,
-              )}
-            >
-              <ArrowLeft aria-hidden="true" size={14} />
-              Back
-            </button>
-          ) : (
-            <span />
-          )}
-          {moreText === null ? null : <span>{moreText}</span>}
-        </div>
+        {(draft.step > 0 && !pending) || moreText !== null ? (
+          <div className="flex min-h-24 items-center justify-between gap-12 text-13 text-text-2">
+            {draft.step > 0 && !pending ? (
+              <button
+                type="button"
+                onClick={back}
+                className={cn(
+                  "inline-flex items-center gap-6 rounded-s hover:text-text",
+                  focusRing,
+                )}
+              >
+                <ArrowLeft aria-hidden="true" size={14} />
+                Back
+              </button>
+            ) : (
+              <span />
+            )}
+            {moreText === null ? null : <span>{moreText}</span>}
+          </div>
+        ) : null}
         {pending ? (
           <p
             role="status"
