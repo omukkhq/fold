@@ -7,7 +7,7 @@ import {
   proposalVersion,
 } from "@/test/proposals";
 import {
-  NAME_NOTE,
+  SELECTION_NAME_NOTE,
   SINCE_OLD_SIDE_NOTE,
   askTitle,
   lineMenu,
@@ -205,6 +205,7 @@ describe("lineMenu", () => {
     expect(lineMenu(p, "tanim", resolveView(p, {}), "old", "a.sql")).toEqual({
       ask: "tanim",
       comment: "tanim",
+      request: "tanim",
       notes: [],
     });
   });
@@ -216,6 +217,7 @@ describe("lineMenu", () => {
     ).toEqual({
       ask: "tanim",
       comment: null,
+      request: "tanim",
       notes: [
         {
           text: "This is v1. Comments go on the current version, v2.",
@@ -230,6 +232,7 @@ describe("lineMenu", () => {
     expect(lineMenu(p, "tanim", resolveView(p, {}), "new", "a.sql")).toEqual({
       ask: "tanim",
       comment: null,
+      request: "tanim",
       notes: [
         {
           text: "P-4 is integrated, so it takes no new comments.",
@@ -244,13 +247,15 @@ describe("lineMenu", () => {
     expect(lineMenu(p, null, resolveView(p, {}), "new", "a.sql")).toEqual({
       ask: null,
       comment: null,
-      notes: [{ text: NAME_NOTE, link: null }],
+      request: null,
+      notes: [{ text: SELECTION_NAME_NOTE, link: null }],
     });
     expect(
       lineMenu(p, "tanim", resolveView(p, { since: 1 }), "old", "a.sql"),
     ).toEqual({
       ask: null,
       comment: null,
+      request: null,
       notes: [{ text: SINCE_OLD_SIDE_NOTE, link: null }],
     });
     expect(

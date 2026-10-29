@@ -6,6 +6,7 @@ import {
   proposalChangesQuery,
   proposalFileDiffQuery,
   proposalFileQuery,
+  requestsQuery,
 } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
@@ -25,6 +26,14 @@ import {
 import type { LineSet } from "@/features/diff/gaps";
 import { currentFile, fileBody, listedFiles } from "@/features/diff/layout";
 import type { DiffSelection } from "@/features/diff/selection";
+import {
+  makeRequestTitle,
+  requestMarks,
+  type CodeAnchor,
+} from "@/features/requests/codeLocation";
+import { useCodeRequest } from "@/features/requests/useCodeRequest";
+import { MakeRequestBox } from "@/features/requests/MakeRequestBox";
+import { RequestMarker } from "@/features/requests/RequestMarker";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { ActorText } from "@/people/ActorText";
@@ -54,6 +63,7 @@ import {
   versionTabs,
   type DetailSearch,
   type DetailView,
+  commentsOnSide,
 } from "./view";
 import { shownPath, viewedKey } from "./viewed";
 
@@ -65,7 +75,7 @@ function failureText(error: unknown): string {
 export type LineComment = DiffSelection & { body: string };
 
 /** What the selected lines show: the menu, or the box of the action the human chose there. */
-type SelectionMode = "menu" | "ask" | "comment";
+type SelectionMode = "menu" | "ask" | "comment" | "request";
 
 function Toolbar({
   slug,
@@ -226,6 +236,18 @@ function ChangeBody({
   );
   const editable = canEdit(proposal, human, view) && editableFile(file);
   const questionById = new Map(questions.map((q) => [q.id, q]));
+  const requests = useQuery(requestsQuery(slug));
+  const makeRequest = useCodeRequest(slug);
+  const anchor: CodeAnchor = { kind: "version", proposal: id, version };
+  const requestById = new Map((requests.data ?? []).map((r) => [r.id, r]));
+  const marks = [
+    ...questionMarks(questions, view),
+    ...requestMarks(
+      requests.data ?? [],
+      anchor,
+      commentsOnSide(view, "old") ? ["old", "new"] : ["new"],
+    ),
+  ];
 
   if (comparison.isPending) return <Skeleton className="m-24" />;
   if (comparison.isError) {
@@ -292,16 +314,22 @@ function ChangeBody({
             ) : null
           }
           threads={placed}
-          marks={questionMarks(questions, view)}
+          marks={marks}
           renderMark={(mark, first) => {
             const question = questionById.get(mark.id);
-            return question ? (
-              <QuestionMarker
-                href={questionHref(slug, question)}
-                label={questionLabel(question)}
-                answered={question.answered}
-                focusable={first}
-              />
+            if (question) {
+              return (
+                <QuestionMarker
+                  href={questionHref(slug, question)}
+                  label={questionLabel(question)}
+                  answered={question.answered}
+                  focusable={first}
+                />
+              );
+            }
+            const request = requestById.get(mark.id);
+            return request ? (
+              <RequestMarker slug={slug} request={request} focusable={first} />
             ) : null;
           }}
           renderThread={(anchor) => {
@@ -349,6 +377,22 @@ function ChangeBody({
                 />
               );
             }
+            if (mode === "request" && menu.request !== null) {
+              return (
+                <MakeRequestBox
+                  slug={slug}
+                  key={key}
+                  title={makeRequestTitle(anchor, sel)}
+                  onCancel={() => {
+                    setMode("menu");
+                  }}
+                  onDone={() => {
+                    select(null);
+                  }}
+                  onSubmit={(body) => makeRequest(anchor, sel, body)}
+                />
+              );
+            }
             return (
               <SelectionMenu
                 slug={slug}
@@ -359,6 +403,9 @@ function ChangeBody({
                 }}
                 onComment={() => {
                   setMode("comment");
+                }}
+                onRequest={() => {
+                  setMode("request");
                 }}
               />
             );

@@ -37,9 +37,12 @@ INSERT INTO message_ask_closures (message_id, reason, closed_by, created_at) VAL
 INSERT INTO messages (id, number, thread_id, sender_kind, sender_human, proposal_id, body, created_at) VALUES (10, 10, 10, 'human', 'ana', 1, 'why', 0);
 INSERT INTO message_line_refs (message_id, version_id, path, side, start_line, end_line, excerpt, excerpt_cut) VALUES (10, 1, 'a.rs', 'new', 1, 2, 'a', 0);
 INSERT INTO worker_turns (worker_process_id, role, cost_micro_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, failed, interrupted, created_at) VALUES (1, 'review_lead', 10, 0, 0, 0, 0, 0, 0, 0);
+INSERT INTO requests (id, number, body, requester, created_at, updated_at) VALUES (1, 1, 'b', 'human:ana', 0, 0), (2, 2, 'b', 'human:ana', 0, 0);
+INSERT INTO request_code_refs (request_id, revision_id, path, start_line, end_line, excerpt, excerpt_cut) VALUES (1, 1, 'a.rs', 1, 2, 'a', 0);
+INSERT INTO request_code_refs (request_id, version_id, side, path, start_line, end_line, excerpt, excerpt_cut) VALUES (2, 1, 'old', 'a.rs', 3, 3, 'c', 1);
 ";
 
-const APPEND_ONLY: [&str; 21] = [
+const APPEND_ONLY: [&str; 22] = [
     "completions",
     "revisions",
     "changesets",
@@ -61,14 +64,16 @@ const APPEND_ONLY: [&str; 21] = [
     "message_ask_closures",
     "message_line_refs",
     "worker_turns",
+    "request_code_refs",
 ];
 
 /// The append-only tables whose rows are derived in the transaction of a row that carries the time, so they have no `created_at` of their own.
-const WITHOUT_CREATED_AT: [&str; 4] = [
+const WITHOUT_CREATED_AT: [&str; 5] = [
     "review_batch_lines",
     "worker_question_messages",
     "message_choices",
     "message_line_refs",
+    "request_code_refs",
 ];
 
 #[cfg(test)]
@@ -139,6 +144,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "refs",
         "remote_states",
         "request_attachments",
+        "request_code_refs",
         "request_comments",
         "request_draft_cards",
         "request_draft_edges",

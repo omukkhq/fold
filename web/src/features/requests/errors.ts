@@ -95,6 +95,13 @@ const TEXTS: Record<string, string | ((details: Details) => string)> = {
   },
   [REQUEST_TOO_LARGE]:
     "The files are larger than fold takes in one request. Remove a file, then try once more.",
+  unknown_comment_path:
+    "This file is not a text file of that revision or version, so it takes no request on its lines.",
+  invalid_comment_range:
+    "These lines are not in the file now. Select the lines again.",
+  revision_not_found: "fold has no such revision.",
+  proposal_not_found: "fold has no such proposal or version.",
+  invalid_path: "fold does not accept this file path.",
 };
 
 export interface Failure {

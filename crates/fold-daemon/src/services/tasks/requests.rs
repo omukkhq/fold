@@ -1,20 +1,25 @@
 use std::collections::BTreeMap;
 
 use fold_core::events::types;
+use fold_core::messages::{line_excerpt, text_lines};
 use fold_core::object::{ObjectHash, ObjectKind};
 use fold_core::requests::{
-    AttachmentFacts, DraftCard, DraftEdge, RequestKind, RequestState, RequestStep, Requester,
-    check_attachments, deputy, drafter_lapsed, excerpt, request_text, request_title,
-    validate_draft,
+    AttachmentFacts, CodeAnchor, CodeRef, CodeSelection, DraftCard, DraftEdge, RequestKind,
+    RequestState, RequestStep, Requester, check_attachments, deputy, drafter_lapsed, excerpt,
+    request_text, request_title, validate_draft,
 };
+use fold_core::reviews::Side;
+use fold_core::tree::EntryKind;
 use fold_core::{
-    Actor, DependencyOrigin, FoldError, IdKind, MessageId, NewEvent, RequestId, TaskDescription,
-    TaskId, TaskKind, TaskTitle, Timestamp, WorkerName, codes, policy,
+    Actor, DependencyOrigin, FoldError, IdKind, MessageId, NewEvent, ProposalId, RequestId,
+    TaskDescription, TaskId, TaskKind, TaskTitle, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::tasks::requests::{self, NewAttachment, NewRequest, RequestRow};
 pub use fold_store::tasks::requests::{AttachmentRow as RequestAttachment, RequestFilter};
+use fold_store::workspaces as revisions;
 use fold_store::{StoreError, WriteTx, counters};
-use fold_store::{agents, messages};
+use fold_store::{agents, messages, reviews};
+use fold_vcs::browse;
 use fold_vcs::objects::ObjectStore;
 use serde_json::json;
 
@@ -74,6 +79,8 @@ pub struct RequestView {
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     pub latest_version: Option<u32>,
+    /// The code the request was made on.
+    pub code: Option<CodeRef>,
 }
 
 impl From<RequestRow> for RequestView {
@@ -96,6 +103,7 @@ impl From<RequestRow> for RequestView {
             created_at: row.created_at,
             updated_at: row.updated_at,
             latest_version: row.latest_version,
+            code: row.code,
         }
     }
 }
@@ -165,6 +173,30 @@ impl TaskService {
         attachments: Vec<NewRequestAttachment>,
     ) -> Result<RequestView, TaskError> {
         let requester = policy::can_create_request(actor).map_err(FoldError::from)?;
+        self.create(actor, requester, body, attachments, None).await
+    }
+
+    /// Creates an `open` request about lines a human selected in a revision of main or in one side of a proposal version, the same request as [`TaskService::create_request`] makes with the code location added. The path must be a relative, normalised path of a text file in that tree (`invalid_path`, `unknown_comment_path`), and the lines must exist there (`invalid_comment_range`); the request keeps a short excerpt of them, read from the tree.
+    pub async fn create_code_request(
+        &self,
+        actor: &Actor,
+        body: &str,
+        selection: CodeSelection,
+    ) -> Result<RequestView, TaskError> {
+        let requester = policy::can_create_request(actor).map_err(FoldError::from)?;
+        let code = self.code_ref(selection).await?;
+        self.create(actor, requester, body, Vec::new(), Some(code))
+            .await
+    }
+
+    async fn create(
+        &self,
+        actor: &Actor,
+        requester: Requester,
+        body: &str,
+        attachments: Vec<NewRequestAttachment>,
+        code: Option<CodeRef>,
+    ) -> Result<RequestView, TaskError> {
         let body = request_text(body, "body", false)?.unwrap_or_default();
         let facts: Vec<AttachmentFacts<'_>> = attachments
             .iter()
@@ -211,14 +243,87 @@ impl TaskService {
                     };
                     requests::insert_attachment(tx, id, &attachment, now).await?;
                 }
-                let event = NewEvent::new(types::REQUEST_CREATED, actor.event_actor())?
-                    .data(json!({"request": id.to_string(), "attachments": hashes.len()}))?;
+                let mut data = json!({"request": id.to_string(), "attachments": hashes.len()});
+                if let Some(code) = &code {
+                    requests::insert_code_ref(tx, id, code).await?;
+                    match code.anchor {
+                        CodeAnchor::Revision(revision) => {
+                            data["code_revision"] = json!(revision.to_string());
+                        }
+                        CodeAnchor::Version {
+                            proposal, version, ..
+                        } => {
+                            data["code_proposal"] = json!(proposal.to_string());
+                            data["code_version"] = json!(version);
+                        }
+                    }
+                }
+                let event =
+                    NewEvent::new(types::REQUEST_CREATED, actor.event_actor())?.data(data)?;
                 buffer.append(tx, &event, now).await?;
                 Ok::<_, TaskError>(id)
             })
             .await?;
         self.bus.publish(buffer);
         self.request_view(id).await
+    }
+
+    /// The selection checked against the tree it names, with the excerpt of its lines.
+    async fn code_ref(&self, selection: CodeSelection) -> Result<CodeRef, TaskError> {
+        let path = browse::parse_path(&selection.path)?.ok_or_else(|| {
+            FoldError::new(codes::INVALID_PATH, "a request on code needs a file path")
+                .with_details([("field", json!("path"))])
+                .with_hint("name the file the lines belong to")
+        })?;
+        if selection.start_line == 0 || selection.start_line > selection.end_line {
+            return Err(range_refusal(&selection, None));
+        }
+        let read = self.store.read();
+        let tree = match selection.anchor {
+            CodeAnchor::Revision(revision) => {
+                revisions::get_by_number(read, revision).await?.tree_hash
+            }
+            CodeAnchor::Version {
+                proposal,
+                version,
+                side,
+            } => {
+                let target = reviews::version_target(read, proposal, version)
+                    .await?
+                    .ok_or_else(|| version_refusal(proposal, version))?;
+                match side {
+                    Side::Old => target.base_tree,
+                    Side::New => target.tree,
+                }
+            }
+        };
+        let access = self.object_access()?;
+        let text = blocking(move || {
+            let objects = ObjectStore::open_existing(&access.fold_dir)?;
+            match browse::read_file(&objects, &tree, &path) {
+                Ok(file) if file.kind == EntryKind::File && !file.binary && !file.too_large => {
+                    Ok(Some(String::from_utf8_lossy(&file.bytes).into_owned()))
+                }
+                Ok(_) => Ok(None),
+                Err(error) if error.code() == codes::NOT_FOUND => Ok(None),
+                Err(error) => Err(error),
+            }
+        })
+        .await?
+        .ok_or_else(|| unknown_code_path(&selection))?;
+        let (excerpt, excerpt_cut) = line_excerpt(&text, selection.start_line, selection.end_line)
+            .ok_or_else(|| {
+                let lines = u32::try_from(text_lines(&text).len()).unwrap_or(u32::MAX);
+                range_refusal(&selection, Some(lines))
+            })?;
+        Ok(CodeRef {
+            anchor: selection.anchor,
+            path: selection.path,
+            start_line: selection.start_line,
+            end_line: selection.end_line,
+            excerpt,
+            excerpt_cut,
+        })
     }
 
     /// Writes each blob and returns the object lock guard, held until the caller's transaction has committed, with the hashes in order. A request without attachments needs neither the store nor the lock.
@@ -793,4 +898,73 @@ pub(crate) fn request_missing(request: RequestId) -> FoldError {
         format!("{request} does not exist"),
     )
     .with_hint("call list_requests to see the requests")
+}
+
+/// Where the selection's lines are, for an error detail: the anchor's ids and the path, never the lines.
+fn anchor_details(selection: &CodeSelection) -> Vec<(&'static str, serde_json::Value)> {
+    let mut details = vec![("path", json!(selection.path))];
+    match selection.anchor {
+        CodeAnchor::Revision(revision) => details.push(("revision", json!(revision.to_string()))),
+        CodeAnchor::Version {
+            proposal,
+            version,
+            side,
+        } => {
+            details.push(("proposal", json!(proposal.to_string())));
+            details.push(("version", json!(version)));
+            details.push(("side", json!(side.as_str())));
+        }
+    }
+    details
+}
+
+fn unknown_code_path(selection: &CodeSelection) -> TaskError {
+    let mut details = vec![("field", json!("path"))];
+    details.extend(anchor_details(selection));
+    FoldError::new(
+        codes::UNKNOWN_COMMENT_PATH,
+        "the selected code has no text file at this path",
+    )
+    .with_details(details)
+    .with_hint("select lines of a text file in that revision or version")
+    .into()
+}
+
+fn range_refusal(selection: &CodeSelection, lines: Option<u32>) -> TaskError {
+    let message = match lines {
+        Some(lines) => format!(
+            "lines {}-{} run past the end of the file, which has {lines}",
+            selection.start_line, selection.end_line
+        ),
+        None => format!(
+            "lines {}-{} are not a forward run of lines from line 1",
+            selection.start_line, selection.end_line
+        ),
+    };
+    let mut details = vec![
+        ("field", json!("end_line")),
+        ("start_line", json!(selection.start_line)),
+        ("end_line", json!(selection.end_line)),
+    ];
+    details.extend(anchor_details(selection));
+    if let Some(lines) = lines {
+        details.push(("line_count", json!(lines)));
+    }
+    FoldError::new(codes::INVALID_COMMENT_RANGE, message)
+        .with_details(details)
+        .with_hint("select lines that exist in that revision or version")
+        .into()
+}
+
+fn version_refusal(proposal: ProposalId, version: u32) -> TaskError {
+    FoldError::new(
+        codes::PROPOSAL_NOT_FOUND,
+        format!("{proposal} has no v{version}"),
+    )
+    .with_details([
+        ("proposal", json!(proposal.to_string())),
+        ("version", json!(version)),
+    ])
+    .with_hint("call get_proposal to see its versions")
+    .into()
 }

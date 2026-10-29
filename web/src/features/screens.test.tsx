@@ -29,6 +29,8 @@ import {
   type StubRequest,
 } from "../test/stubFetch";
 import { workerList } from "../test/workers";
+import { requestDetail, requestSummary } from "../test/requests";
+import type { RequestSummary } from "../api/requests";
 import { ProjectsScreen } from "./projects/ProjectsScreen";
 import { RepositoryScreen } from "./repository/RepositoryScreen";
 
@@ -358,6 +360,14 @@ const TREES: Record<string, ReturnType<typeof entry>[]> = {
 };
 
 const FILES: Record<string, Record<string, unknown>> = {
+  "long.txt": {
+    kind: "file",
+    binary: false,
+    too_large: false,
+    text: Array.from({ length: 1001 }, (_, i) => `line ${String(i + 1)}`).join(
+      "\n",
+    ),
+  },
   "README.md": {
     kind: "file",
     binary: false,
@@ -386,8 +396,36 @@ const FILES: Record<string, Record<string, unknown>> = {
   },
 };
 
-function stubRepository(revisions = REVISIONS): StubRequest[] {
+function stubRepository(
+  revisions = REVISIONS,
+  requests: RequestSummary[] = [],
+): StubRequest[] {
   return stubFetch({
+    "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+    "GET /api/v1/projects/demo/requests": () => ({ body: { items: requests } }),
+    "POST /api/v1/projects/demo/requests/from-code": (request) => {
+      const body = request.body as {
+        path: string;
+        start_line: number;
+        end_line: number;
+        revision: string;
+      };
+      const made = requestSummary(`RQ-${String(requests.length + 1)}`, {
+        code: {
+          path: body.path,
+          start_line: body.start_line,
+          end_line: body.end_line,
+          excerpt: "A demo project.",
+          excerpt_cut: false,
+          revision: body.revision,
+          proposal: null,
+          version: null,
+          side: null,
+        },
+      });
+      requests.push(made);
+      return { status: 201, body: requestDetail(made) };
+    },
     "GET /api/v1/projects/demo/revisions": {
       body: { revisions, before: null },
     },
@@ -428,8 +466,9 @@ function renderRepository(
   initial?: string,
   revisions = REVISIONS,
   path?: string,
+  requests: RequestSummary[] = [],
 ) {
-  stubRepository(revisions);
+  const calls = stubRepository(revisions, requests);
   const queryClient = createQueryClient();
   const root = createRootRoute();
   function Harness() {
@@ -462,8 +501,11 @@ function renderRepository(
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
+  repositoryCalls = calls;
   return router;
 }
+
+let repositoryCalls: StubRequest[] = [];
 
 describe("A project fold removed", () => {
   it("shows the project not-found state, never the load failure, and leads back to a list without it", async () => {
@@ -748,6 +790,86 @@ describe("Repository screen", () => {
     await user.click(await screen.findByRole("button", { name: /README\.md/ }));
     const text = await screen.findByRole("region", { name: "File README.md" });
     expect(await within(text).findByText(/A demo project/)).toBeTruthy();
+  });
+
+  it("selects lines of a file and makes a request about them, and marks the lines that requests on this revision were made on", async () => {
+    const onLine = (revision: string) => ({
+      path: "README.md",
+      start_line: 1,
+      end_line: 1,
+      excerpt: "A demo project.",
+      excerpt_cut: false,
+      revision,
+      proposal: null,
+      version: null,
+      side: null,
+    });
+    renderRepository(undefined, REVISIONS, "README.md", [
+      requestSummary("RQ-1", { code: onLine("r5"), state: "approved" }),
+      requestSummary("RQ-2", { code: onLine("r4") }),
+    ]);
+    const user = userEvent.setup();
+    const file = await screen.findByRole("region", { name: "File README.md" });
+    const marker = await within(file).findByRole("link", {
+      name: "Request RQ-1 about line 1, approved",
+    });
+    expect(marker.getAttribute("href")).toBe("/p/demo/requests/RQ-1");
+    expect(
+      within(file).queryByRole("link", { name: /^Request RQ-2/ }),
+    ).toBeNull();
+    await user.click(
+      within(file).getByRole("gridcell", { name: "Line 1: A demo project." }),
+    );
+    await user.click(
+      await within(file).findByRole("button", { name: "Make a request" }),
+    );
+    const form = await within(file).findByRole("form", {
+      name: "Make a request about line 1 · r5",
+    });
+    await user.type(within(form).getByLabelText("Request"), "Say more.");
+    await user.click(
+      within(form).getByRole("button", { name: "Make the request" }),
+    );
+    const note = await within(file).findByText(/with these lines/);
+    expect(
+      within(note).getByRole("link", { name: "RQ-3" }).getAttribute("href"),
+    ).toBe("/p/demo/requests/RQ-3");
+    expect(
+      repositoryCalls.find((c) => c.path.endsWith("/requests/from-code"))?.body,
+    ).toEqual({
+      body: "Say more.",
+      path: "README.md",
+      start_line: 1,
+      end_line: 1,
+      revision: "r5",
+    });
+    expect(
+      await within(file).findByRole("link", {
+        name: "Request RQ-3 about line 1, open",
+      }),
+    ).toBeTruthy();
+    await user.click(within(file).getByRole("button", { name: "Done" }));
+    expect(within(file).queryByText(/with these lines/)).toBeNull();
+  });
+
+  it("shows a long file a thousand lines at a time", async () => {
+    renderRepository(undefined, REVISIONS, "long.txt");
+    const user = userEvent.setup();
+    const file = await screen.findByRole("region", { name: "File long.txt" });
+    expect(
+      await within(file).findByRole("gridcell", {
+        name: "Line 1000: line 1000",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(file).queryByRole("gridcell", { name: "Line 1001: line 1001" }),
+    ).toBeNull();
+    await user.click(
+      within(file).getByRole("button", { name: "Show more · 1 more row" }),
+    );
+    expect(
+      within(file).getByRole("gridcell", { name: "Line 1001: line 1001" }),
+    ).toBeTruthy();
   });
 
   it("opens a binary file with its size and hash", async () => {

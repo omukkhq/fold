@@ -91,20 +91,24 @@ export interface MenuNote {
   link: { label: string; search: DetailSearch } | null;
 }
 
-/** What a line selection offers: the human who asks or comments, `null` for an action the selection does not take, and the reasons for those. */
+/** What a line selection offers: the human who asks, comments or makes a request, `null` for an action the selection does not take, and the reasons for those. */
 export interface LineMenu {
   ask: string | null;
   comment: string | null;
+  request: string | null;
   notes: MenuNote[];
 }
 
 export const NAME_NOTE = "Tell fold your name first, then ask or comment.";
 
+export const SELECTION_NAME_NOTE =
+  "Tell fold your name first, then ask, comment or make a request.";
+
 export const SINCE_OLD_SIDE_NOTE =
-  "A change since an earlier version takes questions and comments on the new side only: its lines are the version's own.";
+  "A change since an earlier version takes questions, comments and requests on the new side only: its lines are the version's own.";
 
 /**
- * The actions of a selection. A question goes to the author about any version of a proposal in any state; a comment only on the current version of an open proposal.
+ * The actions of a selection. A question goes to the author, and a request to the main agent, about any version of a proposal in any state; a comment only on the current version of an open proposal.
  * The old side of a change since an earlier version holds that version's lines, which neither reads, and a missing name stops both, so each shows one note in place of the menu.
  */
 export function lineMenu(
@@ -118,23 +122,26 @@ export function lineMenu(
     return {
       ask: null,
       comment: null,
-      notes: [{ text: NAME_NOTE, link: null }],
+      request: null,
+      notes: [{ text: SELECTION_NAME_NOTE, link: null }],
     };
   }
   if (!commentsOnSide(view, side)) {
     return {
       ask: null,
       comment: null,
+      request: null,
       notes: [{ text: SINCE_OLD_SIDE_NOTE, link: null }],
     };
   }
   const comment = commentNote(proposal, human, view, side, path);
   if (comment.kind === "comment") {
-    return { ask: human, comment: human, notes: [] };
+    return { ask: human, comment: human, request: human, notes: [] };
   }
   return {
     ask: human,
     comment: null,
+    request: human,
     notes: [{ text: comment.text, link: comment.link }],
   };
 }

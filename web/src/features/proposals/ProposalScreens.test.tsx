@@ -42,8 +42,10 @@ import {
   reviewComment,
   revision,
 } from "@/test/proposals";
+import { requestDetail, requestSummary } from "@/test/requests";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 import { needsItem } from "@/test/workers";
+import type { RequestCode, RequestSummary } from "@/api/requests";
 
 vi.mock("@/api/client", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/api/client")>();
@@ -555,7 +557,7 @@ async function lineCell(container: HTMLElement, key: string) {
 /** Picks an action of the menu at the selected lines. */
 async function choose(
   user: ReturnType<typeof userEvent.setup>,
-  action: "Ask the author" | "Review comment",
+  action: "Ask the author" | "Review comment" | "Make a request",
 ): Promise<void> {
   const menu = await screen.findByRole("group", { name: "Selected lines" });
   await user.click(within(menu).getByRole("button", { name: action }));
@@ -1079,6 +1081,90 @@ describe("Proposal detail", () => {
     expect(writes("POST /api/v1/projects/demo/proposals/P-4/reviews")).toEqual(
       [],
     );
+  });
+
+  it("makes a request from selected lines apart from the review, pending until the daemon answers, then names it and marks the lines", async () => {
+    const made: RequestSummary[] = [];
+    daemon.on("GET /api/v1/projects/:slug/requests", () => ok({ items: made }));
+    daemon.on(
+      "POST /api/v1/projects/:slug/requests/from-code",
+      async (call) => {
+        if (held) await held;
+        const body = call.body as {
+          path: string;
+          start_line: number;
+          end_line: number;
+          proposal: string;
+          version: number;
+          side: "old" | "new";
+        };
+        const code: RequestCode = {
+          path: body.path,
+          start_line: body.start_line,
+          end_line: body.end_line,
+          excerpt: "x",
+          excerpt_cut: false,
+          revision: null,
+          proposal: body.proposal,
+          version: body.version,
+          side: body.side,
+        };
+        const summary = requestSummary("RQ-7", { code });
+        made.push(summary);
+        return ok(requestDetail(summary), 201);
+      },
+    );
+    const user = userEvent.setup();
+    const { container } = renderAt("/p/demo/proposals/P-4?tab=changes");
+    await user.click(await lineCell(container, "new:2"));
+    fireEvent.click(await lineCell(container, "new:3"), { shiftKey: true });
+    await choose(user, "Make a request");
+    const form = await screen.findByRole("form", {
+      name: "Make a request about lines 2–3 · new side · v2",
+    });
+    await user.click(
+      within(form).getByRole("button", { name: "Make the request" }),
+    );
+    expect(within(form).getByText("Say what you need first.")).toBeTruthy();
+    await user.type(within(form).getByLabelText("Request"), "Index the date.");
+    const release = hold();
+    await user.click(
+      within(form).getByRole("button", { name: "Make the request" }),
+    );
+    expect(
+      within(form)
+        .getByRole("button", { name: "Making the request…" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    release();
+    const note = await screen.findByText(/with these lines/);
+    expect(
+      within(note).getByRole("link", { name: "RQ-7" }).getAttribute("href"),
+    ).toBe("/p/demo/requests/RQ-7");
+    const markers = await screen.findAllByRole("link", {
+      name: "Request RQ-7 about lines 2–3, open",
+    });
+    expect(markers.map((m) => m.getAttribute("href"))).toEqual([
+      "/p/demo/requests/RQ-7",
+      "/p/demo/requests/RQ-7",
+    ]);
+    expect(
+      writes("POST /api/v1/projects/demo/requests/from-code")[0]?.body,
+    ).toEqual({
+      body: "Index the date.",
+      path: SCHEMA,
+      start_line: 2,
+      end_line: 3,
+      proposal: "P-4",
+      version: 2,
+      side: "new",
+    });
+    expect(writes("POST /api/v1/projects/demo/proposals/P-4/comments")).toEqual(
+      [],
+    );
+    expect(
+      writes("POST /api/v1/projects/demo/proposals/P-4/questions"),
+    ).toEqual([]);
   });
 
   it("marks the lines of a question on the version it asks about, answered once the author wrote back, and a click on the mark opens the thread without selecting the line", async () => {

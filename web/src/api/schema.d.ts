@@ -933,6 +933,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/requests/from-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human creates a request about lines they selected in a revision of main or in a proposal version. It is the same request as `POST /requests` makes, with the code location and a short excerpt of the lines added. */
+        post: operations["create_code_request"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/requests/{id}": {
         parameters: {
             query?: never;
@@ -2320,6 +2337,33 @@ export interface components {
         CloseRequestBody: {
             /** @description Why the request is closed. `#` names a fold item and `@` names a file; the daemon parses nothing. */
             reason: string;
+        };
+        /** @description A request about lines a human selected. Name the lines by `revision`, or by `proposal`, `version` and `side`. */
+        CodeRequestBody: {
+            /** @description The message in Markdown. `#` names a fold item and `@` names a file; the daemon parses nothing. */
+            body: string;
+            /**
+             * Format: int32
+             * @description 1-based, at least `start_line`.
+             */
+            end_line: number;
+            /**
+             * @description The file the lines belong to, relative to the tree's root.
+             * @example web/src/board.ts
+             */
+            path: string;
+            /** @description A proposal, such as `P-3`, with `version` and `side`. */
+            proposal?: string | null;
+            /** @description A revision of main, such as `r17`. */
+            revision?: string | null;
+            side?: components["schemas"]["CommentSide"] | null;
+            /**
+             * Format: int32
+             * @description 1-based.
+             */
+            start_line: number;
+            /** Format: int32 */
+            version?: number | null;
         };
         /** @description The comment of a review batch that a comment puts on its proposal. */
         CommentBatchLink: {
@@ -4188,6 +4232,41 @@ export interface components {
              */
             size: number;
         };
+        /** @description The lines a request was made on: a run of lines of one file in a revision of main, or in one side of a proposal version. */
+        RequestCodeView: {
+            /**
+             * Format: int32
+             * @description 1-based, at least `start_line`.
+             */
+            end_line: number;
+            /** @description The lines as the tree held them when the request was made, joined by newlines. */
+            excerpt: string;
+            /** @description The excerpt holds only the first of the lines. */
+            excerpt_cut: boolean;
+            /** @example web/src/board.ts */
+            path: string;
+            /**
+             * @description The proposal whose version the lines belong to; null for lines of a revision.
+             * @example P-3
+             */
+            proposal: string | null;
+            /**
+             * @description The revision of main the lines belong to; null for lines of a proposal version.
+             * @example r17
+             */
+            revision: string | null;
+            side: components["schemas"]["CommentSide"] | null;
+            /**
+             * Format: int32
+             * @description 1-based.
+             */
+            start_line: number;
+            /**
+             * Format: int32
+             * @description The proposal version; null for lines of a revision.
+             */
+            version: number | null;
+        };
         /** @description The requester's comment on one version, written when asking for changes. */
         RequestCommentView: {
             author: string;
@@ -4246,6 +4325,7 @@ export interface components {
         RequestState: "open" | "drafting" | "draft_ready" | "changes_requested" | "approved" | "closed";
         /** @description One request in a list. */
         RequestSummary: {
+            code: components["schemas"]["RequestCodeView"] | null;
             /**
              * Format: int64
              * @description UTC milliseconds.
@@ -10965,6 +11045,96 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    create_code_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodeRequestBody"];
+            };
+        };
+        responses: {
+            /** @description The created request */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestDetailView"];
+                };
+            };
+            /** @description `invalid_request` (no body, or the lines are not named by a revision or by a proposal version and side), `invalid_id` or `invalid_path` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `revision_not_found`, `proposal_not_found` (also for a version the proposal does not have) or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_comment_path`: the tree has no text file at the path; `invalid_comment_range`: the lines are not in the file */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
             /** @description Internal error */
             500: {

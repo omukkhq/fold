@@ -1,15 +1,22 @@
 import { Id } from "@/components/id/Id";
 import { useQuery } from "@tanstack/react-query";
-import { FileX, Link2, Ruler } from "lucide-react";
-import { SyntaxText } from "@/components/code/SyntaxText";
+import { ChevronsDown, FileX, Link2, Ruler } from "lucide-react";
+import { useState } from "react";
 import { Mono } from "@/components/mono/Mono";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
-import { CODE_BOX } from "@/components/text/textFlow";
-import { cn } from "@/lib/cn";
+import { requestsQuery } from "@/api/queries";
+import { Button } from "@/components/button/Button";
+import { DiffRows } from "@/features/diff/DiffRows";
+import { ROW_LIMIT } from "@/features/diff/layout";
+import { moreRowsText } from "@/features/diff/present";
+import type { DiffSelection } from "@/features/diff/selection";
+import { revisionRequestMarks } from "@/features/requests/codeLocation";
+import { CodeRequestComposer } from "@/features/requests/CodeRequestComposer";
+import { RequestMarker } from "@/features/requests/RequestMarker";
 import { fileState, formatSize } from "./describe";
+import { fileRows } from "./fileLines";
 import { fileQuery } from "@/api/repositoryQueries";
-import { languageForPath } from "@/syntax/languages";
 
 interface FileViewProps {
   slug: string;
@@ -17,10 +24,15 @@ interface FileViewProps {
   path: string;
 }
 
-/** A read-only view of one file, highlighted when Shiki has a grammar for its name. A binary or too-large file shows its size and hash and no content; a symlink shows its target text and is never followed. */
+/** A read-only view of one file, highlighted when Shiki has a grammar for its name. Selected lines take a request, and the requests made on lines of this revision mark them. A binary or too-large file shows its size and hash and no content; a symlink shows its target text and is never followed. */
 export function FileView({ slug, revision, path }: FileViewProps) {
   const file = useQuery(fileQuery(slug, revision, path));
+  const requests = useQuery(requestsQuery(slug));
+  const [selection, setSelection] = useState<DiffSelection | null>(null);
+  const [limit, setLimit] = useState(ROW_LIMIT);
   const shown = file.data ? fileState(file.data) : null;
+  const rows = shown?.kind === "text" ? fileRows(shown.text) : [];
+  const byId = new Map((requests.data ?? []).map((r) => [r.id, r]));
   return (
     <section
       aria-label={`File ${path}`}
@@ -41,14 +53,53 @@ export function FileView({ slug, revision, path }: FileViewProps) {
         />
       ) : null}
       {shown?.kind === "text" ? (
-        <pre
-          className={cn(
-            CODE_BOX,
-            "px-16 pt-6 pb-14 font-mono text-13 leading-normal text-text",
-          )}
-        >
-          <SyntaxText code={shown.text} language={languageForPath(path)} />
-        </pre>
+        <div className="pt-6 pb-14">
+          <DiffRows
+            variant="file"
+            path={path}
+            rows={rows.slice(0, limit)}
+            selection={selection}
+            onSelect={setSelection}
+            onExpand={() => undefined}
+            marks={revisionRequestMarks(requests.data ?? [], revision, "new")}
+            renderMark={(mark, first) => {
+              const request = byId.get(mark.id);
+              return request ? (
+                <RequestMarker
+                  slug={slug}
+                  request={request}
+                  focusable={first}
+                />
+              ) : null;
+            }}
+            renderComposer={(sel) => (
+              <CodeRequestComposer
+                key={`${String(sel.start_line)}:${String(sel.end_line)}`}
+                slug={slug}
+                anchor={{ kind: "revision", revision }}
+                selection={sel}
+                onDone={() => {
+                  setSelection(null);
+                }}
+              />
+            )}
+          />
+          {rows.length > limit ? (
+            <div className="bg-diff-hunk px-8 py-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-accent hover:bg-surface hover:text-accent"
+                icon={<ChevronsDown aria-hidden="true" size={14} />}
+                onClick={() => {
+                  setLimit((old) => old + ROW_LIMIT);
+                }}
+              >
+                {moreRowsText(rows.length - limit)}
+              </Button>
+            </div>
+          ) : null}
+        </div>
       ) : null}
       {shown?.kind === "symlink" ? (
         <p className="flex items-center gap-8 px-16 pt-6 pb-14 text-14 text-text-2">

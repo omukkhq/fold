@@ -133,3 +133,21 @@ describe("reloadsRequest", () => {
     expect(reloadsRequest(new Error("x"))).toBe(false);
   });
 });
+
+describe("describeFailure for a request on code", () => {
+  it.each([
+    [
+      "unknown_comment_path",
+      "This file is not a text file of that revision or version, so it takes no request on its lines.",
+    ],
+    [
+      "invalid_comment_range",
+      "These lines are not in the file now. Select the lines again.",
+    ],
+    ["revision_not_found", "fold has no such revision."],
+    ["proposal_not_found", "fold has no such proposal or version."],
+    ["invalid_path", "fold does not accept this file path."],
+  ])("names %s in words", (code, text) => {
+    expect(describeFailure(err(code))).toEqual({ text, code });
+  });
+});
