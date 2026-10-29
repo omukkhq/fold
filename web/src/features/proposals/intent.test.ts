@@ -9,6 +9,7 @@ import { historyEntries } from "./history";
 import {
   NO_INTENT,
   intentCard,
+  intentInHistory,
   reviewerSummary,
   versionIntent,
 } from "./intent";
@@ -48,7 +49,22 @@ describe("the intent card", () => {
   it("has no intent for a version made before intents, and no card without a version", () => {
     expect(intentCard(entries([proposalVersion(1)]))?.intent).toBeNull();
     expect(intentCard([])).toBeNull();
-    expect(NO_INTENT).toContain("no intent");
+    expect(NO_INTENT).toBe("This version has no intent.");
+  });
+
+  it("shows an intent in the history only on a version the Intent card does not show", () => {
+    const list = entries([proposalVersion(1), proposalVersion(2)]);
+    const card = intentCard(list);
+    expect(
+      list.map((entry) => [
+        entry.version.version,
+        intentInHistory(entry, card),
+      ]),
+    ).toEqual([
+      [2, false],
+      [1, true],
+    ]);
+    expect(intentInHistory({ version: proposalVersion(2) }, null)).toBe(true);
   });
 
   it("takes the newest verdict as the reviewer's summary, and a comment only without one", () => {

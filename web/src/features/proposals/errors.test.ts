@@ -106,6 +106,9 @@ describe("describeFailure", () => {
     expect(text("invalid_intent", { reason: "too_long" }).text).toBe(
       "The intent is too long. Keep it to 2000 characters.",
     );
+    expect(
+      text("invalid_intent", { reason: "too_long", max_chars: 1500 }).text,
+    ).toBe("The intent is too long. Keep it to 1500 characters.");
     expect(text("invalid_intent", { reason: "empty" })).toMatchObject({
       place: "inline",
       text: "Say what the new version does, why, what it does not change and its risks.",

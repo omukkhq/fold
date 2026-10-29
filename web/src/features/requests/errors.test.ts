@@ -150,4 +150,28 @@ describe("describeFailure for a request on code", () => {
   ])("names %s in words", (code, text) => {
     expect(describeFailure(err(code))).toEqual({ text, code });
   });
+
+  it.each([
+    [
+      "missing",
+      "That revision or version has no file at this path, so its lines take no request.",
+    ],
+    ["binary", "This file is binary, so its lines take no request."],
+    [
+      "too_large",
+      "This file is too large for fold to read, so its lines take no request.",
+    ],
+    [
+      "not_a_file",
+      "This path is not a file in that revision or version, so it takes no request.",
+    ],
+    [
+      "other",
+      "This file is not a text file of that revision or version, so it takes no request on its lines.",
+    ],
+  ])("says why a path takes no request: %s", (reason, text) => {
+    expect(describeFailure(err("unknown_comment_path", { reason })).text).toBe(
+      text,
+    );
+  });
 });

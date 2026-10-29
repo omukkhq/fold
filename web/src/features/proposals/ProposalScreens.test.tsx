@@ -2130,6 +2130,16 @@ describe("Human edit", () => {
     fireEvent.change(box, {
       target: { value: "CREATE TABLE reports (\n);\n-- checked\n" },
     });
+    expect(save).toHaveProperty("disabled", true);
+    expect(
+      within(editor).getByText(
+        "What v3 does, why, what it does not change and its risks. v2 has no intent, so write one for v3.",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(within(editor).getByLabelText("Intent of v3"), {
+      target: { value: "Marks the reports table as checked." },
+    });
+    expect(save).toHaveProperty("disabled", false);
     const release = hold();
     await user.click(save);
     expect(
@@ -2160,6 +2170,7 @@ describe("Human edit", () => {
       version: 2,
       path: SCHEMA,
       content: "CREATE TABLE reports (\r\n);\r\n-- checked\r\n",
+      intent: "Marks the reports table as checked.",
     });
   });
 
@@ -2214,6 +2225,9 @@ describe("Human edit", () => {
     });
     fireEvent.change(within(editor).getByLabelText(`Content of ${SCHEMA}`), {
       target: { value: "x\n" },
+    });
+    fireEvent.change(within(editor).getByLabelText("Intent of v3"), {
+      target: { value: "Clears the table." },
     });
     await user.click(
       within(editor).getByRole("button", { name: "Save as v3" }),
@@ -2534,17 +2548,15 @@ describe("Intent", () => {
     ).toBeTruthy();
     const v1 = screen.getByRole("article", { name: "Version v1" });
     expect(within(v1).getByText("Adds the reports table.")).toBeTruthy();
+    const v2 = screen.getByRole("article", { name: "Version v2" });
+    expect(within(v2).queryByText(/Adds the reports table/)).toBeNull();
   });
 
   it("says when a version has no intent and nobody reviewed it", async () => {
     update("P-4", (p) => ({ ...p, reviews: [] }));
     renderAt("/p/demo/proposals/P-4");
     const card = await screen.findByRole("region", { name: "Intent" });
-    expect(
-      within(card).getByText(
-        "This version has no intent: fold made it before it asked for one.",
-      ),
-    ).toBeTruthy();
+    expect(within(card).getByText("This version has no intent.")).toBeTruthy();
     expect(
       within(card).getByText("No reviewer has reviewed v2 yet."),
     ).toBeTruthy();

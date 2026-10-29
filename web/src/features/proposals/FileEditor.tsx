@@ -17,7 +17,9 @@ import {
   editNotice,
   editRequest,
   editSource,
+  intentHint,
   intentProblem,
+  shownIntentProblem,
 } from "./edit";
 import { describeFailure } from "./errors";
 import type { DetailView } from "./view";
@@ -47,7 +49,7 @@ export function FileEditor({
   const [value, setValue] = useState<string | null>(null);
   const started = editIntent(proposal, view.version);
   const [intent, setIntent] = useState(started);
-  const problem = intentProblem(intent, started);
+  const problem = intentProblem(intent);
   const save = useMutation({
     mutationFn: (edit: NewEdit) => editProposalFile(slug, id, edit),
     onSuccess: onSaved,
@@ -96,8 +98,8 @@ export function FileEditor({
           />
           <Textarea
             label={`Intent of ${next}`}
-            hint={`What ${next} does, why, what it does not change and its risks. It starts as the intent of v${String(view.version)}; change what your edit changes.`}
-            error={problem ?? undefined}
+            hint={intentHint(view.version, started)}
+            error={shownIntentProblem(intent, started) ?? undefined}
             rows={4}
             readOnly={save.isPending}
             value={intent}

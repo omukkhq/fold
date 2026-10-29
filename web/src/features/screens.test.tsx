@@ -405,11 +405,15 @@ function stubRepository(
     "GET /api/v1/projects/demo/requests": () => ({ body: { items: requests } }),
     "POST /api/v1/projects/demo/requests/from-code": (request) => {
       const body = request.body as {
+        body: string;
         path: string;
         start_line: number;
         end_line: number;
         revision: string;
       };
+      if (body.body === "Refuse it.") {
+        return errorReply(422, "invalid_comment_range");
+      }
       const made = requestSummary(`RQ-${String(requests.length + 1)}`, {
         code: {
           path: body.path,
@@ -467,6 +471,7 @@ function renderRepository(
   revisions = REVISIONS,
   path?: string,
   requests: RequestSummary[] = [],
+  line?: number,
 ) {
   const calls = stubRepository(revisions, requests);
   const queryClient = createQueryClient();
@@ -478,6 +483,7 @@ function renderRepository(
         slug="demo"
         revision={revision}
         path={path}
+        line={line}
         onSelectRevision={setRevision}
       />
     );
@@ -834,6 +840,7 @@ describe("Repository screen", () => {
     expect(
       within(note).getByRole("link", { name: "RQ-3" }).getAttribute("href"),
     ).toBe("/p/demo/requests/RQ-3");
+    expect(document.activeElement?.contains(note)).toBe(true);
     expect(
       repositoryCalls.find((c) => c.path.endsWith("/requests/from-code"))?.body,
     ).toEqual({
@@ -850,6 +857,49 @@ describe("Repository screen", () => {
     ).toBeTruthy();
     await user.click(within(file).getByRole("button", { name: "Done" }));
     expect(within(file).queryByText(/with these lines/)).toBeNull();
+    expect(document.activeElement).toBe(
+      within(file).getByRole("gridcell", { name: "Line 1: A demo project." }),
+    );
+  });
+
+  it("shows why the daemon refused a request with its code, and keeps the box", async () => {
+    renderRepository(undefined, REVISIONS, "README.md");
+    const user = userEvent.setup();
+    const file = await screen.findByRole("region", { name: "File README.md" });
+    await user.click(
+      await within(file).findByRole("gridcell", {
+        name: "Line 1: A demo project.",
+      }),
+    );
+    await user.click(
+      await within(file).findByRole("button", { name: "Make a request" }),
+    );
+    const form = await within(file).findByRole("form", {
+      name: "Make a request about line 1 · r5",
+    });
+    await user.type(within(form).getByLabelText("Request"), "Refuse it.");
+    await user.click(
+      within(form).getByRole("button", { name: "Make the request" }),
+    );
+    const alert = await within(form).findByRole("alert");
+    expect(alert.textContent).toBe(
+      "The request was not made. These lines are not in the file now. Select the lines again. code: invalid_comment_range",
+    );
+  });
+
+  it("opens a long file at the line a link names, selected and focused", async () => {
+    renderRepository(undefined, REVISIONS, "long.txt", [], 1001);
+    const file = await screen.findByRole("region", { name: "File long.txt" });
+    const cell = await within(file).findByRole("gridcell", {
+      name: "Line 1001: line 1001",
+    });
+    expect(cell.getAttribute("aria-selected")).toBe("true");
+    await waitFor(() => {
+      expect(document.activeElement).toBe(cell);
+    });
+    expect(
+      within(file).queryByRole("button", { name: /^Show more/ }),
+    ).toBeNull();
   });
 
   it("shows a long file a thousand lines at a time", async () => {

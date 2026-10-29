@@ -51,6 +51,7 @@ import type { IntegrationView } from "./integration";
 import {
   NO_INTENT,
   intentCard,
+  intentInHistory,
   versionIntent,
   type IntentCardModel,
 } from "./intent";
@@ -465,13 +466,16 @@ function VersionCard({
   proposal,
   entry,
   now,
+  showIntent,
 }: {
   slug: string;
   proposal: ProposalDetail;
   entry: HistoryEntry;
   now: number;
+  showIntent: boolean;
 }) {
   const v = entry.version;
+  const intent = versionIntent(v);
   const id = proposal.summary.id;
   return (
     <article
@@ -507,20 +511,22 @@ function VersionCard({
         </HrefLink>
       </header>
       <dl className="grid grid-cols-[var(--width-fact-label)_minmax(0,1fr)] gap-x-14 gap-y-10 px-16 pt-8 pb-14 text-14">
-        <VersionFact label="Intent">
-          {versionIntent(v) === null ? (
-            <p className="text-text-2">{NO_INTENT}</p>
-          ) : (
-            <MentionText
-              text={versionIntent(v) ?? ""}
-              slug={slug}
-              className={cn(
-                "max-w-measure text-15 leading-normal text-text",
-                textFlow("prose"),
-              )}
-            />
-          )}
-        </VersionFact>
+        {showIntent ? (
+          <VersionFact label="Intent">
+            {intent === null ? (
+              <p className="text-text-2">{NO_INTENT}</p>
+            ) : (
+              <MentionText
+                text={intent}
+                slug={slug}
+                className={cn(
+                  "max-w-measure text-15 leading-normal text-text",
+                  textFlow("prose"),
+                )}
+              />
+            )}
+          </VersionFact>
+        ) : null}
         <VersionFact label="Checks">
           {entry.runsFailed ? (
             <p role="alert" className="font-medium text-bad">
@@ -853,6 +859,7 @@ export function OverviewTab({
               proposal={proposal}
               entry={entry}
               now={now}
+              showIntent={intentInHistory(entry, intent)}
             />
           ))}
         </section>

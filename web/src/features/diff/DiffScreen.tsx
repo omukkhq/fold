@@ -6,7 +6,11 @@ import { fileDiffQuery, requestsQuery, workspaceQuery } from "@/api/queries";
 import { repositoryQuery } from "@/api/repositoryQueries";
 import { HrefLink } from "@/app/HrefLink";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
-import { compareMarks, revisionAnchor } from "@/features/requests/codeLocation";
+import {
+  compareMarks,
+  revisionAnchor,
+  sideSelection,
+} from "@/features/requests/codeLocation";
 import { CodeRequestComposer } from "@/features/requests/CodeRequestComposer";
 import { RequestMarker } from "@/features/requests/RequestMarker";
 import { cn } from "@/lib/cn";
@@ -160,7 +164,7 @@ export function DiffScreen({
             fileDiff={fileDiff}
             selection={selection}
             onSelect={setSelection}
-            marks={compareMarks(requests.data ?? [], comparison)}
+            marks={compareMarks(requests.data ?? [], comparison, file)}
             renderMark={(mark, first) => {
               const request = requests.data?.find((r) => r.id === mark.id);
               return request ? (
@@ -171,7 +175,7 @@ export function DiffScreen({
                 />
               ) : null;
             }}
-            renderComposer={(sel) => {
+            renderComposer={(sel, focusLine) => {
               const anchor = revisionAnchor(
                 sel.side === "new" ? comparison.to : comparison.from,
               );
@@ -180,7 +184,8 @@ export function DiffScreen({
                   key={`${sel.path}:${sel.side}:${String(sel.start_line)}:${String(sel.end_line)}`}
                   slug={slug}
                   anchor={anchor}
-                  selection={sel}
+                  selection={sideSelection(sel, file)}
+                  focusLine={focusLine}
                   onDone={() => {
                     setSelection(null);
                   }}

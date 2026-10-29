@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { CircleCheck, FilePlus2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
@@ -9,7 +9,7 @@ import { focusRing } from "@/lib/focus";
 import { MessageComposer } from "@/mentions/MessageComposer";
 import { projectPath } from "@/routes/paths";
 import { newRequestSchema, type NewRequestValues } from "./compose";
-import { describeFailure } from "./errors";
+import { describeFailure, type Failure } from "./errors";
 
 interface MakeRequestBoxProps {
   slug: string;
@@ -31,10 +31,15 @@ export function MakeRequestBox({
   onDone,
 }: MakeRequestBoxProps) {
   const [made, setMade] = useState<string | null>(null);
+  const [failure, setFailure] = useState<Failure | null>(null);
+  const note = useRef<HTMLParagraphElement>(null);
+  // The form that held focus is gone once the request is made, so focus moves to the note that names it.
+  useEffect(() => {
+    if (made !== null) note.current?.focus();
+  }, [made]);
   const {
     control,
     handleSubmit,
-    setError,
     formState: { errors, isSubmitting },
   } = useForm<NewRequestValues>({
     resolver: zodResolver(newRequestSchema),
@@ -42,17 +47,26 @@ export function MakeRequestBox({
   });
 
   const submit = handleSubmit(async ({ body }) => {
+    setFailure(null);
     try {
       setMade(await onSubmit(body.trim()));
     } catch (error) {
-      setError("root", { message: describeFailure(error).text });
+      setFailure(describeFailure(error));
     }
   });
 
   if (made !== null) {
     return (
       <div className="flex flex-wrap items-center gap-8">
-        <p role="status" className="flex items-center gap-8 text-14 text-text">
+        <p
+          ref={note}
+          role="status"
+          tabIndex={-1}
+          className={cn(
+            "flex items-center gap-8 rounded-s text-14 text-text",
+            focusRing,
+          )}
+        >
           <CircleCheck aria-hidden="true" size={14} className="text-ok" />
           <span>
             fold made{" "}
@@ -106,9 +120,15 @@ export function MakeRequestBox({
       {errors.body ? (
         <p className="text-13 font-medium text-bad">{errors.body.message}</p>
       ) : null}
-      {errors.root ? (
+      {failure ? (
         <p role="alert" className="text-13 font-medium text-bad">
-          The request was not made. {errors.root.message}
+          The request was not made. {failure.text}
+          {failure.code ? (
+            <span className="font-mono font-regular">
+              {" "}
+              code: {failure.code}
+            </span>
+          ) : null}
         </p>
       ) : null}
       <div className="flex flex-wrap items-center gap-8">

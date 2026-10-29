@@ -2,6 +2,7 @@ import { ApiError, apiErrorCode } from "@/api/errors";
 import { commonText } from "@/format/failure";
 import { atName } from "@/people/names";
 import { updateRunsLine } from "./actions";
+import { MAX_INTENT_CHARS } from "./intent";
 
 /** `inline` shows on the control whose write failed: the actions or the form. `banner` shows above the screen. */
 export type FailurePlace = "inline" | "banner";
@@ -175,7 +176,7 @@ const ENTRIES: Record<string, Entry> = {
     place: "inline",
     text: (d) =>
       d.reason === "too_long"
-        ? "The intent is too long. Keep it to 2000 characters."
+        ? `The intent is too long. Keep it to ${count(d, "max_chars") ?? String(MAX_INTENT_CHARS)} characters.`
         : "Say what the new version does, why, what it does not change and its risks.",
   },
 };
