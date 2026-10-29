@@ -200,21 +200,9 @@ fn terminate(pids: &[i32]) {
     }
 }
 
-/// The files `fld init` writes into a new project's folder that are there now, and their bytes as `r1` counts them. The `.gitignore` always counts, with the bytes it holds after init, so the folder's own `.gitignore` is not part of the folder's file count. An empty `.foldignore` counts as a file of no bytes.
+/// The files `fld init` writes into a new project's folder that are there now, and their bytes as `r1` counts them. The `.gitignore` always counts, with the bytes it holds after init, so the folder's own `.gitignore` is not part of the folder's file count. An empty `.foldignore` counts as a file of no bytes. fold's skills are never part of `r1`: `.fold/exclude` leaves them out.
 pub fn init_files(project: &Path) -> (usize, u64) {
-    let written = [
-        "AGENTS.md",
-        ".claude/skills/fold/SKILL.md",
-        ".claude/skills/fold/REFERENCE.md",
-        ".claude/skills/fold-main/SKILL.md",
-        ".claude/skills/fold-area-lead/SKILL.md",
-        ".claude/skills/fold-review-lead/SKILL.md",
-        ".claude/skills/fold-task-worker/SKILL.md",
-        ".claude/skills/fold-reviewer/SKILL.md",
-        ".claude/skills/fold/ERRORS.md",
-        ".foldignore",
-        ".gitignore",
-    ];
+    let written = ["AGENTS.md", ".foldignore", ".gitignore"];
     let mut found = (0, 0);
     for relative in written {
         let path = project.join(relative);

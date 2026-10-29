@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
-use fold_core::{Clock, FoldError, ProjectConfig, ProjectPaths, codes};
+use fold_core::{Actor, Clock, FoldError, ProjectConfig, ProjectPaths, codes};
 use fold_store::Store;
 use fold_store::projects::ProjectRow;
 use fold_vcs::git::Git;
@@ -18,7 +18,9 @@ use crate::services::agents::environment::WorkerEnvironment;
 use crate::services::agents::{AgentService, Launcher, SeenPresence, Supervisor, code_of};
 use crate::services::events::EventBus;
 use crate::services::messages::MessageService;
-use crate::services::projects::{GitAttention, ProjectError, RemoteContext, load_config};
+use crate::services::projects::{
+    FoldSkills, GitAttention, ProjectError, RemoteContext, keep_fold_skills_out, load_config,
+};
 use crate::services::reviews::ReviewService;
 use crate::services::reviews::checks::{CheckPermits, CheckRunner, recover_check_runs};
 use crate::services::tasks::TaskService;
@@ -511,6 +513,28 @@ impl std::fmt::Debug for FolderFiles {
     }
 }
 
+/// The one revision of fold that stops tracking its skill files, after the open that made `handle` has let go of the open lock, so other projects open meanwhile; it runs before any worker of the project resumes. A folder that is not ready waits for the next open.
+async fn fold_skills_out_of_main(handle: &Arc<ProjectHandle>) {
+    let project = handle.slug.as_str();
+    match keep_fold_skills_out(handle, &Actor::System, &Git::default()).await {
+        Ok(FoldSkills::Waits(reason)) => {
+            tracing::warn!(
+                project,
+                reason,
+                "main still tracks fold's skill files; the next start of the daemon tries again"
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(
+                project,
+                code = error.log_code(),
+                "could not keep fold's skill files out of main; the next start of the daemon tries again"
+            );
+        }
+    }
+}
+
 /// The projects the daemon has tried to open, by slug.
 #[derive(Debug, Default)]
 pub struct Projects {
@@ -613,7 +637,7 @@ impl Projects {
             .collect()
     }
 
-    /// Opens `row` unless it is already open, in which case the same handle comes back. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold instead, with `project_not_found`; a missing folder or a `.fold/` without its database leaves the project registered and unavailable. An open handle whose database was replaced is closed first, with its workers, and leaves the slot, so the new project that `fld init` made there opens fresh. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect; the inbox socket that the daemon kept for each agent, outside the project folder, is then restored while its session still listens, so a session that outlived the daemon gets its notices again. The handle's commit writer runs as it starts, which writes the commit of a revision an integration cut off after its own commit never got and brings the project folder to it, and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. Once the handle is in place, every worker that was working or idle runs again with its session resumed; a resumed worker's adapter connects through the daemon's socket, which is bound by then, and its handshake opens this same project, so the resume runs after the open has let go of its lock.
+    /// Opens `row` unless it is already open, in which case the same handle comes back. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold instead, with `project_not_found`; a missing folder or a `.fold/` without its database leaves the project registered and unavailable. An open handle whose database was replaced is closed first, with its workers, and leaves the slot, so the new project that `fld init` made there opens fresh. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect; the inbox socket that the daemon kept for each agent, outside the project folder, is then restored while its session still listens, so a session that outlived the daemon gets its notices again. The handle's commit writer runs as it starts, which writes the commit of a revision an integration cut off after its own commit never got and brings the project folder to it, and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. Once the handle is in place and the open lock is let go, fold's own revision stops tracking its skill files where main still holds them ([`keep_fold_skills_out`]), and then every worker that was working or idle runs again with its session resumed; a resumed worker's adapter connects through the daemon's socket, which is bound by then, and its handshake opens this same project, so the resume runs after the open has let go of its lock.
     pub async fn open(
         &self,
         row: &ProjectRow,
@@ -621,6 +645,7 @@ impl Projects {
     ) -> Result<Arc<ProjectHandle>, FoldError> {
         let (handle, opened) = self.open_once(row, clock).await?;
         if opened {
+            fold_skills_out_of_main(&handle).await;
             resume_workers(&handle).await;
         }
         Ok(handle)
@@ -632,7 +657,11 @@ impl Projects {
         row: &ProjectRow,
         clock: Arc<dyn Clock>,
     ) -> Result<Arc<ProjectHandle>, FoldError> {
-        self.open_once(row, clock).await.map(|(handle, _)| handle)
+        let (handle, opened) = self.open_once(row, clock).await?;
+        if opened {
+            fold_skills_out_of_main(&handle).await;
+        }
+        Ok(handle)
     }
 
     /// The handle of `row` and whether this call opened it.

@@ -69,6 +69,8 @@ mod crash_checkpoint;
 #[cfg(feature = "failpoints")]
 mod crash_direct_change;
 #[cfg(feature = "failpoints")]
+mod crash_fold_skills;
+#[cfg(feature = "failpoints")]
 mod crash_folder;
 #[cfg(feature = "failpoints")]
 mod crash_git_commit;
@@ -94,6 +96,7 @@ mod enable_git;
 mod event_bus;
 mod events_service;
 mod exclude_file;
+mod fold_skills;
 mod folder_stash;
 mod folder_status;
 mod gc;
