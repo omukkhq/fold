@@ -26,7 +26,7 @@ END;
 CREATE TRIGGER message_choices_not_questions BEFORE INSERT ON message_choices
 WHEN EXISTS (SELECT 1 FROM message_questions WHERE message_id = NEW.message_id)
 BEGIN
-    SELECT RAISE(ABORT, 'message_questions_not_choices');
+    SELECT RAISE(ABORT, 'message_choices_not_questions');
 END;
 
 -- The options of one question of a set, in their order.

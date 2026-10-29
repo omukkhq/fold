@@ -524,7 +524,7 @@ async fn a_set_keeps_its_questions_and_a_reply_that_answers_one_set_leaves_the_o
     assert!(
         choices
             .to_string()
-            .contains("message_questions_not_choices"),
+            .contains("message_choices_not_questions"),
         "{choices}"
     );
     let orphan = exec(
