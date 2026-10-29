@@ -1,4 +1,4 @@
--- The code a request was made on: a human selected a run of lines of one file and wrote the request about them. The lines belong to a revision of main (`revision_id`) or to one side of a proposal version (`version_id` and `side`: its base tree `old` or its own tree `new`). `excerpt` holds those lines as the tree has them, joined by newlines; `excerpt_cut` marks an excerpt that holds only the first of them.
+-- The code a request was made on: a human selected a run of lines of one file and wrote the request about them. The lines belong to a revision of main (`revision_id`) or to one side of a proposal version (`version_id` and `side`: its base tree `old` or its own tree `new`). `excerpt` holds those lines as the tree has them, joined by newlines; `excerpt_cut` marks an excerpt cut to its first lines, or to the first characters of a first line that is too long.
 CREATE TABLE request_code_refs (
     request_id INTEGER PRIMARY KEY REFERENCES requests (id),
     revision_id INTEGER REFERENCES revisions (id),

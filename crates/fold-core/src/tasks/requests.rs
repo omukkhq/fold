@@ -586,7 +586,7 @@ pub struct CodeRef {
     pub end_line: u32,
     /// The lines as the tree had them, joined by newlines and cut as a line question's excerpt is.
     pub excerpt: String,
-    /// The excerpt holds only the first of the lines.
+    /// The excerpt was cut: it holds only the first lines, or the first characters of a first line that is too long.
     pub excerpt_cut: bool,
 }
 

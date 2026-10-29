@@ -129,7 +129,7 @@ pub struct RequestCodeView {
     pub end_line: u32,
     /// The lines as the tree held them when the request was made, joined by newlines.
     pub excerpt: String,
-    /// The excerpt holds only the first of the lines.
+    /// The excerpt was cut: it holds only the first lines, or the first characters of a first line that is too long.
     pub excerpt_cut: bool,
     /// The revision of main the lines belong to; null for lines of a proposal version.
     #[schema(required = true, example = "r17")]
