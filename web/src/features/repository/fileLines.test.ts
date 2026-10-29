@@ -24,4 +24,15 @@ describe("fileRows", () => {
     expect(fileRows("")).toEqual([]);
     expect(fileRows("\n").map((r) => r.text)).toEqual([""]);
   });
+
+  it("ends a line at a lone carriage return too, as the daemon counts the lines of a request", () => {
+    const rows = fileRows("a\rb\r\nc\r");
+    expect(rows.map((r) => [r.newNo, r.text])).toEqual([
+      [1, "a"],
+      [2, "b"],
+      [3, "c"],
+    ]);
+    expect(rows.at(-1)?.noNewline).toBe(false);
+    expect(fileRows("a\r\rb").map((r) => r.text)).toEqual(["a", "", "b"]);
+  });
 });
