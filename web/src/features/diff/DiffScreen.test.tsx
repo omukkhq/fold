@@ -7,6 +7,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Comparison } from "@/api/diff";
 import {
@@ -18,6 +19,7 @@ import {
   hunk,
   state,
 } from "@/test/diff";
+import { requestDetail, requestSummary } from "@/test/requests";
 import { stubFetch } from "@/test/stubFetch";
 import { DiffScreen } from "./DiffScreen";
 import type { DiffSearch } from "./search";
@@ -240,5 +242,94 @@ describe("DiffScreen", () => {
     expect(
       await screen.findByText("fold has no comparison for C-99."),
     ).toBeTruthy();
+  });
+
+  it("makes a request about lines of a revision side, and offers none on a workspace side", async () => {
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo/diff": () => ({
+        body: {
+          view: "file",
+          ...fileDiff(LOGIN, [hunk(1, 1, [ctx("a"), add("b")])]),
+          path: LOGIN.path,
+        },
+      }),
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects/demo/requests": {
+        body: {
+          items: [
+            requestSummary("RQ-2", {
+              code: {
+                path: LOGIN.path,
+                start_line: 1,
+                end_line: 1,
+                excerpt: "a",
+                excerpt_cut: false,
+                revision: "r7",
+                proposal: null,
+                version: null,
+                side: null,
+              },
+            }),
+          ],
+        },
+      },
+      "POST /api/v1/projects/demo/requests/from-code": {
+        status: 201,
+        body: requestDetail(requestSummary("RQ-3")),
+      },
+    });
+    const user = userEvent.setup();
+    show(
+      { from: "r7", to: "r8", path: LOGIN.path },
+      comparison([LOGIN], {
+        source: "recorded",
+        from: state("revision", "r7"),
+        to: state("revision", "r8"),
+      }),
+    );
+    const grid = await screen.findByRole("grid", {
+      name: `Diff of ${LOGIN.path}`,
+    });
+    // The request on r7 marks its line, which the old side of this comparison holds.
+    expect(
+      await within(grid).findByRole("link", {
+        name: "Request RQ-2 about line 1, open",
+      }),
+    ).toBeTruthy();
+    await user.click(
+      within(grid).getByRole("gridcell", { name: /^Added line/ }),
+    );
+    await user.click(
+      await within(grid).findByRole("button", { name: "Make a request" }),
+    );
+    const form = await within(grid).findByRole("form", {
+      name: "Make a request about line 2 · r8",
+    });
+    await user.type(within(form).getByLabelText("Request"), "Why b?");
+    await user.click(
+      within(form).getByRole("button", { name: "Make the request" }),
+    );
+    expect(await within(grid).findByText(/with these lines/)).toBeTruthy();
+    expect(
+      calls.find((c) => c.path.endsWith("/requests/from-code"))?.body,
+    ).toEqual({
+      body: "Why b?",
+      path: LOGIN.path,
+      start_line: 2,
+      end_line: 2,
+      revision: "r8",
+    });
+
+    cleanup();
+    show({ from: "r7", to: "ws-7", path: LOGIN.path }, WORKING);
+    const working = await screen.findByRole("grid", {
+      name: `Diff of ${LOGIN.path}`,
+    });
+    await user.click(
+      within(working).getByRole("gridcell", { name: /^Added line/ }),
+    );
+    expect(
+      within(working).queryByRole("button", { name: "Make a request" }),
+    ).toBeNull();
   });
 });

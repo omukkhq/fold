@@ -4,7 +4,13 @@ import { HrefLink } from "@/app/HrefLink";
 import { CODE_BOX, textFlow } from "@/components/text/textFlow";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
-import { cutNote, lineRefHref, lineRefText, quotedLines } from "./lineRef";
+import {
+  cutNote,
+  lineRefHref,
+  lineRefText,
+  quotedLines,
+  type Quoted,
+} from "./lineRef";
 
 /** The lines of a proposal version a question to its author is about, as the version holds them, linked to the diff. */
 export function QuotedLines({
@@ -19,7 +25,28 @@ export function QuotedLines({
   /** The quote sits on a surface, such as a message card, so it takes the fill tone to stand apart; a thread on the page tone shows it on a surface. */
   onSurface?: boolean;
 }) {
-  const head = lineRefText(lines);
+  return (
+    <LineQuote
+      head={lineRefText(lines)}
+      href={proposal === null ? null : lineRefHref(slug, proposal, lines)}
+      lines={lines}
+      onSurface={onSurface}
+    />
+  );
+}
+
+/** A numbered excerpt under a head that names where its lines are, linked to them when `href` is set. */
+export function LineQuote({
+  head,
+  href,
+  lines,
+  onSurface = true,
+}: {
+  head: string;
+  href: string | null;
+  lines: Quoted;
+  onSurface?: boolean;
+}) {
   const note = cutNote(lines);
   return (
     <figure
@@ -30,11 +57,11 @@ export function QuotedLines({
     >
       <figcaption className="flex items-center gap-6 px-12 pt-8 pb-4 font-mono text-13 text-text-2">
         <FileCode aria-hidden="true" size={14} className="shrink-0" />
-        {proposal === null ? (
+        {href === null ? (
           <span className="min-w-0 truncate">{head}</span>
         ) : (
           <HrefLink
-            href={lineRefHref(slug, proposal, lines)}
+            href={href}
             className={cn(
               "min-w-0 truncate rounded-s text-accent hover:underline",
               focusRing,

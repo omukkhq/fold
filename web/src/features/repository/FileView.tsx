@@ -1,15 +1,19 @@
 import { Id } from "@/components/id/Id";
 import { useQuery } from "@tanstack/react-query";
 import { FileX, Link2, Ruler } from "lucide-react";
-import { SyntaxText } from "@/components/code/SyntaxText";
+import { useState } from "react";
 import { Mono } from "@/components/mono/Mono";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
-import { CODE_BOX } from "@/components/text/textFlow";
-import { cn } from "@/lib/cn";
+import { requestsQuery } from "@/api/queries";
+import { DiffRows } from "@/features/diff/DiffRows";
+import type { DiffSelection } from "@/features/diff/selection";
+import { revisionRequestMarks } from "@/features/requests/codeLocation";
+import { CodeRequestComposer } from "@/features/requests/CodeRequestComposer";
+import { RequestMarker } from "@/features/requests/RequestMarker";
 import { fileState, formatSize } from "./describe";
+import { fileRows } from "./fileLines";
 import { fileQuery } from "@/api/repositoryQueries";
-import { languageForPath } from "@/syntax/languages";
 
 interface FileViewProps {
   slug: string;
@@ -17,10 +21,13 @@ interface FileViewProps {
   path: string;
 }
 
-/** A read-only view of one file, highlighted when Shiki has a grammar for its name. A binary or too-large file shows its size and hash and no content; a symlink shows its target text and is never followed. */
+/** A read-only view of one file, highlighted when Shiki has a grammar for its name. Selected lines take a request, and the requests made on lines of this revision mark them. A binary or too-large file shows its size and hash and no content; a symlink shows its target text and is never followed. */
 export function FileView({ slug, revision, path }: FileViewProps) {
   const file = useQuery(fileQuery(slug, revision, path));
+  const requests = useQuery(requestsQuery(slug));
+  const [selection, setSelection] = useState<DiffSelection | null>(null);
   const shown = file.data ? fileState(file.data) : null;
+  const byId = new Map((requests.data ?? []).map((r) => [r.id, r]));
   return (
     <section
       aria-label={`File ${path}`}
@@ -41,14 +48,38 @@ export function FileView({ slug, revision, path }: FileViewProps) {
         />
       ) : null}
       {shown?.kind === "text" ? (
-        <pre
-          className={cn(
-            CODE_BOX,
-            "px-16 pt-6 pb-14 font-mono text-13 leading-normal text-text",
-          )}
-        >
-          <SyntaxText code={shown.text} language={languageForPath(path)} />
-        </pre>
+        <div className="pt-6 pb-14">
+          <DiffRows
+            variant="file"
+            path={path}
+            rows={fileRows(shown.text)}
+            selection={selection}
+            onSelect={setSelection}
+            onExpand={() => undefined}
+            marks={revisionRequestMarks(requests.data ?? [], revision, "new")}
+            renderMark={(mark, first) => {
+              const request = byId.get(mark.id);
+              return request ? (
+                <RequestMarker
+                  slug={slug}
+                  request={request}
+                  focusable={first}
+                />
+              ) : null;
+            }}
+            renderComposer={(sel) => (
+              <CodeRequestComposer
+                key={`${String(sel.start_line)}:${String(sel.end_line)}`}
+                slug={slug}
+                anchor={{ kind: "revision", revision }}
+                selection={sel}
+                onDone={() => {
+                  setSelection(null);
+                }}
+              />
+            )}
+          />
+        </div>
       ) : null}
       {shown?.kind === "symlink" ? (
         <p className="flex items-center gap-8 px-16 pt-6 pb-14 text-14 text-text-2">
