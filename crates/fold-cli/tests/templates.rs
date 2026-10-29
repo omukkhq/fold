@@ -1370,6 +1370,48 @@ fn run_state_names() -> BTreeSet<&'static str> {
 }
 
 #[test]
+fn the_reference_names_the_claude_files_fold_keeps_out_of_main() {
+    for line in fold_vcs::ignore::CLAUDE_EXCLUDES {
+        assert!(
+            REFERENCE.contains(&format!("`{line}`")),
+            "REFERENCE.md does not name `{line}`"
+        );
+    }
+    assert!(REFERENCE.contains(fold_daemon::services::projects::FOLD_SKILLS_TITLE));
+    assert!(REFERENCE.contains("`fld untrack .claude/settings.local.json`"));
+}
+
+#[test]
+fn the_exclude_lines_leave_out_every_skill_file_fold_writes_and_only_those_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join(".fold")).unwrap();
+    fold_vcs::git_remote::exclude_claude_files(&root.join(".fold")).unwrap();
+    let rules = fold_vcs::ignore::IgnoreRules::new(root);
+    let ignored = |path: &str| {
+        rules.is_ignored(
+            &fold_vcs::paths::RepoPath::parse(path.as_bytes()).unwrap(),
+            false,
+        )
+    };
+    for path in SKILL_FILES {
+        assert!(ignored(path), "{path}");
+    }
+    for folder in &claude_files::FOLDERS[2..] {
+        let name = folder.strip_prefix(".claude/skills/").unwrap();
+        assert!(fold_core::layout::is_fold_skill(name), "{folder}");
+    }
+    for path in [
+        claude_files::SETTINGS_FILE,
+        claude_files::AGENTS_FILE,
+        ".claude/skills/deploy/SKILL.md",
+    ] {
+        assert!(!ignored(path), "{path}");
+    }
+    assert!(ignored(".claude/settings.local.json"));
+}
+
+#[test]
 fn the_reference_has_every_section() {
     let headings: Vec<&str> = REFERENCE
         .lines()
