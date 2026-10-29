@@ -15,6 +15,7 @@ const twMerge = extendTailwindMerge({
       shadow: [{ shadow: ["pop", "dialog"] }],
       rounded: [{ rounded: ["s", "m", "l", "pill"] }],
       tracking: [{ tracking: ["wordmark"] }],
+      z: [{ z: ["sticky", "toast", "dialog", "pop", "tooltip"] }],
     },
   },
 });

@@ -284,7 +284,7 @@ export function BoardCard({
               onPointerDown={() => {
                 peek.press();
               }}
-              className="z-10 w-side-panel rounded-m bg-surface px-16 py-14 text-14 text-text shadow-pop outline-none"
+              className="z-pop w-side-panel rounded-m bg-surface px-16 py-14 text-14 text-text shadow-pop outline-none"
             >
               <CardPanel slug={slug} card={card} line={line} now={now} />
             </RadixPopover.Content>

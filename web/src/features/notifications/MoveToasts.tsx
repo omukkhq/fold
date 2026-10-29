@@ -8,7 +8,7 @@ import { notificationStore, useMoveToasts } from "./store";
 
 /** Below `md` a screen's own actions sit in a bar at the bottom, such as a proposal's Approve and Request changes, so the toasts show under the top bar there; from `md` they sit at the bottom right. */
 export const TOAST_PLACE =
-  "fixed inset-x-16 top-(--height-bar-compact) z-20 mt-8 flex flex-col gap-8 outline-none md:top-auto md:bottom-16 md:left-auto md:mt-0 md:w-toast";
+  "fixed inset-x-16 top-(--height-bar-compact) z-toast mt-8 flex flex-col gap-8 outline-none md:top-auto md:bottom-16 md:left-auto md:mt-0 md:w-toast";
 
 /** A toast closes by itself after this time; hovering or focusing it holds it open. */
 const TOAST_MS = 5_000;

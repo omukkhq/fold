@@ -338,7 +338,7 @@ export function Inbox({ slug }: { slug: string }) {
           sideOffset={6}
           collisionPadding={16}
           aria-label="Inbox"
-          className="z-10 flex max-h-(--radix-popover-content-available-height) w-inbox max-w-(--width-popover-max) flex-col overflow-hidden rounded-m bg-surface shadow-pop outline-none"
+          className="z-pop flex max-h-(--radix-popover-content-available-height) w-inbox max-w-(--width-popover-max) flex-col overflow-hidden rounded-m bg-surface shadow-pop outline-none"
         >
           <RadixTabs.Root
             value={tab}

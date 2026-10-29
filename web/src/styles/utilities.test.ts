@@ -3,6 +3,7 @@ import { readSources } from "../test/sources";
 import themeCss from "./index.css?raw";
 
 const sources = readSources(import.meta.url, "", ["ts", "tsx"]);
+const styleSources = readSources(import.meta.url, "", ["css"]);
 
 type Keys = Map<string, Set<string>>;
 
@@ -14,6 +15,7 @@ const COMPOUND = [
   "min-height",
   "max-height",
   "flex-basis",
+  "z-index",
 ];
 
 function splitName(name: string): [string, string] {
@@ -112,6 +114,38 @@ function offToken(text: string, keys: Keys): string[] {
   return bad;
 }
 
+const zCandidate =
+  /(?<![\w./-])(?:[\w-]+:)*!?-?z-(\[[^\]\s]*\]|\([^)\s]*\)|[\w.-]+)!?(?![\w-])/g;
+
+/** Tailwind takes a bare number as a z-index without any theme key, so only the named layers keep one stacking order across the screens. */
+function offLayer(text: string, keys: Keys): string[] {
+  const code = text
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const layers = keys.get("z-index") ?? new Set<string>();
+  return [
+    ...[...code.matchAll(zCandidate)]
+      .filter((m) => !layers.has(m[1] ?? ""))
+      .map((m) => m[0]),
+    ...[...code.matchAll(/(?<![\w$])zIndex(?![\w$])/g)].map(() => "zIndex"),
+  ];
+}
+
+/** The theme block alone maps the layer tokens to z-index; a stylesheet rule stacks only through the layer utilities. */
+function offLayerCss(css: string, keys: Keys): string[] {
+  const code = css
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/@theme[^{]*\{[^}]*\}/g, "");
+  return [
+    ...[...code.matchAll(/(?<![\w-])z-index\s*:\s*([^;}]*)/g)].map(
+      (m) => `z-index: ${(m[1] ?? "").trim()}`,
+    ),
+    ...[...code.matchAll(/@apply\s+([^;}]*)/g)].flatMap((m) =>
+      offLayer(m[1] ?? "", keys),
+    ),
+  ];
+}
+
 const keys = themeKeys(themeCss);
 
 describe("utility guard", () => {
@@ -186,5 +220,67 @@ describe("utility guard", () => {
     expect(files.length).toBeGreaterThan(3);
     for (const [path, text] of files)
       expect(offToken(text, keys), path).toEqual([]);
+  });
+});
+
+describe("layer guard", () => {
+  it("reads the named layers from the Tailwind theme", () => {
+    expect([...(keys.get("z-index") ?? [])]).toEqual([
+      "sticky",
+      "toast",
+      "dialog",
+      "pop",
+      "tooltip",
+    ]);
+  });
+  it("accepts a named layer, with a variant too", () => {
+    expect(
+      offLayer(
+        'className="sticky z-sticky max-md:z-sticky z-dialog md:z-pop"',
+        keys,
+      ),
+    ).toEqual([]);
+    expect(offLayer('"a-z-index" // z-3 in a comment', keys)).toEqual([]);
+  });
+  it("rejects a number, an arbitrary value or an unknown name", () => {
+    for (const word of [
+      "z-3",
+      "max-md:z-10",
+      "-z-1",
+      "z-[5]",
+      "z-(--x)",
+      "z-top",
+    ])
+      expect(offLayer(`className="${word}"`, keys), word).toEqual([word]);
+  });
+  it("rejects an inline zIndex", () => {
+    expect(offLayer("style={{ zIndex: 5 }}", keys)).toEqual(["zIndex"]);
+    expect(offLayer("style={{ zIndex }}", keys)).toEqual(["zIndex"]);
+    expect(offLayer("const zIndexed = 1;", keys)).toEqual([]);
+  });
+  it("rejects a z-index rule or an applied number outside the theme block of a stylesheet", () => {
+    expect(
+      offLayerCss(
+        "@theme { --z-index-pop: var(--layer-pop); }\n/* z-index: 3 */\n.a { @apply z-pop; }",
+        keys,
+      ),
+    ).toEqual([]);
+    expect(offLayerCss(".a { z-index: 3; }", keys)).toEqual(["z-index: 3"]);
+    expect(offLayerCss(".a { z-index: var(--layer-pop) }", keys)).toEqual([
+      "z-index: var(--layer-pop)",
+    ]);
+    expect(offLayerCss(".a { @apply relative z-10; }", keys)).toEqual(["z-10"]);
+  });
+  it("finds no layer outside the scale in the stylesheets", () => {
+    expect(Object.keys(styleSources)).toContain("/src/styles/index.css");
+    for (const [path, text] of Object.entries(styleSources))
+      expect(offLayerCss(text, keys), path).toEqual([]);
+  });
+  it("finds no layer outside the scale in the sources", () => {
+    const files = Object.entries(sources).filter(
+      ([p]) => !p.endsWith(".test.ts") && !p.endsWith(".gen.ts"),
+    );
+    for (const [path, text] of files)
+      expect(offLayer(text, keys), path).toEqual([]);
   });
 });

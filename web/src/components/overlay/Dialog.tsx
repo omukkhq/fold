@@ -1,7 +1,15 @@
 import * as RadixDialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import type { ReactNode } from "react";
+import { cn } from "@/lib/cn";
 import { IconButton } from "../button/Button";
+import {
+  dialogBody,
+  dialogContent,
+  dialogFill,
+  dialogFillOverlay,
+  dialogOverlay,
+} from "./dialogStyles";
 
 interface DialogProps {
   open?: boolean;
@@ -11,6 +19,10 @@ interface DialogProps {
   title: string;
   description?: string;
   children?: ReactNode;
+  /** The dialog takes the reading width of a long text, and on a phone the whole screen. */
+  wide?: boolean;
+  /** The action row, which stays in view under the scrolling body; a form in the body reaches its buttons through their `form` attribute. */
+  footer?: ReactNode;
 }
 
 export function Dialog({
@@ -20,6 +32,8 @@ export function Dialog({
   title,
   description,
   children,
+  wide = false,
+  footer,
 }: DialogProps) {
   return (
     <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
@@ -27,27 +41,47 @@ export function Dialog({
         <RadixDialog.Trigger asChild>{trigger}</RadixDialog.Trigger>
       ) : null}
       <RadixDialog.Portal>
-        <RadixDialog.Overlay className="fixed inset-0 bg-scrim" />
-        <RadixDialog.Content className="fixed top-1/2 left-1/2 flex w-max max-w-full -translate-x-1/2 -translate-y-1/2 flex-col gap-12 rounded-l bg-surface p-20 shadow-dialog outline-none">
-          <div className="flex items-start justify-between gap-12">
-            <div className="flex flex-col gap-4">
-              <RadixDialog.Title className="text-16 font-semibold text-text">
-                {title}
-              </RadixDialog.Title>
-              {description ? (
-                <RadixDialog.Description className="text-15 text-text-2">
-                  {description}
-                </RadixDialog.Description>
-              ) : null}
+        <RadixDialog.Overlay
+          className={cn(dialogOverlay, wide && dialogFillOverlay)}
+        >
+          <RadixDialog.Content
+            className={cn(
+              dialogContent,
+              wide ? cn("w-dialog", dialogFill) : "w-max",
+            )}
+          >
+            <div className="flex shrink-0 items-start justify-between gap-12 px-20 pt-20 pb-8">
+              <div className="flex min-w-0 flex-col gap-4">
+                <RadixDialog.Title className="text-16 font-semibold text-text">
+                  {title}
+                </RadixDialog.Title>
+                {description ? (
+                  <RadixDialog.Description className="text-15 text-text-2">
+                    {description}
+                  </RadixDialog.Description>
+                ) : null}
+              </div>
+              <RadixDialog.Close asChild>
+                <IconButton aria-label="Close" size="sm">
+                  <X aria-hidden="true" size={14} />
+                </IconButton>
+              </RadixDialog.Close>
             </div>
-            <RadixDialog.Close asChild>
-              <IconButton aria-label="Close" size="sm">
-                <X aria-hidden="true" size={14} />
-              </IconButton>
-            </RadixDialog.Close>
-          </div>
-          {children}
-        </RadixDialog.Content>
+            <div className={dialogBody}>
+              <div
+                className={cn(
+                  "flex flex-col gap-12 px-20 pt-4",
+                  footer ? "pb-8" : "pb-20",
+                )}
+              >
+                {children}
+              </div>
+            </div>
+            {footer ? (
+              <div className="shrink-0 px-20 pt-8 pb-20">{footer}</div>
+            ) : null}
+          </RadixDialog.Content>
+        </RadixDialog.Overlay>
       </RadixDialog.Portal>
     </RadixDialog.Root>
   );

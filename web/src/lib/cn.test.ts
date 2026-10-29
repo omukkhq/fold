@@ -46,4 +46,9 @@ describe("cn", () => {
   it("replaces one elevation token with another", () => {
     expect(cn("shadow-pop", "shadow-dialog")).toBe("shadow-dialog");
   });
+
+  it("replaces one stacking layer with another", () => {
+    expect(cn("z-pop rounded-m", "z-tooltip")).toBe("rounded-m z-tooltip");
+    expect(cn("z-dialog", "md:z-pop")).toBe("z-dialog md:z-pop");
+  });
 });
