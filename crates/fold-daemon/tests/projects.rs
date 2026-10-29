@@ -416,14 +416,22 @@ async fn a_plain_init_keeps_the_gitignore_and_writes_no_git_data() {
     std::fs::create_dir_all(root.join("target")).unwrap();
     std::fs::write(root.join("target/out"), "built").unwrap();
     std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
+    std::fs::create_dir_all(root.join(".claude/skills/fold-main")).unwrap();
+    std::fs::write(root.join(".claude/skills/fold-main/SKILL.md"), "steps\n").unwrap();
+    std::fs::write(root.join(".claude/settings.local.json"), "{}\n").unwrap();
+    std::fs::write(root.join(".claude/settings.json"), "{}\n").unwrap();
     let project = init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap();
     assert_eq!(project.revision.to_string(), "r1");
-    // `.gitignore` and the empty `.foldignore`; the ignore rules leave `target/` out.
-    assert_eq!(project.imported.files, 2);
+    // `.gitignore`, the empty `.foldignore` and the shared Claude Code settings; the ignore rules leave `target/`, fold's skills and the local settings out.
+    assert_eq!(project.imported.files, 3);
     assert_eq!(read(&root, ".gitignore"), "target/\n");
     assert_eq!(read(&root, ".foldignore"), "");
+    assert_eq!(
+        read(&root, ".fold/exclude"),
+        "/.fold/\n/.claude/skills/fold/\n/.claude/skills/fold-*/\n/.claude/settings.local.json\n"
+    );
     assert!(!root.join(".git").exists());
 }
 
@@ -462,12 +470,17 @@ async fn init_with_git_records_the_folder_as_r1_and_the_gitignore_as_r2() {
             .count(),
         1
     );
-    assert!(
-        std::fs::read_to_string(root.join(".git/info/exclude"))
-            .unwrap()
-            .lines()
-            .any(|line| line == "/.fold/")
-    );
+    let exclude = std::fs::read_to_string(root.join(".git/info/exclude")).unwrap();
+    for line in ["/.fold/"]
+        .into_iter()
+        .chain(fold_vcs::ignore::CLAUDE_EXCLUDES)
+    {
+        assert_eq!(
+            exclude.lines().filter(|found| *found == line).count(),
+            1,
+            "{line}"
+        );
+    }
     assert_eq!(git(&root, &["status", "--porcelain"]), "");
     let store = Store::open_project(&ProjectPaths::new(&project.root))
         .await

@@ -119,3 +119,67 @@ fn a_bang_line_that_matches_fold_brings_its_data_folder_back() {
         assert!(!brings_back_fold_dir(kept), "{kept}");
     }
 }
+
+#[test]
+fn the_claude_lines_leave_out_folds_skills_and_the_local_settings_and_nothing_else_of_claude() {
+    use fold_vcs::git_remote::exclude_claude_files;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, ".fold/exclude", "/.fold/\nnotes/\n");
+    let added = exclude_claude_files(&root.join(".fold")).unwrap();
+    assert_eq!(added, fold_vcs::ignore::CLAUDE_EXCLUDES.map(str::to_owned));
+    let rules = IgnoreRules::new(root);
+    for path in [
+        ".claude/skills/fold/SKILL.md",
+        ".claude/skills/fold/REFERENCE.md",
+        ".claude/skills/fold-main/SKILL.md",
+        ".claude/skills/fold-task-worker/SKILL.md",
+        ".claude/settings.local.json",
+        "notes/a.md",
+    ] {
+        assert!(ignored(&rules, path, false), "{path}");
+    }
+    for path in [
+        ".claude/settings.json",
+        ".claude/skills/deploy/SKILL.md",
+        ".claude/agents/reviewer.md",
+        ".claude/commands/ship.md",
+        "src/.claude/skills/fold/SKILL.md",
+        "src/.claude/settings.local.json",
+    ] {
+        assert!(!ignored(&rules, path, false), "{path}");
+    }
+    // The user's lines stay where they are, and a second call adds nothing.
+    assert!(
+        exclude_claude_files(&root.join(".fold"))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        fs::read_to_string(root.join(".fold/exclude")).unwrap(),
+        "/.fold/\nnotes/\n/.claude/skills/fold/\n/.claude/skills/fold-*/\n/.claude/settings.local.json\n"
+    );
+}
+
+#[test]
+fn a_bang_line_of_the_foldignore_brings_a_claude_path_back() {
+    use fold_vcs::git_remote::exclude_claude_files;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join(".fold")).unwrap();
+    exclude_claude_files(&root.join(".fold")).unwrap();
+    let rules = IgnoreRules::new(root);
+    assert!(ignored(&rules, ".claude/skills/fold/SKILL.md", false));
+    assert!(ignored(&rules, ".claude/settings.local.json", false));
+    // As in Git, a file below an excluded folder comes back only with its folder.
+    write(root, ".foldignore", "!/.claude/skills/fold/SKILL.md\n");
+    assert!(ignored(&rules, ".claude/skills/fold/SKILL.md", false));
+    write(
+        root,
+        ".foldignore",
+        "!/.claude/skills/fold/\n!/.claude/settings.local.json\n",
+    );
+    assert!(!ignored(&rules, ".claude/skills/fold/SKILL.md", false));
+    assert!(!ignored(&rules, ".claude/settings.local.json", false));
+    assert!(ignored(&rules, ".claude/skills/fold-main/SKILL.md", false));
+}

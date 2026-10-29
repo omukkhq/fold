@@ -112,6 +112,12 @@ fn write_exclude(fold_dir: &Path, text: &str) -> io::Result<()> {
     written
 }
 
+/// Adds each of [`CLAUDE_EXCLUDES`](crate::ignore::CLAUDE_EXCLUDES) that `.fold/exclude` in `fold_dir` does not list yet at its end, as [`add_exclude_patterns`] does, and returns the lines it added. Blocking.
+pub fn exclude_claude_files(fold_dir: &Path) -> Result<Vec<String>, FoldError> {
+    let lines = crate::ignore::CLAUDE_EXCLUDES.map(str::to_owned);
+    add_exclude_patterns(fold_dir, &lines)
+}
+
 /// Adds each of `patterns` that `.fold/exclude` in `fold_dir` does not list yet at its end, keeping [`EXCLUDE_LINE`] in it, and returns the patterns it added. Blocking.
 pub fn add_exclude_patterns(
     fold_dir: &Path,

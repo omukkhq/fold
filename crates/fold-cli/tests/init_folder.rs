@@ -220,8 +220,12 @@ fn init_with_git_records_the_gitignore_change_as_r2_and_commits_from_r1() {
     );
     assert_eq!(
         git(&project, &["ls-tree", "-r", "--name-only", "HEAD"]),
-        ".claude/skills/fold-area-lead/SKILL.md\n.claude/skills/fold-main/SKILL.md\n.claude/skills/fold-review-lead/SKILL.md\n.claude/skills/fold-reviewer/SKILL.md\n.claude/skills/fold-task-worker/SKILL.md\n.claude/skills/fold/ERRORS.md\n.claude/skills/fold/REFERENCE.md\n.claude/skills/fold/SKILL.md\n.foldignore\n.gitignore\nAGENTS.md\nREADME.md\nlink\nrun.sh\nsrc/lib.rs\n"
+        ".foldignore\n.gitignore\nAGENTS.md\nREADME.md\nlink\nrun.sh\nsrc/lib.rs\n"
     );
+    // fold's skills stay in the folder, and Git leaves them out as fold does.
+    for path in fold_cli::claude_files::SKILL_FILES {
+        assert!(project.join(path).is_file(), "{path}");
+    }
     // The empty genesis gets no commit, so the history starts at r1.
     assert_eq!(git(&project, &["rev-list", "--count", "HEAD"]).trim(), "2");
     assert_eq!(git(&project, &["status", "--porcelain"]), "");
@@ -247,7 +251,7 @@ fn init_with_git_in_a_new_dir_writes_a_gitignore_that_copies_the_foldignore() {
     );
     assert_eq!(
         git(&project, &["ls-tree", "--name-only", "HEAD"]),
-        ".claude\n.foldignore\n.gitignore\nAGENTS.md\n"
+        ".foldignore\n.gitignore\nAGENTS.md\n"
     );
     assert_eq!(git(&project, &["status", "--porcelain"]), "");
 }

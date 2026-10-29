@@ -454,7 +454,7 @@ fn refresh(dir: Option<&Path>, dirs: &Dirs, out: &mut impl Write) -> Result<(), 
     Ok(())
 }
 
-/// Writes the Claude Code files into a new project's folder before init records it, so they are part of `r1`, and returns the files and folders that did not exist before.
+/// Writes the Claude Code files into a new project's folder before init records it, so the instructions file is part of `r1` while `.fold/exclude` leaves the skills out, and returns the files and folders that did not exist before.
 fn new_claude_files(root: &Path) -> Result<Vec<PathBuf>, FoldError> {
     // A folder comes before the files below it, so only the topmost new path is recorded.
     let written = [claude_files::instructions_file(root)]

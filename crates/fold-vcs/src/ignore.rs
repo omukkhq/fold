@@ -14,6 +14,12 @@ pub const GITIGNORE: &str = ".gitignore";
 pub const FOLDIGNORE: &str = ".foldignore";
 /// The project's local ignore file in `.fold/`, which `.git/info/exclude` links to.
 pub const EXCLUDE: &str = "exclude";
+/// The lines fold keeps in every project's `.fold/exclude`, after the user's own: the skills fold writes into the project folder, which it refreshes after each upgrade and every session reads from the project root, and Claude Code's settings of one person on one machine. A `!` line of a `.gitignore` or `.foldignore` brings one back, and a file main tracks already stays tracked.
+pub const CLAUDE_EXCLUDES: [&str; 3] = [
+    "/.claude/skills/fold/",
+    "/.claude/skills/fold-*/",
+    "/.claude/settings.local.json",
+];
 /// fold's data folder, whose `exclude` file holds the project's local rules.
 const FOLD_DIR: &str = ".fold";
 
