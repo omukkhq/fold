@@ -12,13 +12,13 @@ describe("tabBadge", () => {
     );
   });
 
-  it("counts the questions that wait for the human's answer", () => {
+  it("counts the question sets that wait for the human's answer", () => {
     expect(tabBadge("messages", 3, 1)).toMatchObject({
       count: 1,
-      label: "1 question waits for your answer",
+      label: "1 question set waits for your answer",
     });
     expect(tabBadge("messages", 0, 2)?.label).toBe(
-      "2 questions wait for your answer",
+      "2 question sets wait for your answer",
     );
   });
 

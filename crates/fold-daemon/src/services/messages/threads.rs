@@ -197,7 +197,7 @@ impl MessageService {
     ) -> Result<MessageView, MessageError> {
         let send = super::SendOptions {
             to_drafter: to.is_none(),
-            asks_human: false,
+            ..super::SendOptions::default()
         };
         self.send_inner(
             actor,

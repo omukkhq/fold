@@ -415,6 +415,10 @@ describe("the task's messages", () => {
     header: null,
     asks_human: false,
     lines: null,
+    questions: [],
+    answers: [],
+    answers_ask: null,
+    worker_question: false,
     ...over,
   });
   const thread = (messages: MessageView[]) => ({

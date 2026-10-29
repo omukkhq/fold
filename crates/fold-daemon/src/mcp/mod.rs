@@ -207,6 +207,9 @@ impl FoldServer {
             (messages::GET_THREAD, Some(_)) => messages::get_thread(self, arguments).await?,
             (messages::SEND_MESSAGE, Some(_)) => messages::send_message(self, arguments).await?,
             (messages::MARK_ANSWERED, Some(_)) => messages::mark_answered(self, arguments).await?,
+            (messages::LIST_OPEN_ASKS, Some(_)) => {
+                messages::list_open_asks(self, arguments).await?
+            }
             (workspaces::GET_REPOSITORY_STATE, Some(_)) => {
                 workspaces::get_repository_state(self, arguments).await?
             }

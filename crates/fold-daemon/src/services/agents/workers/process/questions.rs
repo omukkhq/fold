@@ -1,12 +1,14 @@
 use fold_core::events::types;
 use fold_core::messages::{
-    MAX_CHOICE_DESCRIPTION_LEN, MAX_QUESTION_HEADER_LEN, chosen_answer, short_line,
+    MAX_CHOICE_DESCRIPTION_LEN, MAX_QUESTION_HEADER_LEN, MAX_QUESTION_LEN, chosen_answer,
+    short_line,
 };
 use fold_core::roles::{PermissionBehavior, ask_answer_turn, permission_answer_turn};
+use fold_core::text::shorten;
 use fold_core::{
     Actor, AgentName, Choice, Event, EventActor, FoldError, HumanName, IdKind, MessageBody,
-    MessageChoices, MessageId, NewEvent, PermissionQuestionId, WorkerName, WorkerState, codes,
-    policy,
+    MessageChoices, MessageId, NewEvent, PermissionQuestionId, QuestionSet, SetQuestion,
+    WorkerName, WorkerState, codes, policy,
 };
 use fold_store::agents::{self, NewQuestion, QuestionKind, QuestionRow};
 use fold_store::{StoreError, counters, messages, projects};
@@ -259,7 +261,7 @@ impl Supervisor {
         Ok(())
     }
 
-    /// A new `ask` question: each question of the `AskUserQuestion` call goes to every human as a question message from the worker, with the call's options as choices, linked to the worker's task when it has exactly one.
+    /// A new `ask` question: the `AskUserQuestion` call goes to every human as one message from the worker, linked to the worker's task when it has exactly one. A call of one question is a question with the call's options as choices; a call of several is one question set, which the humans answer together in one reply.
     async fn ask_humans(
         &self,
         process: &Process,
@@ -280,6 +282,7 @@ impl Supervisor {
         };
         let humans = projects::list_humans(registry.read()).await?;
         let mut bodies = Vec::with_capacity(asked.questions.len());
+        let mut set = Vec::with_capacity(asked.questions.len());
         for question in &asked.questions {
             // A description or header that fold would refuse is left out, so the question keeps its options.
             let options: Vec<Choice> = question
@@ -297,11 +300,29 @@ impl Supervisor {
                 .header
                 .as_deref()
                 .and_then(|text| short_line(text, MAX_QUESTION_HEADER_LEN));
-            bodies.push((
-                MessageBody::parse(question.question.clone())?,
-                MessageChoices::parse(&options, header.as_deref()).ok(),
-            ));
+            let choices = MessageChoices::parse(&options, header.as_deref()).ok();
+            set.push(SetQuestion {
+                text: shorten(question.question.trim(), MAX_QUESTION_LEN),
+                header: header.clone(),
+                choices: choices
+                    .as_ref()
+                    .map(|choices| choices.options().to_vec())
+                    .unwrap_or_default(),
+            });
+            bodies.push((MessageBody::parse(question.question.clone())?, choices));
         }
+        // Several questions are one set, so the humans see and answer them as one ask.
+        let set = if bodies.len() > 1 {
+            let text = bodies
+                .iter()
+                .map(|(body, _)| body.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            bodies = vec![(MessageBody::parse(text)?, None)];
+            Some(QuestionSet::parse(&set)?)
+        } else {
+            None
+        };
         let worker = WorkerName::main(&process.agent);
         let now = self.inner.clock.now();
         let mut buffer = EventBuffer::new();
@@ -342,6 +363,7 @@ impl Supervisor {
                             task,
                             body,
                             choices: choices.as_ref(),
+                            questions: set.as_ref(),
                             now,
                         },
                     )
@@ -406,6 +428,11 @@ impl Supervisor {
             return Ok(None);
         };
         let ids = agents::question_messages(self.inner.store.read(), question.id).await?;
+        if let [message] = ids.as_slice()
+            && asked.questions.len() > 1
+        {
+            return self.set_answers(&asked, *message).await;
+        }
         let mut answers = Vec::with_capacity(ids.len());
         let mut last = None;
         for (asked, message) in asked.questions.iter().zip(ids) {
@@ -423,6 +450,35 @@ impl Supervisor {
             last = Some(human);
         }
         Ok(last.map(|human| (answers, human)))
+    }
+
+    /// Each question of a call asked as one set with the answer its reply stored for it, and the human who replied; a reply in the thread without stored answers, written in the reply box, answers each question with its whole text. `None` while no human replied.
+    async fn set_answers(
+        &self,
+        asked: &AskUserQuestion,
+        message: MessageId,
+    ) -> Result<Option<(Vec<(String, String)>, HumanName)>, AgentError> {
+        let (replies, human) = match messages::answers_of(self.inner.store.read(), message).await? {
+            Some(stored) => stored,
+            None => match messages::first_human_reply(self.inner.store.read(), message).await? {
+                Some((body, human)) => (vec![body; asked.questions.len()], human),
+                None => return Ok(None),
+            },
+        };
+        let answers = asked
+            .questions
+            .iter()
+            .zip(replies)
+            .map(|(asked, reply)| {
+                let labels: Vec<String> = asked
+                    .options
+                    .iter()
+                    .map(|option| option.label.clone())
+                    .collect();
+                (asked.question.clone(), chosen_answer(&labels, &reply))
+            })
+            .collect();
+        Ok(Some((answers, human)))
     }
 
     /// Sends an answered question's decision to every live request that waits for it. A worker whose process ended while it waited, at a daemon stop, resumes with the answer as its first turn, and its first repeat of the call takes the stored answer.

@@ -14,9 +14,14 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { keys } from "@/api/keys";
-import { sendMessage, type NewMessage } from "@/api/messages";
+import { answerAsk, sendMessage, type NewMessage } from "@/api/messages";
 import { olderNotListed } from "@/api/pages";
-import { messagesQuery, sessionQuery, threadQuery } from "@/api/queries";
+import {
+  messagesQuery,
+  needsYouQuery,
+  sessionQuery,
+  threadQuery,
+} from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
 import { buttonClasses } from "@/components/button/buttonStyles";
 import { cn } from "@/lib/cn";
@@ -28,6 +33,7 @@ import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import { ChatList } from "./ChatList";
+import { answeredKeys } from "./answered";
 import { ChatPanel } from "./ChatPanel";
 import { groupChats } from "./chats";
 import {
@@ -48,6 +54,7 @@ import {
   visibleChats,
 } from "./openThread";
 import { messagesHref, type MessagesSearch } from "./search";
+import { openAskIds } from "./sets";
 import { ThreadFilterMenu } from "./ThreadFilterMenu";
 import { paneShown, WIDE_LAYOUT } from "./readGate";
 
@@ -72,6 +79,18 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: keys.messages(slug) }),
   });
+  // The card stays pending until the reads that show the set are read again, so the set leaves only once the daemon closed it.
+  const answer = useMutation({
+    mutationFn: async (input: { ask: string; answers: string[] }) => {
+      await answerAsk(slug, input.ask, input.answers);
+      await Promise.all(
+        answeredKeys(slug, { ask: input.ask }).map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey }),
+        ),
+      );
+    },
+  });
+  const openAsks = openAskIds(useQuery(needsYouQuery(slug)).data ?? [], you);
 
   const filter: ThreadFilter = {
     agent: search.agent,
@@ -154,7 +173,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
           <div className="flex items-center justify-between gap-8">
             <ThreadFilterMenu
               filter={filter}
-              shows={showOptions(data, you)}
+              shows={showOptions(you, openAsks.size)}
               options={filterOptions(data)}
               onShow={(next) => {
                 go({
@@ -198,6 +217,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
               selected={paneOnScreen ? (open?.key ?? null) : null}
               now={dataUpdatedAt}
               you={you}
+              open={openAsks}
               hrefOf={(chat) =>
                 messagesHref(
                   slug,
@@ -256,8 +276,12 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
             now={dataUpdatedAt}
             backHref={listHref}
             shown={paneOnScreen}
+            open={openAsks}
             onReply={async (replyTo, body) => {
               await send.mutateAsync({ reply_to: replyTo, body });
+            }}
+            onAnswer={async (ask, answers) => {
+              await answer.mutateAsync({ ask, answers });
             }}
           />
         ) : null}

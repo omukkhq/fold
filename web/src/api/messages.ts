@@ -69,10 +69,11 @@ export async function sendMessage(
   );
 }
 
-/** What a human marks answered: the open asks of the thread that holds a message, or every open ask linked to a task. */
+/** What a human marks answered: the open asks of the thread that holds a message, every open ask linked to a task, or one ask, so another ask of its thread keeps waiting. */
 export type AnsweredScope =
-  | { thread: string; task?: undefined }
-  | { task: string; thread?: undefined };
+  | { thread: string; task?: undefined; ask?: undefined }
+  | { task: string; thread?: undefined; ask?: undefined }
+  | { ask: string; thread?: undefined; task?: undefined };
 
 /**
  * Marks the open asks of a thread or a task answered without a reply, and answers with the ids it closed, none when nothing waited.
@@ -89,6 +90,20 @@ export async function markAnswered(
     }),
   );
   return result.answered;
+}
+
+/** Answers every question of the open ask `ask` in one reply, one answer per question in order; resolves with the reply once the daemon stored it. */
+export async function answerAsk(
+  slug: string,
+  ask: string,
+  answers: string[],
+): Promise<MessageView> {
+  return unwrap(
+    api.POST("/api/v1/projects/{slug}/asks/{id}/answer", {
+      params: { path: { slug, id: ask } },
+      body: { answers },
+    }),
+  );
 }
 
 /** Marks the thread read for the signed-in human, their own recipient rows only, and answers with the ids it marked, none on a repeat. */

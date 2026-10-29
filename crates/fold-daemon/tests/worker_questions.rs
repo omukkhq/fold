@@ -721,3 +721,76 @@ async fn a_supervisor_that_falls_behind_its_bus_still_answers_a_replied_question
         json!({"Which colour should the fold probe use?": "Blue"})
     );
 }
+
+#[tokio::test]
+async fn an_ask_user_question_of_several_questions_is_one_set_that_one_reply_answers() {
+    let fake = FakeClaude::new("ask_questions");
+    let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    let ana = fold_core::HumanName::parse("ana").unwrap();
+    let now = harness.project.now();
+    harness
+        .project
+        .registry()
+        .write(async |tx| fold_store::projects::ensure_human(tx, &ana, now).await)
+        .await
+        .unwrap();
+    let lead = start_lead(&harness).await;
+    let waiting = eventually(WAIT, async || {
+        let items = needs_you(&harness).await;
+        if items.len() == 1 {
+            Ok(items)
+        } else {
+            Err(items.len())
+        }
+    })
+    .await;
+    assert_eq!(waiting[0]["kind"], "question");
+    assert_eq!(
+        waiting[0]["questions"], 2,
+        "one set, not one item per question"
+    );
+    let message = waiting[0]["message"].as_str().unwrap().to_owned();
+    let (status, thread) = harness
+        .socket(
+            Method::GET,
+            &format!("/api/v1/projects/{SLUG}/threads/{message}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{thread}");
+    let set = &thread["messages"][0];
+    assert_eq!(set["worker_question"], true);
+    assert_eq!(set["choices"], json!([]));
+    assert_eq!(
+        set["questions"][1],
+        json!({
+            "text": "Which size should the fold probe use?",
+            "header": "Probe size",
+            "choices": [
+                {"label": "Small", "description": "A small fold probe."},
+                {"label": "Large", "description": "A large fold probe."},
+            ],
+        })
+    );
+
+    let (status, reply) = harness
+        .socket(
+            Method::POST,
+            &format!("/api/v1/projects/{SLUG}/asks/{message}/answer"),
+            Some(&json!({"answers": ["blue", "Large"]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{reply}");
+    let run = until_answered(&fake, &lead, 1, 1).await.remove(0);
+    let allowed = responses(&run).remove(0);
+    assert_eq!(allowed["behavior"], "allow");
+    assert_eq!(
+        allowed["updatedInput"]["answers"],
+        json!({
+            "Which colour should the fold probe use?": "Blue",
+            "Which size should the fold probe use?": "Large",
+        })
+    );
+    assert!(needs_you(&harness).await.is_empty());
+}

@@ -35,6 +35,10 @@ export function message(
     header: null,
     asks_human: false,
     lines: null,
+    questions: [],
+    answers: [],
+    answers_ask: null,
+    worker_question: false,
     ...fields,
   };
 }

@@ -100,24 +100,27 @@ describe("chatAnchor", () => {
   });
   const [chat] = groupChats([a, b, ask]);
   if (!chat) throw new Error("no chat");
+  const open = new Set(["m-11"]);
+  const none = new Set<string>();
 
   it("opens at the newest message without a link or with a link outside the chat", () => {
-    expect(chatAnchor(chat, undefined, "tanim")).toBe("m-12");
-    expect(chatAnchor(chat, "m-3", "tanim")).toBe("m-12");
-    expect(chatAnchor({ ...chat, threads: [] }, undefined, null)).toBeNull();
+    expect(chatAnchor(chat, undefined, open)).toBe("m-12");
+    expect(chatAnchor(chat, "m-3", open)).toBe("m-12");
+    expect(chatAnchor({ ...chat, threads: [] }, undefined, none)).toBeNull();
   });
 
   it("opens at a linked message", () => {
-    expect(chatAnchor(chat, "m-5", "tanim")).toBe("m-5");
+    expect(chatAnchor(chat, "m-5", open)).toBe("m-5");
   });
 
-  it("opens a linked thread at its question to you, else at its newest message", () => {
-    expect(chatAnchor(chat, "m-10", "tanim")).toBe("m-11");
-    expect(chatAnchor(chat, "m-2", "tanim")).toBe("m-5");
+  it("opens a linked thread at its set that waits for you, else at its newest message", () => {
+    expect(chatAnchor(chat, "m-10", open)).toBe("m-11");
+    expect(chatAnchor(chat, "m-10", none)).toBe("m-12");
+    expect(chatAnchor(chat, "m-2", open)).toBe("m-5");
     const empty = thread("m-20", { participants: ["frontend"] });
     const [lone] = groupChats([empty]);
     if (!lone) throw new Error("no chat");
-    expect(chatAnchor(lone, "m-20", null)).toBeNull();
+    expect(chatAnchor(lone, "m-20", none)).toBeNull();
   });
 });
 

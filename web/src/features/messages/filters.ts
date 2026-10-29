@@ -1,7 +1,6 @@
 import type { ThreadView } from "@/api/messages";
 import { atName, bareName, isHumanName, isYou } from "@/people/names";
 import { threadAgent } from "./chats";
-import { waitingQuestions } from "./questionQueue";
 import { isAsk } from "./replyTarget";
 import { threadTitle } from "./title";
 
@@ -159,21 +158,18 @@ const SHOW_LABELS: Record<ShowFilter, string> = {
 export interface ShowOption {
   show: ShowFilter;
   label: string;
-  /** The questions that wait for you, as the Messages tab badge counts them; null for the other choices. */
+  /** The question sets that wait for you, as the Messages tab badge counts them; null for the other choices. */
   count: number | null;
 }
 
-/** The Show choices: all chats, the waiting chats with the count of their questions, questions, and Mine while a human is signed in. */
-export function showOptions(
-  threads: readonly ThreadView[],
-  you: string | null,
-): ShowOption[] {
+/** The Show choices: all chats, the waiting chats with the count of their question sets, questions, and Mine while a human is signed in. `waiting` is that count, as the Messages tab shows it. */
+export function showOptions(you: string | null, waiting: number): ShowOption[] {
   const shows: ShowFilter[] = ["all", "waiting", "questions"];
   if (you !== null) shows.push("mine");
   return shows.map((show) => ({
     show,
     label: SHOW_LABELS[show],
-    count: show === "waiting" ? waitingQuestions(threads, you) : null,
+    count: show === "waiting" ? waiting : null,
   }));
 }
 

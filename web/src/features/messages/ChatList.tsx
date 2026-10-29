@@ -13,16 +13,25 @@ interface ChatListProps {
   selected: string | null;
   now: number;
   you: string | null;
+  /** The asks that wait for the signed-in human, as Needs you lists them. */
+  open: ReadonlySet<string>;
   hrefOf: (chat: AgentChat) => string;
 }
 
 /** The chats as two-line rows that fills separate: the agent and the time of the newest message, then that message and the counts of what waits for you. */
-export function ChatList({ chats, selected, now, you, hrefOf }: ChatListProps) {
+export function ChatList({
+  chats,
+  selected,
+  now,
+  you,
+  open,
+  hrefOf,
+}: ChatListProps) {
   return (
     <ul aria-label="Chats" className="flex flex-col gap-6 lg:gap-2">
       {chats.map((chat) => {
         const current = chat.key === selected;
-        const row = chatRow(chat, you);
+        const row = chatRow(chat, you, open);
         return (
           <li key={chat.key}>
             <HrefLink
