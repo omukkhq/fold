@@ -2556,11 +2556,7 @@ describe("Intent", () => {
     update("P-4", (p) => ({ ...p, reviews: [] }));
     renderAt("/p/demo/proposals/P-4");
     const card = await screen.findByRole("region", { name: "Intent" });
-    expect(
-      within(card).getByText(
-        "This version has no intent.",
-      ),
-    ).toBeTruthy();
+    expect(within(card).getByText("This version has no intent.")).toBeTruthy();
     expect(
       within(card).getByText("No reviewer has reviewed v2 yet."),
     ).toBeTruthy();

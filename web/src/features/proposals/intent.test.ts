@@ -56,7 +56,10 @@ describe("the intent card", () => {
     const list = entries([proposalVersion(1), proposalVersion(2)]);
     const card = intentCard(list);
     expect(
-      list.map((entry) => [entry.version.version, intentInHistory(entry, card)]),
+      list.map((entry) => [
+        entry.version.version,
+        intentInHistory(entry, card),
+      ]),
     ).toEqual([
       [2, false],
       [1, true],
