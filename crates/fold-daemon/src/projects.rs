@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
-use fold_core::{Clock, FoldError, ProjectConfig, ProjectPaths, codes};
+use fold_core::{Actor, Clock, FoldError, ProjectConfig, ProjectPaths, codes};
 use fold_store::Store;
 use fold_store::projects::ProjectRow;
 use fold_vcs::git::Git;
@@ -18,7 +18,9 @@ use crate::services::agents::environment::WorkerEnvironment;
 use crate::services::agents::{AgentService, Launcher, SeenPresence, Supervisor, code_of};
 use crate::services::events::EventBus;
 use crate::services::messages::MessageService;
-use crate::services::projects::{GitAttention, ProjectError, RemoteContext, load_config};
+use crate::services::projects::{
+    FoldSkills, GitAttention, ProjectError, RemoteContext, keep_fold_skills_out, load_config,
+};
 use crate::services::reviews::ReviewService;
 use crate::services::reviews::checks::{CheckPermits, CheckRunner, recover_check_runs};
 use crate::services::tasks::TaskService;
@@ -701,6 +703,15 @@ impl Projects {
             }
             if let Err(error) = handle.agents().restore_push_targets().await {
                 tracing::error!(project = %row.slug, code = code_of(&error), "could not restore the kept inbox sockets");
+            }
+            match keep_fold_skills_out(handle, &Actor::System, &Git::default()).await {
+                Ok(FoldSkills::Waits(reason)) => {
+                    tracing::info!(project = %row.slug, reason, "main still tracks fold's skill files; the next open tries again");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(project = %row.slug, code = error.log_code(), "could not keep fold's skill files out of main; the next open tries again");
+                }
             }
         }
         if let (Ok(handle), Some(notify)) = (&outcome, &self.notify) {

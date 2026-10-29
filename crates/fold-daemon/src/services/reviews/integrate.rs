@@ -20,7 +20,9 @@ use fold_store::reviews::{
 };
 use fold_store::tasks::claims::{self, ReleaseReason};
 use fold_store::tasks::completions::{self, CompletionKind};
-use fold_store::workspaces::{NewHumanChange, WorkspaceKind, WorkspaceRow, WorkspaceState};
+use fold_store::workspaces::{
+    Checkout, NewHumanChange, WorkspaceKind, WorkspaceRow, WorkspaceState,
+};
 use fold_store::{StoreError, WriteTx, agents, counters, tasks, workspaces};
 use fold_vcs::integrate::MergeOutcome;
 use serde_json::json;
@@ -93,9 +95,18 @@ pub struct RecordIntegration {
     pub commit: Option<String>,
     pub base_tree: ObjectHash,
     pub tree: ObjectHash,
-    pub human: HumanRecord,
+    pub by: RecordAuthor,
     /// The title of the revision, such as the one `fld untrack` gives; `None` for a change `fld record` read.
     pub title: Option<String>,
+}
+
+/// Whose change of the project folder a record integration brings onto main.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordAuthor {
+    /// A human's change, which the integration records as the human change with its event.
+    Human(HumanRecord),
+    /// fold's own change, the one revision that stops tracking fold's skill files: no human made it, so no human change is recorded. Instead the integration's transaction gives the checkout record the change's tree, which no longer holds the files, so the folder's follow leaves them on disk. `checkout` is the record the change is based on, which the project's folder lock keeps as it is; another record refuses the integration.
+    Fold { checkout: Checkout },
 }
 
 /// A human change as its integration records it: the human whose change it is, and the data of its `human_change.recorded` event, which names the changed files, the open workspaces they touch and the leads of their tasks.
@@ -233,7 +244,7 @@ pub(super) enum Subject {
         commit: Option<String>,
         base_tree: ObjectHash,
         tree: ObjectHash,
-        human: HumanRecord,
+        by: RecordAuthor,
         title: Option<String>,
     },
     Direct {
@@ -1048,15 +1059,21 @@ impl ReviewService {
     }
 }
 
-/// Step 2 of a record: only a named human records a change of the project folder, and the merge base is the tree the change is based on.
+/// Step 2 of a record: only a named human records a change of the project folder, and only fold its own change, and the merge base is the tree the change is based on.
 fn record_plan(actor: &Actor, record: &RecordIntegration) -> Result<Plan, Step> {
-    if !actor.is_human() {
-        return Err(FoldError::new(
-            codes::HUMAN_REQUIRED,
-            "only a human records a change of the project folder",
-        )
-        .with_hint("ask a human to run `fld record`")
-        .into());
+    match &record.by {
+        RecordAuthor::Human(_) if actor.is_human() => {}
+        RecordAuthor::Human(_) => {
+            return Err(FoldError::new(
+                codes::HUMAN_REQUIRED,
+                "only a human records a change of the project folder",
+            )
+            .with_hint("ask a human to run `fld record`")
+            .into());
+        }
+        RecordAuthor::Fold { .. } => {
+            policy::can_untrack_fold_skills(actor).map_err(FoldError::from)?;
+        }
     }
     if let Some(commit) = &record.commit
         && !is_commit_id(commit)
@@ -1076,7 +1093,7 @@ fn record_plan(actor: &Actor, record: &RecordIntegration) -> Result<Plan, Step> 
             commit: record.commit.clone(),
             base_tree: record.base_tree,
             tree: record.tree,
-            human: record.human.clone(),
+            by: record.by.clone(),
             title: record.title.clone(),
         },
     })
@@ -1488,7 +1505,7 @@ impl Commit<'_> {
                 commit,
                 base_tree,
                 tree,
-                human,
+                by,
                 title,
             } => {
                 let subject = IntegrationSubject::Record {
@@ -1502,21 +1519,42 @@ impl Commit<'_> {
                         "commit": commit,
                     }))?;
                 self.advance(tx, buffer, &label, subject, succeeded).await?;
-                workspaces::supersede_conflicted(tx, self.now).await?;
-                let change = NewHumanChange {
-                    commit: commit.as_deref(),
-                    human: human.human.as_str(),
-                    base_tree: *base_tree,
-                    tree: *tree,
-                    now: self.now,
-                };
-                workspaces::insert_recorded_human_change(tx, &change, self.integration).await?;
-                let mut data = human.data.clone();
-                data["integration"] = json!(self.integration.to_string());
-                let recorded = NewEvent::new(types::HUMAN_CHANGE_RECORDED, label.clone())?
-                    .revision(revision)
-                    .data(data)?;
-                buffer.append(tx, &recorded, self.now).await?;
+                match by {
+                    RecordAuthor::Human(human) => {
+                        workspaces::supersede_conflicted(tx, self.now).await?;
+                        let change = NewHumanChange {
+                            commit: commit.as_deref(),
+                            human: human.human.as_str(),
+                            base_tree: *base_tree,
+                            tree: *tree,
+                            now: self.now,
+                        };
+                        workspaces::insert_recorded_human_change(tx, &change, self.integration)
+                            .await?;
+                        let mut data = human.data.clone();
+                        data["integration"] = json!(self.integration.to_string());
+                        let recorded = NewEvent::new(types::HUMAN_CHANGE_RECORDED, label.clone())?
+                            .revision(revision)
+                            .data(data)?;
+                        buffer.append(tx, &recorded, self.now).await?;
+                    }
+                    RecordAuthor::Fold { checkout } => {
+                        if workspaces::checkout(tx.conn()).await?.as_ref() != Some(checkout) {
+                            return Err(Step::Failed(
+                                FoldError::new(
+                                    codes::INVALID_REQUEST,
+                                    "the project folder's checkout record changed during the change",
+                                )
+                                .into(),
+                            ));
+                        }
+                        let record = Checkout {
+                            tree: *tree,
+                            ..checkout.clone()
+                        };
+                        workspaces::set_checkout(tx, &record, self.now).await?;
+                    }
+                }
                 buffer.extend(recompute(tx, &[], self.now).await?.events);
                 Vec::new()
             }

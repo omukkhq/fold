@@ -84,7 +84,7 @@ pub use stash::{
     AfterUnstash, StashEntry, StashOutcome, UnstashConflict, UnstashOutcome, stash, stash_list,
     unstash,
 };
-pub use untrack::{UntrackOutcome, untrack};
+pub use untrack::{FOLD_SKILLS_TITLE, FoldSkills, UntrackOutcome, keep_fold_skills_out, untrack};
 pub use web_auth::{
     DEFAULT_SESSION_LIFETIME, SIGN_IN_LINK_LIFETIME, SignInLink, SignedIn, WEB_TOUCH_INTERVAL,
     check_web_session, create_sign_in_link, create_web_session, create_web_token, end_web_session,
@@ -281,7 +281,7 @@ pub async fn init_new_project(
     init_with(host, &root, name, human, git, start, clock).await
 }
 
-/// Makes the Git repository whose top is `root` a fold project whose folder is main, as [`init_project`] does, keeping the repository and its history: the genesis `r0` is the committed tree at `HEAD`, free of ignore rules, and its commit is `HEAD` itself, which `.fold/git-sync.map` records as its first line. Git sync is on from the start, turned on by `human`. The folder must be the top of a repository whose `.git` is a directory, with a branch checked out that has a commit and no change in the index or a tracked file; anything else is refused with a hint. The `[git]` branch becomes the checked-out branch. Nothing in the repository changes but `info/exclude`, which becomes the link to `.fold/exclude` with `/.fold/` in it.
+/// Makes the Git repository whose top is `root` a fold project whose folder is main, as [`init_project`] does, keeping the repository and its history: the genesis `r0` is the committed tree at `HEAD`, free of ignore rules, and its commit is `HEAD` itself, which `.fold/git-sync.map` records as its first line. Git sync is on from the start, turned on by `human`. The folder must be the top of a repository whose `.git` is a directory, with a branch checked out that has a commit and no change in the index or a tracked file; anything else is refused with a hint. The `[git]` branch becomes the checked-out branch. Nothing in the repository changes but `info/exclude`, which becomes the link to `.fold/exclude` with `/.fold/` and fold's Claude Code lines in it; files below fold's skill folders that `HEAD` tracks stay in `r0`, and the daemon's first open of the project stops tracking them.
 pub async fn init_project_from_git(
     host: &HostPaths,
     root: &Path,

@@ -199,6 +199,17 @@ pub fn session_settings() -> serde_json::Value {
     })
 }
 
+/// The folder of the project's Claude Code skills, relative to the project root.
+pub const SKILLS_DIR: &str = ".claude/skills";
+
+/// The name of the skill a session opened by hand loads, which indexes the skill of each role.
+pub const INDEX_SKILL: &str = "fold";
+
+/// Whether `name` is a folder of [`SKILLS_DIR`] that fold writes whole and refreshes after each upgrade: the [`INDEX_SKILL`] or the skill of a role. Every session starts in the project root and reads them there, so main never needs them.
+pub fn is_fold_skill(name: &str) -> bool {
+    name == INDEX_SKILL || Role::ALL.iter().any(|role| role.skill() == name)
+}
+
 /// The parent of every workspace directory relative to the project root.
 pub const WS_DIR: &str = ".fold/ws";
 
@@ -243,6 +254,16 @@ pub fn review_batch_checkout_path(batch: ReviewBatchId, earlier: u32) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fold_writes_the_index_skill_and_the_skill_of_each_role() {
+        assert!(is_fold_skill("fold"));
+        assert!(is_fold_skill("fold-main"));
+        assert!(is_fold_skill("fold-task-worker"));
+        for name in ["fold-custom", "fold-", "folder", "deploy", ""] {
+            assert!(!is_fold_skill(name), "{name}");
+        }
+    }
 
     #[test]
     fn the_session_settings_allow_the_fold_tools_and_run_each_hook_once() {
