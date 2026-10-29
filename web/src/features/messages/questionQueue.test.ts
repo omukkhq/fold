@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 import { message, recipient, thread } from "@/test/messages";
 import { groupChats, type AgentChat } from "./chats";
 import {
+  answeredAway,
   cursorAt,
   markableThread,
   openQuestions,
   queueIndex,
   startCursor,
+  stepEndsQueue,
   stepText,
   unmarkedAsk,
+  waitingQuestions,
 } from "./questionQueue";
 
 const asks = (id: string, sentAt: number, fields = {}) =>
@@ -68,6 +71,19 @@ describe("openQuestions", () => {
     expect(openQuestions(chat(), "rafeed").map((q) => q.message.id)).toEqual([
       "m-8",
     ]);
+  });
+
+  it("leaves out a question with choices that someone marked answered, which the thread shows as no longer waiting", () => {
+    const marked = { ...late, awaiting_human: false };
+    const [both] = groupChats([marked, early]);
+    if (!both) throw new Error("no chat");
+    expect(openQuestions(both, "tanim").map((q) => q.message.id)).toEqual([
+      "m-1",
+      "m-3",
+    ]);
+    const [alone] = groupChats([marked]);
+    if (!alone) throw new Error("no chat");
+    expect(openQuestions(alone, "tanim")).toEqual([]);
   });
 });
 
@@ -178,5 +194,36 @@ describe("unmarkedAsk", () => {
         "tanim",
       ),
     ).toBeNull();
+  });
+});
+
+describe("answeredAway", () => {
+  const queue = openQuestions(chat(), "tanim");
+
+  it("tells when the shown question left the queue", () => {
+    expect(answeredAway("m-6", queue)).toBe(true);
+    expect(answeredAway("m-3", queue)).toBe(false);
+    expect(answeredAway(null, queue)).toBe(false);
+    expect(answeredAway("m-1", [])).toBe(true);
+  });
+});
+
+describe("stepEndsQueue", () => {
+  it("is true for a step to the first or the last question", () => {
+    expect(stepEndsQueue(0, 3)).toBe(true);
+    expect(stepEndsQueue(2, 3)).toBe(true);
+    expect(stepEndsQueue(1, 3)).toBe(false);
+  });
+});
+
+describe("waitingQuestions", () => {
+  it("adds up the questions of every chat, as the chat rows count them", () => {
+    const threads = [late, early, done, other];
+    expect(waitingQuestions(threads, "tanim")).toBe(3);
+    expect(waitingQuestions(threads, "rafeed")).toBe(1);
+    expect(
+      waitingQuestions([{ ...late, awaiting_human: false }], "tanim"),
+    ).toBe(0);
+    expect(waitingQuestions([], "tanim")).toBe(0);
   });
 });

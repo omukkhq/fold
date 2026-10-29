@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { keys } from "../api/keys";
 import { liveStatusStore } from "../live/status";
 import { agent } from "../test/agents";
+import { message, recipient, thread } from "../test/messages";
 import { ThemeProvider } from "../theme/ThemeProvider";
 import { PhoneMenu } from "./PhoneMenu";
 
@@ -31,7 +32,23 @@ async function renderMenu(pausedSince: number | null) {
   });
   client.setQueryData(keys.session(), { human: "tanim", authenticated: true });
   client.setQueryData(keys.needsYou("demo"), []);
-  client.setQueryData(keys.messagesAwaiting("demo"), 2);
+  // One chat whose two questions wait: the tab counts questions, as the chat row does.
+  const ask = (id: string) =>
+    message(id, {
+      sender: "web-lead",
+      recipients: [recipient("human:tanim")],
+      choices: [{ label: "Yes", description: null }],
+    });
+  client.setQueryData(keys.messages("demo"), {
+    items: [
+      thread("m-1", {
+        awaiting_human: true,
+        participants: ["web-lead", "human:tanim"],
+        messages: [ask("m-1"), ask("m-2")],
+      }),
+    ],
+    more: false,
+  });
   client.setQueryData(keys.agentBar("demo"), [
     agent("web-lead"),
     agent("docs", { presence: "offline" }),
@@ -80,7 +97,7 @@ describe("PhoneMenu", () => {
     ).toBe("page");
     expect(
       within(tabs).getByRole("status", {
-        name: "2 threads wait for your answer",
+        name: "2 questions wait for your answer",
       }).textContent,
     ).toBe("2");
     expect(within(menu).getByText("1 working · 2 in all")).toBeTruthy();

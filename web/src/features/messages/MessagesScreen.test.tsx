@@ -256,7 +256,6 @@ describe("MessagesScreen", () => {
         .map((option) => option.textContent),
     ).toEqual([
       "All agents",
-      "frontend",
       "frontend/ui",
       "All tasks",
       "T-3",

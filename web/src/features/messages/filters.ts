@@ -1,5 +1,7 @@
 import type { ThreadView } from "@/api/messages";
 import { atName, bareName, isHumanName, isYou } from "@/people/names";
+import { threadAgent } from "./chats";
+import { waitingQuestions } from "./questionQueue";
 import { isAsk } from "./replyTarget";
 import { threadTitle } from "./title";
 
@@ -26,7 +28,7 @@ export function startedBy(thread: ThreadView, you: string | null): boolean {
   return first !== undefined && isYou(first.sender, you);
 }
 
-/** The threads that match every set field, newest first. An agent matches by taking part in the thread. */
+/** The threads that match every set field, newest first. An agent matches the threads of its own chat, so the list then shows only that agent's chat. */
 export function filterThreads(
   threads: ThreadView[],
   filter: ThreadFilter,
@@ -35,7 +37,7 @@ export function filterThreads(
   return threads
     .filter(
       (t) =>
-        (filter.agent === undefined || t.participants.includes(filter.agent)) &&
+        (filter.agent === undefined || threadAgent(t) === filter.agent) &&
         (filter.task === undefined || t.task === filter.task) &&
         (filter.proposal === undefined || t.proposal === filter.proposal) &&
         (filter.waiting !== true || t.awaiting_human) &&
@@ -51,21 +53,14 @@ function sorted(values: Iterable<string>): string[] {
   );
 }
 
-/** How many listed threads the daemon marks as waiting for you: the threads the Messages tab badge counts. */
-export function waitingCount(threads: readonly ThreadView[]): number {
-  return threads.filter((t) => t.awaiting_human).length;
-}
-
-/** What each filter can pick, taken from the threads themselves. */
+/** What each filter can pick, taken from the threads themselves: the agents are the agents of the chats. */
 export function filterOptions(threads: ThreadView[]): {
   agents: string[];
   tasks: string[];
   proposals: string[];
 } {
   return {
-    agents: sorted(
-      threads.flatMap((t) => t.participants).filter((p) => !isHumanName(p)),
-    ),
+    agents: sorted(threads.flatMap((t) => threadAgent(t) ?? [])),
     tasks: sorted(threads.flatMap((t) => (t.task === null ? [] : [t.task]))),
     proposals: sorted(
       threads.flatMap((t) => (t.proposal === null ? [] : [t.proposal])),
@@ -164,11 +159,11 @@ const SHOW_LABELS: Record<ShowFilter, string> = {
 export interface ShowOption {
   show: ShowFilter;
   label: string;
-  /** The threads that wait for you, as the Messages tab badge counts them; null for the other choices. */
+  /** The questions that wait for you, as the Messages tab badge counts them; null for the other choices. */
   count: number | null;
 }
 
-/** The Show choices: all chats, the waiting threads with their count, questions, and Mine while a human is signed in. */
+/** The Show choices: all chats, the waiting chats with the count of their questions, questions, and Mine while a human is signed in. */
 export function showOptions(
   threads: readonly ThreadView[],
   you: string | null,
@@ -178,7 +173,7 @@ export function showOptions(
   return shows.map((show) => ({
     show,
     label: SHOW_LABELS[show],
-    count: show === "waiting" ? waitingCount(threads) : null,
+    count: show === "waiting" ? waitingQuestions(threads, you) : null,
   }));
 }
 

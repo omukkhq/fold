@@ -8,6 +8,7 @@ import {
   chatName,
   chatParticipants,
   groupChats,
+  headerContexts,
   messageContext,
   newestMessage,
   threadAgent,
@@ -78,6 +79,39 @@ describe("threadAgent", () => {
     expect(threadAgent(thread("m-8", { participants: ["human:tanim"] }))).toBe(
       null,
     );
+  });
+
+  it("never gives a thread to fold, which only writes its own notes", () => {
+    const note = thread("m-9", {
+      participants: ["fold", "web-lead", "human:tanim"],
+      messages: [
+        message("m-9", {
+          sender: "fold",
+          recipients: [recipient("web-lead")],
+          body: "@web-worker cannot start now.",
+        }),
+        message("m-10", {
+          sender: "web-lead",
+          recipients: [recipient("human:tanim", { addressed_as: "humans" })],
+          body: "Start it again?",
+          asks_human: true,
+        }),
+      ],
+    });
+    expect(threadAgent(note)).toBe("web-lead");
+    const forwarded = thread("m-11", {
+      participants: ["human:tanim", "fold", "frontend"],
+      messages: [
+        message("m-11", {
+          sender: "human:tanim",
+          recipients: [recipient("fold"), recipient("frontend")],
+        }),
+      ],
+    });
+    expect(threadAgent(forwarded)).toBe("frontend");
+    expect(
+      threadAgent(thread("m-12", { participants: ["human:tanim", "fold"] })),
+    ).toBe(null);
   });
 });
 
@@ -168,6 +202,25 @@ describe("contexts", () => {
       "P-3",
       "RQ-4",
     ]);
+  });
+
+  it("names the newest few in the header and counts the rest", () => {
+    const tasks = [1, 2, 3, 4, 5].map((n) =>
+      thread(`m-${String(20 + n)}`, {
+        task: `T-${String(n)}`,
+        last_at: n,
+        participants: ["frontend"],
+      }),
+    );
+    const [chat] = groupChats(tasks);
+    if (!chat) throw new Error("no chat");
+    const header = headerContexts(chat);
+    expect(header.shown.map((c) => c.id)).toEqual(["T-5", "T-4", "T-3"]);
+    expect(header.more).toBe(2);
+    expect(headerContexts(chat, 5)).toEqual({
+      shown: chatContexts(chat),
+      more: 0,
+    });
   });
 });
 

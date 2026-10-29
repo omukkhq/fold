@@ -103,13 +103,3 @@ export async function markThreadRead(
   );
   return result.read;
 }
-
-/** How many threads hold an ask that waits for the signed-in human: the threads the Messages screen marks. One request for a page of a single thread carries the count. */
-export async function countAwaitingHuman(slug: string): Promise<number> {
-  const page = await unwrap(
-    api.GET("/api/v1/projects/{slug}/messages", {
-      params: { path: { slug }, query: { mine: true, limit: 1 } },
-    }),
-  );
-  return page.total_awaiting_human;
-}

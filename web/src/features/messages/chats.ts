@@ -18,20 +18,23 @@ export interface AgentChat {
   last_at: number;
 }
 
+/** fold writes only its own notes and reads no reply, so a chat is never with fold. */
+function isChatAgent(actor: string): boolean {
+  return !isHumanName(actor) && actor !== "fold";
+}
+
 /**
  * The agent a thread belongs to: the first agent that wrote in it, so a thread with several agents shows in the chat of the agent that started it.
  * A thread the person started belongs to the first agent its first message went to.
  */
 export function threadAgent(thread: ThreadView): string | null {
-  const writer = thread.messages.find((m) => !isHumanName(m.sender));
+  const writer = thread.messages.find((m) => isChatAgent(m.sender));
   const first = thread.messages[0];
   if (first !== undefined && isHumanName(first.sender)) {
-    const to = first.recipients.find((r) => !isHumanName(r.name));
+    const to = first.recipients.find((r) => isChatAgent(r.name));
     if (to !== undefined) return to.name;
   }
-  return (
-    writer?.sender ?? thread.participants.find((p) => !isHumanName(p)) ?? null
-  );
+  return writer?.sender ?? thread.participants.find(isChatAgent) ?? null;
 }
 
 /** The threads as one chat per agent, newest chat first; a thread without an agent is a chat of its own. */
@@ -163,6 +166,18 @@ export function chatContexts(chat: AgentChat): MessageContext[] {
     }
   }
   return list;
+}
+
+/** How many of a chat's tasks, proposals and requests its header names; the rest it counts as `+N`. */
+export const HEADER_CONTEXTS = 3;
+
+/** The newest contexts the chat's header names, and how many more the chat has. */
+export function headerContexts(
+  chat: AgentChat,
+  max = HEADER_CONTEXTS,
+): { shown: MessageContext[]; more: number } {
+  const all = chatContexts(chat);
+  return { shown: all.slice(0, max), more: Math.max(all.length - max, 0) };
 }
 
 /** Every person and agent of the chat's threads, in the order they first appear. */

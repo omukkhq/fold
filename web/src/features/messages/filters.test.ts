@@ -17,7 +17,6 @@ import {
   withShow,
   replyPlaceholder,
   replyTargets,
-  waitingCount,
 } from "./filters";
 
 const threads = [
@@ -62,6 +61,29 @@ describe("filterThreads", () => {
       ),
     ).toEqual(["m-3"]);
     expect(filterThreads(threads, { agent: "nobody" })).toEqual([]);
+  });
+  it("keeps for an agent only the threads of its own chat, not the threads it joined", () => {
+    const joined = thread("m-9", {
+      last_at: 4,
+      participants: ["main", "backend", "human:tanim"],
+      messages: [
+        message("m-9", { sender: "main", recipients: [recipient("backend")] }),
+        message("m-10", { sender: "backend" }),
+      ],
+    });
+    const own = thread("m-11", {
+      last_at: 5,
+      participants: ["backend", "human:tanim"],
+      messages: [message("m-11", { sender: "backend" })],
+    });
+    const list = [joined, own];
+    expect(filterThreads(list, { agent: "backend" }).map((t) => t.id)).toEqual([
+      "m-11",
+    ]);
+    expect(filterThreads(list, { agent: "main" }).map((t) => t.id)).toEqual([
+      "m-9",
+    ]);
+    expect(filterOptions(list).agents).toEqual(["backend", "main"]);
   });
   it("does not change the input order", () => {
     const copy = [...threads];
@@ -130,12 +152,11 @@ describe("names", () => {
 });
 
 describe("the waiting filter", () => {
-  it("keeps the threads the daemon marks, and counts them as the badge does", () => {
+  it("keeps the threads the daemon marks", () => {
     expect(filterThreads(threads, { waiting: true }).map((t) => t.id)).toEqual([
       "m-2",
     ]);
     expect(filterThreads(threads, { waiting: false })).toHaveLength(3);
-    expect(waitingCount(threads)).toBe(1);
   });
 });
 
@@ -239,12 +260,27 @@ describe("the Show choice", () => {
     expect(showFilter(withShow({}, "questions"))).toBe("questions");
     expect(showFilter(withShow({}, "waiting"))).toBe("waiting");
   });
-  it("counts the waiting threads and offers Mine only to a signed-in human", () => {
+  it("counts the waiting questions and offers Mine only to a signed-in human", () => {
+    const asking = thread("m-20", {
+      awaiting_human: true,
+      messages: [
+        message("m-20", {
+          sender: "frontend",
+          recipients: [recipient("human:tanim")],
+          asks_human: true,
+        }),
+        message("m-21", {
+          sender: "frontend",
+          recipients: [recipient("human:tanim")],
+          choices: [{ label: "Yes", description: null }],
+        }),
+      ],
+    });
     expect(
-      showOptions(threads, "tanim").map((c) => [c.label, c.count]),
+      showOptions([...threads, asking], "tanim").map((c) => [c.label, c.count]),
     ).toEqual([
       ["All chats", null],
-      ["Waits for you", 1],
+      ["Waits for you", 2],
       ["Questions", null],
       ["Mine", null],
     ]);

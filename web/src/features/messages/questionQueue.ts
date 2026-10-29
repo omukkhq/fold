@@ -1,6 +1,11 @@
 import type { MessageView, ThreadView } from "@/api/messages";
 import { threadCanMarkAnswered } from "./answered";
-import { chatMessages, threadsByMessage, type AgentChat } from "./chats";
+import {
+  chatMessages,
+  groupChats,
+  threadsByMessage,
+  type AgentChat,
+} from "./chats";
 import { isHumanName } from "@/people/names";
 import { askWaits, asksYou } from "./replyTarget";
 
@@ -31,7 +36,10 @@ export function unmarkedAsk(
   );
 }
 
-/** The asks of the chat that wait for the signed-in human, oldest first: the order the chat asks them in. */
+/**
+ * The asks of the chat that wait for the signed-in human, oldest first: the order the chat asks them in.
+ * A question with choices also ends when someone marks it answered, which only the thread's `awaiting_human` shows, so an ask waits only in a thread the daemon marks as waiting.
+ */
 export function openQuestions(
   chat: AgentChat,
   you: string | null,
@@ -45,9 +53,22 @@ export function openQuestions(
     if (thread === undefined) return [];
     const waits =
       unmarked.has(message.id) ||
-      (askWaits(thread, message) && asksYou(message, you));
+      (thread.awaiting_human &&
+        askWaits(thread, message) &&
+        asksYou(message, you));
     return waits ? [{ message, thread }] : [];
   });
+}
+
+/** How many asks wait for the signed-in human across the threads: the sum of the chat rows' gold counts, which the Messages tab and the Waits for you filter show. */
+export function waitingQuestions(
+  threads: readonly ThreadView[],
+  you: string | null,
+): number {
+  return groupChats(threads).reduce(
+    (sum, chat) => sum + openQuestions(chat, you).length,
+    0,
+  );
 }
 
 /** The question the dock shows: the one the person stepped to, or the place it had in the queue once it left, such as after its answer. */
@@ -105,4 +126,17 @@ export function markableThread(
     return threadCanMarkAnswered(current.thread) ? current.thread : null;
   }
   return chat.threads.find(threadCanMarkAnswered) ?? null;
+}
+
+/** The question the dock showed has left the queue, as an answer makes it do. */
+export function answeredAway(
+  shown: string | null,
+  queue: readonly OpenQuestion[],
+): boolean {
+  return shown !== null && !queue.some((q) => q.message.id === shown);
+}
+
+/** A step to either end of the queue turns off the control that made it, so the focus moves to the dock's heading instead of to nothing. */
+export function stepEndsQueue(index: number, total: number): boolean {
+  return index <= 0 || index >= total - 1;
 }
