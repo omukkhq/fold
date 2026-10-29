@@ -41,7 +41,12 @@ import {
   type ThreadFilter,
 } from "./filters";
 import { FeedbackDialog } from "./FeedbackDialog";
-import { isMissingThread, openChat, visibleChats } from "./openThread";
+import {
+  isMissingThread,
+  missingChatTitle,
+  openChat,
+  visibleChats,
+} from "./openThread";
 import { messagesHref, type MessagesSearch } from "./search";
 import { ThreadFilterMenu } from "./ThreadFilterMenu";
 import { paneShown, WIDE_LAYOUT } from "./readGate";
@@ -216,7 +221,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
           requested === undefined ? "hidden" : "flex",
         )}
       >
-        {target.kind === "unlisted" ? (
+        {target.kind === "listed" ? null : (
           <div className="flex min-h-0 flex-1 flex-col gap-8 p-16 lg:p-28">
             <HrefLink
               href={listHref}
@@ -229,13 +234,19 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
               <ArrowLeft aria-hidden="true" size={15} />
               Chats
             </HrefLink>
-            <UnlistedThread
-              id={target.id}
-              error={unlisted.error}
-              onRetry={() => void unlisted.refetch()}
-            />
+            {target.kind === "unlisted" ? (
+              <UnlistedThread
+                id={target.id}
+                error={unlisted.error}
+                onRetry={() => void unlisted.refetch()}
+              />
+            ) : (
+              <EmptyPanel icon={SearchX} title={missingChatTitle(target.key)}>
+                No message of the project is between you and this agent.
+              </EmptyPanel>
+            )}
           </div>
-        ) : null}
+        )}
         {open ? (
           <ChatPanel
             key={`${open.key} ${search.thread ?? ""}`}

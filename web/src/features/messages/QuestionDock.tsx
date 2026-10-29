@@ -1,24 +1,30 @@
 import { ChevronLeft, ChevronRight, CircleHelp } from "lucide-react";
+import type { RefObject } from "react";
 import { IconButton } from "@/components/button/Button";
 import { Id } from "@/components/id/Id";
 import { Tooltip } from "@/components/overlay/Tooltip";
 import type { MessageView } from "@/api/messages";
-import { formatClock } from "@/format/time";
+import { cn } from "@/lib/cn";
+import { focusRing } from "@/lib/focus";
 import { PersonName } from "@/people/PersonName";
 import { idHref } from "@/routes/paths";
 import { messageContext } from "./chats";
+import { dayClock } from "./days";
 import { MessageBody } from "./MessageBody";
 import { isQuestion } from "./question";
 import { QuestionChoices } from "./QuestionChoices";
-import type { OpenQuestion } from "./questionQueue";
+import { stepEndsQueue, type OpenQuestion } from "./questionQueue";
 import { QuotedLines } from "./QuotedLines";
 
 interface QuestionDockProps {
   slug: string;
   queue: OpenQuestion[];
   index: number;
-  step: string;
+  stepLabel: string;
   you: string | null;
+  now: number;
+  /** The step heading, which takes the focus when the dock moves to another question by itself or a step turns off its own control. */
+  headingRef: RefObject<HTMLHeadingElement | null>;
   onStep: (index: number) => void;
   onReply: (replyTo: string, body: string) => Promise<void>;
   onWriteOwn: (question: MessageView) => void;
@@ -31,8 +37,10 @@ export function QuestionDock({
   slug,
   queue,
   index,
-  step,
+  stepLabel,
   you,
+  now,
+  headingRef,
   onStep,
   onReply,
   onWriteOwn,
@@ -42,6 +50,10 @@ export function QuestionDock({
   const { message, thread } = current;
   const context = messageContext(message, thread);
   const many = queue.length > 1;
+  const step = (next: number) => {
+    onStep(next);
+    if (stepEndsQueue(next, queue.length)) headingRef.current?.focus();
+  };
   return (
     <section
       aria-label="Open questions"
@@ -54,8 +66,15 @@ export function QuestionDock({
             size={16}
             className="shrink-0 text-warn"
           />
-          <h3 className="font-title text-15 leading-tight font-semibold text-warn">
-            {step}
+          <h3
+            ref={headingRef}
+            tabIndex={-1}
+            className={cn(
+              "rounded-s font-title text-15 leading-tight font-semibold text-warn",
+              focusRing,
+            )}
+          >
+            {stepLabel}
           </h3>
           <span className="text-13 text-text-2">
             from <PersonName name={message.sender} />
@@ -72,7 +91,7 @@ export function QuestionDock({
             dateTime={new Date(message.sent_at).toISOString()}
             className="text-13 text-text-2"
           >
-            {formatClock(message.sent_at)}
+            {dayClock(now, message.sent_at)}
           </time>
           {many ? (
             <span className="ml-auto flex items-center gap-4">
@@ -83,7 +102,7 @@ export function QuestionDock({
                   size="sm"
                   disabled={index === 0}
                   onClick={() => {
-                    onStep(index - 1);
+                    step(index - 1);
                   }}
                 >
                   <ChevronLeft aria-hidden="true" size={16} />
@@ -96,7 +115,7 @@ export function QuestionDock({
                   size="sm"
                   disabled={index === queue.length - 1}
                   onClick={() => {
-                    onStep(index + 1);
+                    step(index + 1);
                   }}
                 >
                   <ChevronRight aria-hidden="true" size={16} />

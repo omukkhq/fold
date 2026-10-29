@@ -336,6 +336,17 @@ describe("MessagesScreen", () => {
     expect(await screen.findByText(`${MISSING} does not exist`)).toBeTruthy();
   });
 
+  it("says that a requested chat does not exist instead of opening another one", async () => {
+    await setup({ chat: "docs" }, [question]);
+    expect(screen.getByText("No chat with @docs")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Messages" })).toBeNull();
+    expect(
+      screen
+        .getByRole("link", { name: /frontend\/ui/ })
+        .getAttribute("aria-current"),
+    ).toBeNull();
+  });
+
   it("shows a reply as pending, then in the thread once the daemon answers", async () => {
     let answered = false;
     let release: () => void = () => undefined;

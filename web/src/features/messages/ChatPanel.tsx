@@ -22,10 +22,10 @@ import { useMediaQuery, usePageVisible } from "@/lib/pageState";
 import { idHref } from "@/routes/paths";
 import { aboutOptions, aboutValue, chatReplyTarget } from "./chatReply";
 import {
-  chatContexts,
   chatMessages,
   chatName,
   chatParticipants,
+  headerContexts,
   messageContext,
   threadsByMessage,
   type AgentChat,
@@ -42,12 +42,14 @@ import {
   toBottom,
   toMessage,
 } from "./follow";
+import { markResetDue } from "./answered";
 import { useMarkAnsweredBar } from "./MarkAnswered";
 import { MessageItem } from "./MessageItem";
 import { chatAnchor } from "./openThread";
 import { chosenAnswers } from "./question";
 import { QuestionDock } from "./QuestionDock";
 import {
+  answeredAway,
   cursorAt,
   markableThread,
   openQuestions,
@@ -128,7 +130,14 @@ export function ChatPanel({
   const target = chatReplyTarget(chat, you, current, about, picked);
   const options = aboutOptions(chat, current, step);
   const markable = markableThread(chat, current);
-  const mark = useMarkAnsweredBar(slug, { thread: markable?.id ?? "" });
+  const markableId = markable?.id ?? null;
+  const mark = useMarkAnsweredBar(slug, { thread: markableId ?? "" });
+  const resetMark = mark.reset;
+  const offered = useRef(markableId);
+  useEffect(() => {
+    if (markResetDue(offered.current, markableId)) resetMark();
+    if (markableId !== null) offered.current = markableId;
+  }, [markableId, resetMark]);
   const visible = usePageVisible();
   const wide = useMediaQuery(WIDE_LAYOUT);
 
@@ -196,6 +205,35 @@ export function ChatPanel({
     followNewest(scroller.current, following);
   };
 
+  const dockHeading = useRef<HTMLHeadingElement>(null);
+  const replyBox = useRef<HTMLTextAreaElement | null>(null);
+  const [dockFocus, setDockFocus] = useState(0);
+  useEffect(() => {
+    if (dockFocus > 0) dockHeading.current?.focus();
+  }, [dockFocus]);
+  // A choice the person clicked leaves with its answered question and drops the focus; the next question, else the reply box, takes it.
+  const currentId = current?.message.id ?? null;
+  const shownQuestion = useRef(currentId);
+  useEffect(() => {
+    const before = shownQuestion.current;
+    shownQuestion.current = currentId;
+    if (!answeredAway(before, queue)) return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    if (currentId === null) {
+      replyBox.current?.focus();
+    } else {
+      dockHeading.current?.focus();
+    }
+  }, [currentId, queue]);
+
+  // A written answer belongs to the question it was picked for, so moving the dock to another question drops the pick.
+  const showQuestion = (at: number, focus: boolean) => {
+    setCursor(cursorAt(queue, at));
+    setPicked(null);
+    if (focus) setDockFocus((n) => n + 1);
+  };
+
   const writeOwn = (question: MessageView) => {
     setPicked(question.id);
     setFocus("body");
@@ -215,6 +253,7 @@ export function ChatPanel({
   };
 
   const name = chatName(chat);
+  const contexts = headerContexts(chat);
   const chosen = new Set(chat.threads.flatMap((t) => [...chosenAnswers(t)]));
   const replyThread = target?.thread ?? chat.threads[0];
   return (
@@ -240,7 +279,7 @@ export function ChatPanel({
             {chat.agent === null ? name : <PersonName name={chat.agent} />}
           </h2>
           <p className="flex flex-wrap items-center gap-x-10 gap-y-2 text-13 lg:gap-x-14 lg:gap-y-4 lg:text-14">
-            {chatContexts(chat).map((context) => (
+            {contexts.shown.map((context) => (
               <SubjectLink
                 key={context.id}
                 slug={slug}
@@ -248,6 +287,12 @@ export function ChatPanel({
                 id={context.id}
               />
             ))}
+            {contexts.more === 0 ? null : (
+              <span className="text-text-2 tabular-nums">
+                <span aria-hidden="true">+{contexts.more}</span>
+                <span className="sr-only">{contexts.more} more</span>
+              </span>
+            )}
             <span className="text-text">
               <PersonList
                 names={chatParticipants(chat)}
@@ -313,7 +358,7 @@ export function ChatPanel({
                 context={messageContext(item.message, thread)}
                 docked={queued < 0 ? null : stepText(queued, queue.length)}
                 onDock={() => {
-                  setCursor(cursorAt(queue, queued));
+                  showQuestion(queued, true);
                 }}
                 onReply={reply}
                 onWriteOwn={writeOwn}
@@ -327,10 +372,12 @@ export function ChatPanel({
         slug={slug}
         queue={queue}
         index={index}
-        step={step}
+        stepLabel={step}
         you={you}
+        now={now}
+        headingRef={dockHeading}
         onStep={(next) => {
-          setCursor(cursorAt(queue, next));
+          showQuestion(next, false);
         }}
         onReply={reply}
         onWriteOwn={writeOwn}
@@ -345,7 +392,10 @@ export function ChatPanel({
             value={field.value}
             onValueChange={field.onChange}
             onBlur={field.onBlur}
-            boxRef={field.ref}
+            boxRef={(element) => {
+              replyBox.current = element;
+              field.ref(element);
+            }}
             placeholder={
               replyThread === undefined
                 ? "Reply…"

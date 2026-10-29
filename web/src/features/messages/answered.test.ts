@@ -3,6 +3,7 @@ import { keys } from "@/api/keys";
 import {
   answeredKeys,
   answeredNote,
+  markResetDue,
   taskCanMarkAnswered,
   threadCanMarkAnswered,
 } from "./answered";
@@ -57,5 +58,14 @@ describe("threadCanMarkAnswered", () => {
     expect(
       threadCanMarkAnswered({ awaiting_human: false, closable: false }),
     ).toBe(false);
+  });
+});
+
+describe("markResetDue", () => {
+  it("forgets the last call only when the control moves to another thread", () => {
+    expect(markResetDue("m-1", "m-5")).toBe(true);
+    expect(markResetDue("m-1", "m-1")).toBe(false);
+    expect(markResetDue("m-1", null)).toBe(false);
+    expect(markResetDue(null, "m-5")).toBe(false);
   });
 });

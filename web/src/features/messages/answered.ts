@@ -36,3 +36,11 @@ export function answeredNote(
   }
   return "It was already answered.";
 }
+
+/** Mark answered forgets the note and the error of its last call once it acts on another thread than the one it last offered, so they never show beside a question they are not about. A control that only went away keeps them. */
+export function markResetDue(
+  last: string | null,
+  next: string | null,
+): boolean {
+  return last !== null && next !== null && last !== next;
+}

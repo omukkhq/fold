@@ -875,6 +875,137 @@ describe("ChatPanel with several threads", () => {
       }),
     );
     expect(within(dock()).getByText("Use Recharts?")).toBeTruthy();
+    expect(document.activeElement).toBe(
+      within(dock()).getByRole("heading", { name: "Question 1 of 2" }),
+    );
+  });
+
+  it("sends an own answer to the question the dock shows, also after a step", async () => {
+    const onReply = vi.fn(() => Promise.resolve());
+    await renderChat([first, second], onReply);
+    const own = "Or write your own answer in the reply box below";
+    await userEvent.click(within(dock()).getByRole("button", { name: own }));
+    await userEvent.click(
+      within(dock()).getByRole("button", { name: "Next question" }),
+    );
+    await userEvent.type(screen.getByLabelText("Reply"), "Maybe{Enter}");
+    expect(onReply).toHaveBeenLastCalledWith(ASK_B, "Maybe");
+    await userEvent.click(within(dock()).getByRole("button", { name: own }));
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Question 1 of 2 waits for your answer below",
+      }),
+    );
+    await userEvent.type(screen.getByLabelText("Reply"), "Later{Enter}");
+    expect(onReply).toHaveBeenLastCalledWith(ASK_A, "Later");
+  });
+
+  it("keeps the focus in the dock when a step turns its control off and after an answer", async () => {
+    const onReply = vi.fn(() => Promise.resolve());
+    await renderChat([first, second], onReply);
+    await userEvent.click(
+      within(dock()).getByRole("button", { name: "Next question" }),
+    );
+    expect(document.activeElement).toBe(
+      within(dock()).getByRole("heading", { name: "Question 2 of 2" }),
+    );
+    await userEvent.click(
+      within(dock()).getByRole("button", { name: "Previous question" }),
+    );
+    await userEvent.click(
+      within(within(dock()).getByRole("list", { name: "Choices" })).getByRole(
+        "button",
+        { name: /^Yes/ },
+      ),
+    );
+    const answer = (thread: ThreadView, id: number, to: string) => ({
+      ...thread,
+      messages: [
+        ...thread.messages,
+        message(`m-${String(id)}`, {
+          sender: "human:tanim",
+          body: "Yes",
+          reply_to: to,
+          sent_at: NOW,
+        }),
+      ],
+    });
+    act(() => {
+      change([answer(first, 70, ASK_A), second]);
+    });
+    expect(document.activeElement).toBe(
+      within(dock()).getByRole("heading", { name: "Question" }),
+    );
+    await userEvent.click(
+      within(within(dock()).getByRole("list", { name: "Choices" })).getByRole(
+        "button",
+        { name: /^Yes/ },
+      ),
+    );
+    act(() => {
+      change([answer(first, 70, ASK_A), answer(second, 71, ASK_B)]);
+    });
+    expect(screen.queryByRole("region", { name: "Open questions" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByLabelText("Reply"));
+  });
+
+  it("forgets the note of Mark answered once the dock shows another thread's question", async () => {
+    daemon.on("POST /api/v1/projects/demo/asks/answered", {
+      status: 200,
+      body: { answered: [] },
+    });
+    await renderChat(
+      [
+        { ...first, closable: true },
+        { ...second, closable: true },
+      ],
+      () => Promise.resolve(),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark answered" }),
+    );
+    expect(await screen.findByText("It was already answered.")).toBeTruthy();
+    expect(
+      daemon.made("POST /api/v1/projects/demo/asks/answered")[0]?.body,
+    ).toEqual({ thread: ASK_A });
+    await userEvent.click(
+      within(dock()).getByRole("button", { name: "Next question" }),
+    );
+    expect(screen.queryByText("It was already answered.")).toBeNull();
+  });
+
+  it("names the newest three subjects in the bar and counts the rest", async () => {
+    const fourth = baseThread(`m-${String(80)}`, {
+      task: "T-40",
+      participants: ["frontend", "human:tanim"],
+      last_at: NOW - 500,
+      messages: [
+        message(`m-${String(80)}`, {
+          sender: "frontend",
+          body: "T-40 is done.",
+          sent_at: NOW - 500,
+        }),
+      ],
+    });
+    await renderChat([first, second, third, fourth], () => Promise.resolve());
+    const bar = screen.getByRole("banner");
+    expect(
+      within(bar)
+        .getAllByRole("link")
+        .map((link) => link.textContent),
+    ).toEqual(["T-40", "RQ-4", "P-3"]);
+    expect(within(bar).getByText("1 more")).toBeTruthy();
+  });
+
+  it("shows the day of an older question in the dock", async () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const old = baseThread(ASK_A, {
+      ...first,
+      last_at: NOW - DAY,
+      messages: [choice(ASK_A, "Use Recharts?", NOW - DAY)],
+    });
+    await renderChat([old], () => Promise.resolve());
+    expect(within(dock()).getByText(/^Yesterday \d\d:\d\d$/)).toBeTruthy();
   });
 
   it("replies in the newest thread, or in the thread the person chooses", async () => {

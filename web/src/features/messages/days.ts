@@ -47,6 +47,13 @@ export function rowTime(now: number, at: number): string {
     : dayLabel(now, at);
 }
 
+/** A message's time where no day divider stands above it: the clock for today, else the day as a divider names it and the clock, `Yesterday 14:02`. */
+export function dayClock(now: number, at: number): string {
+  return startOfDay(at) === startOfDay(now)
+    ? formatClock(at)
+    : `${dayLabel(now, at)} ${formatClock(at)}`;
+}
+
 export type ThreadItem =
   | { kind: "day"; key: string; label: string }
   | { kind: "message"; key: string; message: MessageView };

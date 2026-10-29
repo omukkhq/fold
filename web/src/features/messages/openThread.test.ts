@@ -5,6 +5,7 @@ import { groupChats } from "./chats";
 import {
   chatAnchor,
   isMissingThread,
+  missingChatTitle,
   openChat,
   visibleChats,
 } from "./openThread";
@@ -56,7 +57,15 @@ describe("openChat", () => {
     expect(open({ thread: "m-3" })).toBe("backend");
     expect(open({ thread: "m-5" })).toBe("frontend");
     expect(open({ chat: "backend", thread: "m-5" })).toBe("frontend");
-    expect(open({ chat: "nobody" })).toBe("frontend");
+  });
+
+  it("shows a chat key that no listed chat has as missing, never another chat", () => {
+    expect(openChat(all, chats, chats, { chat: "nobody" })).toEqual({
+      kind: "missing",
+      key: "nobody",
+    });
+    expect(openChat([], [], [], { chat: "nobody" }).kind).toBe("missing");
+    expect(missingChatTitle("nobody")).toBe("No chat with @nobody");
   });
 
   it("falls back to the first visible chat when the filters hide the requested one", () => {

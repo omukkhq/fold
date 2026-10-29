@@ -7,13 +7,15 @@ import {
   threadIn,
   type AgentChat,
 } from "./chats";
+import { atName } from "@/people/names";
 import { findThread } from "./filters";
 import { openQuestions } from "./questionQueue";
 
-/** The chat pane's content: a chat of the listing, or a thread read on its own because the listing did not reach it. */
+/** The chat pane's content: a chat of the listing, a thread read on its own because the listing did not reach it, or a chat key that no listed chat has. */
 export type OpenChat =
   | { kind: "listed"; chat: AgentChat | null }
-  | { kind: "unlisted"; id: string };
+  | { kind: "unlisted"; id: string }
+  | { kind: "missing"; key: string };
 
 /** The visible chats: every chat with a thread that the filters and the search keep, with all of its threads. */
 export function visibleChats(
@@ -26,7 +28,7 @@ export function visibleChats(
 
 /**
  * A linked thread or message opens the chat that holds it; a chat key opens that chat; with neither, the newest visible chat opens.
- * A requested thread that no listed thread holds is read directly: opening another chat instead would show another conversation under the requested address.
+ * A requested thread that no listed thread holds is read directly, and a requested chat that no listed chat has is missing: opening another chat instead would show another conversation under the requested address.
  * A chat that the filters hide falls back to the first visible chat, as the filters ask.
  */
 export function openChat(
@@ -41,6 +43,9 @@ export function openChat(
   }
   const wanted =
     thread === undefined ? chatByKey(chats, chat) : chatHolding(chats, thread);
+  if (chat !== undefined && thread === undefined && wanted === null) {
+    return { kind: "missing", key: chat };
+  }
   const shown = visible.find((c) => c.key === wanted?.key);
   return { kind: "listed", chat: shown ?? visible[0] ?? null };
 }
@@ -70,4 +75,9 @@ export function isMissingThread(error: unknown): boolean {
   return (
     isApiError(error, "message_not_found") || isApiError(error, "invalid_id")
   );
+}
+
+/** The title of the missing state of a chat key that no listed chat has: `No chat with @frontend`. */
+export function missingChatTitle(key: string): string {
+  return `No chat with ${atName(key)}`;
 }
