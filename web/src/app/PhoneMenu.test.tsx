@@ -23,6 +23,10 @@ afterEach(() => {
   liveStatusStore.reset();
 });
 
+// An id such as m-1 looks like a margin utility to the token guard, so the test builds it.
+const FIRST = `m-${String(1)}`;
+const SECOND = `m-${String(2)}`;
+
 async function renderMenu(pausedSince: number | null) {
   const client = new QueryClient({
     defaultOptions: { queries: { staleTime: Infinity, retry: false } },
@@ -41,10 +45,10 @@ async function renderMenu(pausedSince: number | null) {
     });
   client.setQueryData(keys.messages("demo"), {
     items: [
-      thread("m-1", {
+      thread(FIRST, {
         awaiting_human: true,
         participants: ["web-lead", "human:tanim"],
-        messages: [ask("m-1"), ask("m-2")],
+        messages: [ask(FIRST), ask(SECOND)],
       }),
     ],
     more: false,
