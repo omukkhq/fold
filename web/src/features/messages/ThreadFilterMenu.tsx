@@ -69,7 +69,7 @@ export function ThreadFilterMenu({
           align="start"
           sideOffset={6}
           collisionPadding={16}
-          aria-label="Filter threads"
+          aria-label="Filter chats"
           className="z-10 flex w-menu max-w-(--width-popover-max) flex-col gap-4 rounded-m bg-surface p-8 shadow-pop outline-none"
         >
           <p

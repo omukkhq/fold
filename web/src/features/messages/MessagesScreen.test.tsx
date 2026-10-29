@@ -178,9 +178,9 @@ describe("MessagesScreen", () => {
       screen.getAllByRole("status", { name: "1 question waits for you" }),
     ).toHaveLength(2);
     await userEvent.click(
-      screen.getByRole("button", { name: "Filter: All threads" }),
+      screen.getByRole("button", { name: "Filter: All chats" }),
     );
-    const menu = screen.getByRole("dialog", { name: "Filter threads" });
+    const menu = screen.getByRole("dialog", { name: "Filter chats" });
     const waiting = within(menu).getByRole("button", { name: /Waits for you/ });
     expect(waiting.getAttribute("aria-pressed")).toBe("false");
     expect(
@@ -193,7 +193,7 @@ describe("MessagesScreen", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Filter: Waits for you" }),
     );
-    const open = screen.getByRole("dialog", { name: "Filter threads" });
+    const open = screen.getByRole("dialog", { name: "Filter chats" });
     expect(
       within(open)
         .getByRole("button", { name: /Waits for you/ })
@@ -243,9 +243,9 @@ describe("MessagesScreen", () => {
       ),
     ).toHaveLength(1);
     await userEvent.click(
-      screen.getByRole("button", { name: "Filter: All threads · 1 more" }),
+      screen.getByRole("button", { name: "Filter: All chats · 1 more" }),
     );
-    const menu = screen.getByRole("dialog", { name: "Filter threads" });
+    const menu = screen.getByRole("dialog", { name: "Filter chats" });
     expect(
       within(menu).getByRole<HTMLSelectElement>("combobox", { name: "Task" })
         .value,

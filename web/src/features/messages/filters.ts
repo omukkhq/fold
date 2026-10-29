@@ -155,7 +155,7 @@ export function withShow<T extends ThreadFilter>(
 }
 
 const SHOW_LABELS: Record<ShowFilter, string> = {
-  all: "All threads",
+  all: "All chats",
   waiting: "Waits for you",
   questions: "Questions",
   mine: "Mine",
@@ -168,7 +168,7 @@ export interface ShowOption {
   count: number | null;
 }
 
-/** The Show choices: all threads, the waiting threads with their count, questions, and Mine while a human is signed in. */
+/** The Show choices: all chats, the waiting threads with their count, questions, and Mine while a human is signed in. */
 export function showOptions(
   threads: readonly ThreadView[],
   you: string | null,

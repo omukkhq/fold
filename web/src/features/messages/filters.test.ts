@@ -243,24 +243,24 @@ describe("the Show choice", () => {
     expect(
       showOptions(threads, "tanim").map((c) => [c.label, c.count]),
     ).toEqual([
-      ["All threads", null],
+      ["All chats", null],
       ["Waits for you", 1],
       ["Questions", null],
       ["Mine", null],
     ]);
     expect(showOptions([], null).map((c) => [c.label, c.count])).toEqual([
-      ["All threads", null],
+      ["All chats", null],
       ["Waits for you", 0],
       ["Questions", null],
     ]);
   });
   it("names the Show choice on the button and counts the other set filters", () => {
-    expect(filterSummary({})).toBe("All threads");
+    expect(filterSummary({})).toBe("All chats");
     expect(filterSummary({ waiting: true })).toBe("Waits for you");
     expect(filterSummary({ mine: true, agent: "fe", task: "T-1" })).toBe(
       "Mine · 2 more",
     );
-    expect(filterSummary({ proposal: "P-1" })).toBe("All threads · 1 more");
+    expect(filterSummary({ proposal: "P-1" })).toBe("All chats · 1 more");
   });
   it("counts the chats it shows", () => {
     expect(chatCount(1)).toBe("1 chat");
