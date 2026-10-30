@@ -4,6 +4,7 @@ import {
   aboutOptions,
   aboutValue,
   chatReplyTarget,
+  isStoredSet,
   REPLY_HINT,
   replyHint,
   threadLabel,
@@ -96,7 +97,7 @@ describe("chatReplyTarget", () => {
     expect(target).toMatchObject({ replyTo: "m-4", answers: null });
   });
 
-  it("never claims that a reply answers an open set, and says so under the box", () => {
+  it("never claims that a reply answers an open ask on the card", () => {
     const free = thread("m-30", {
       awaiting_human: true,
       messages: [
@@ -114,12 +115,9 @@ describe("chatReplyTarget", () => {
     expect(
       chatReplyTarget(freeChat, "tanim", card ?? null, null, waiting),
     ).toMatchObject({ replyTo: "m-30", answers: null });
-    expect(replyHint(free, waiting)).toBe(REPLY_HINT);
     expect(
       chatReplyTarget(freeChat, "tanim", null, null, new Set())?.answers?.id,
     ).toBe("m-30");
-    expect(replyHint(free, new Set())).toBeNull();
-    expect(replyHint(null, waiting)).toBeNull();
   });
 
   it("has no target for a chat without threads or messages", () => {
@@ -129,5 +127,60 @@ describe("chatReplyTarget", () => {
     expect(
       chatReplyTarget(chatOf(thread("m-20")), null, null, null, open),
     ).toBeNull();
+  });
+});
+
+describe("replyHint", () => {
+  const one = { text: "Is Pencil open?", header: null, choices: [] };
+  const ask = (fields: Parameters<typeof message>[1]) =>
+    thread("m-30", {
+      awaiting_human: true,
+      messages: [
+        message("m-30", {
+          sender: "frontend",
+          recipients: [recipient("human:tanim")],
+          body: "Is Pencil open?",
+          ...fields,
+        }),
+      ],
+    });
+  const waiting = new Set(["m-30"]);
+
+  it("says under the box that a reply does not answer an open set, of one question or several", () => {
+    const set = ask({ questions: [one, { ...one, text: "Which keys?" }] });
+    expect(replyHint(set, waiting)).toBe(REPLY_HINT);
+    expect(replyHint(ask({ questions: [one] }), waiting)).toBe(REPLY_HINT);
+    expect(replyHint(set, new Set())).toBeNull();
+    expect(replyHint(null, waiting)).toBeNull();
+  });
+
+  it("says nothing for an ask that a reply ends: a question with choices, a marked ask or a worker's single question", () => {
+    const choices = [{ label: "Yes", description: null }];
+    expect(
+      replyHint(ask({ choices, questions: [{ ...one, choices }] }), waiting),
+    ).toBeNull();
+    expect(
+      replyHint(ask({ asks_human: true, questions: [one] }), waiting),
+    ).toBeNull();
+    expect(replyHint(ask({ worker_question: true }), waiting)).toBeNull();
+  });
+});
+
+describe("isStoredSet", () => {
+  it("is a message with questions and neither choices nor the mark", () => {
+    const one = { text: "Ready?", header: null, choices: [] };
+    expect(isStoredSet(message("m-1", { questions: [one] }))).toBe(true);
+    expect(isStoredSet(message("m-1"))).toBe(false);
+    expect(
+      isStoredSet(message("m-1", { questions: [one], asks_human: true })),
+    ).toBe(false);
+    expect(
+      isStoredSet(
+        message("m-1", {
+          questions: [one],
+          choices: [{ label: "Yes", description: null }],
+        }),
+      ),
+    ).toBe(false);
   });
 });

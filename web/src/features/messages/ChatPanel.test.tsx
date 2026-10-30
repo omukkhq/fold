@@ -532,6 +532,15 @@ describe("ChatPanel question set", () => {
       { name },
     );
 
+  it("says under the reply box that a reply does not answer the open set", async () => {
+    renderSets([asked], [SET], () => Promise.resolve());
+    expect(
+      await screen.findByText(
+        "Your reply does not answer the open set; answer it in the card.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("shows one question at a time with its step, and a choice or its number key shows the next", async () => {
     renderSets([asked], [SET], () => Promise.resolve());
     await screen.findByLabelText("Reply");
@@ -1118,13 +1127,13 @@ describe("ChatPanel with several threads", () => {
     expect(pick(/^Yes/).getAttribute("aria-keyshortcuts")).toBe("1");
   });
 
-  it("says under the reply box that a reply does not answer the open set", async () => {
+  it("adds no note under the reply box for a question with choices, which a reply ends", async () => {
     await renderChat([first, second, third], () => Promise.resolve());
     expect(
-      screen.getByText(
+      screen.queryByText(
         "Your reply does not answer the open set; answer it in the card.",
       ),
-    ).toBeTruthy();
+    ).toBeNull();
   });
 
   it("shows the oldest set also when a link names a later one", async () => {

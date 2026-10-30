@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn version_line_names_the_workspace_version() {
-        assert_eq!(version_line(), "fld 0.6.0");
+        assert_eq!(version_line(), "fld 0.7.0");
     }
 
     #[test]

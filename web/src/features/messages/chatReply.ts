@@ -1,4 +1,4 @@
-import type { ThreadView } from "@/api/messages";
+import type { MessageView, ThreadView } from "@/api/messages";
 import { threadContext, type AgentChat } from "./chats";
 import { replyTarget, type ReplyTarget } from "./replyTarget";
 import type { OpenSet } from "./sets";
@@ -57,15 +57,25 @@ export function chatReplyTarget(
   return { ...target, answers, thread };
 }
 
-/** The reply box's note while the thread it writes in holds an open set: only the card's answers close a set. */
+/** The reply box's note while the thread it writes in holds an open set: only the card's answers or Mark answered close a set. */
 export const REPLY_HINT =
   "Your reply does not answer the open set; answer it in the card.";
+
+/** The ask is a stored question set. The daemon also gives a question with choices and a marked ask one question, but a human's reply in their thread ends them, as it ends a worker's `AskUserQuestion` of one question; a set has neither choices nor the mark. */
+export function isStoredSet(message: MessageView): boolean {
+  return (
+    message.questions.length > 0 &&
+    message.choices.length === 0 &&
+    !message.asks_human
+  );
+}
 
 export function replyHint(
   thread: ThreadView | null,
   open: ReadonlySet<string>,
 ): string | null {
-  return thread !== null && thread.messages.some((m) => open.has(m.id))
+  return thread !== null &&
+    thread.messages.some((m) => open.has(m.id) && isStoredSet(m))
     ? REPLY_HINT
     : null;
 }
