@@ -1,5 +1,6 @@
 import type { ThreadView } from "@/api/messages";
 import { atName, bareName, isHumanName, isYou } from "@/people/names";
+import { threadAgent } from "./chats";
 import { isAsk } from "./replyTarget";
 import { threadTitle } from "./title";
 
@@ -26,7 +27,7 @@ export function startedBy(thread: ThreadView, you: string | null): boolean {
   return first !== undefined && isYou(first.sender, you);
 }
 
-/** The threads that match every set field, newest first. An agent matches by taking part in the thread. */
+/** The threads that match every set field, newest first. An agent matches the threads of its own chat, so the list then shows only that agent's chat. */
 export function filterThreads(
   threads: ThreadView[],
   filter: ThreadFilter,
@@ -35,7 +36,7 @@ export function filterThreads(
   return threads
     .filter(
       (t) =>
-        (filter.agent === undefined || t.participants.includes(filter.agent)) &&
+        (filter.agent === undefined || threadAgent(t) === filter.agent) &&
         (filter.task === undefined || t.task === filter.task) &&
         (filter.proposal === undefined || t.proposal === filter.proposal) &&
         (filter.waiting !== true || t.awaiting_human) &&
@@ -51,21 +52,14 @@ function sorted(values: Iterable<string>): string[] {
   );
 }
 
-/** How many listed threads the daemon marks as waiting for you: the threads the Messages tab badge counts. */
-export function waitingCount(threads: readonly ThreadView[]): number {
-  return threads.filter((t) => t.awaiting_human).length;
-}
-
-/** What each filter can pick, taken from the threads themselves. */
+/** What each filter can pick, taken from the threads themselves: the agents are the agents of the chats. */
 export function filterOptions(threads: ThreadView[]): {
   agents: string[];
   tasks: string[];
   proposals: string[];
 } {
   return {
-    agents: sorted(
-      threads.flatMap((t) => t.participants).filter((p) => !isHumanName(p)),
-    ),
+    agents: sorted(threads.flatMap((t) => threadAgent(t) ?? [])),
     tasks: sorted(threads.flatMap((t) => (t.task === null ? [] : [t.task]))),
     proposals: sorted(
       threads.flatMap((t) => (t.proposal === null ? [] : [t.proposal])),
@@ -155,7 +149,7 @@ export function withShow<T extends ThreadFilter>(
 }
 
 const SHOW_LABELS: Record<ShowFilter, string> = {
-  all: "All threads",
+  all: "All chats",
   waiting: "Waits for you",
   questions: "Questions",
   mine: "Mine",
@@ -164,21 +158,18 @@ const SHOW_LABELS: Record<ShowFilter, string> = {
 export interface ShowOption {
   show: ShowFilter;
   label: string;
-  /** The threads that wait for you, as the Messages tab badge counts them; null for the other choices. */
+  /** The question sets that wait for you, as the Messages tab badge counts them; null for the other choices. */
   count: number | null;
 }
 
-/** The Show choices: all threads, the waiting threads with their count, questions, and Mine while a human is signed in. */
-export function showOptions(
-  threads: readonly ThreadView[],
-  you: string | null,
-): ShowOption[] {
+/** The Show choices: all chats, the waiting chats with the count of their question sets, questions, and Mine while a human is signed in. `waiting` is that count, as the Messages tab shows it. */
+export function showOptions(you: string | null, waiting: number): ShowOption[] {
   const shows: ShowFilter[] = ["all", "waiting", "questions"];
   if (you !== null) shows.push("mine");
   return shows.map((show) => ({
     show,
     label: SHOW_LABELS[show],
-    count: show === "waiting" ? waitingCount(threads) : null,
+    count: show === "waiting" ? waiting : null,
   }));
 }
 
@@ -191,9 +182,9 @@ export function filterSummary(filter: ThreadFilter): string {
   return set === 0 ? show : `${show} · ${String(set)} more`;
 }
 
-/** `1 thread`, `5 threads`. */
-export function threadCount(count: number): string {
-  return `${String(count)} ${count === 1 ? "thread" : "threads"}`;
+/** `1 chat`, `5 chats`. */
+export function chatCount(count: number): string {
+  return `${String(count)} ${count === 1 ? "chat" : "chats"}`;
 }
 
 /** The choices of one narrowing menu, with the value the address sets even when no listed thread holds it, so the menu shows what the list narrows to. */

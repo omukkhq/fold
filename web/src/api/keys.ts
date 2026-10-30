@@ -79,8 +79,6 @@ export const keys = {
   /** Under the messages prefix, so a thread read on its own refreshes with the list. */
   messagesThread: (slug: string, thread: string) =>
     [slug, "messages", "thread", thread] as const,
-  /** Under the messages prefix, so every message event that refreshes the threads also refreshes the count. */
-  messagesAwaiting: (slug: string) => [slug, "messages", "awaiting"] as const,
   repository: (slug: string) => [slug, "repository"] as const,
   /** Outside the repository prefix: a revision never changes, so no integration refreshes its trees and files. */
   revisionTree: (slug: string, revision: string, dir: string) =>

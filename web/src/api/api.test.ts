@@ -7,7 +7,6 @@ import { agentBarQuery } from "./agentBar";
 import { keys } from "./keys";
 import {
   agentsQuery,
-  awaitingHumanQuery,
   messagesQuery,
   projectQuery,
   projectsQuery,
@@ -64,19 +63,6 @@ describe("queries", () => {
   });
 });
 
-describe("awaitingHumanQuery", () => {
-  it("sits under the messages key, so message events refresh it", async () => {
-    const query = awaitingHumanQuery("demo");
-    expect(query.queryKey.slice(0, 2)).toEqual(keys.messages("demo"));
-    stubFetch({
-      "GET /api/v1/projects/demo/messages": {
-        body: { items: [], next: null, total_awaiting_human: 2 },
-      },
-    });
-    await expect(new QueryClient().query(query)).resolves.toBe(2);
-  });
-});
-
 describe("keys", () => {
   it("starts every project key with the slug", () => {
     const projectKeys = [
@@ -88,7 +74,6 @@ describe("keys", () => {
       keys.proposal("s", "P-2"),
       keys.agents("s"),
       keys.messages("s"),
-      keys.messagesAwaiting("s"),
       keys.repository("s"),
       keys.workspaces("s"),
       keys.workspace("s", "ws-3"),

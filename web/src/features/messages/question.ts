@@ -51,12 +51,3 @@ export function chosenAnswers(thread: ThreadView): Set<string> {
   }
   return ids;
 }
-
-/** An answer sent from this screen stays pending until the thread holds a human answer: the daemon has then stored it. */
-export function answerPending(
-  sending: boolean,
-  sent: boolean,
-  state: QuestionState,
-): boolean {
-  return sending || (sent && state.answer === null);
-}

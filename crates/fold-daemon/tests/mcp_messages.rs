@@ -175,6 +175,7 @@ async fn the_message_tools_are_listed_with_described_inputs() {
         "get_thread",
         "acknowledge_message",
         "mark_answered",
+        "list_open_asks",
     ] {
         let tool = tools
             .iter()
@@ -538,4 +539,110 @@ async fn an_ask_to_a_human_shows_its_mark_and_its_sender_records_an_answer_given
     assert_eq!(answered, json!({"answered": "m-1"}));
     let again = call_raw(&frontend, "mark_answered", json!({"message": "m-1"})).await;
     assert_eq!(body(&again)["error"]["code"], "ask_not_open");
+}
+
+#[tokio::test]
+async fn a_set_of_questions_is_one_ask_that_the_main_agent_lists_compactly() {
+    let fixture = Fixture::new().await;
+    let mut session = fixture.agents.start_session(1).await.unwrap();
+    fixture
+        .agents
+        .register_agent(
+            &mut session,
+            &fold_core::AgentName::parse("main").unwrap(),
+            &[fold_core::Tag::parse("main").unwrap()],
+        )
+        .await
+        .unwrap();
+    let frontend = fixture.connect("frontend").await;
+    let backend = fixture.connect("backend").await;
+    let main = fixture.connect("main").await;
+    let sent = call(
+        &frontend,
+        "send_message",
+        json!({
+            "to": ["humans"],
+            "body": "Both workers wait for the MCP server.\nMore context.",
+            "task": "T-1",
+            "questions": [
+                {"text": "Is the MCP server connected again?", "header": "MCP", "choices": ["Yes", {"label": "Not yet", "description": "I am on it"}]},
+                {"text": "Which keys must the workers use?"},
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(sent["id"], "m-1");
+    let thread = call(&backend, "get_thread", json!({"thread": "m-1"})).await;
+    assert_eq!(
+        thread["messages"][0]["questions"],
+        json!([
+            {"text": "Is the MCP server connected again?", "header": "MCP", "choices": [{"label": "Yes"}, {"label": "Not yet", "description": "I am on it"}]},
+            {"text": "Which keys must the workers use?"},
+        ])
+    );
+    assert!(thread["messages"][0].get("choices").is_none());
+    call(
+        &backend,
+        "send_message",
+        json!({"to": ["humans"], "body": "Also blocked.", "questions": [{"text": "Connected?", "choices": ["Yes", "No"]}]}),
+    )
+    .await;
+
+    for (arguments, reason) in [
+        (
+            json!({"to": ["humans"], "body": "x", "questions": [{"text": "a", "choices": ["Yes", "No"]}], "choices": ["Yes", "No"]}),
+            "questions",
+        ),
+        (
+            json!({"to": ["humans"], "body": "x", "questions": []}),
+            "questions",
+        ),
+        (
+            json!({"to": ["humans"], "body": "x", "questions": [{"text": "a", "choices": ["Only"]}]}),
+            "choices",
+        ),
+    ] {
+        let refused = call_raw(&frontend, "send_message", arguments).await;
+        assert_eq!(body(&refused)["error"]["code"], "invalid_request");
+        assert_eq!(body(&refused)["error"]["details"]["reason"], reason);
+    }
+    let no_human = call_raw(
+        &frontend,
+        "send_message",
+        json!({"to": ["backend"], "body": "x", "questions": [{"text": "a"}]}),
+    )
+    .await;
+    assert_eq!(body(&no_human)["error"]["code"], "invalid_request");
+
+    call(
+        &frontend,
+        "send_message",
+        json!({"to": ["main"], "body": "I asked the humans in m-1."}),
+    )
+    .await;
+    let denied = call_raw(&frontend, "list_open_asks", json!({})).await;
+    assert_eq!(body(&denied)["error"]["code"], "main_agent_required");
+    assert!(body(&denied)["error"]["hint"].is_string());
+    let listed = call_raw(&main, "list_open_asks", json!({})).await;
+    assert_eq!(listed.is_error, Some(false));
+    assert_eq!(
+        body(&listed),
+        json!({"asks": [
+            {"id": "m-1", "agent": "frontend", "thread": "m-1", "task": "T-1", "first_line": "Both workers wait for the MCP server.", "questions": 2},
+            {"id": "m-2", "agent": "backend", "thread": "m-2", "first_line": "Also blocked.", "questions": 1},
+        ]})
+    );
+    let line = footer(&listed).unwrap_or_default();
+    assert!(line.contains("1 unread"), "{line}");
+
+    call(
+        &main,
+        "send_message",
+        json!({"to": ["frontend"], "reply_to": "m-1", "body": "Connected again; use mocks."}),
+    )
+    .await;
+    call(&main, "mark_answered", json!({"message": "m-1"})).await;
+    let left = call(&main, "list_open_asks", json!({})).await;
+    assert_eq!(left["asks"].as_array().unwrap().len(), 1);
+    assert_eq!(left["asks"][0]["id"], "m-2");
 }

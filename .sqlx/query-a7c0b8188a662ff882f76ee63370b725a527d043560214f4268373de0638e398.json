@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT later.body, later.sender_human AS \"human!: String\"\n           FROM messages m\n           JOIN messages later ON later.thread_id = m.thread_id AND later.number > m.number\n           WHERE m.number = ?1 AND later.sender_kind = 'human'\n           ORDER BY later.number LIMIT 1",
+  "query": "SELECT later.body, later.sender_human AS \"human!: String\"\n           FROM messages m\n           JOIN messages later ON later.thread_id = m.thread_id AND later.number > m.number\n           WHERE m.number = ?1 AND later.sender_kind = 'human'\n             AND NOT EXISTS (\n                 SELECT 1 FROM message_answers o WHERE o.reply_id = later.id AND o.ask_id <> m.id\n             )\n           ORDER BY later.number LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -34,5 +34,5 @@
       true
     ]
   },
-  "hash": "6a5f6cea29e753a23384d1d10794b3c6947c83830eb74c934ce944e434bf44fd"
+  "hash": "a7c0b8188a662ff882f76ee63370b725a527d043560214f4268373de0638e398"
 }

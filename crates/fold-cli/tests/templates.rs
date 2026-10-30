@@ -68,7 +68,7 @@ fn skill_identifiers() -> BTreeSet<String> {
         .collect()
 }
 
-const FOLD_TOOLS: [&str; 96] = [
+const FOLD_TOOLS: [&str; 97] = [
     "register_agent",
     "list_agents",
     "define_area",
@@ -165,6 +165,7 @@ const FOLD_TOOLS: [&str; 96] = [
     "get_review_plan",
     "list_review_plans",
     "integrate_review_batch",
+    "list_open_asks",
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
@@ -378,7 +379,7 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 63] = [
+const NON_TOOL_NAMES: [&str; 65] = [
     "file_count",
     "human_review",
     "fold_failed",
@@ -431,6 +432,8 @@ const NON_TOOL_NAMES: [&str; 63] = [
     "update_run",
     "related_tasks",
     "plan_hint",
+    "reply_only",
+    "answer_these",
     "too_long",
     "control_character",
     "not_changed",
@@ -539,6 +542,7 @@ fn role_steps(role: Role) -> &'static [&'static str] {
             "remove_from_batch",
             "list_review_batches",
             "get_review_batch",
+            "list_open_asks",
         ],
         Role::AreaLead => &[
             "get_task_graph",

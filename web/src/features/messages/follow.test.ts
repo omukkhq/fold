@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  ANCHOR_GAP,
   FOLLOW_SLACK,
   followNewest,
   followResizes,
   isFollowing,
   toBottom,
+  toMessage,
 } from "./follow";
 
 const view = (scrollTop: number) => ({
@@ -51,6 +53,16 @@ function observed(): FakeObserver {
   }
   return FakeObserver.last;
 }
+
+describe("toMessage", () => {
+  it("puts a linked message near the top, never above the start", () => {
+    const box = view(0);
+    toMessage(box, 500);
+    expect(box.scrollTop).toBe(500 - ANCHOR_GAP);
+    toMessage(box, 4);
+    expect(box.scrollTop).toBe(0);
+  });
+});
 
 describe("toBottom", () => {
   it("scrolls to the newest message", () => {

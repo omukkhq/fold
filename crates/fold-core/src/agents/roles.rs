@@ -977,6 +977,19 @@ mod tests {
         ));
         assert!(main.contains("the leads' short lines name"));
         assert!(!main.contains("Bring human questions"));
+        for role in [
+            Role::AreaLead,
+            Role::ReviewLead,
+            Role::TaskWorker,
+            Role::Reviewer,
+        ] {
+            assert!(
+                role.prompt().contains(
+                    "Ask everything you need now as one set with `questions`, up to 4 with their `choices`, and wait for its answer before you send another set."
+                ),
+                "{role}"
+            );
+        }
     }
 
     #[test]

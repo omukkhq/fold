@@ -1090,8 +1090,7 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
             .get("message")
             .and_then(serde_json::Value::as_str)
             .and_then(|message| message.parse::<fold_core::MessageId>().ok());
-        if event.actor.is_human()
-            && let Some(message) = message
+        if let Some(message) = message
             && let Some(asker) = agents::asker_answered_by(store.read(), message).await?
         {
             ctx.recipients.remove(&asker);

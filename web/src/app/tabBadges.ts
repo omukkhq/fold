@@ -8,11 +8,11 @@ export interface TabBadge {
   hint: string;
 }
 
-/** A tab counts only what waits for the human, in gold: the proposals that wait for their review and the threads that wait for their answer. */
+/** A tab counts only what waits for the human, in gold: the proposals that wait for their review and the question sets that wait for their answer, one for each set, as the chat rows and Needs you count them. */
 export function tabBadge(
   id: NavId,
   reviews: number,
-  awaiting: number,
+  questions: number,
 ): TabBadge | null {
   if (id === "proposals" && reviews > 0) {
     return {
@@ -21,11 +21,11 @@ export function tabBadge(
       hint: "Open proposals whose current version waits for your review",
     };
   }
-  if (id === "messages" && awaiting > 0) {
+  if (id === "messages" && questions > 0) {
     return {
-      count: awaiting,
-      label: `${String(awaiting)} ${awaiting === 1 ? "thread waits" : "threads wait"} for your answer`,
-      hint: "Threads with a question that waits for your answer",
+      count: questions,
+      label: `${String(questions)} ${questions === 1 ? "question set waits" : "question sets wait"} for your answer`,
+      hint: "Question sets that wait for your answer",
     };
   }
   return null;

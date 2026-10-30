@@ -110,6 +110,7 @@ export function needsItem(fields: Partial<NeedsYouItem> = {}): NeedsYouItem {
     humans: [],
     choices: [],
     header: null,
+    questions: 0,
     title: null,
     reason: null,
     commit: null,

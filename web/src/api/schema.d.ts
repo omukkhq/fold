@@ -280,6 +280,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/asks/{id}/answer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human answers every question of an open ask in one reply. The reply joins the ask's thread, goes to the asker, holds each question with its answer and stores the answers, so the ask stops waiting while another ask of the same thread still waits. It appends `message.sent` like any reply. */
+        post: operations["answer_ask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/board": {
         parameters: {
             query?: never;
@@ -1894,6 +1911,17 @@ export interface components {
              */
             started_at: number;
         };
+        /** @description A human's answers to every question of an ask, in the order of its `questions`. */
+        AnswerRequest: {
+            /**
+             * @description One answer per question: a choice's label, or free text. A label matches without case and surrounding space.
+             * @example [
+             *       "Yes, it is reconnected",
+             *       "Mock the calls"
+             *     ]
+             */
+            answers: string[];
+        };
         AnswerWorkerQuestionBody: {
             behavior: components["schemas"]["Behavior"];
             /** @description A note for the worker: the tool error it gets with `deny`, or what it reads with the answer after a restart. */
@@ -3329,6 +3357,8 @@ export interface components {
         };
         /** @description The asks a human marks answered: those of one thread, or every ask linked to one task. */
         MarkAnsweredRequest: {
+            /** @description One ask, such as `m-31`, so another ask of its thread keeps waiting. Give one of `thread`, `task` and `ask`. */
+            ask?: string | null;
             /** @description The task whose asks are answered, such as `T-12`. */
             task?: string | null;
             /** @description Any message of the thread whose asks are answered, such as `m-31`. Give `thread` or `task`, not both. */
@@ -3397,6 +3427,13 @@ export interface components {
         };
         /** @description A stored message with public ids only. */
         MessageView: {
+            /** @description A human's reply that answers an ask with the answer route: one answer per question of `answers_ask`, in order. Empty for any other message. */
+            answers: string[];
+            /**
+             * @description The ask whose questions `answers` answer.
+             * @example m-30
+             */
+            answers_ask: string | null;
             /** @description The sending agent marked the message as asking a human for an answer. A question with choices and a worker's `AskUserQuestion` message ask without the mark. */
             asks_human: boolean;
             /** @description Plain text. */
@@ -3413,6 +3450,8 @@ export interface components {
             lines: components["schemas"]["MessageLines"] | null;
             /** @example P-3 */
             proposal: string | null;
+            /** @description The questions of an ask as one set, in order, which a human answers together with the answer route: the 1 to 4 questions of a question set, or the one question that a question with choices or a marked ask is, with the body as its text. Empty for a message that asks nothing. */
+            questions: components["schemas"]["SetQuestion"][];
             recipients: components["schemas"]["RecipientView"][];
             /** @example m-30 */
             reply_to: string | null;
@@ -3438,6 +3477,8 @@ export interface components {
              * @example m-31
              */
             thread: string;
+            /** @description The message stands for a worker's `AskUserQuestion` call: only a human's reply in its thread ends it, never Mark answered. */
+            worker_question: boolean;
         };
         ModelCost: {
             /** Format: int64 */
@@ -3500,6 +3541,8 @@ export interface components {
              * @example pq-3
              */
             question: string | null;
+            /** @description How many questions a `question` asks as one set, which a human answers together in one reply; 0 for every other kind. */
+            questions: number;
             /**
              * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again; what to check for a `worker_model_unreachable`.
              * @example Wait until the design is signed off
@@ -4888,6 +4931,18 @@ export interface components {
         SetProjectNotifyBody: {
             /** @description Whether the host's targets get the project's notices too. */
             use_host_targets: boolean;
+        };
+        /** @description One question of a set. */
+        SetQuestion: {
+            /** @description The options a human may pick, in order; empty for a question that takes free text only. A human may always answer with free text. */
+            choices: components["schemas"]["MessageChoice"][];
+            /**
+             * @description A short header, such as `Chart library`.
+             * @example MCP server
+             */
+            header: string | null;
+            /** @example Is the MCP server connected again? */
+            text: string;
         };
         /** @description A change of the worker limits; a limit left out stays as it is. */
         SetWorkerLimitsBody: {
@@ -7258,7 +7313,7 @@ export interface operations {
                     "application/json": components["schemas"]["MarkedAnswered"];
                 };
             };
-            /** @description `invalid_request`: neither or both of `thread` and `task`; `invalid_id`: an id is malformed */
+            /** @description `invalid_request`: not exactly one of `thread`, `task` and `ask`; `invalid_id`: an id is malformed */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -7287,6 +7342,98 @@ export interface operations {
             };
             /** @description `message_not_found`, `task_not_found` or `project_not_found` */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    answer_ask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The ask, such as `m-31` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnswerRequest"];
+            };
+        };
+        responses: {
+            /** @description The reply that carries the answers */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageView"];
+                };
+            };
+            /** @description `invalid_request`: the answers do not match the questions one to one (`details.reason` `answers`); `invalid_id`: the id is malformed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `message_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `ask_not_open`: the ask was already answered or marked answered */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

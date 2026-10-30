@@ -2,9 +2,11 @@ import type { MessageView, ThreadView } from "@/api/messages";
 import { isHumanName, isYou } from "@/people/names";
 import { isQuestion, questionState } from "./question";
 
-/** A message that waits for a human's answer: a question with choices, or one its agent marked as asking a human. */
+/** A message that waits for a human's answer: a question set, a question with choices, or one its agent marked as asking a human. */
 export function isAsk(message: MessageView): boolean {
-  return isQuestion(message) || message.asks_human;
+  return (
+    message.questions.length > 0 || isQuestion(message) || message.asks_human
+  );
 }
 
 /** The message names the signed-in human as a recipient; with no one signed in, any human recipient counts. */
@@ -24,41 +26,34 @@ export function askWaits(thread: ThreadView, message: MessageView): boolean {
   return isQuestion(message) || thread.awaiting_human;
 }
 
-/** A free-text ask that waits for the signed-in human: its head shows that it waits for their answer. */
-export function freeAskWaitsForYou(
-  thread: ThreadView,
-  message: MessageView,
-  you: string | null,
-): boolean {
-  return (
-    !isQuestion(message) && askWaits(thread, message) && asksYou(message, you)
-  );
-}
-
 /** What the reply box sends to: the message it replies to and, when the text answers a question, the agent who asked it. */
 export interface ReplyTarget {
   replyTo: string;
   answers: MessageView | null;
 }
 
+/** A free ask the reply box answers: a marked ask or a worker's question with one question and no choices. A set of several, or a question with choices, takes its answers on the set's card. */
+function freeAsk(message: MessageView): boolean {
+  return (
+    (message.asks_human || message.worker_question) &&
+    !isQuestion(message) &&
+    message.questions.length <= 1
+  );
+}
+
 /**
- * The reply box answers the question a human picked with "write your own answer" while it waits, else the newest waiting ask to the signed-in human when that ask has no choices; otherwise it replies to the newest message.
+ * The reply box answers the newest waiting ask to the signed-in human when it is a free ask; otherwise it replies to the newest message.
  */
 export function replyTarget(
   thread: ThreadView,
   you: string | null,
-  picked: string | null,
 ): ReplyTarget | null {
   const last = thread.messages.at(-1);
   if (!last) return null;
-  const chosen = thread.messages.find((m) => m.id === picked);
-  if (chosen && askWaits(thread, chosen)) {
-    return { replyTo: chosen.id, answers: chosen };
-  }
   const newest = thread.messages.findLast(
     (m) => askWaits(thread, m) && asksYou(m, you),
   );
-  if (newest && !isQuestion(newest)) {
+  if (newest && freeAsk(newest)) {
     return { replyTo: newest.id, answers: newest };
   }
   return { replyTo: last.id, answers: null };

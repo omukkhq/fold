@@ -127,6 +127,8 @@ pub struct NeedsYouItem {
     pub choices: Vec<Choice>,
     /// The short header of a `Question`.
     pub header: Option<String>,
+    /// How many questions a `Question` asks as one set; 0 for every other kind.
+    pub questions: usize,
     /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft; the task title of a `HumanTask` or a `Blocker`; Claude Code's error of a `WorkerModelUnreachable`.
     pub title: Option<String>,
     /// The reason of a `Blocker`; the command that brings the branch back for `HeadMoved`, records the folder's changes for `FolderHeld`, ends the conflict for `UnstashConflicted`, or lets a `WorkerUnreachable` worker reach fold again; what to check for a `WorkerModelUnreachable`.
@@ -173,6 +175,7 @@ impl NeedsYouItem {
             humans: Vec::new(),
             choices: Vec::new(),
             header: None,
+            questions: 0,
             title: None,
             reason: None,
             commit: None,
@@ -264,6 +267,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         item.proposal = row.proposal;
         item.request = row.request;
         item.humans = asked_humans(&row.recipients);
+        item.questions = crate::services::messages::row_questions(&row).len();
         item.choices = row.choices;
         item.header = row.header;
         items.push(item);

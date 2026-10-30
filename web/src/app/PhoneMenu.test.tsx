@@ -11,9 +11,11 @@ import {
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
+import { needsItem } from "@/test/workers";
 import { keys } from "../api/keys";
 import { liveStatusStore } from "../live/status";
 import { agent } from "../test/agents";
+import { message, recipient, thread } from "../test/messages";
 import { ThemeProvider } from "../theme/ThemeProvider";
 import { PhoneMenu } from "./PhoneMenu";
 
@@ -21,6 +23,10 @@ afterEach(() => {
   cleanup();
   liveStatusStore.reset();
 });
+
+// An id such as m-1 looks like a margin utility to the token guard, so the test builds it.
+const FIRST = `m-${String(1)}`;
+const SECOND = `m-${String(2)}`;
 
 async function renderMenu(pausedSince: number | null) {
   const client = new QueryClient({
@@ -30,8 +36,27 @@ async function renderMenu(pausedSince: number | null) {
     overview: { paused_since: pausedSince },
   });
   client.setQueryData(keys.session(), { human: "tanim", authenticated: true });
-  client.setQueryData(keys.needsYou("demo"), []);
-  client.setQueryData(keys.messagesAwaiting("demo"), 2);
+  // Two sets wait in Needs you: the tab counts sets, as the chat rows do.
+  client.setQueryData(keys.needsYou("demo"), [
+    needsItem({ kind: "question", message: FIRST }),
+    needsItem({ kind: "question", message: SECOND }),
+  ]);
+  const ask = (id: string) =>
+    message(id, {
+      sender: "web-lead",
+      recipients: [recipient("human:tanim")],
+      choices: [{ label: "Yes", description: null }],
+    });
+  client.setQueryData(keys.messages("demo"), {
+    items: [
+      thread(FIRST, {
+        awaiting_human: true,
+        participants: ["web-lead", "human:tanim"],
+        messages: [ask(FIRST), ask(SECOND)],
+      }),
+    ],
+    more: false,
+  });
   client.setQueryData(keys.agentBar("demo"), [
     agent("web-lead"),
     agent("docs", { presence: "offline" }),
@@ -80,7 +105,7 @@ describe("PhoneMenu", () => {
     ).toBe("page");
     expect(
       within(tabs).getByRole("status", {
-        name: "2 threads wait for your answer",
+        name: "2 question sets wait for your answer",
       }).textContent,
     ).toBe("2");
     expect(within(menu).getByText("1 working · 2 in all")).toBeTruthy();
