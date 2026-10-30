@@ -1,6 +1,6 @@
 use fold_core::object::ObjectHash;
 use fold_core::policy::AgentStanding;
-use fold_core::reviews::{Approver, HumanReviewMark, ReviewFact, Side, Verdict};
+use fold_core::reviews::{Approver, HumanReviewMark, ProposalIntent, ReviewFact, Side, Verdict};
 use fold_core::roles::Role;
 use fold_core::tree::ChangeCounts;
 use fold_core::{
@@ -19,6 +19,7 @@ pub mod checks;
 mod claims;
 mod human_edits;
 mod integrations;
+pub(crate) mod intents;
 pub mod plans;
 mod scopes;
 mod summaries;
@@ -118,6 +119,8 @@ pub struct VersionRow {
     pub head_changeset: ChangesetId,
     pub stats: ChangeCounts,
     pub evidence: Option<String>,
+    /// How the change works in the code, part by part; `None` on a version made before intents existed.
+    pub intent: Option<ProposalIntent>,
     pub created_by: String,
     pub created_at: Timestamp,
     /// A human sent this version for review again, so the approvals it kept from an earlier version no longer count.
@@ -141,6 +144,8 @@ pub struct NewVersion<'a> {
     pub tree: ObjectHash,
     pub head_changeset: ChangesetId,
     pub evidence: Option<&'a str>,
+    /// A checked intent; `None` only for a version made before intents existed.
+    pub intent: Option<&'a ProposalIntent>,
     pub created_by: &'a str,
     /// The review checkout a reviewer's fix came from; it must be a review checkout of the same proposal.
     pub fixed_in_checkout: Option<WorkspaceId>,
@@ -210,15 +215,17 @@ async fn insert_version(
     );
     let tree = new.tree.to_string();
     let checkout = new.fixed_in_checkout.map(WorkspaceId::to_db);
-    let inserted = sqlx::query!(
-        "INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash,
+    let summary = new.intent.map(|intent| intent.summary.as_str());
+    let inserted = sqlx::query_scalar!(
+        r#"INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash,
                                         head_changeset_id, evidence, created_by, created_at,
-                                        fixed_in_checkout_id)
+                                        fixed_in_checkout_id, intent_summary)
          SELECT p.id, ?2, r.id, ?4, c.id, ?6, ?7, ?8,
-                (SELECT w.id FROM workspaces w WHERE w.number = ?9)
+                (SELECT w.id FROM workspaces w WHERE w.number = ?9), ?10
          FROM proposals p, revisions r, changesets c
          WHERE p.number = ?1 AND r.number = ?3 AND c.number = ?5
-           AND (?9 IS NULL OR EXISTS (SELECT 1 FROM workspaces w WHERE w.number = ?9))",
+           AND (?9 IS NULL OR EXISTS (SELECT 1 FROM workspaces w WHERE w.number = ?9))
+         RETURNING id AS "id!: i64""#,
         proposal,
         version,
         base,
@@ -227,17 +234,19 @@ async fn insert_version(
         new.evidence,
         new.created_by,
         now,
-        checkout
+        checkout,
+        summary
     )
-    .execute(tx.conn())
-    .await?
-    .rows_affected();
-    if inserted == 1 {
-        Ok(())
-    } else {
-        Err(StoreError::Invalid(
+    .fetch_optional(tx.conn())
+    .await?;
+    let Some(version_id) = inserted else {
+        return Err(StoreError::Invalid(
             "the proposal, base revision, changeset or checkout does not exist",
-        ))
+        ));
+    };
+    match new.intent {
+        Some(intent) => intents::insert(tx, version_id, intent).await,
+        None => Ok(()),
     }
 }
 
@@ -543,7 +552,7 @@ pub async fn list_versions(
     let number = proposal.to_db();
     let rows = sqlx::query!(
         r#"SELECT v.version, r.number AS "base!: i64", v.tree_hash,
-                  c.number AS "changeset!: i64", c.stats, v.evidence, v.created_by, v.created_at,
+                  c.number AS "changeset!: i64", c.stats, v.evidence, vi.intent AS "intent?: String", v.created_by, v.created_at,
                   EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = v.id) AS "review_again!: bool",
                   f.number AS "fixed_in?: i64"
            FROM proposal_versions v
@@ -551,6 +560,7 @@ pub async fn list_versions(
            JOIN revisions r ON r.id = v.base_revision_id
            JOIN changesets c ON c.id = v.head_changeset_id
            LEFT JOIN workspaces f ON f.id = v.fixed_in_checkout_id
+           LEFT JOIN proposal_version_intents vi ON vi.version_id = v.id
            WHERE p.number = ?
            ORDER BY v.version"#,
         number
@@ -572,6 +582,7 @@ pub async fn list_versions(
                     .ok_or(StoreError::Corrupt("changesets.number"))?,
                 stats: parse_stats(&row.stats).ok_or(StoreError::Corrupt("changesets.stats"))?,
                 evidence: row.evidence,
+                intent: intents::decode(row.intent.as_deref(), "proposal_version_intents.intent")?,
                 created_by: row.created_by,
                 created_at: time(row.created_at, "proposal_versions.created_at")?,
                 review_again: row.review_again,

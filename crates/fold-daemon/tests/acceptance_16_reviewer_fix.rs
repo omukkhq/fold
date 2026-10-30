@@ -51,6 +51,7 @@ async fn acceptance_16_the_reviewer_fixes_the_proposal_in_its_checkout_and_integ
             "review",
             "submit_review_fix",
             json!({
+                "intent": "Make the change the task asks for.",
                 "id": proposal,
                 "version": 1,
                 "fixes": [{"path": FIXED.0, "reason": "GET was not refused; the endpoint now answers 405"}],

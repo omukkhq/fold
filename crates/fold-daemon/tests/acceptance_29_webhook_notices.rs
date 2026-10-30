@@ -108,7 +108,7 @@ async fn acceptance_29_a_failed_check_and_a_card_move_reach_a_generic_and_a_slac
         .call(
             "backend",
             "create_proposal",
-            json!({"task": task, "title": "Add the login endpoint", "evidence": "fold ran the checks"}),
+            json!({"intent": "Make the change the task asks for.", "task": task, "title": "Add the login endpoint", "evidence": "fold ran the checks"}),
         )
         .await;
     assert_eq!(

@@ -275,3 +275,63 @@ async fn an_attachment_blob_is_a_gc_root() {
     let roots = gc_roots(store.read()).await.unwrap();
     assert_eq!(roots, vec![hash_object(ObjectKind::Blob, b"screenshot")]);
 }
+
+#[tokio::test]
+async fn a_code_location_names_one_anchor_and_a_forward_range() {
+    let (_dir, store) = seeded().await;
+    for statement in [
+        "INSERT INTO revisions (id, number, hash, tree_hash, created_at) VALUES (1, 1, 'h1', 't1', 0)",
+        "INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revision_id, state, created_at) VALUES (1, 1, 1, 1, 'task', 'ws/t-1', 1, 'active', 0)",
+        "INSERT INTO changesets (id, number, workspace_id, task_id, base_revision_id, tree_hash, message, created_by, created_at) VALUES (1, 1, 1, 1, 1, 't2', 'm', 'frontend', 0)",
+        "INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 1, 1, 1, 'p', 0, 0)",
+        "INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (1, 1, 1, 1, 't2', 1, 'frontend', 0)",
+    ] {
+        exec(&store, statement).await.unwrap();
+    }
+    let code = |columns: &str, values: &str| {
+        format!(
+            "INSERT INTO request_code_refs (request_id, path, start_line, end_line, excerpt, excerpt_cut{columns}) VALUES (1, 'a.rs', {values})"
+        )
+    };
+    for (sql, constraint) in [
+        (code("", "1, 1, 'a', 0"), "request_code_refs_one_anchor"),
+        (
+            code(
+                ", revision_id, version_id, side",
+                "1, 1, 'a', 0, 1, 1, 'new'",
+            ),
+            "request_code_refs_one_anchor",
+        ),
+        (
+            code(", version_id", "1, 1, 'a', 0, 1"),
+            "request_code_refs_side_with_version",
+        ),
+        (
+            code(", revision_id, side", "1, 1, 'a', 0, 1, 'new'"),
+            "request_code_refs_side_with_version",
+        ),
+        (
+            code(", revision_id", "3, 2, 'a', 0, 1"),
+            "request_code_refs_range_order",
+        ),
+        (
+            code(", revision_id", "0, 0, 'a', 0, 1"),
+            "request_code_refs_range_order",
+        ),
+    ] {
+        let error = refused(&store, &sql).await;
+        assert_eq!(error.constraint().as_deref(), Some(constraint), "{sql}");
+    }
+    exec(
+        &store,
+        &code(", version_id, side", "2, 4, 'b', 1, 1, 'old'"),
+    )
+    .await
+    .unwrap();
+    let again = refused(&store, &code(", revision_id", "1, 1, 'a', 0, 1")).await;
+    assert!(again.unique_violation(), "{again}");
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM request_code_refs").await,
+        1
+    );
+}

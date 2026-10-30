@@ -48,14 +48,27 @@ export function approvers(
   version: number,
   reviews: readonly Review[],
 ): string[] {
+  return approvals(version, reviews).map((r) => r.reviewer);
+}
+
+/** The approvals that stand on the version: each reviewer's latest verdict when it is an approval, in the order they approved. */
+export function approvals(
+  version: number,
+  reviews: readonly Review[],
+): Review[] {
   const last = new Map<string, Review>();
   for (const r of verdictsOn(version, reviews)) {
     last.delete(r.reviewer);
     last.set(r.reviewer, r);
   }
-  return [...last.values()]
-    .filter((r) => r.verdict === "approve")
-    .map((r) => r.reviewer);
+  return [...last.values()].filter((r) => r.verdict === "approve");
+}
+
+/** ` (kept from v3)` after a verdict a human edit kept from the version it was made from; empty for the version's own verdict. */
+export function keptNote(review: Pick<Review, "kept_from">): string {
+  return review.kept_from === null
+    ? ""
+    : ` (kept from v${String(review.kept_from)})`;
 }
 
 export interface PillContext {
@@ -217,13 +230,15 @@ const VERDICT_WORDS: Record<Verdict, string> = {
   comment: "commented",
 };
 
-/** The latest verdict on the version, for its tab; comments are not verdicts. */
+/** The latest verdict on the version, for its tab, with the version a kept approval came from; comments are not verdicts. */
 export function versionVerdict(
   version: number,
   reviews: readonly Review[],
 ): string {
   const latest = verdictsOn(version, reviews).at(-1);
-  return latest ? VERDICT_WORDS[latest.verdict] : "no verdict yet";
+  return latest
+    ? `${VERDICT_WORDS[latest.verdict]}${keptNote(latest)}`
+    : "no verdict yet";
 }
 
 const REVIEW_HEADS: Record<Verdict, string> = {

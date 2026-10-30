@@ -13,6 +13,7 @@ import {
   approveRequestDraft,
   attachmentHref,
   closeRequest,
+  createCodeRequest,
   createRequest,
   editRequestDraft,
   getRequest,
@@ -151,5 +152,39 @@ describe("requester writes", () => {
     expect(attachmentHref("demo", "RQ-4", 2)).toBe(
       "/api/v1/projects/demo/requests/RQ-4/attachments/2",
     );
+  });
+});
+
+describe("createCodeRequest", () => {
+  it("posts the lines with their anchor and answers the new request", async () => {
+    const calls = stubFetch({
+      [`POST ${R}/from-code`]: { status: 201, body: detail },
+    });
+    const body = {
+      body: "Rename it.",
+      path: "web/src/board.ts",
+      start_line: 2,
+      end_line: 3,
+      revision: "r17",
+    };
+    await expect(createCodeRequest("demo", body)).resolves.toEqual(detail);
+    expect(calls.map((c) => [c.path, c.body])).toEqual([
+      [`${R}/from-code`, body],
+    ]);
+  });
+
+  it("rejects with the daemon's code", async () => {
+    stubFetch({
+      [`POST ${R}/from-code`]: errorReply(422, "invalid_comment_range"),
+    });
+    await expect(
+      createCodeRequest("demo", {
+        body: "x",
+        path: "a.ts",
+        start_line: 9,
+        end_line: 9,
+        revision: "r1",
+      }),
+    ).rejects.toSatisfy((e: unknown) => isApiError(e, "invalid_comment_range"));
   });
 });

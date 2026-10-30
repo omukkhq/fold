@@ -1,3 +1,4 @@
+use crate::common::intents::Covering as _;
 use fold_core::events::types;
 use fold_core::reviews::Verdict;
 use fold_core::roles::Role;
@@ -390,7 +391,7 @@ async fn only_the_main_agent_claims_a_review_and_the_author_is_refused_first() {
                 }];
                 let fixed = fx
                     .reviews()
-                    .submit_review_fix(&acting, p(1), 1, &fixes, "cargo test: ok")
+                    .submit_review_fix_covering(&acting, p(1), 1, &fixes, "cargo test: ok")
                     .await;
                 assert_eq!(
                     review_code(fixed.unwrap_err()),

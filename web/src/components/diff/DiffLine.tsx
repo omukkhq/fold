@@ -18,6 +18,8 @@ interface DiffLineProps extends Omit<ComponentProps<"div">, "children"> {
   children: ReactNode;
   /** The comment marker or any other mark at the end of the row. */
   marker?: ReactNode;
+  /** A line of a file rather than of a diff: one number column, no sign and no kind for a screen reader. */
+  plain?: boolean;
 }
 
 const NUMBER_CLASSES =
@@ -30,6 +32,7 @@ export function DiffLine({
   selected = false,
   children,
   marker,
+  plain = false,
   className,
   ...rest
 }: DiffLineProps) {
@@ -45,34 +48,40 @@ export function DiffLine({
         className,
       )}
     >
-      <span className="sr-only">{style.description}</span>
+      {plain ? null : <span className="sr-only">{style.description}</span>}
       {style.header ? (
         <code className="min-w-0 flex-1 px-14 py-4 font-mono text-13 leading-tight whitespace-pre-wrap wrap-anywhere text-text-2">
           {children}
         </code>
       ) : (
         <>
-          <span
-            aria-hidden="true"
-            className={cn(NUMBER_CLASSES, diffNumberClass(selected))}
-          >
-            {oldNo}
-          </span>
+          {plain ? null : (
+            <span
+              aria-hidden="true"
+              className={cn(NUMBER_CLASSES, diffNumberClass(selected))}
+            >
+              {oldNo}
+            </span>
+          )}
           <span
             aria-hidden="true"
             className={cn(NUMBER_CLASSES, diffNumberClass(selected))}
           >
             {newNo}
           </span>
-          <span
-            aria-hidden="true"
-            className={cn(
-              "w-24 shrink-0 select-none text-center font-mono text-13",
-              style.signClass,
-            )}
-          >
-            {style.sign}
-          </span>
+          {plain ? (
+            <span aria-hidden="true" className="w-14 shrink-0" />
+          ) : (
+            <span
+              aria-hidden="true"
+              className={cn(
+                "w-24 shrink-0 select-none text-center font-mono text-13",
+                style.signClass,
+              )}
+            >
+              {style.sign}
+            </span>
+          )}
           <code className="min-w-0 flex-1 font-mono text-13 leading-normal whitespace-pre-wrap wrap-anywhere text-text">
             {children}
           </code>

@@ -257,6 +257,20 @@ describe("versionTabs", () => {
       versionTabs(p, resolveView(p, { since: 1 })).map((t) => t.selected),
     ).toEqual([true, false]);
   });
+
+  it("names the version a human edit kept the approval from", () => {
+    const p = proposalDetail(proposalSummary("P-4", { current_version: 2 }), {
+      versions: [proposalVersion(1), proposalVersion(2, { human_edit: true })],
+      reviews: [
+        review(1, "review/audit", "approve"),
+        review(2, "review/audit", "approve", { kept_from: 1 }),
+      ],
+    });
+    expect(versionTabs(p, resolveView(p, {})).map((t) => t.label)).toEqual([
+      "v2 · approved (kept from v1)",
+      "v1 · approved",
+    ]);
+  });
 });
 
 describe("detailHref", () => {

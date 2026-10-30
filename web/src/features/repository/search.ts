@@ -6,19 +6,35 @@ export interface RepositorySearch {
   revision?: string;
   /** A file to open, as an `@` mention names it, for example `web/src/board.ts`. */
   path?: string;
+  /** The 1-based line of `path` to select and show, such as the first line a request was made on. */
+  line?: number;
 }
 
-/** Keeps `revision` only when it is exactly one revision id and `path` only when it is relative and normalised; any other value is ignored. */
+/** Keeps `revision` only when it is exactly one revision id, `path` only when it is relative and normalised, and `line` only as a positive whole number beside a path; any other value is ignored. */
 export function parseRepositorySearch(
   search: Record<string, unknown>,
 ): RepositorySearch {
   const { revision, path } = search;
+  const cleanPath = typeof path === "string" && isCleanPath(path) ? path : null;
+  const line = cleanPath === null ? null : lineNumber(search.line);
   return {
     ...(typeof revision === "string" && parseId(revision)?.kind === "revision"
       ? { revision }
       : {}),
-    ...(typeof path === "string" && isCleanPath(path) ? { path } : {}),
+    ...(cleanPath === null ? {} : { path: cleanPath }),
+    ...(line === null ? {} : { line }),
   };
+}
+
+/** The router reads `line=12` as the number 12; a hand-written address may still hold it as text. */
+function lineNumber(value: unknown): number | null {
+  const text =
+    typeof value === "number"
+      ? String(value)
+      : typeof value === "string"
+        ? value
+        : "";
+  return /^[1-9]\d{0,8}$/.test(text) ? Number(text) : null;
 }
 
 /** The directory that holds a path, `""` for the root. */

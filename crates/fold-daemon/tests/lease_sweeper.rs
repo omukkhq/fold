@@ -1,3 +1,4 @@
+use crate::common::intents::Covering as _;
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
@@ -324,7 +325,7 @@ impl Fixture {
         );
         fs::write(dir.join("README.md"), "# demo\nproposed\n").unwrap();
         let proposal = reviews
-            .create_proposal(&by(&self.frontend.worker), t(1), "Change the readme", None)
+            .create_proposal_covering(&by(&self.frontend.worker), t(1), "Change the readme", None)
             .await
             .unwrap()
             .detail()
@@ -686,7 +687,7 @@ async fn a_worker_whose_files_are_its_sent_version_never_stalls() {
 
     let reviews = fx.handle.reviews(fx.project.registry());
     let proposal = reviews
-        .create_proposal(&by(&fx.frontend.worker), t(1), "Change the readme", None)
+        .create_proposal_covering(&by(&fx.frontend.worker), t(1), "Change the readme", None)
         .await
         .unwrap()
         .detail()

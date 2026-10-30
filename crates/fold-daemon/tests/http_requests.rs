@@ -93,6 +93,7 @@ async fn a_human_creates_asks_for_changes_edits_and_approves() {
             "requester": "human:ana",
             "drafter": null,
             "latest_version": null,
+            "code": null,
             "created_at": created["request"]["created_at"],
             "updated_at": created["request"]["updated_at"],
         })

@@ -5,7 +5,9 @@ use fold_core::merge::{
     ConflictReport, HunkSide, ReportEntry, ReportEntryKind, ReportFile, ReportHunk, ReportKind,
 };
 use fold_core::policy::{Gate, GateState, GateStatus};
-use fold_core::reviews::{ReviewScope, ReviewScopeRecord, ScopeRule, Side, Verdict};
+use fold_core::reviews::{
+    Contracts, ProposalIntent, ReviewScope, ReviewScopeRecord, ScopeRule, Side, Verdict,
+};
 use fold_core::{
     FoldError, HumanName, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkspaceId,
 };
@@ -339,6 +341,9 @@ pub struct ProposalVersion {
     /// The author's evidence that the work is done.
     #[schema(required = true)]
     pub evidence: Option<String>,
+    /// How the change works in the code, as the version's author, reviewer or human editor wrote it; `null` on a version made before intents existed.
+    #[schema(required = true)]
+    pub intent: Option<Intent>,
     /// The worker, the reviewer's worker for a reviewer's fix, or `human:<name>` for a human edit.
     pub created_by: String,
     /// UTC milliseconds.
@@ -349,6 +354,127 @@ pub struct ProposalVersion {
     pub review_again: bool,
     /// The reviewer that holds the review claim made this version by fixing the one before it in its review checkout. It starts without approvals like every version.
     pub reviewer_fix: bool,
+}
+
+/// How the change of a proposal version works in the code, so a human understands and judges it without reading every line: the summary and the parts of the diff always, and the contracts, the decisions and what it does not change when they apply. A section without entries does not show. Every file the version changes belongs to exactly one part.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Intent {
+    /// How the change works in the code: the flow, the states and the rules, at most 1200 characters; it may hold line breaks.
+    pub summary: String,
+    /// The parts of the diff in reading order, 1 to 12.
+    pub parts: Vec<IntentPart>,
+    /// The contracts by kind; a request may leave it out for none.
+    #[serde(default)]
+    #[schema(required = true)]
+    pub contracts: IntentContracts,
+    /// The choices the author made and why, and open questions with the message that asks them; empty when none apply, and a request may leave it out.
+    #[serde(default)]
+    #[schema(required = true)]
+    pub decisions: Vec<String>,
+    /// What a reader may think the change touches but it does not; empty when nothing applies, and a request may leave it out.
+    #[serde(default)]
+    #[schema(required = true)]
+    pub not_changed: Vec<String>,
+}
+
+/// One part of a version's diff.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IntentPart {
+    /// A short name, one line of at most 80 characters, unique in the intent.
+    #[schema(example = "Case model and migration")]
+    pub name: String,
+    /// What this part of the code does, at most 800 characters; it may hold line breaks.
+    pub does: String,
+    /// The changed files of the part, as the version's diff names them (a renamed file by its new path). A file belongs to one part only.
+    #[schema(example = json!(["src/cases.rs"]))]
+    pub files: Vec<String>,
+}
+
+/// The contracts a change adds or changes, by kind; a kind the change does not touch is empty, and a request may leave it out. Each entry is one line of at most 300 characters, at most 20 per kind.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IntentContracts {
+    #[serde(default)]
+    #[schema(required = true)]
+    pub routes: Vec<String>,
+    #[serde(default)]
+    #[schema(required = true)]
+    pub database: Vec<String>,
+    #[serde(default)]
+    #[schema(required = true)]
+    pub rights: Vec<String>,
+    #[serde(default)]
+    #[schema(required = true)]
+    pub config: Vec<String>,
+    #[serde(default)]
+    #[schema(required = true)]
+    pub errors: Vec<String>,
+    #[serde(default)]
+    #[schema(required = true)]
+    pub events: Vec<String>,
+    #[serde(default)]
+    #[schema(required = true)]
+    pub commands: Vec<String>,
+}
+
+impl From<ProposalIntent> for Intent {
+    fn from(intent: ProposalIntent) -> Self {
+        let contracts = intent.contracts;
+        Self {
+            summary: intent.summary,
+            parts: intent
+                .parts
+                .into_iter()
+                .map(|part| IntentPart {
+                    name: part.name,
+                    does: part.does,
+                    files: part.files,
+                })
+                .collect(),
+            contracts: IntentContracts {
+                routes: contracts.routes,
+                database: contracts.database,
+                rights: contracts.rights,
+                config: contracts.config,
+                errors: contracts.errors,
+                events: contracts.events,
+                commands: contracts.commands,
+            },
+            decisions: intent.decisions,
+            not_changed: intent.not_changed,
+        }
+    }
+}
+
+impl From<Intent> for ProposalIntent {
+    fn from(intent: Intent) -> Self {
+        let contracts = intent.contracts;
+        Self {
+            summary: intent.summary,
+            parts: intent
+                .parts
+                .into_iter()
+                .map(|part| fold_core::reviews::IntentPart {
+                    name: part.name,
+                    does: part.does,
+                    files: part.files,
+                })
+                .collect(),
+            contracts: Contracts {
+                routes: contracts.routes,
+                database: contracts.database,
+                rights: contracts.rights,
+                config: contracts.config,
+                errors: contracts.errors,
+                events: contracts.events,
+                commands: contracts.commands,
+            },
+            decisions: intent.decisions,
+            not_changed: intent.not_changed,
+        }
+    }
 }
 
 impl From<service::VersionView> for ProposalVersion {
@@ -363,6 +489,7 @@ impl From<service::VersionView> for ProposalVersion {
             files_deleted: version.stats.files_deleted,
             human_edit: version.human_edit,
             evidence: version.evidence,
+            intent: version.intent.map(Intent::from),
             created_by: version.created_by,
             created_at: version.created_at.as_millis(),
             review_again: version.review_again,
@@ -1015,6 +1142,9 @@ pub struct EditFileBody {
     pub path: String,
     /// The whole new content of the file, as UTF-8 text.
     pub content: String,
+    /// The intent of the new version, whose parts cover every file the edited version changes against its base. Leave it out to keep the intent of the version the human edited when the edit changes no file outside it; a version made before intents existed has none, so its edit needs one.
+    #[serde(default)]
+    pub intent: Option<Intent>,
 }
 
 /// The human edit the human sends for review again.
@@ -1506,7 +1636,7 @@ pub async fn read_proposal_file(
     request_body = EditFileBody,
     responses(
         (status = 201, description = "The new version", body = ProposalVersion),
-        (status = 400, description = "`invalid_request`, `invalid_path`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request`, `invalid_path`, `invalid_id`, `invalid_name` or `invalid_intent` (`details.field` names the part of the intent and `details.reason` is `missing` for no intent on a version that has none, `empty`, `too_long`, `control_character`, `no_parts`, `too_many_parts`, `too_many_entries`, `duplicate_part`, `file_in_two_parts`, `part_without_files`, `part_files_uncovered` with `details.uncovered` or `part_file_outside_diff` with `details.outside`)", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 403, description = "`human_edit_denied`: the task has no human review mark, or the mark names another human (`details.reviewer`)", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
@@ -1530,6 +1660,7 @@ pub async fn edit_proposal_file(
             body.version,
             &body.path,
             &body.content,
+            body.intent.map(ProposalIntent::from),
         )
         .await?;
     Ok((StatusCode::CREATED, Json(edit.detail.selected.into())))

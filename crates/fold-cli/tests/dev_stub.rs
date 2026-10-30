@@ -218,7 +218,7 @@ async fn a_stub_lead_and_its_task_worker_run_their_scripts_through_the_fold_tool
                 {"call": {"tool": "create_workspace", "arguments": {"task": task}, "save": {"ws": "/workspace", "dir": "/path"}}},
                 {"write": {"path": "${dir}/hello.txt", "text": "hello\n"}},
                 {"call": {"tool": "record_changes", "arguments": {"ws": "${ws}", "message": "Add the greeting"}}},
-                {"call": {"tool": "create_proposal", "arguments": {"task": task, "title": "Add the greeting", "evidence": "hello.txt says hello."}, "save": {"proposal": "/id"}}},
+                {"call": {"tool": "create_proposal", "arguments": {"task": task, "title": "Add the greeting", "intent": {"summary": "Adds hello.txt with a greeting; nothing else changes.", "parts": [{"name": "Greeting", "does": "hello.txt says hello.", "files": ["hello.txt"]}]}, "evidence": "hello.txt says hello."}, "save": {"proposal": "/id"}}},
             ],
             "reply": "Proposed ${proposal}.",
         }]}),

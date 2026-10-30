@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use crate::common::roles::{give_main_tag, give_review_claim, give_role};
 use crate::reviews_support;
 use fold_core::roles::Role;
@@ -344,7 +345,7 @@ async fn push_goes_to_the_review_lead_on_proposal_opened() {
     n.give_claim("review").await;
     n.fx.write("src/more.rs", "pub fn more() {}\n");
     n.fx.reviews
-        .update_proposal(&by(&n.fx.frontend.worker), p(1), None)
+        .update_proposal_covering(&by(&n.fx.frontend.worker), p(1), None)
         .await
         .unwrap()
         .detail()

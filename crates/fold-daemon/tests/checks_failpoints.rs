@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use fold_core::reviews::checks::{RunReason, RunState};
 use fold_daemon::services::reviews::Proposed;
 use fold_daemon::services::reviews::checks::{CheckPermits, CheckRunner, recover_check_runs};
@@ -17,7 +18,7 @@ async fn a_stop_before_the_version_leaves_no_result_and_no_proposal() {
     let runner = CheckRunner::new(CheckPermits::new(1));
     let reviews = fx.service().with_checks(runner.clone());
     let proposed = reviews
-        .create_proposal(&by(&fx.frontend.worker), t(1), "Add checks", None)
+        .create_proposal_covering(&by(&fx.frontend.worker), t(1), "Add checks", None)
         .await
         .unwrap();
     let Proposed::Checking { run, .. } = proposed else {

@@ -101,7 +101,11 @@ async fn acceptance_26_the_approved_members_of_a_batch_integrate_together() {
     )
     .await;
     let updated = h
-        .call("frontend", "update_proposal", json!({"id": first}))
+        .call(
+            "frontend",
+            "update_proposal",
+            json!({"intent": "Make the change the task asks for.", "id": first}),
+        )
         .await;
     assert_eq!(updated["version"], "v2", "{updated}");
     h.approve(&first).await;

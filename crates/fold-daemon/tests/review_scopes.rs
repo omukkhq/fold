@@ -10,7 +10,7 @@ use fold_daemon::services::events::EventService;
 use fold_daemon::services::messages::MessageService;
 use fold_store::testing::eventually;
 use http_body_util::BodyExt;
-use rmcp::model::{CallToolRequestParams, CallToolResult};
+use rmcp::model::CallToolResult;
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::{Value, json};
@@ -57,10 +57,7 @@ async fn call(client: &Client, tool: &str, arguments: Value) -> CallToolResult {
     let Value::Object(arguments) = arguments else {
         panic!("arguments must be an object");
     };
-    client
-        .call_tool(CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments))
-        .await
-        .unwrap()
+    crate::common::intents::call_tool(client, tool, arguments).await
 }
 
 fn body(result: &CallToolResult) -> Value {
@@ -99,14 +96,19 @@ async fn revised(fx: &Fixture, frontend: &Client, review: &Client, contents: &[&
     ok(
         frontend,
         "create_proposal",
-        json!({"task": "T-1", "title": "Add the functions"}),
+        json!({"intent": "Make the change the task asks for.", "task": "T-1", "title": "Add the functions"}),
     )
     .await;
     for (index, content) in contents.iter().enumerate() {
         let reviewed = u32::try_from(index).unwrap() + 1;
         verdict(review, "P-1", reviewed, "request_changes").await;
         fx.write(1, "src/lib.rs", &format!("{first}{content}"));
-        ok(frontend, "update_proposal", json!({"id": "P-1"})).await;
+        ok(
+            frontend,
+            "update_proposal",
+            json!({"intent": "Make the change the task asks for.", "id": "P-1"}),
+        )
+        .await;
     }
 }
 
@@ -282,7 +284,7 @@ async fn a_first_version_takes_no_scope_and_a_scope_names_a_proposal_of_the_call
     ok(
         &backend,
         "create_proposal",
-        json!({"task": "T-2", "title": "Export"}),
+        json!({"intent": "Make the change the task asks for.", "task": "T-2", "title": "Export"}),
     )
     .await;
 
@@ -381,8 +383,12 @@ async fn a_reviewer_follows_the_scope_its_review_lead_chose_at_the_start() {
         json!({"ws": work.workspace, "message": "Add d"}),
     )
     .await;
-    h.call("frontend", "update_proposal", json!({"id": proposal}))
-        .await;
+    h.call(
+        "frontend",
+        "update_proposal",
+        json!({"intent": "Make the change the task asks for.", "id": proposal}),
+    )
+    .await;
     let since = h
         .call(
             "review-lead",
@@ -603,8 +609,12 @@ async fn a_reviewer_batch_takes_the_chosen_scopes_and_a_refused_scope_starts_not
             json!({"ws": work.workspace, "message": "Add d"}),
         )
         .await;
-        h.call("frontend", "update_proposal", json!({"id": proposal}))
-            .await;
+        h.call(
+            "frontend",
+            "update_proposal",
+            json!({"intent": "Make the change the task asks for.", "id": proposal}),
+        )
+        .await;
     }
     let [(first, ..), (second, ..), (fresh, ..)] = proposals.as_slice() else {
         panic!("three proposals");

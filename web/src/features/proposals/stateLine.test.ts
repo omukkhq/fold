@@ -29,6 +29,28 @@ describe("approvalLine", () => {
     });
   });
 
+  it("names the version a human edit kept an approval from", () => {
+    const edited = proposalDetail(
+      proposalSummary("P-4", { current_version: 4 }),
+      {
+        reviews: [
+          review(3, "review/audit", "approve"),
+          review(4, "review/audit", "approve", { kept_from: 3 }),
+          review(4, "human:rafeed", "approve"),
+        ],
+      },
+    );
+    expect(approvalLine(edited, 4)).toEqual({
+      tone: "approved",
+      segments: [
+        "Approved on v4 by ",
+        { actor: "review/audit" },
+        " (kept from v3) and ",
+        { actor: "human:rafeed" },
+      ],
+    });
+  });
+
   it("says the latest verdict, or that none came", () => {
     expect(approvalLine(p, 1)).toEqual({
       tone: "changes",
