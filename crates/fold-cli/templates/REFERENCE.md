@@ -216,7 +216,7 @@ Every fold tool by purpose; the skill holds their arguments and workflows. The h
 
 - Identity and agents: `register_agent`, `list_agents`, `get_activity`.
 - Areas and workers: `define_area`, `update_area`, `start_worker`, `stop_worker`, `list_workers`, `set_worker_limits`, `write_handoff`, `restart_worker`, `pause_project`, `resume_project`.
-- Messages and events: `send_message`, `get_inbox`, `get_thread`, `acknowledge_message`, `mark_answered`, `list_open_asks` (main agent: every agent's open ask with id, agent, thread and first line, to answer for the user what the user says is done), `get_events`, `wait_for_events`.
+- Messages and events: `send_message`, `get_inbox`, `get_thread`, `acknowledge_message`, `mark_answered`, `list_open_asks` (main agent: every agent's open ask with id, agent, thread and first line, and the questions of a worker's `reply_only` AskUserQuestion, to answer for the user what the user says is done; `mark_answered` with `answers` answers one for the user), `get_events`, `wait_for_events`.
 - Tasks: `get_task_graph`, `get_ready_tasks`, `get_task`, `create_task`, `create_task_plan`, `update_task`, `delete_task`, `archive_task`, `add_dependency`, `remove_dependency`, `create_label`, `set_blocker`, `clear_blocker`, `require_human_review`.
 - Checklists: `add_checklist_item`, `update_checklist_item`, `move_checklist_item`, `remove_checklist_item`.
 - Claims and completion: `claim_task`, `release_task`, `takeover_claim`, `report_task`, `complete_task`, `send_back_task`.

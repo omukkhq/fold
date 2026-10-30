@@ -378,7 +378,7 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 52] = [
+const NON_TOOL_NAMES: [&str; 53] = [
     "human_review",
     "fold_failed",
     "left_out",
@@ -431,6 +431,7 @@ const NON_TOOL_NAMES: [&str; 52] = [
     "related_tasks",
     "plan_hint",
     "reply_only",
+    "answer_these",
 ];
 
 /// The sections of the index before the shared ones.
