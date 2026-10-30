@@ -32,6 +32,8 @@ interface ReplyBoxProps {
   answering: string | null;
   /** The choice of what the reply is about, above the text. */
   about?: ReactNode;
+  /** A note under the box about what the reply does, such as that it answers no open set. */
+  hint?: string | null;
   invalid: string | null;
   failure: string | null;
   onSubmit: ComponentProps<"form">["onSubmit"];
@@ -50,6 +52,7 @@ export function ReplyBox({
   pending,
   answering,
   about = null,
+  hint = null,
   invalid,
   failure,
   onSubmit,
@@ -143,6 +146,7 @@ export function ReplyBox({
           </button>
         </div>
       </div>
+      {hint === null ? null : <p className="text-13 text-text-2">{hint}</p>}
       {invalid === null ? null : (
         <p className="text-13 font-medium text-bad">{invalid}</p>
       )}

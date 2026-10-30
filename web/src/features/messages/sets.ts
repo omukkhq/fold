@@ -1,6 +1,8 @@
+import { isApiError } from "@/api/errors";
 import type { AnsweredScope, MessageView, ThreadView } from "@/api/messages";
 import type { NeedsYouItem } from "@/api/workers";
 import { itemsFor } from "@/app/needsYouModel";
+import { isHumanName } from "@/people/names";
 import { chatMessages, threadsByMessage, type AgentChat } from "./chats";
 
 /** One question of a set as the card shows it. */
@@ -89,17 +91,24 @@ export function startDraft(ask: string, questions: number): SetDraft {
   };
 }
 
-/** The answer of the question on screen; the next question shows, or the draft is complete after the last. */
-export function answerStep(draft: SetDraft, answer: string): SetDraft {
-  const text = answer.trim();
-  if (text === "" || draftComplete(draft)) return draft;
-  const answers = draft.answers.map((a, i) => (i === draft.step ? text : a));
-  return { ...draft, step: draft.step + 1, answers };
+/** The question the card shows: a complete draft whose send failed still shows its last question. */
+export function shownStep(draft: SetDraft): number {
+  return Math.max(Math.min(draft.step, draft.answers.length - 1), 0);
 }
 
-/** Back to the question before, whose answer stays until the person picks another. */
+/** The answer of the question on screen; the next question shows, or the draft is complete after the last. After a failed send the last question takes a new answer. */
+export function answerStep(draft: SetDraft, answer: string): SetDraft {
+  const text = answer.trim();
+  if (text === "") return draft;
+  const at = shownStep(draft);
+  const answers = draft.answers.map((a, i) => (i === at ? text : a));
+  return { ...draft, step: at + 1, answers };
+}
+
+/** Back to the question before the one on screen, whose answer stays until the person picks another. */
 export function stepBack(draft: SetDraft): SetDraft {
-  return draft.step === 0 ? draft : { ...draft, step: draft.step - 1 };
+  if (draft.step === 0) return draft;
+  return { ...draft, step: Math.max(shownStep(draft) - 1, 0) };
 }
 
 export function draftComplete(draft: SetDraft): boolean {
@@ -127,6 +136,22 @@ export function choiceKey(key: string, choices: number): number | null {
   if (!/^[1-9]$/.test(key)) return null;
   const index = Number(key) - 1;
   return index < choices ? index : null;
+}
+
+/** The choice a key press on the card picks: its number key without a modifier, never a key typed into a field. */
+export function keyChoice(
+  event: {
+    key: string;
+    altKey: boolean;
+    ctrlKey: boolean;
+    metaKey: boolean;
+    target: { tagName?: string; isContentEditable?: boolean } | null;
+  },
+  choices: number,
+): number | null {
+  if (event.altKey || event.ctrlKey || event.metaKey) return null;
+  if (typesText(event.target)) return null;
+  return choiceKey(event.key, choices);
 }
 
 /** A key typed into a field belongs to the field, never to the card's number keys. */
@@ -164,6 +189,13 @@ export function answeredPairs(
   }));
 }
 
+/** The agent that answered a set for the person, such as main, which the timeline names over the answers; null when the person answered it. */
+export function answeredFor(reply: MessageView): string | null {
+  return reply.answers_ask !== null && !isHumanName(reply.sender)
+    ? reply.sender
+    : null;
+}
+
 /** A set of several questions, which the timeline lists under its body; a single question is its body. */
 export function listedQuestions(message: MessageView): SetQuestion[] {
   return message.questions.length > 1 ? message.questions : [];
@@ -186,4 +218,14 @@ export function answeredAway(
   sets: readonly OpenSet[],
 ): boolean {
   return shown !== null && !sets.some((s) => s.message.id === shown);
+}
+
+/** The daemon refused the answers because the set was closed meanwhile, such as by main or Mark answered. */
+export function alreadyAnswered(error: unknown): boolean {
+  return isApiError(error, "ask_not_open");
+}
+
+/** The line that stays once the shown set has left: the answers this screen sent, or a set that someone else answered or closed. */
+export function leftText(sentHere: boolean): string {
+  return sentHere ? "Answers sent." : "This set was already answered.";
 }

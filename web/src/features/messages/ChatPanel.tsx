@@ -1,6 +1,6 @@
 import { PersonList, PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import {
@@ -20,7 +20,12 @@ import { cn } from "@/lib/cn";
 import { focusRing, insetFocusRing } from "@/lib/focus";
 import { useMediaQuery, usePageVisible } from "@/lib/pageState";
 import { idHref } from "@/routes/paths";
-import { aboutOptions, aboutValue, chatReplyTarget } from "./chatReply";
+import {
+  aboutOptions,
+  aboutValue,
+  chatReplyTarget,
+  replyHint,
+} from "./chatReply";
 import {
   chatMessages,
   chatName,
@@ -42,7 +47,7 @@ import {
   toBottom,
   toMessage,
 } from "./follow";
-import { markResetDue, threadCanMarkAnswered } from "./answered";
+import { answeredKeys, markResetDue, threadCanMarkAnswered } from "./answered";
 import { useMarkAnsweredBar } from "./MarkAnswered";
 import { MessageItem } from "./MessageItem";
 import { chatAnchor } from "./openThread";
@@ -50,7 +55,13 @@ import { chosenAnswers } from "./question";
 import { QuestionSetCard } from "./QuestionSetCard";
 import { readsDue, WIDE_LAYOUT } from "./readGate";
 import { ReplyBox } from "./ReplyBox";
-import { answeredAway, chatSets, markScope } from "./sets";
+import {
+  alreadyAnswered,
+  answeredAway,
+  chatSets,
+  leftText,
+  markScope,
+} from "./sets";
 
 interface ChatPanelProps {
   slug: string;
@@ -118,8 +129,9 @@ export function ChatPanel({
   const sets = chatSets(chat, open);
   const current = sets[0] ?? null;
   const [about, setAbout] = useState<string | null>(null);
-  const [answered, setAnswered] = useState(false);
-  const target = chatReplyTarget(chat, you, current, about);
+  // The line that stays once the shown set has left, until the person starts on the next one.
+  const [left, setLeft] = useState<{ sent: boolean } | null>(null);
+  const target = chatReplyTarget(chat, you, current, about, open);
   const options = aboutOptions(chat);
   const scope = markScope(current, chat.threads.find(threadCanMarkAnswered));
   const markableId = scope?.ask ?? scope?.thread ?? null;
@@ -198,6 +210,8 @@ export function ChatPanel({
 
   const cardHeading = useRef<HTMLHeadingElement>(null);
   const replyBox = useRef<HTMLTextAreaElement | null>(null);
+  // The set leaves while its answer is still in flight, because the screen reads the asks again before the send resolves.
+  const sending = useRef<string | null>(null);
   // An answered set leaves with the control that sent it and drops the focus; the next set, else the reply box, takes it.
   const currentId = current?.message.id ?? null;
   const shownSet = useRef(currentId);
@@ -205,6 +219,8 @@ export function ChatPanel({
     const before = shownSet.current;
     shownSet.current = currentId;
     if (!answeredAway(before, sets)) return;
+    setLeft({ sent: sending.current === before });
+    sending.current = null;
     const active = document.activeElement;
     if (active !== null && active !== document.body) return;
     if (currentId === null) {
@@ -214,9 +230,20 @@ export function ChatPanel({
     }
   }, [currentId, sets]);
 
+  const queryClient = useQueryClient();
   const answer = async (ask: string, answers: string[]) => {
-    await onAnswer(ask, answers);
-    setAnswered(true);
+    sending.current = ask;
+    try {
+      await onAnswer(ask, answers);
+    } catch (error) {
+      sending.current = null;
+      if (alreadyAnswered(error)) {
+        for (const queryKey of answeredKeys(slug, { ask })) {
+          void queryClient.invalidateQueries({ queryKey });
+        }
+      }
+      throw error;
+    }
     followNewest(scroller.current, following);
   };
 
@@ -346,14 +373,17 @@ export function ChatPanel({
         </ol>
       </div>
 
-      {answered && current === null ? (
+      {left === null ? null : (
         <p
           role="status"
-          className="shrink-0 px-16 pb-6 text-14 text-ok lg:px-28"
+          className={cn(
+            "shrink-0 px-16 pb-6 text-14 lg:px-28",
+            left.sent ? "text-ok" : "text-text-2",
+          )}
         >
-          Answers sent.
+          {leftText(left.sent)}
         </p>
-      ) : null}
+      )}
       {current === null ? null : (
         <QuestionSetCard
           key={current.message.id}
@@ -363,7 +393,7 @@ export function ChatPanel({
           headingRef={cardHeading}
           onAnswer={answer}
           onStart={() => {
-            setAnswered(false);
+            setLeft(null);
           }}
         />
       )}
@@ -388,6 +418,7 @@ export function ChatPanel({
             }
             pending={isSubmitting}
             answering={target?.answers?.sender ?? null}
+            hint={replyHint(target?.thread ?? null, open)}
             about={
               options.length < 2 ? null : (
                 <label className="flex min-w-0 flex-1 items-center gap-6 sm:flex-none">
