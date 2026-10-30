@@ -46,7 +46,12 @@ export interface IntentCardModel {
   origin: HistoryEntry["origin"];
   /** The newest review with a verdict, else the newest comment; null before any review of the version. */
   summary: HistoryReview | null;
+  /** The version before, when this version's intent says exactly what that one's does, as a human edit that kept it; null otherwise. */
+  keptFrom: number | null;
 }
+
+/** What the tick beside a part says to a screen reader: the part holds its own files of the diff. */
+export const PART_COVERS = ", covers its files";
 
 /** The text a version without an intent shows in its place. */
 export const NO_INTENT = "This version has no intent.";
@@ -68,13 +73,48 @@ export function intentCard(
 ): IntentCardModel | null {
   const entry = entries.find((item) => item.current) ?? entries[0];
   if (entry === undefined) return null;
+  const intent = versionIntent(entry.version);
+  const before = entries.find(
+    (item) => item.version.version === entry.version.version - 1,
+  );
+  const earlier = before === undefined ? null : versionIntent(before.version);
   return {
     version: entry.version.version,
-    intent: versionIntent(entry.version),
+    intent,
     by: entry.version.created_by,
     origin: entry.origin,
     summary: reviewerSummary(entry.reviews),
+    keptFrom:
+      intent !== null &&
+      earlier !== null &&
+      before !== undefined &&
+      sameIntent(intent, earlier)
+        ? before.version.version
+        : null,
   };
+}
+
+/** Whether two intents say the same: an unchanged edit form keeps the edited version's intent, and a version with the same intent as the one before kept it. The daemon sends the fields in one order, so their text compares them. */
+export function sameIntent(a: Intent, b: Intent): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Who the head of the Intent card names: who wrote the intent, the version it was kept from, or nobody for a version without an intent. */
+export type IntentByline =
+  | { kind: "written"; words: string; by: string }
+  | { kind: "kept"; from: number }
+  | null;
+
+const WRITTEN: Record<HistoryEntry["origin"], string> = {
+  author: "written by",
+  review_fix: "written in a review fix by",
+  human_edit: "written in a human edit by",
+};
+
+export function intentByline(model: IntentCardModel): IntentByline {
+  if (model.intent === null) return null;
+  if (model.keptFrom !== null) return { kind: "kept", from: model.keptFrom };
+  return { kind: "written", words: WRITTEN[model.origin], by: model.by };
 }
 
 /** The reviewer who checked the version against its intent: the author of the newest verdict; null while only comments or nothing stand. */
@@ -126,19 +166,37 @@ export function intentSections(intent: Intent): IntentSections {
   };
 }
 
-/** The changed files the parts name, which the daemon holds to be exactly the version's changed files. */
-export function intentFileCount(intent: Intent): number {
-  return intent.parts.reduce((sum, part) => sum + part.files.length, 0);
+/** The line under the summary: that every changed file belongs to a part, or how many belong to none, which then needs a reader's attention. */
+export interface Coverage {
+  text: string;
+  /** The changed files that no part names. */
+  outside: number;
 }
 
-/** The line under the summary that says every changed file belongs to a part. */
-export function coverageLine(intent: Intent): string {
-  const files = intentFileCount(intent);
+/** The coverage of the version's changed files, `changed` as its diff names them, by the parts of its intent. */
+export function coverage(intent: Intent, changed: readonly string[]): Coverage {
+  const named = new Set(intent.parts.flatMap((part) => part.files));
+  const outside = changed.filter((path) => !named.has(path)).length;
+  if (outside > 0) {
+    return {
+      text:
+        outside === 1
+          ? "1 changed file belongs to no part."
+          : `${String(outside)} changed files belong to no part.`,
+      outside,
+    };
+  }
   const where = intent.parts.length === 1 ? "the part below" : "a part below";
-  if (files === 0) return "This version changes no file.";
-  if (files === 1) return `The changed file belongs to ${where}.`;
-  if (files === 2) return `Both changed files belong to ${where}.`;
-  return `All ${String(files)} changed files belong to ${where}.`;
+  const files = changed.length;
+  const text =
+    files === 0
+      ? "This version changes no file."
+      : files === 1
+        ? `The changed file belongs to ${where}.`
+        : files === 2
+          ? `Both changed files belong to ${where}.`
+          : `All ${String(files)} changed files belong to ${where}.`;
+  return { text, outside: 0 };
 }
 
 /** The part that `path` belongs to; null when no part names it. */

@@ -10,7 +10,9 @@ import {
   MessageSquare,
   type LucideIcon,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { useId, useState, type ReactNode } from "react";
+import { proposalVersionQuery } from "@/api/queries";
 import type {
   CheckRun,
   GateStatus,
@@ -52,7 +54,8 @@ import type { IntegrationView } from "./integration";
 import {
   NO_INTENT,
   checkedBy,
-  coverageLine,
+  coverage,
+  intentByline,
   intentCard,
   intentInHistory,
   versionIntent,
@@ -233,7 +236,15 @@ function IntentCard({
   model: IntentCardModel;
 }) {
   const checker = checkedBy(model);
+  const byline = intentByline(model);
   const intent = model.intent;
+  const covered =
+    intent === null
+      ? null
+      : coverage(
+          intent,
+          proposal.files.map((file) => file.path),
+        );
   return (
     <section
       aria-label="Intent"
@@ -243,15 +254,23 @@ function IntentCard({
         <h2 className="text-16 leading-tight font-semibold text-text">
           Intent of v{model.version}
         </h2>
-        <span className="text-13 text-text-2">
-          {ORIGIN_WRITTEN[model.origin]} <PersonName name={model.by} />
-          {checker === null ? null : (
-            <>
-              {" "}
-              · checked by <PersonName name={checker} />
-            </>
-          )}
-        </span>
+        {byline === null && checker === null ? null : (
+          <span className="text-13 text-text-2">
+            {byline === null ? null : byline.kind === "kept" ? (
+              `kept from v${String(byline.from)}`
+            ) : (
+              <>
+                {byline.words} <PersonName name={byline.by} />
+              </>
+            )}
+            {checker === null ? null : (
+              <>
+                {byline === null ? "checked by " : " · checked by "}
+                <PersonName name={checker} />
+              </>
+            )}
+          </span>
+        )}
       </div>
       {intent === null ? (
         <p className="text-15 leading-normal text-text-2">{NO_INTENT}</p>
@@ -262,12 +281,20 @@ function IntentCard({
             slug={slug}
             className="max-w-measure text-16 leading-normal"
           />
-          <p className="rounded-m bg-ok-soft px-14 py-10 text-14 text-text">
-            {coverageLine(intent)}
+          <p
+            className={cn(
+              "rounded-m px-14 py-10 text-14 text-text",
+              covered !== null && covered.outside > 0
+                ? "bg-warn-soft"
+                : "bg-ok-soft",
+            )}
+          >
+            {covered?.text}
           </p>
           <IntentBody
             slug={slug}
             id={proposal.summary.id}
+            version={model.version}
             intent={intent}
             files={proposal.files}
           />
@@ -356,6 +383,11 @@ function HistoryIntent({
 }) {
   const [open, setOpen] = useState(false);
   const bodyId = useId();
+  // The version's own changed files give its parts their line counts; they are read once the parts open.
+  const read = useQuery({
+    ...proposalVersionQuery(slug, proposal.summary.id, version),
+    enabled: open,
+  });
   return (
     <div className="flex min-w-0 flex-col gap-8">
       <MentionText
@@ -366,7 +398,7 @@ function HistoryIntent({
       <button
         type="button"
         aria-expanded={open}
-        aria-controls={bodyId}
+        aria-controls={open ? bodyId : undefined}
         className={cn("self-start text-14 font-semibold", LINK)}
         onClick={() => {
           setOpen((old) => !old);
@@ -381,8 +413,9 @@ function HistoryIntent({
           <IntentBody
             slug={slug}
             id={proposal.summary.id}
+            version={version}
             intent={intent}
-            files={[]}
+            files={read.data?.files ?? []}
           />
         </div>
       ) : null}
@@ -504,12 +537,6 @@ function RunLine({
     </li>
   );
 }
-
-const ORIGIN_WRITTEN: Record<HistoryEntry["origin"], string> = {
-  author: "written by",
-  review_fix: "written in a review fix by",
-  human_edit: "written in a human edit by",
-};
 
 const ORIGIN_WORDS: Record<HistoryEntry["origin"], string> = {
   author: "by",

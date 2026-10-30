@@ -10,9 +10,9 @@ import { historyEntries } from "./history";
 import {
   NO_INTENT,
   checkedBy,
-  coverageLine,
+  coverage,
+  intentByline,
   intentCard,
-  intentFileCount,
   intentInHistory,
   intentSections,
   partOf,
@@ -54,7 +54,53 @@ describe("the intent card", () => {
       by: "review/quality",
       origin: "review_fix",
       summary: null,
+      keptFrom: null,
     });
+    expect(card === null ? null : intentByline(card)).toEqual({
+      kind: "written",
+      words: "written in a review fix by",
+      by: "review/quality",
+    });
+  });
+
+  it("says a human edit kept the intent of the version before, and names nobody without an intent", () => {
+    const kept = intentCard(
+      entries([
+        proposalVersion(1, { intent: TABLE }),
+        proposalVersion(2, {
+          intent: { ...TABLE },
+          created_by: "human:tanim",
+          human_edit: true,
+        }),
+      ]),
+    );
+    expect(kept?.keptFrom).toBe(1);
+    expect(kept === null ? null : intentByline(kept)).toEqual({
+      kind: "kept",
+      from: 1,
+    });
+    const own = intentCard(
+      entries([
+        proposalVersion(1, { intent: TABLE }),
+        proposalVersion(2, {
+          intent: { ...TABLE, summary: "Adds the table again." },
+          created_by: "human:tanim",
+          human_edit: true,
+        }),
+      ]),
+    );
+    expect(own === null ? null : intentByline(own)).toEqual({
+      kind: "written",
+      words: "written in a human edit by",
+      by: "human:tanim",
+    });
+    const none = intentCard(entries([proposalVersion(1), proposalVersion(2)]));
+    expect(none?.keptFrom).toBeNull();
+    expect(none === null ? "card" : intentByline(none)).toBeNull();
+    const fromNone = intentCard(
+      entries([proposalVersion(1), proposalVersion(2, { intent: TABLE })]),
+    );
+    expect(fromNone?.keptFrom).toBeNull();
   });
 
   it("has no intent for a version made before intents, and no card without a version", () => {
@@ -149,27 +195,39 @@ describe("the sections of an intent", () => {
     });
   });
 
-  it("says that every changed file belongs to a part", () => {
+  it("says that every changed file belongs to a part, from the version's diff", () => {
     const many = intent("s", [
       ["Routes", "d", ["a", "b"]],
       ["Tests", "d", ["c"]],
     ]);
-    expect(intentFileCount(many)).toBe(3);
-    expect(coverageLine(many)).toBe(
-      "All 3 changed files belong to a part below.",
-    );
-    expect(coverageLine(intent("s", [["P", "d", ["a", "b", "c"]]]))).toBe(
-      "All 3 changed files belong to the part below.",
-    );
-    expect(coverageLine(intent("s", [["P", "d", ["a", "b"]]]))).toBe(
-      "Both changed files belong to the part below.",
-    );
-    expect(coverageLine(TABLE)).toBe(
+    expect(coverage(many, ["a", "b", "c"])).toEqual({
+      text: "All 3 changed files belong to a part below.",
+      outside: 0,
+    });
+    expect(
+      coverage(intent("s", [["P", "d", ["a", "b", "c"]]]), ["a", "b", "c"])
+        .text,
+    ).toBe("All 3 changed files belong to the part below.");
+    expect(
+      coverage(intent("s", [["P", "d", ["a", "b"]]]), ["a", "b"]).text,
+    ).toBe("Both changed files belong to the part below.");
+    expect(coverage(TABLE, ["db/0001.sql"]).text).toBe(
       "The changed file belongs to the part below.",
     );
-    expect(coverageLine(intent("s", [["P", "d", []]]))).toBe(
+    expect(coverage(intent("s", [["P", "d", []]]), []).text).toBe(
       "This version changes no file.",
     );
+  });
+
+  it("counts the changed files that no part names", () => {
+    expect(coverage(TABLE, ["db/0001.sql", "src/a.ts"])).toEqual({
+      text: "1 changed file belongs to no part.",
+      outside: 1,
+    });
+    expect(coverage(TABLE, ["src/a.ts", "src/b.ts"])).toEqual({
+      text: "2 changed files belong to no part.",
+      outside: 2,
+    });
   });
 
   it("finds a file's part and sizes each part from the diff", () => {

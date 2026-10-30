@@ -5,7 +5,7 @@ import { HrefLink } from "@/app/HrefLink";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { MentionText } from "@/mentions/MentionText";
-import { intentSections, partSize } from "./intent";
+import { PART_COVERS, intentSections, partSize } from "./intent";
 import { detailHref } from "./view";
 
 const SECTION = "font-title text-14 leading-tight font-semibold text-text-2";
@@ -39,13 +39,21 @@ export interface IntentBodyProps {
   slug: string;
   /** The proposal, such as P-3, whose Changes tab each file opens. */
   id: string;
+  /** The version whose intent this is, whose Changes tab each file opens. */
+  version: number;
   intent: Intent;
-  /** The changed files with their line counts, for the size of each part. */
+  /** The changed files of that version with their line counts, for the size of each part. */
   files: readonly ComparedFile[];
 }
 
 /** What each part of the diff does with its files, then the contracts, decisions and what the change does not change, each only when the intent has it. */
-export function IntentBody({ slug, id, intent, files }: IntentBodyProps) {
+export function IntentBody({
+  slug,
+  id,
+  version,
+  intent,
+  files,
+}: IntentBodyProps) {
   const sections = intentSections(intent);
   return (
     <div className="flex min-w-0 flex-col gap-16">
@@ -69,6 +77,7 @@ export function IntentBody({ slug, id, intent, files }: IntentBodyProps) {
               <div className="flex min-w-0 flex-col gap-2">
                 <span className="text-15 font-semibold text-text">
                   {part.name}
+                  <span className="sr-only">{PART_COVERS}</span>
                 </span>
                 <MentionText
                   text={part.does}
@@ -79,7 +88,12 @@ export function IntentBody({ slug, id, intent, files }: IntentBodyProps) {
                   {part.files.map((path) => (
                     <HrefLink
                       key={path}
-                      href={detailHref(slug, id, { tab: "changes", path })}
+                      href={detailHref(slug, id, {
+                        tab: "changes",
+                        version,
+                        path,
+                      })}
+                      title={path}
                       className={cn(
                         "max-w-full truncate rounded-pill bg-accent-soft px-8 py-2 font-mono text-13 text-accent hover:underline",
                         focusRing,

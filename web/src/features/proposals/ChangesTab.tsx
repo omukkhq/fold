@@ -42,6 +42,7 @@ import { canEdit, editableFile } from "./edit";
 import { describeFailure } from "./errors";
 import { FileEditor } from "./FileEditor";
 import { versionIntent } from "./intent";
+import { groupFiles, partGroups } from "./partGroups";
 import { ChangedFiles } from "./ChangedFiles";
 import { useChangedFiles } from "./changedFilesState";
 import {
@@ -204,7 +205,17 @@ function ChangeBody({
   };
   const [editing, setEditing] = useState<string | null>(null);
   const files = comparison.data ? listedFiles(comparison.data.files) : [];
-  const file = currentFile(files, search.path);
+  const version = shownVersion(view);
+  const shownVersionRow = proposal.versions.find((v) => v.version === version);
+  const shownIntent =
+    shownVersionRow === undefined ? null : versionIntent(shownVersionRow);
+  const since = view.kind === "since";
+  const groups = partGroups(shownIntent, files, since);
+  // The tree lists the files part by part, so with no file in the address the first file of the first part shows.
+  const file = currentFile(
+    groups === null ? files : groupFiles(groups),
+    search.path,
+  );
   const tree = useChangedFiles(
     viewedKey(slug, id, view.range),
     comparison.data ? shownPath(comparison.data, file?.path) : null,
@@ -213,7 +224,6 @@ function ChangeBody({
     proposalFileDiffQuery(slug, id, view.range, file?.path ?? ""),
     file !== null && fileBody(file) === "text",
   );
-  const version = shownVersion(view);
   const fileText = useFileText(
     proposalFileQuery(slug, id, version, file?.path ?? ""),
     needsFileText(file, fileDiff),
@@ -236,9 +246,6 @@ function ChangeBody({
     held,
   );
   const editable = canEdit(proposal, human, view) && editableFile(file);
-  const shownVersionRow = proposal.versions.find((v) => v.version === version);
-  const shownIntent =
-    shownVersionRow === undefined ? null : versionIntent(shownVersionRow);
   const questionById = new Map(questions.map((q) => [q.id, q]));
   const requests = useQuery(requestsQuery(slug));
   const makeRequest = useCodeRequest(slug);
@@ -299,7 +306,9 @@ function ChangeBody({
       ) : (
         <ChangedFiles
           state={tree}
+          slug={slug}
           intent={shownIntent}
+          since={since}
           comparison={data}
           selectedPath={file?.path}
           onSelectFile={showFile}

@@ -2322,6 +2322,17 @@ describe("Human edit", () => {
     fireEvent.change(within(form).getByLabelText("Decisions"), {
       target: { value: "A human checked the table.\n" },
     });
+    await user.click(within(form).getByRole("button", { name: "Add a part" }));
+    expect(document.activeElement).toBe(
+      within(form).getByLabelText("Part 2 name"),
+    );
+    await user.click(
+      within(form).getByRole("button", { name: "Remove part 2" }),
+    );
+    expect(document.activeElement).toBe(
+      within(form).getByLabelText("Part 1 name"),
+    );
+    expect(within(form).queryByLabelText("Part 2 name")).toBeNull();
     await user.click(save);
     await waitFor(() => {
       expect(writes(EDITS)).toHaveLength(1);
@@ -2643,6 +2654,10 @@ describe("Intent", () => {
       reviews: p.reviews.map((r) =>
         r.version === 2 ? { ...r, body: "The diff matches the intent." } : r,
       ),
+      files: [
+        comparedFile(SCHEMA, "added"),
+        comparedFile("docs/cases.md", "added"),
+      ],
     }));
     const user = userEvent.setup();
     renderAt("/p/demo/proposals/P-4");
@@ -2691,6 +2706,12 @@ describe("Intent", () => {
       within(v1).getByRole("button", { name: "Show the whole intent of v1" }),
     );
     expect(within(v1).getByText("Creates it.")).toBeTruthy();
+    expect(
+      within(v1).getByRole("link", { name: SCHEMA }).getAttribute("href"),
+    ).toBe(
+      `/p/demo/proposals/P-4?tab=changes&version=1&path=${encodeURIComponent(SCHEMA)}`,
+    );
+    expect(await within(v1).findByText("1 file · +1 −1")).toBeTruthy();
     await user.click(
       within(v1).getByRole("button", { name: "Hide the parts" }),
     );
@@ -2708,6 +2729,7 @@ describe("Intent", () => {
           ["Reset the page", "setFilter writes page 1.", [SCHEMA]],
         ]),
       })),
+      files: [comparedFile(SCHEMA, "added")],
     }));
     renderAt("/p/demo/proposals/P-4");
     const card = await screen.findByRole("region", { name: "Intent" });
@@ -2743,6 +2765,89 @@ describe("Intent", () => {
     expect(
       within(file).getByText("Creates the reports table.", { exact: false }),
     ).toBeTruthy();
+  });
+
+  it("warns on the Overview about changed files that no part names, and says a human edit kept the intent", async () => {
+    const kept = intent("Adds the reports table.", [
+      ["Table", "Creates it.", [SCHEMA]],
+    ]);
+    update("P-4", (p) => ({
+      ...p,
+      versions: p.versions.map((v) => ({
+        ...v,
+        intent: kept,
+        ...(v.version === 2
+          ? { human_edit: true, created_by: "human:tanim" }
+          : {}),
+      })),
+      files: [
+        comparedFile(SCHEMA, "added"),
+        comparedFile("src/extra.ts", "added"),
+      ],
+    }));
+    renderAt("/p/demo/proposals/P-4");
+    const card = await screen.findByRole("region", { name: "Intent" });
+    expect(
+      within(card).getByText("1 changed file belongs to no part."),
+    ).toBeTruthy();
+    expect(within(card).getByText(/kept from v1/)).toBeTruthy();
+    expect(within(card).queryByText(/written/)).toBeNull();
+    expect(
+      within(card).getByRole("link", { name: SCHEMA }).getAttribute("title"),
+    ).toBe(SCHEMA);
+  });
+
+  it("names nobody as the writer of a version without an intent", async () => {
+    update("P-4", (p) => ({ ...p, reviews: [] }));
+    renderAt("/p/demo/proposals/P-4");
+    const card = await screen.findByRole("region", { name: "Intent" });
+    expect(within(card).queryByText(/written by/)).toBeNull();
+  });
+
+  it("puts a file the version changed back to the base into a quiet group of a change since an earlier version", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      versions: p.versions.map((v) => ({
+        ...v,
+        intent: intent("Describes the cases.", [
+          ["Docs", "Describes the cases with #T-9.", ["docs/cases.md"]],
+        ]),
+      })),
+    }));
+    renderAt(
+      `/p/demo/proposals/P-4?tab=changes&version=2&since=1&path=${SCHEMA}`,
+    );
+    const tree = await screen.findByRole("navigation", {
+      name: "Changed files",
+    });
+    expect(within(tree).getByText("Changed back to the base")).toBeTruthy();
+    expect(within(tree).queryByText("Not in the intent")).toBeNull();
+    const file = await screen.findByRole("region", { name: SCHEMA });
+    expect(
+      within(file).getByText("as the base has it.", { exact: false }),
+    ).toBeTruthy();
+    expect(
+      within(file).queryByText("belongs to no part of the intent.", {
+        exact: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("links the mentions of what a part does above its file", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      versions: p.versions.map((v) => ({
+        ...v,
+        intent: intent("Adds the table.", [
+          ["Reports table", "Creates the table for #T-9.", [SCHEMA]],
+        ]),
+      })),
+    }));
+    renderAt("/p/demo/proposals/P-4?tab=changes");
+    const file = await screen.findByRole("region", { name: SCHEMA });
+    expect(
+      within(file).getByRole("link", { name: "T-9" }).getAttribute("href"),
+    ).toBe("/p/demo/t/T-9");
   });
 
   it("warns about a changed file that no part names", async () => {

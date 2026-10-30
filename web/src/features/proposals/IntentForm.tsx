@@ -1,4 +1,5 @@
 import { Plus, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { Button, IconButton } from "@/components/button/Button";
 import { TextField, Textarea } from "@/components/form/controls";
 import {
@@ -6,6 +7,7 @@ import {
   addPart,
   changePart,
   changeSection,
+  partAfterRemove,
   removePart,
   type IntentDraft,
 } from "./intentDraft";
@@ -33,6 +35,12 @@ export function IntentForm({
   problem,
   readOnly,
 }: IntentFormProps) {
+  const names = useRef(new Map<number, HTMLInputElement>());
+  // A new object each time, so adding or removing twice in a row moves focus each time.
+  const [focusPart, setFocusPart] = useState<{ index: number } | null>(null);
+  useEffect(() => {
+    if (focusPart !== null) names.current.get(focusPart.index)?.focus();
+  }, [focusPart]);
   return (
     <section
       aria-label={`Intent of ${next}`}
@@ -67,6 +75,10 @@ export function IntentForm({
               <div className="flex items-end gap-8">
                 <div className="min-w-0 flex-1">
                   <TextField
+                    ref={(element) => {
+                      if (element === null) names.current.delete(index);
+                      else names.current.set(index, element);
+                    }}
                     label={`${which} name`}
                     readOnly={readOnly}
                     value={part.name}
@@ -83,6 +95,9 @@ export function IntentForm({
                     disabled={readOnly}
                     onClick={() => {
                       onChange(removePart(draft, index));
+                      setFocusPart({
+                        index: partAfterRemove(index, draft.parts.length),
+                      });
                     }}
                   >
                     <Trash2 aria-hidden="true" size={16} />
@@ -127,6 +142,7 @@ export function IntentForm({
           icon={<Plus aria-hidden="true" size={14} />}
           onClick={() => {
             onChange(addPart(draft));
+            setFocusPart({ index: draft.parts.length });
           }}
         >
           Add a part
@@ -150,7 +166,7 @@ export function IntentForm({
         ))}
       </div>
       {problem === null ? null : (
-        <p role="alert" className="text-13 font-medium text-bad">
+        <p role="status" className="text-13 font-medium text-bad">
           {problem}
         </p>
       )}
