@@ -1,5 +1,5 @@
 use fold_core::roles::PermissionBehavior;
-use fold_core::{HumanName, MessageId, PermissionQuestionId, Role, Timestamp};
+use fold_core::{EventActor, HumanName, MessageId, PermissionQuestionId, Role, Timestamp};
 use fold_store::Store;
 use fold_store::agents::{self, NewQuestion, NewWorkerProcess, QuestionKind};
 use serde_json::json;
@@ -74,7 +74,7 @@ async fn question(store: &Store, process: i64, kind: QuestionKind, number: Optio
 #[tokio::test]
 async fn a_question_takes_one_answer_or_one_closure_and_never_changes() {
     let (_dir, store, process) = seeded().await;
-    let ana = HumanName::parse("ana").unwrap();
+    let ana = EventActor::human(&HumanName::parse("ana").unwrap());
     let first = question(&store, process, QuestionKind::Tool, Some(1)).await;
     let second = question(&store, process, QuestionKind::Tool, Some(2)).await;
     let open = agents::open_questions(store.read()).await.unwrap();
@@ -184,7 +184,7 @@ async fn a_question_takes_one_answer_or_one_closure_and_never_changes() {
 #[tokio::test]
 async fn an_ask_question_links_its_messages_and_is_only_allowed() {
     let (_dir, store, process) = seeded().await;
-    let ana = HumanName::parse("ana").unwrap();
+    let ana = EventActor::human(&HumanName::parse("ana").unwrap());
     let ask = question(&store, process, QuestionKind::Ask, None).await;
     let tool = question(&store, process, QuestionKind::Tool, Some(1)).await;
     let m1 = MessageId::from_number(1).unwrap();
@@ -216,12 +216,28 @@ async fn an_ask_question_links_its_messages_and_is_only_allowed() {
     let reply = fold_store::messages::first_human_reply(store.read(), m1)
         .await
         .unwrap();
-    assert_eq!(reply, Some((" red ".to_owned(), ana.clone())));
+    assert_eq!(
+        reply,
+        Some((" red ".to_owned(), HumanName::parse("ana").unwrap()))
+    );
     assert_eq!(
         fold_store::messages::first_human_reply(store.read(), MessageId::from_number(2).unwrap())
             .await
             .unwrap(),
         None
+    );
+    let main = EventActor::parse("main").unwrap();
+    let by_agent = store
+        .write(async |tx| {
+            agents::insert_answer(tx, tool, PermissionBehavior::Allow, &main, None, at(3)).await
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        by_agent
+            .to_string()
+            .contains("worker_permission_answers_tool_by_human"),
+        "only a named human answers a tool question: {by_agent}"
     );
     let denied = store
         .write(async |tx| {

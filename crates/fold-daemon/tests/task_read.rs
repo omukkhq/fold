@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use crate::common::roles::give_role;
 use crate::reviews_support;
 use fold_core::roles::Role;
@@ -311,7 +312,7 @@ async fn the_files_of_the_task_read_count_the_newest_version() {
     fx.proposal().await;
     fx.write("src/more.rs", "pub fn w() {}\n");
     fx.reviews
-        .update_proposal(&by(&fx.frontend.worker), p(1), None)
+        .update_proposal_covering(&by(&fx.frontend.worker), p(1), None)
         .await
         .unwrap();
 

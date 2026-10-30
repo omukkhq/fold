@@ -9,7 +9,7 @@ import type { ComparedFile, FileDiff, FileWarning } from "@/api/diff";
 import { Button } from "@/components/button/Button";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
-import { DiffRows } from "./DiffRows";
+import { DiffRows, type DiffRowsProps } from "./DiffRows";
 import { FileList } from "./FileList";
 import {
   diffSides,
@@ -69,7 +69,7 @@ export interface DiffViewerProps {
   threads?: readonly DiffThread[];
   renderThread?: (thread: DiffThread) => ReactNode;
   /** Shown under the last selected line. */
-  renderComposer?: (selection: DiffSelection) => ReactNode;
+  renderComposer?: DiffRowsProps["renderComposer"];
   /** Ranges marked at each of their lines, such as questions to the author. */
   marks?: readonly DiffThread[];
   renderMark?: (mark: DiffThread, first: boolean) => ReactNode;
@@ -79,6 +79,8 @@ export interface DiffViewerProps {
   fileNav?: ReactNode;
   /** Drawn at the end of the file's head, such as a viewed mark. */
   headExtra?: (path: string) => ReactNode;
+  /** Drawn under the file's head, above its lines, such as the part of the intent the file belongs to. */
+  headNote?: (path: string) => ReactNode;
 }
 
 type PanelProps = Omit<
@@ -86,7 +88,10 @@ type PanelProps = Omit<
   "comparison" | "selectedPath" | "onSelectFile" | "filesTitle" | "fileNav"
 > & { file: ComparedFile; split: boolean };
 
-type BodyProps = Omit<PanelProps, "fileText" | "headExtra" | "split"> & {
+type BodyProps = Omit<
+  PanelProps,
+  "fileText" | "headExtra" | "headNote" | "split"
+> & {
   gaps: GapText | null;
   spans: readonly Span[];
   whole: boolean;
@@ -283,7 +288,14 @@ function shownGaps(
 }
 
 /** One file: its head and its lines. The lines the reader showed belong to the file and the sides it compares, so another file or another version of it starts with its hunks only. */
-function FilePanel({ file, split, headExtra, fileText, ...body }: PanelProps) {
+function FilePanel({
+  file,
+  split,
+  headExtra,
+  headNote,
+  fileText,
+  ...body
+}: PanelProps) {
   const sides = diffSides(
     body.fileDiff.status === "ready" ? body.fileDiff.diff : null,
   );
@@ -339,6 +351,7 @@ function FilePanel({ file, split, headExtra, fileText, ...body }: PanelProps) {
         ) : null}
         {headExtra?.(file.path)}
       </header>
+      {headNote?.(file.path)}
       <FileBody
         file={file}
         {...body}
@@ -359,6 +372,7 @@ export function DiffViewer({
   filesTitle,
   fileNav,
   headExtra,
+  headNote,
   ...body
 }: DiffViewerProps) {
   const files = listedFiles(comparison.files);
@@ -412,6 +426,7 @@ export function DiffViewer({
         file={shown.file}
         split={split}
         headExtra={headExtra}
+        headNote={headNote}
         {...body}
       />
     </div>

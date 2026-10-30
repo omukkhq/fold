@@ -188,3 +188,4 @@ notify_settings_io
 plaintext_notify_target
 notify_send_not_found
 notify_target_inactive
+invalid_intent

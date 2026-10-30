@@ -270,6 +270,14 @@ fn web_lead(tasks: &Tasks) -> Script {
     )
 }
 
+/// An intent of one part that covers `files`.
+fn one_part(summary: &str, name: &str, does: &str, files: &[&str]) -> Value {
+    json!({
+        "summary": summary,
+        "parts": [{"name": name, "does": does, "files": files}],
+    })
+}
+
 /// The first steps of every task worker: the workspace of its task, whose id and folder later steps use as `${ws}` and `${dir}`.
 fn workspace(task: &str) -> Step {
     call_saving(
@@ -279,21 +287,27 @@ fn workspace(task: &str) -> Step {
     )
 }
 
-fn propose(task: &str, title: &str, evidence: &str) -> [Step; 2] {
+fn propose(task: &str, title: &str, intent: Value, evidence: &str) -> [Step; 2] {
     [
         call("record_changes", json!({"ws": "${ws}", "message": title})),
         call_saving(
             "create_proposal",
-            json!({"task": task, "title": title, "evidence": evidence}),
+            json!({"task": task, "title": title, "intent": intent, "evidence": evidence}),
             &[("proposal", "/id")],
         ),
     ]
 }
 
-fn proposing_worker(task: &str, edits: Vec<Step>, title: &str, evidence: &str) -> Script {
+fn proposing_worker(
+    task: &str,
+    edits: Vec<Step>,
+    title: &str,
+    intent: Value,
+    evidence: &str,
+) -> Script {
     let mut steps = vec![workspace(task)];
     steps.extend(edits);
-    steps.extend(propose(task, title, evidence));
+    steps.extend(propose(task, title, intent, evidence));
     one_turn(steps, "Proposed ${proposal}.")
 }
 
@@ -302,6 +316,12 @@ fn schema_worker(tasks: &Tasks) -> Script {
         &tasks.schema,
         vec![insert("src/db.js", 6, "  tables.set(\"users\", []);\n")],
         "Create the users table",
+        json!({
+            "summary": "createDb() sets an empty users table next to the other tables when the service starts, so sign-up has a table to write to.",
+            "parts": [{"name": "Users table", "does": "createDb() sets tables.users to an empty list before it returns the store.", "files": ["src/db.js"]}],
+            "contracts": {"database": ["New table users, empty at start"]},
+            "not_changed": ["The other tables and their rows."],
+        }),
         "The service starts and the users table exists.",
     )
 }
@@ -340,11 +360,27 @@ fn routes_worker(tasks: &Tasks) -> Script {
 fn audit_worker(tasks: &Tasks) -> Script {
     proposing_worker(
         &tasks.audit,
-        vec![write(
-            "src/audit.js",
-            "export function record(log, who, what) {\n  log.push({ who, what });\n}\n",
-        )],
+        vec![
+            write(
+                "src/audit.js",
+                "export function record(log, who, what) {\n  log.push({ who, what });\n}\n",
+            ),
+            write(
+                "test/audit.test.js",
+                "import { record } from \"../src/audit.js\";\n\nconst log = [];\nrecord(log, \"ana\", \"name\");\nrecord(log, \"bo\", \"mail\");\nconsole.assert(log.length === 2 && log[0].who === \"ana\");\n",
+            ),
+        ],
         "Record changes in an audit log",
+        json!({
+            "summary": "record(log, who, what) appends one entry with the author and the change to the audit log, so each write can be traced. The log is a plain list in memory; nothing reads or trims it yet.",
+            "parts": [
+                {"name": "Audit log", "does": "record() pushes { who, what } onto the log it is given and returns nothing.", "files": ["src/audit.js"]},
+                {"name": "Tests", "does": "One write adds one entry with its author; two writes keep their order.", "files": ["test/audit.test.js"]},
+            ],
+            "contracts": {"events": ["audit entry { who, what } per write"]},
+            "decisions": ["The log stays in memory: the store for it comes with the retention task.", "An entry holds no time, so two entries compare by their order only."],
+            "not_changed": ["Reading, trimming or exporting the log."],
+        }),
         "Each write adds one entry.",
     )
 }
@@ -382,6 +418,12 @@ fn local_worker(tasks: &Tasks) -> Script {
             "  return new Date(value).toLocaleDateString(\"en-GB\");",
         )],
         "Show dates in the local time zone",
+        one_part(
+            "formatDate() formats the stored UTC value in the reader's local time zone, so a date matches the reader's day. The stored value stays UTC.",
+            "Local date",
+            "formatDate() returns toLocaleDateString(\"en-GB\") of the value.",
+            &["src/format.js"],
+        ),
         "Checked in the list view with two time zones.",
     )
 }
@@ -395,6 +437,12 @@ fn relative_worker(tasks: &Tasks) -> Script {
             "  return relativeTime(Date.now() - new Date(value));",
         )],
         "Show dates as relative text",
+        one_part(
+            "formatDate() returns the time since the value as relative text, such as 3 hours ago. The stored value stays as it is.",
+            "Relative date",
+            "formatDate() passes the age of the value to relativeTime().",
+            &["src/format.js"],
+        ),
         "Checked with items from the last day.",
     )
 }
@@ -409,6 +457,12 @@ fn counts_worker(tasks: &Tasks) -> Script {
             "  return count.toLocaleString(\"en-US\");",
         )],
         "Format counts with separators",
+        one_part(
+            "formatCount() formats a count with thousands separators, so large counts are easy to read.",
+            "Count format",
+            "formatCount() returns toLocaleString(\"en-US\") of the count.",
+            &["src/format.js"],
+        ),
         "Checked with counts above one thousand.",
     );
     script.turns.push(Turn {
@@ -425,7 +479,12 @@ fn counts_worker(tasks: &Tasks) -> Script {
             ),
             call(
                 "update_proposal",
-                json!({"id": "${proposal}", "evidence": "Checked with counts from 1 to 10000000."}),
+                json!({"id": "${proposal}", "intent": one_part(
+                    "formatCount() formats every count with thousands separators, small counts too, so all counts read the same way.",
+                    "Count format",
+                    "formatCount() returns toLocaleString(\"en-US\") of the count at every size.",
+                    &["src/format.js"],
+                ), "evidence": "Checked with counts from 1 to 10000000."}),
             ),
         ],
         reply: Some("Updated ${proposal}.".to_owned()),
@@ -443,6 +502,12 @@ fn login_worker(tasks: &Tasks) -> Script {
             "  const handler = routes(db);\n  const form = {\n    fields: [\"name\", \"password\"],\n    submit: (values) => db.insert(\"sessions\", values),\n  };\n  handler.login = form;",
         )],
         "Add the login form",
+        json!({
+            "summary": "The app gives its handler a login form with a name and a password field; submitting it inserts a sessions row, so a user can sign in. The password is not checked yet.",
+            "parts": [{"name": "Login form", "does": "app.js builds the handler, then sets handler.login to a form whose submit inserts the values into sessions.", "files": ["src/app.js"]}],
+            "contracts": {"database": ["Writes rows into sessions"]},
+            "decisions": ["Any password signs in until the password check task lands."],
+        }),
         "The form renders and submits.",
     )
 }

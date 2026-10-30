@@ -30,7 +30,9 @@ use crate::projects::ProjectHandle;
 use crate::services::events::EventBuffer;
 #[cfg(feature = "failpoints")]
 use crate::services::fired;
-use crate::services::reviews::{self as review, HumanRecord, RecordIntegration, ReviewService};
+use crate::services::reviews::{
+    self as review, HumanRecord, RecordAuthor, RecordIntegration, ReviewService,
+};
 use crate::services::workspaces::{WorkspaceError, WorkspaceService};
 
 /// How many times a record starts again from reading main when main moved between its own merge and the integration's.
@@ -618,10 +620,10 @@ pub(crate) async fn integrate_change(
             title: change.title.clone(),
             base_tree,
             tree: human_tree,
-            human: HumanRecord {
+            by: RecordAuthor::Human(HumanRecord {
                 human: change.human.clone(),
                 data: reach.event_data(commit_text),
-            },
+            }),
         };
         let revision = match reviews
             .integrate_record(actor, request)

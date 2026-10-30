@@ -1,15 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
-import {
-  awaitingHumanQuery,
-  needsYouQuery,
-  sessionQuery,
-} from "../api/queries";
+import { needsYouQuery, sessionQuery } from "../api/queries";
 import { Count } from "../components/badge/Chip";
 import { Tooltip } from "../components/overlay/Tooltip";
 import { cn } from "../lib/cn";
 import { focusRing } from "../lib/focus";
 import { NAV_ENTRIES, activeNav, navPath, type NavId } from "../routes/nav";
+import { waitingSets } from "@/features/messages/sets";
 import { HrefLink } from "./HrefLink";
 import { reviewsWaitingFor } from "./needsYouModel";
 import { tabBadge, type TabBadge } from "./tabBadges";
@@ -21,17 +18,15 @@ export function useTabs(slug: string): {
   badge: (id: NavId) => TabBadge | null;
 } {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const { data: awaiting = 0 } = useQuery(awaitingHumanQuery(slug));
   const needs = useQuery(needsYouQuery(slug));
   const session = useQuery(sessionQuery());
-  const reviews = reviewsWaitingFor(
-    needs.data ?? [],
-    session.data?.human ?? null,
-  );
+  const you = session.data?.human ?? null;
+  const reviews = reviewsWaitingFor(needs.data ?? [], you);
+  const questions = waitingSets(needs.data ?? [], you);
   return {
     entries: NAV_ENTRIES,
     active: activeNav(pathname),
-    badge: (id) => tabBadge(id, reviews, awaiting),
+    badge: (id) => tabBadge(id, reviews, questions),
   };
 }
 

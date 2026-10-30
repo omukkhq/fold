@@ -1,46 +1,15 @@
-import type { MessageView, ThreadView } from "@/api/messages";
+import type { MessageView } from "@/api/messages";
 import { isYou } from "@/people/names";
 import { actorSegment, seg, type Segment } from "@/people/segments";
-import { askWaits, asksYou } from "./replyTarget";
+import {
+  chatName,
+  newestMessage,
+  unreadMessages,
+  type AgentChat,
+} from "./chats";
+import { chatSets } from "./sets";
 
-/** A thread row's second line: who asks you, or who wrote to whom first. */
-export interface RowLine {
-  segments: Segment[];
-  /** The sender the line names, whose name the preview then leaves out. */
-  sender: string | null;
-  /** The line says who asks you. */
-  asks: boolean;
-}
-
-function recipientsOf(message: MessageView): Segment[] {
-  return message.recipients.flatMap((r, index) => [
-    ...(index > 0 ? [", "] : []),
-    actorSegment(r.name),
-  ]);
-}
-
-/** `@web-worker-39 asks you` while the thread waits for you, else `@main to @backend-lead, @web-lead` or `You to @frontend`. */
-export function rowLine(thread: ThreadView, you: string | null): RowLine {
-  if (thread.awaiting_human) {
-    const ask = thread.messages.findLast(
-      (m) => askWaits(thread, m) && asksYou(m, you),
-    );
-    if (ask) {
-      return {
-        segments: seg`${actorSegment(ask.sender)} asks you`,
-        sender: ask.sender,
-        asks: true,
-      };
-    }
-  }
-  const first = thread.messages[0];
-  if (!first) return { segments: [], sender: null, asks: false };
-  const from = isYou(first.sender, you) ? "You" : actorSegment(first.sender);
-  const to = first.recipients.length > 0 ? seg` to ${recipientsOf(first)}` : [];
-  return { segments: seg`${from}${to}`, sender: first.sender, asks: false };
-}
-
-/** The newest message in one line: `You: …`, the body alone when the row's line already names its sender, else `@sender: …`. */
+/** The newest message in one line: `You: …`, the body alone when the row already names its sender, else `@sender: …`. */
 export function rowPreview(
   message: MessageView,
   you: string | null,
@@ -51,19 +20,42 @@ export function rowPreview(
   return seg`${actorSegment(message.sender)}: ${message.body}`;
 }
 
-/** A thread row's second line, after the title. */
-export interface RowSecond {
-  segments: Segment[];
-  /** The line says who asks you, so the row draws it in the waiting tone. */
-  asks: boolean;
+/** A chat row: its title, the newest message, and how many question sets and other messages wait for the signed-in human. */
+export interface ChatRow {
+  /** The agent's name for a chat with an agent, else the title of its one thread. */
+  title: { agent: string } | { text: string };
+  preview: Segment[];
+  /** The question sets that wait for the signed-in human's answer, one for each set. */
+  questions: number;
+  /** The unread messages that are not such a set, which the questions count already holds. */
+  unread: number;
 }
 
-/** `@web-worker-39 asks you` while the thread waits for you; the route of a thread whose one message is already its title; else the newest message with its sender. */
-export function rowSecond(thread: ThreadView, you: string | null): RowSecond {
-  const line = rowLine(thread, you);
-  const last = thread.messages.at(-1);
-  if (line.asks || last === undefined || thread.messages.length === 1) {
-    return { segments: line.segments, asks: line.asks };
-  }
-  return { segments: rowPreview(last, you, null), asks: false };
+/** `open` holds the asks that wait for the signed-in human, as Needs you lists them. */
+export function chatRow(
+  chat: AgentChat,
+  you: string | null,
+  open: ReadonlySet<string>,
+): ChatRow {
+  const newest = newestMessage(chat);
+  const asks = chatSets(chat, open);
+  return {
+    title:
+      chat.agent === null ? { text: chatName(chat) } : { agent: chat.agent },
+    preview: newest === null ? [] : rowPreview(newest, you, chat.agent),
+    questions: asks.length,
+    unread: unreadMessages(chat, you).filter((m) => !open.has(m.id)).length,
+  };
+}
+
+/** `1 question set waits for you`, `2 question sets wait for you`. */
+export function questionsLabel(count: number): string {
+  return count === 1
+    ? "1 question set waits for you"
+    : `${String(count)} question sets wait for you`;
+}
+
+/** `1 unread message`, `3 unread messages`. */
+export function unreadLabel(count: number): string {
+  return `${String(count)} unread ${count === 1 ? "message" : "messages"}`;
 }

@@ -3,11 +3,7 @@ import { getComparison, getFileDiff } from "./diff";
 import { RECENT_EVENTS, listAgents } from "./agents";
 import { getProjectGit } from "./git";
 import { keys } from "./keys";
-import {
-  countAwaitingHuman,
-  listProposalThreads,
-  listThreads,
-} from "./messages";
+import { listProposalThreads, listThreads } from "./messages";
 import { getProjectNotify, listNotifySends } from "./notify";
 import { getProject, listProjects } from "./projects";
 import { localDayStart } from "../format/days";
@@ -110,13 +106,6 @@ export const proposalThreadsQuery = (slug: string, proposal: string) =>
   queryOptions({
     queryKey: keys.proposalThreads(slug, proposal),
     queryFn: () => listProposalThreads(slug, proposal),
-    staleTime: Infinity,
-  });
-
-export const awaitingHumanQuery = (slug: string) =>
-  queryOptions({
-    queryKey: keys.messagesAwaiting(slug),
-    queryFn: () => countAwaitingHuman(slug),
     staleTime: Infinity,
   });
 

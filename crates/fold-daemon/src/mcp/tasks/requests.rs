@@ -1,5 +1,6 @@
 use fold_core::requests::{
-    DraftCard, DraftEdge, MAX_ATTACHMENT_BYTES, RequestKind, RequestState, Requester,
+    CodeAnchor, CodeRef, DraftCard, DraftEdge, MAX_ATTACHMENT_BYTES, RequestKind, RequestState,
+    Requester,
 };
 use fold_core::{Actor, FoldError, LabelName, RequestId, WorkspaceId, codes};
 use rmcp::handler::server::common::schema_for_type;
@@ -189,7 +190,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_REQUEST,
-            "Read one request: the message, the attachments, one draft version with its cards and edges, the requester's comments, the clarification thread and the tasks an approval created.",
+            "Read one request: the message, the attachments, the code it was made on (path, lines, an excerpt and the revision or proposal version), one draft version with its cards and edges, the requester's comments, the clarification thread and the tasks an approval created.",
             schema_for_type::<GetRequestInput>(),
         ),
         Tool::new(
@@ -394,9 +395,34 @@ fn detail_json(detail: &RequestDetail, version: Option<u32>) -> Result<Value, Fo
             "author": comment.author,
             "body": comment.body,
         })).collect::<Vec<_>>(),
+        "code": request.code.as_ref().map(code_json),
         "thread": detail.thread.map(|thread| thread.id.to_string()),
         "tasks": detail.tasks.iter().map(ToString::to_string).collect::<Vec<_>>(),
     }))
+}
+
+/// The lines the requester selected, with the anchor that names the tree they were read from.
+fn code_json(code: &CodeRef) -> Value {
+    let mut value = json!({
+        "path": code.path,
+        "start_line": code.start_line,
+        "end_line": code.end_line,
+        "excerpt": code.excerpt,
+        "excerpt_cut": code.excerpt_cut,
+    });
+    match code.anchor {
+        CodeAnchor::Revision(revision) => value["revision"] = json!(revision.to_string()),
+        CodeAnchor::Version {
+            proposal,
+            version,
+            side,
+        } => {
+            value["proposal"] = json!(proposal.to_string());
+            value["version"] = json!(version);
+            value["side"] = json!(side.as_str());
+        }
+    }
+    value
 }
 
 async fn create_request(

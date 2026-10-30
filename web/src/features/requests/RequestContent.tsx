@@ -25,6 +25,7 @@ import { buttonClasses } from "@/components/button/buttonStyles";
 import { Id } from "@/components/id/Id";
 import { IdText } from "@/components/text/IdText";
 import { recipientActors } from "@/features/messages/delivery";
+import { LineQuote } from "@/features/messages/QuotedLines";
 import { Markdown } from "@/features/task/Markdown";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
@@ -46,6 +47,7 @@ import {
   threadSummary,
   versionText,
 } from "./present";
+import { codeHref, codeText } from "./codeLocation";
 import { KindLabel } from "./RequestPills";
 import { projectPath } from "@/routes/paths";
 
@@ -176,6 +178,16 @@ export function BodySection({
   return (
     <Section title="Request">
       <Markdown mentions={{ slug, known }}>{detail.body}</Markdown>
+      {detail.request.code === null ? null : (
+        <div className="flex flex-col gap-6">
+          <h3 className={OVERLINE}>Made on</h3>
+          <LineQuote
+            head={codeText(detail.request.code)}
+            href={codeHref(slug, detail.request.code)}
+            lines={detail.request.code}
+          />
+        </div>
+      )}
       {detail.attachments.length > 0 ? (
         <div className="flex flex-col gap-6">
           <h3 className={OVERLINE}>Attachments</h3>

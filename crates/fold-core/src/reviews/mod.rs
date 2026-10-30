@@ -5,7 +5,14 @@ use crate::tasks::define_names;
 
 pub mod batches;
 pub mod checks;
+mod intent;
 pub mod plans;
+
+pub use intent::{
+    ContractKind, Contracts, IntentPart, MAX_ENTRIES, MAX_ENTRY_CHARS, MAX_PART_CHARS,
+    MAX_PART_NAME_CHARS, MAX_PARTS, MAX_SUMMARY_CHARS, ProposalIntent, intent_coverage,
+    misshapen_intent, missing_intent, proposal_intent,
+};
 
 /// The longest reason a review command takes, in characters: why a proposal closes, why a reviewer gives a review claim up, or why a human must look.
 pub const MAX_REASON_CHARS: usize = 500;

@@ -241,8 +241,12 @@ async fn a_new_version_before_any_review_still_names_the_plan() {
         json!({"ws": work.workspace, "message": "Take the week"}),
     )
     .await;
-    h.call("frontend", "update_proposal", json!({"id": proposal}))
-        .await;
+    h.call(
+        "frontend",
+        "update_proposal",
+        json!({"intent": "Make the change the task asks for.", "id": proposal}),
+    )
+    .await;
     assert_eq!(
         notice(&mut inbox, " has version 2").await,
         format!(

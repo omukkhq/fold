@@ -1,5 +1,7 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
+use fold_core::reviews::ProposalIntent;
 use std::time::Duration;
 
 use crate::common::invariants::assert_consistent;
@@ -81,7 +83,7 @@ impl Scene {
         fx.workspaces().create_workspace(&ops, t(6)).await.unwrap();
         checks_file(&fx.project.paths().root().join(".fold/ws/t-6"), run);
         fx.reviews()
-            .create_proposal(&ops, t(6), "Checks", Some("tests pass"))
+            .create_proposal_covering(&ops, t(6), "Checks", Some("tests pass"))
             .await
             .unwrap()
             .detail()
@@ -137,12 +139,19 @@ impl Scene {
                 task,
                 &fx.project.paths().root().join(format!(".fold/ws/t-{task}")),
             );
-            fx.reviews()
-                .create_proposal(&author, t(task), "Change", Some("tests pass"))
-                .await
-                .unwrap()
-                .detail()
-                .unwrap();
+            let intent = ProposalIntent {
+                summary: format!("Changes m{task}.rs; nothing else changes."),
+                ..crate::common::intents::whole_change(&[])
+            };
+            crate::common::intents::covering_with(intent, async |intent| {
+                fx.reviews()
+                    .create_proposal(&author, t(task), "Change", intent, Some("tests pass"))
+                    .await
+            })
+            .await
+            .unwrap()
+            .detail()
+            .unwrap();
             authors.push(author);
         }
         fx.agent("review").await;
@@ -278,7 +287,7 @@ async fn four_approved_members_of_a_five_member_batch_integrate_with_one_check_r
     scene
         .fx
         .reviews()
-        .update_proposal(&scene.authors[4], p(5), Some("tests pass"))
+        .update_proposal_covering(&scene.authors[4], p(5), Some("tests pass"))
         .await
         .unwrap();
     scene.review(batch, &[1, 2, 3, 4], &[1]).await;
@@ -642,7 +651,7 @@ async fn a_member_that_needs_the_sent_back_member_waits_and_integrates_on_its_ow
     scene
         .fx
         .reviews()
-        .update_proposal(&scene.authors[0], p(1), Some("tests pass"))
+        .update_proposal_covering(&scene.authors[0], p(1), Some("tests pass"))
         .await
         .unwrap();
     scene
@@ -692,6 +701,18 @@ async fn a_deciding_agent_or_a_human_integrates_a_batch_with_one_command() {
         panic!("expected the members together, got {outcome:?}");
     };
     assert_eq!(succeeded(&members), [(p(1), r(2)), (p(2), r(3))]);
+    // Each member is its own revision, so its commit has its own intent as the body.
+    for (member, revision) in [(1, r(2)), (2, r(3))] {
+        let row = fold_store::workspaces::get_by_number(scene.fx.handle.store.read(), revision)
+            .await
+            .unwrap();
+        assert_eq!(
+            fold_daemon::services::projects::commit_message(&row),
+            format!(
+                "Change\n\nChanges m{member}.rs; nothing else changes.\n\nThe change: Make the change the task asks for.\n\nFold-Proposal: P-{member}\nFold-Version: 1\nFold-Task: T-{member}\nFold-Revision: {revision}\n"
+            )
+        );
+    }
     let integrated = scene.events("integration.succeeded").await;
     assert!(
         integrated
@@ -718,7 +739,7 @@ async fn a_ready_batch_waits_while_an_update_of_a_member_runs_its_checks() {
     );
     let reviews = scene.fx.reviews();
     let fold_daemon::services::reviews::Proposed::Checking { run, .. } = reviews
-        .update_proposal(&scene.authors[1], p(2), None)
+        .update_proposal_covering(&scene.authors[1], p(2), None)
         .await
         .unwrap()
     else {
@@ -1047,7 +1068,7 @@ async fn an_hour_after_the_review_the_members_without_a_verdict_leave_and_the_ap
     scene
         .fx
         .reviews()
-        .update_proposal(&scene.authors[2], p(3), Some("tests pass"))
+        .update_proposal_covering(&scene.authors[2], p(3), Some("tests pass"))
         .await
         .unwrap();
     scene.review(batch, &[1, 2], &[]).await;

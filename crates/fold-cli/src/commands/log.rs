@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use fold_cli::daemon_client::Response;
-use fold_core::Timestamp;
+use fold_core::{EventActor, Timestamp};
 use hyper::Method;
 use serde_json::Value;
 
@@ -101,7 +101,7 @@ struct Described {
     when: String,
 }
 
-/// The title and the details by origin, in the words of the web app: a proposal names itself, its task and its author; a pull, a direct change, a record and the genesis say what they are. Agent and remote text is escaped.
+/// The title and the details by origin, in the words of the web app: a proposal names itself, its task and its author; a pull, a direct change, a record and the genesis say what they are, and fold's own record says fold made it. Agent and remote text is escaped.
 fn describe(
     revision: &Value,
     time: &dyn Fn(Timestamp) -> String,
@@ -137,6 +137,10 @@ fn describe(
         "direct" => (
             text("title").unwrap_or_else(|| id.clone()),
             format!("a direct change on main{by}, approved by the user"),
+        ),
+        "record" if text("author").as_deref() == Some(EventActor::FOLD) => (
+            text("title").unwrap_or_else(|| id.clone()),
+            "a change of main made by fold".to_owned(),
         ),
         "record" => (
             text("title").unwrap_or_else(|| "Changes of the project folder".to_owned()),
@@ -278,6 +282,18 @@ mod tests {
         assert_eq!(
             described(&revision("r11", "record", json!({"title": "Tidy"}))).0,
             "Tidy"
+        );
+        assert_eq!(
+            described(&revision(
+                "r14",
+                "record",
+                json!({"author": "fold", "title": "Stop tracking fold's skill files"})
+            )),
+            three(
+                "Stop tracking fold's skill files",
+                "a change of main made by fold",
+                TIME
+            )
         );
 
         assert_eq!(

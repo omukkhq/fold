@@ -74,7 +74,7 @@ enum Command {
     Resume(commands::pause::PauseArgs),
     /// Record your changes in the project folder on main as one change of yours; a conflict with the agents' work waits for the main agent
     Record(commands::record::RecordArgs),
-    /// Stop tracking files of the project folder, as git rm --cached does: one revision of yours removes them from main from now on and leaves them on disk. Older revisions keep them, so a leaked secret still needs to be changed. Add them to .foldignore, or fld record records them again
+    /// Stop tracking files of the project folder, as git rm --cached does: one revision of yours removes them from main from now on and leaves them on disk. Older revisions keep them, so a leaked secret still needs to be changed. Add them to .foldignore, or fld record records them again. fold's own lines in .fold/exclude leave out its skills and .claude/settings.local.json; a ! line in .foldignore, such as !/.claude/skills/fold/, keeps one of them tracked
     Untrack(commands::untrack::UntrackArgs),
     /// Put your changes in the project folder aside, so the folder follows main; fld stash list shows the stash, newest first
     Stash(commands::stash::StashArgs),
@@ -331,7 +331,7 @@ mod tests {
             panic!("expected a parse failure, got {result:?}");
         };
         assert_eq!(error.kind(), ErrorKind::DisplayVersion);
-        assert_eq!(error.to_string().trim(), "fld 0.6.0");
+        assert_eq!(error.to_string().trim(), "fld 0.7.0");
         assert!(out.is_empty());
     }
 

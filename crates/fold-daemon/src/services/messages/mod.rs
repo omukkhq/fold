@@ -2,14 +2,17 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use fold_core::events::types;
-use fold_core::messages::resolve;
+use fold_core::messages::{AskParts, ask_questions, resolve};
 use fold_core::tasks::areas::feedback_to;
 use fold_core::{
     Actor, Address, AddressedAs, AgentActor, AgentName, Choice, Clock, EventError, FoldError,
-    HumanName, IdKind, MessageBody, MessageChoices, MessageId, NewEvent, ProposalId, Recipient,
-    RequestId, Sender, Target, TaskId, Timestamp, WorkerName, codes, policy,
+    HumanName, IdKind, MessageBody, MessageChoices, MessageId, NewEvent, ProposalId, QuestionSet,
+    Recipient, RequestId, Sender, SetQuestion, Target, TaskId, Timestamp, WorkerName, codes,
+    policy,
 };
-use fold_store::messages::{self, MessageHead, MessageLines, MessageRow, NewMessage, RecipientRow};
+use fold_store::messages::{
+    self, AskScope, MessageHead, MessageLines, MessageRow, NewMessage, RecipientRow,
+};
 use fold_store::{Store, StoreError, WriteTx, agents, counters, projects, reviews, tasks};
 use serde_json::json;
 use thiserror::Error;
@@ -25,7 +28,7 @@ mod forward;
 mod inbox;
 mod threads;
 
-pub use asks::DismissScope;
+pub use asks::{DismissScope, OpenAskView};
 pub(crate) use forward::{forward_in_tx, tell_lead_in_tx};
 pub use inbox::{InboxItem, StopCarry, unread_count};
 pub(crate) use inbox::{carry_for_push, record_pushed};
@@ -108,6 +111,25 @@ pub struct MessageView {
     pub asks_human: bool,
     /// The lines of a version of the message's proposal that the message asks about.
     pub lines: Option<MessageLines>,
+    /// The questions of an ask as a set, in order: the questions of a question set, or the one question that a question with choices or a marked ask is, with the body as its text; empty for any other message.
+    pub questions: Vec<SetQuestion>,
+    /// The answers of a human's reply to an ask, one per question of `answers_ask`, in order; empty for any other message.
+    pub answers: Vec<String>,
+    /// The ask whose questions `answers` answer.
+    pub answers_ask: Option<MessageId>,
+    /// The message stands for a worker's `AskUserQuestion` call, which only a human's reply in its thread ends.
+    pub worker_question: bool,
+}
+
+/// The questions of a stored message as a set, as [`ask_questions`] decides them.
+pub(crate) fn row_questions(row: &MessageRow) -> Vec<SetQuestion> {
+    ask_questions(AskParts {
+        stored: &row.questions,
+        body: &row.body,
+        choices: &row.choices,
+        header: row.header.as_deref(),
+        marked: row.asks_human || row.worker_question,
+    })
 }
 
 fn recipient_view(row: RecipientRow) -> RecipientView {
@@ -123,6 +145,7 @@ fn recipient_view(row: RecipientRow) -> RecipientView {
 }
 
 fn message_view(row: MessageRow) -> MessageView {
+    let questions = row_questions(&row);
     MessageView {
         id: row.id,
         thread: row.thread,
@@ -138,6 +161,10 @@ fn message_view(row: MessageRow) -> MessageView {
         header: row.header,
         asks_human: row.asks_human,
         lines: row.lines,
+        questions,
+        answers: row.answers,
+        answers_ask: row.answers_ask,
+        worker_question: row.worker_question,
     }
 }
 
@@ -254,6 +281,72 @@ impl MessageService {
         self.send_inner(actor, input, request, choices, send).await
     }
 
+    /// Sends a question set: one message that asks the humans every question of `questions`, which they answer together in one reply with [`MessageService::answer`]. It waits for a human as any ask does. A set without a human recipient is `invalid_request`.
+    pub async fn send_set(
+        &self,
+        actor: &Actor,
+        input: SendMessage,
+        request: Option<RequestId>,
+        questions: QuestionSet,
+    ) -> Result<MessageView, MessageError> {
+        let send = SendOptions {
+            questions: Some(questions),
+            ..SendOptions::default()
+        };
+        self.send_inner(actor, input, request, None, send).await
+    }
+
+    /// A human, or the main agent with the answers the user gave it, answers every question of the open ask `ask` in one reply: one answer per question in order, each a choice of its question or free text. The reply joins the ask's thread from the one who answers, goes to the asker, holds each question with its answer, and stores the answers, so the ask stops waiting while another ask of the thread still waits; a worker's `AskUserQuestion` gets them as its tool's answer. Another agent is `main_agent_required`; an ask that is not open is `ask_not_open`; answers that do not match the questions one to one are `invalid_request`.
+    pub async fn answer(
+        &self,
+        actor: &Actor,
+        ask: MessageId,
+        answers: &[String],
+    ) -> Result<MessageView, MessageError> {
+        let mut conn = self
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        let standing = agents::standing_of(&mut *conn, actor).await?;
+        policy::can_answer_ask(actor, standing).map_err(FoldError::from)?;
+        let row = messages::get(&mut conn, ask)
+            .await?
+            .ok_or_else(|| message_not_found(ask))?;
+        drop(conn);
+        let questions = row_questions(&row);
+        if questions.is_empty() {
+            return Err(asks::not_open(ask).into());
+        }
+        let answers = fold_core::messages::set_answers(&questions, answers)?;
+        let body = MessageBody::parse(fold_core::messages::answers_body(&questions, &answers))?;
+        let recipients: Vec<Target> = row
+            .recipients
+            .into_iter()
+            .map(|recipient| recipient.target)
+            .collect();
+        let to = fold_core::messages::reply_addresses(&row.sender, &recipients, &Sender::of(actor));
+        let send = SendOptions {
+            answers: Some(answers),
+            ..SendOptions::default()
+        };
+        self.send_inner(
+            actor,
+            SendMessage {
+                to,
+                body,
+                task: None,
+                proposal: None,
+                reply_to: Some(ask),
+            },
+            None,
+            None,
+            send,
+        )
+        .await
+    }
+
     /// The send of [`MessageService::send_marked`]. With `send.to_drafter` the message goes to the drafter of `request`, read in the send's own transaction, instead of to `input.to`.
     pub(super) async fn send_inner(
         &self,
@@ -310,8 +403,16 @@ impl MessageService {
                 };
                 let directory = messages::directory(tx.conn(), humans).await?;
                 let recipients = resolve(&to, &directory, &sender).map_err(FoldError::from)?;
-                if send.asks_human && !reaches_human(&recipients) {
+                if (send.asks_human || send.questions.is_some()) && !reaches_human(&recipients) {
                     return Err(ask_without_human().into());
+                }
+                if send.answers.is_some()
+                    && let Some(parent) = parent
+                    && messages::open_asks(tx.conn(), AskScope::Message(parent.id))
+                        .await?
+                        .is_empty()
+                {
+                    return Err(asks::not_open(parent.id).into());
                 }
                 let draft = Draft {
                     actor,
@@ -323,12 +424,18 @@ impl MessageService {
                     parent,
                     body: &input.body,
                     choices: choices.as_ref(),
+                    questions: send.questions.as_ref(),
                     asks_human: send.asks_human,
                     lines: None,
                     recipients,
                     now,
                 };
-                let view = write_message(tx, &mut buffer, draft).await?;
+                let mut view = write_message(tx, &mut buffer, draft).await?;
+                if let (Some(answers), Some(parent)) = (&send.answers, parent) {
+                    messages::insert_answers(tx, view.id, parent.id, answers).await?;
+                    view.answers.clone_from(answers);
+                    view.answers_ask = Some(parent.id);
+                }
                 // A reply also acknowledges the message it answers for a sender that received it.
                 if let (Some(worker), Some(parent)) = (&sender_worker, parent) {
                     let changed =
@@ -397,6 +504,7 @@ impl MessageService {
                     parent: None,
                     body: &body,
                     choices: None,
+                    questions: None,
                     asks_human: false,
                     lines: None,
                     recipients,
@@ -432,6 +540,7 @@ struct Draft<'a> {
     parent: Option<MessageHead>,
     body: &'a MessageBody,
     choices: Option<&'a MessageChoices>,
+    questions: Option<&'a QuestionSet>,
     asks_human: bool,
     /// The lines of a version of `proposal` the message asks about.
     lines: Option<MessageLines>,
@@ -440,12 +549,16 @@ struct Draft<'a> {
 }
 
 /// How [`MessageService::send_inner`] sends beyond its input.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct SendOptions {
     /// The message goes to the drafter of its request instead of to its `to`.
     pub to_drafter: bool,
     /// The sender marks the message as asking a human for an answer.
     pub asks_human: bool,
+    /// The message asks these questions as one set.
+    pub questions: Option<QuestionSet>,
+    /// The message is a human's reply that answers each question of the open ask it replies to, in order.
+    pub answers: Option<Vec<String>>,
 }
 
 fn reaches_human(recipients: &[Recipient]) -> bool {
@@ -504,6 +617,18 @@ async fn write_message(
         .and_then(MessageChoices::header)
         .map(str::to_owned);
     messages::insert_choices(tx, id, &choices, header.as_deref()).await?;
+    let stored: Vec<SetQuestion> = draft
+        .questions
+        .map(|set| set.questions().to_vec())
+        .unwrap_or_default();
+    messages::insert_questions(tx, id, &stored).await?;
+    let questions = ask_questions(AskParts {
+        stored: &stored,
+        body: draft.body.as_str(),
+        choices: &choices,
+        header: header.as_deref(),
+        marked: draft.asks_human,
+    });
     if let (Some(lines), Some(proposal)) = (&draft.lines, draft.proposal) {
         messages::insert_lines(tx, id, proposal, lines).await?;
     }
@@ -558,6 +683,10 @@ async fn write_message(
         header,
         asks_human: draft.asks_human,
         lines: draft.lines,
+        questions,
+        answers: Vec::new(),
+        answers_ask: None,
+        worker_question: false,
     })
 }
 
@@ -580,6 +709,7 @@ pub(crate) async fn send_from_fold_in_tx(
         parent: None,
         body,
         choices: None,
+        questions: None,
         asks_human: false,
         lines: None,
         recipients,
@@ -619,6 +749,7 @@ pub(crate) async fn ask_author_in_tx(
         parent: None,
         body: question.body,
         choices: None,
+        questions: None,
         asks_human: false,
         lines: question.lines,
         recipients,
@@ -634,6 +765,8 @@ pub(crate) struct WorkerQuestion<'a> {
     pub task: Option<TaskId>,
     pub body: &'a MessageBody,
     pub choices: Option<&'a MessageChoices>,
+    /// The questions of a call that asks more than one, as one set.
+    pub questions: Option<&'a QuestionSet>,
     pub now: Timestamp,
 }
 
@@ -661,6 +794,7 @@ pub(crate) async fn ask_humans_in_tx(
         parent: None,
         body: question.body,
         choices: question.choices,
+        questions: question.questions,
         asks_human: false,
         lines: None,
         recipients,

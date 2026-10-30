@@ -1,21 +1,37 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Pencil, Save } from "lucide-react";
 import { useState } from "react";
-import { editProposalFile, type NewEdit } from "@/api/proposals";
+import {
+  editProposalFile,
+  type NewEdit,
+  type ProposalDetail,
+} from "@/api/proposals";
 import { proposalFileQuery } from "@/api/queries";
 import { Button } from "@/components/button/Button";
 import { Textarea } from "@/components/form/controls";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
-import { changed, editNotice, editRequest, editSource } from "./edit";
+import {
+  changed,
+  editIntent,
+  editNotice,
+  editRequest,
+  editSource,
+  intentHint,
+} from "./edit";
 import { describeFailure } from "./errors";
+import { IntentForm } from "./IntentForm";
+import { draftOf, draftProblem } from "./intentDraft";
 import type { DetailView } from "./view";
 
 interface FileEditorProps {
   slug: string;
   id: string;
+  proposal: ProposalDetail;
   view: DetailView;
   path: string;
+  /** The files the version changes, which the intent of a version without one starts with in one part. */
+  files: readonly string[];
   onCancel: () => void;
   /** Resolves once the proposal with the new version is read again, so Save stays pending until the screen shows it. */
   onSaved: () => Promise<void>;
@@ -25,13 +41,19 @@ interface FileEditorProps {
 export function FileEditor({
   slug,
   id,
+  proposal,
   view,
   path,
+  files,
   onCancel,
   onSaved,
 }: FileEditorProps) {
   const file = useQuery(proposalFileQuery(slug, id, view.version, path));
   const [value, setValue] = useState<string | null>(null);
+  const started = editIntent(proposal, view.version);
+  const [draft, setDraft] = useState(() => draftOf(started, files));
+  const [touched, setTouched] = useState(false);
+  const problem = draftProblem(draft, path);
   const save = useMutation({
     mutationFn: (edit: NewEdit) => editProposalFile(slug, id, edit),
     onSuccess: onSaved,
@@ -78,6 +100,17 @@ export function FileEditor({
             }}
             className="resize-y font-mono text-13"
           />
+          <IntentForm
+            next={next}
+            draft={draft}
+            onChange={(written) => {
+              setDraft(written);
+              setTouched(true);
+            }}
+            hint={intentHint(view.version, started)}
+            problem={touched || started !== null ? problem : null}
+            readOnly={save.isPending}
+          />
         </>
       )}
       {save.isError ? (
@@ -91,10 +124,12 @@ export function FileEditor({
             variant="primary"
             pending={save.isPending}
             pendingLabel={`Saving ${next}…`}
-            disabled={!changed(source, text)}
+            disabled={!changed(source, text) || problem !== null}
             icon={<Save aria-hidden="true" size={15} />}
             onClick={() => {
-              save.mutate(editRequest(view, path, text, source));
+              save.mutate(
+                editRequest(view, path, text, source, draft, started),
+              );
             }}
           >
             Save as {next}

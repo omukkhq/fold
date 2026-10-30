@@ -57,6 +57,9 @@ fn title(item: &NeedsYouItem) -> String {
     match item.kind {
         NeedsYouKind::Question => match &item.header {
             Some(header) if !short_title(header).is_empty() => short_title(header),
+            _ if item.questions > 1 => {
+                format!("{agent} asks {} questions{on_task}", item.questions)
+            }
             _ => format!("{agent} asks a question{on_task}"),
         },
         NeedsYouKind::Permission => short_title(&format!(

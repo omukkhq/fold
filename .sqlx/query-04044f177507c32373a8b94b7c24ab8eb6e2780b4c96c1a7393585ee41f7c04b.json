@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO request_code_refs\n             (request_id, revision_id, version_id, side, path, start_line, end_line, excerpt, excerpt_cut)\n         SELECT r.id,\n                (SELECT id FROM revisions WHERE number = ?2),\n                (SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id\n                 WHERE p.number = ?3 AND v.version = ?4),\n                ?5, ?6, ?7, ?8, ?9, ?10\n         FROM requests r WHERE r.number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "04044f177507c32373a8b94b7c24ab8eb6e2780b4c96c1a7393585ee41f7c04b"
+}

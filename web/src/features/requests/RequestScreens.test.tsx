@@ -719,6 +719,69 @@ describe("Request detail", () => {
     expect(within(thread).getByText(/Archived tasks too\?/)).toBeTruthy();
   });
 
+  it("shows the lines a request was made on, quoted, with a link back to them", async () => {
+    put(
+      requestDetail(
+        requestSummary("RQ-9", {
+          code: {
+            path: "web/src/board.ts",
+            start_line: 2,
+            end_line: 4,
+            excerpt: "const b = 2;\nconst c = 3;",
+            excerpt_cut: true,
+            revision: null,
+            proposal: "P-3",
+            version: 2,
+            side: "new",
+          },
+        }),
+        { body: "Name these after the columns." },
+      ),
+    );
+    put(
+      requestDetail(
+        requestSummary("RQ-10", {
+          code: {
+            path: "README.md",
+            start_line: 1,
+            end_line: 1,
+            excerpt: "fold",
+            excerpt_cut: false,
+            revision: "r17",
+            proposal: null,
+            version: null,
+            side: null,
+          },
+        }),
+      ),
+    );
+    renderAt("/p/demo/requests/RQ-9");
+    const body = await screen.findByRole("region", { name: "Request" });
+    const link = await within(body).findByRole("link", {
+      name: "lines 2–4 of web/src/board.ts in P-3 v2, new side",
+    });
+    expect(link.getAttribute("href")).toBe(
+      "/p/demo/proposals/P-3?tab=changes&version=2&path=web%2Fsrc%2Fboard.ts",
+    );
+    expect(within(body).getByText("const b = 2;")).toBeTruthy();
+    expect(within(body).getByText("const c = 3;")).toBeTruthy();
+    expect(within(body).getByText("The first 2 of 3 lines.")).toBeTruthy();
+    cleanup();
+    renderAt("/p/demo/requests/RQ-10");
+    const other = await screen.findByRole("region", { name: "Request" });
+    expect(
+      (
+        await within(other).findByRole("link", {
+          name: "line 1 of README.md in r17",
+        })
+      ).getAttribute("href"),
+    ).toBe("/p/demo/repository?revision=r17&path=README.md&line=1");
+    cleanup();
+    renderAt("/p/demo/requests/RQ-4");
+    await screen.findByRole("region", { name: "Request" });
+    expect(screen.queryByText("Made on")).toBeNull();
+  });
+
   it("offers no approval, change request or edit while an older draft is shown", async () => {
     renderAt("/p/demo/requests/RQ-4");
     const panel = await screen.findByRole("complementary", {

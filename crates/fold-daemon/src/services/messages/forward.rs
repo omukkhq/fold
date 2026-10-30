@@ -92,6 +92,7 @@ pub(crate) async fn forward_in_tx(
             parent: Some(head),
             body: &body,
             choices: None,
+            questions: None,
             asks_human: false,
             lines: None,
             recipients,
@@ -132,6 +133,7 @@ pub(crate) async fn tell_lead_in_tx(
             parent: None,
             body: &body,
             choices: None,
+            questions: None,
             lines: None,
             asks_human: false,
             recipients: vec![Recipient {

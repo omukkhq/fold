@@ -13,11 +13,10 @@ import {
   showFilter,
   showOptions,
   startedBy,
-  threadCount,
+  chatCount,
   withShow,
   replyPlaceholder,
   replyTargets,
-  waitingCount,
 } from "./filters";
 
 const threads = [
@@ -62,6 +61,29 @@ describe("filterThreads", () => {
       ),
     ).toEqual(["m-3"]);
     expect(filterThreads(threads, { agent: "nobody" })).toEqual([]);
+  });
+  it("keeps for an agent only the threads of its own chat, not the threads it joined", () => {
+    const joined = thread("m-9", {
+      last_at: 4,
+      participants: ["main", "backend", "human:tanim"],
+      messages: [
+        message("m-9", { sender: "main", recipients: [recipient("backend")] }),
+        message("m-10", { sender: "backend" }),
+      ],
+    });
+    const own = thread("m-11", {
+      last_at: 5,
+      participants: ["backend", "human:tanim"],
+      messages: [message("m-11", { sender: "backend" })],
+    });
+    const list = [joined, own];
+    expect(filterThreads(list, { agent: "backend" }).map((t) => t.id)).toEqual([
+      "m-11",
+    ]);
+    expect(filterThreads(list, { agent: "main" }).map((t) => t.id)).toEqual([
+      "m-9",
+    ]);
+    expect(filterOptions(list).agents).toEqual(["backend", "main"]);
   });
   it("does not change the input order", () => {
     const copy = [...threads];
@@ -130,12 +152,11 @@ describe("names", () => {
 });
 
 describe("the waiting filter", () => {
-  it("keeps the threads the daemon marks, and counts them as the badge does", () => {
+  it("keeps the threads the daemon marks", () => {
     expect(filterThreads(threads, { waiting: true }).map((t) => t.id)).toEqual([
       "m-2",
     ]);
     expect(filterThreads(threads, { waiting: false })).toHaveLength(3);
-    expect(waitingCount(threads)).toBe(1);
   });
 });
 
@@ -239,32 +260,42 @@ describe("the Show choice", () => {
     expect(showFilter(withShow({}, "questions"))).toBe("questions");
     expect(showFilter(withShow({}, "waiting"))).toBe("waiting");
   });
-  it("counts the waiting threads and offers Mine only to a signed-in human", () => {
-    expect(
-      showOptions(threads, "tanim").map((c) => [c.label, c.count]),
-    ).toEqual([
-      ["All threads", null],
-      ["Waits for you", 1],
+  it("shows the count of waiting sets and offers Mine only to a signed-in human", () => {
+    expect(showOptions("tanim", 2).map((c) => [c.label, c.count])).toEqual([
+      ["All chats", null],
+      ["Waits for you", 2],
       ["Questions", null],
       ["Mine", null],
     ]);
-    expect(showOptions([], null).map((c) => [c.label, c.count])).toEqual([
-      ["All threads", null],
+    expect(showOptions(null, 0).map((c) => [c.label, c.count])).toEqual([
+      ["All chats", null],
       ["Waits for you", 0],
       ["Questions", null],
     ]);
   });
+  it("counts a question set as an ask", () => {
+    const set = thread("m-30", {
+      messages: [
+        message("m-30", {
+          sender: "frontend",
+          recipients: [recipient("human:tanim")],
+          questions: [{ text: "Connected?", header: null, choices: [] }],
+        }),
+      ],
+    });
+    expect(hasAsk(set)).toBe(true);
+  });
   it("names the Show choice on the button and counts the other set filters", () => {
-    expect(filterSummary({})).toBe("All threads");
+    expect(filterSummary({})).toBe("All chats");
     expect(filterSummary({ waiting: true })).toBe("Waits for you");
     expect(filterSummary({ mine: true, agent: "fe", task: "T-1" })).toBe(
       "Mine · 2 more",
     );
-    expect(filterSummary({ proposal: "P-1" })).toBe("All threads · 1 more");
+    expect(filterSummary({ proposal: "P-1" })).toBe("All chats · 1 more");
   });
-  it("counts the threads it shows", () => {
-    expect(threadCount(1)).toBe("1 thread");
-    expect(threadCount(5)).toBe("5 threads");
+  it("counts the chats it shows", () => {
+    expect(chatCount(1)).toBe("1 chat");
+    expect(chatCount(5)).toBe("5 chats");
   });
 });
 

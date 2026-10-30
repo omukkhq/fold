@@ -43,6 +43,19 @@ pub fn can_record(actor: &Actor) -> Result<(), PolicyDenied> {
     }
 }
 
+/// fold writes its skills into the project folder and refreshes them after each upgrade, so main never needs them; fold itself, and only fold, makes the one revision that stops tracking them in a project whose main still holds them. A human runs `fld untrack` for any other file.
+pub fn can_untrack_fold_skills(actor: &Actor) -> Result<(), PolicyDenied> {
+    if matches!(actor, Actor::System) {
+        Ok(())
+    } else {
+        Err(PolicyDenied {
+            code: codes::INVALID_REQUEST,
+            message: "only fold stops tracking its own skill files",
+            hint: "run `fld untrack <path>` to stop tracking a file of the project folder",
+        })
+    }
+}
+
 /// The stash holds the human's own unrecorded changes and writes them into the project folder, so only a named human runs `fld stash` and `fld unstash`; an agent never puts the human's work aside.
 pub fn can_stash(actor: &Actor) -> Result<(), PolicyDenied> {
     if actor.is_human() {
@@ -191,6 +204,21 @@ mod tests {
             let denied = can_enable_git(&actor).unwrap_err();
             assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
             assert!(denied.hint().contains("fld init --with-git"));
+        }
+    }
+
+    #[test]
+    fn only_fold_stops_tracking_its_own_skills() {
+        assert!(can_untrack_fold_skills(&Actor::System).is_ok());
+        let agent = Actor::Agent(AgentActor {
+            agent: AgentName::parse("main").unwrap(),
+            worker: WorkerName::parse("main").unwrap(),
+            tags: Vec::new(),
+        });
+        for actor in [agent, Actor::human(HumanName::parse("ana").unwrap())] {
+            let denied = can_untrack_fold_skills(&actor).unwrap_err();
+            assert_eq!(denied.code(), codes::INVALID_REQUEST);
+            assert!(denied.hint().contains("fld untrack"));
         }
     }
 

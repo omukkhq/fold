@@ -1,5 +1,5 @@
 use fold_core::roles::PermissionBehavior;
-use fold_core::{AgentName, EventActor, HumanName, MessageId, PermissionQuestionId, Timestamp};
+use fold_core::{AgentName, EventActor, MessageId, PermissionQuestionId, Timestamp};
 use serde_json::Value;
 use sqlx::{SqliteConnection, SqliteExecutor};
 
@@ -170,12 +170,11 @@ pub async fn insert_answer(
     tx: &mut WriteTx,
     question_id: i64,
     behavior: PermissionBehavior,
-    by: &HumanName,
+    by: &EventActor,
     message: Option<&str>,
     now: Timestamp,
 ) -> Result<(), StoreError> {
     let behavior = behavior.as_str();
-    let by = EventActor::human(by);
     let by = by.as_str();
     let now = now.as_millis();
     sqlx::query!(
@@ -372,7 +371,7 @@ pub async fn open_ask_of_thread(
     Ok(id)
 }
 
-/// The agent whose `ask` question takes human message `message` as its answer: `message` is the first human message in the thread of one of the question's messages, and fold has not closed the question. The reply reaches the worker as the tool's answer, never as one more message turn.
+/// The agent whose `ask` question takes message `message` as its answer, while fold has not closed the question: `message` carries the stored answers to one of the question's messages, or it is a human's message that answers no other ask and is the first such one in the thread of a question message that is no set. The reply reaches the worker as the tool's answer, never as one more message turn.
 pub async fn asker_answered_by(
     executor: impl SqliteExecutor<'_>,
     message: MessageId,
@@ -385,12 +384,23 @@ pub async fn asker_answered_by(
            JOIN worker_permission_questions q ON q.id = wq.question_id
            JOIN worker_processes w ON w.id = q.worker_process_id
            JOIN agents g ON g.id = w.agent_id
-           WHERE r.number = ?1 AND r.sender_kind = 'human'
+           WHERE r.number = ?1
              AND NOT EXISTS (SELECT 1 FROM worker_permission_closures c WHERE c.question_id = q.id)
-             AND NOT EXISTS (
-                 SELECT 1 FROM messages e
-                 WHERE e.thread_id = m.thread_id AND e.number > m.number AND e.number < r.number
-                   AND e.sender_kind = 'human'
+             AND (
+                 EXISTS (SELECT 1 FROM message_answers a WHERE a.reply_id = r.id AND a.ask_id = m.id)
+                 OR (
+                     r.sender_kind = 'human'
+                     AND NOT EXISTS (SELECT 1 FROM message_questions s WHERE s.message_id = m.id)
+                     AND NOT EXISTS (SELECT 1 FROM message_answers o WHERE o.reply_id = r.id)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM messages e
+                         WHERE e.thread_id = m.thread_id AND e.number > m.number AND e.number < r.number
+                           AND e.sender_kind = 'human'
+                           AND NOT EXISTS (
+                               SELECT 1 FROM message_answers x WHERE x.reply_id = e.id AND x.ask_id <> m.id
+                           )
+                     )
+                 )
              )
            LIMIT 1"#,
         number

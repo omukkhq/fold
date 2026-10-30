@@ -11,6 +11,11 @@ import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { MentionTextarea } from "@/mentions/MentionTextarea";
 import {
+  dialogBody,
+  dialogContent,
+  dialogOverlay,
+} from "@/components/overlay/dialogStyles";
+import {
   MAX_FILES,
   addFiles,
   blockingProblem,
@@ -136,164 +141,176 @@ export function NewRequestDialog({
       }}
     >
       <RadixDialog.Portal>
-        {/* z-10 matches the task dialog, so the request dialog opened from New task draws over it. */}
-        <RadixDialog.Overlay className="fixed inset-0 z-10 bg-scrim" />
-        <RadixDialog.Content className="fixed top-1/2 z-10 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog outline-none">
-          <div className="flex items-center justify-between px-24 pt-18 pb-4">
-            <RadixDialog.Title className="text-16 leading-tight font-semibold text-text">
-              New request
-            </RadixDialog.Title>
-            <RadixDialog.Close asChild>
-              <IconButton aria-label="Close" size="sm" disabled={isSubmitting}>
-                <X aria-hidden="true" size={13} />
-              </IconButton>
-            </RadixDialog.Close>
-          </div>
-          <form
-            noValidate
-            onSubmit={(event) => void submit(event)}
-            className="flex flex-col"
+        <RadixDialog.Overlay className={dialogOverlay}>
+          <RadixDialog.Content
+            className={cn(dialogContent, "w-request-dialog")}
           >
-            <div className="flex flex-col gap-16 px-24 pt-20 pb-20">
-              <RadixDialog.Description className="text-14 text-text-2">
-                An orchestrator reads your message, writes the title, sets the
-                kind and drafts the cards for you to approve.
-              </RadixDialog.Description>
-              {failure ? (
-                <FailurePanel
-                  title="fold could not create the request"
-                  text={failure.text}
-                  code={failure.code}
-                />
-              ) : null}
-              <div className="flex flex-col gap-6">
-                <label
-                  htmlFor={`${hintId}-body`}
-                  className="text-14 leading-tight font-semibold text-text"
+            <div className="flex shrink-0 items-center justify-between px-24 pt-18 pb-4">
+              <RadixDialog.Title className="text-16 leading-tight font-semibold text-text">
+                New request
+              </RadixDialog.Title>
+              <RadixDialog.Close asChild>
+                <IconButton
+                  aria-label="Close"
+                  size="sm"
+                  disabled={isSubmitting}
                 >
-                  What do you need?
-                </label>
-                <Controller
-                  control={control}
-                  name="body"
-                  render={({ field }) => (
-                    <MentionTextarea
-                      id={`${hintId}-body`}
-                      slug={slug}
-                      rows={7}
-                      ref={field.ref}
-                      value={field.value}
-                      onValueChange={field.onChange}
-                      onBlur={field.onBlur}
-                      readOnly={isSubmitting}
-                      aria-describedby={hintId}
-                      aria-invalid={errors.body ? true : undefined}
-                      placeholder="Product wants the weekly report out of fold. The report page from #T-9 already has the data; see @web/src/report.tsx."
-                      className="resize-y"
+                  <X aria-hidden="true" size={13} />
+                </IconButton>
+              </RadixDialog.Close>
+            </div>
+            <form
+              noValidate
+              onSubmit={(event) => void submit(event)}
+              className="flex min-h-0 flex-col"
+            >
+              <div className={dialogBody}>
+                <div className="flex flex-col gap-16 px-24 pt-20 pb-20">
+                  <RadixDialog.Description className="text-14 text-text-2">
+                    An orchestrator reads your message, writes the title, sets
+                    the kind and drafts the cards for you to approve.
+                  </RadixDialog.Description>
+                  {failure ? (
+                    <FailurePanel
+                      title="fold could not create the request"
+                      text={failure.text}
+                      code={failure.code}
                     />
-                  )}
-                />
-                <p id={hintId} className="text-13 text-text-2">
-                  Markdown is allowed · # for tasks, proposals and requests · @
-                  for files
-                </p>
-                {errors.body ? (
-                  <p className="text-13 font-medium text-bad">
-                    {errors.body.message}
-                  </p>
-                ) : null}
+                  ) : null}
+                  <div className="flex flex-col gap-6">
+                    <label
+                      htmlFor={`${hintId}-body`}
+                      className="text-14 leading-tight font-semibold text-text"
+                    >
+                      What do you need?
+                    </label>
+                    <Controller
+                      control={control}
+                      name="body"
+                      render={({ field }) => (
+                        <MentionTextarea
+                          id={`${hintId}-body`}
+                          slug={slug}
+                          rows={7}
+                          ref={field.ref}
+                          value={field.value}
+                          onValueChange={field.onChange}
+                          onBlur={field.onBlur}
+                          readOnly={isSubmitting}
+                          aria-describedby={hintId}
+                          aria-invalid={errors.body ? true : undefined}
+                          placeholder="Product wants the weekly report out of fold. The report page from #T-9 already has the data; see @web/src/report.tsx."
+                          className="resize-y"
+                        />
+                      )}
+                    />
+                    <p id={hintId} className="text-13 text-text-2">
+                      Markdown is allowed · # for tasks, proposals and requests
+                      · @ for files
+                    </p>
+                    {errors.body ? (
+                      <p className="text-13 font-medium text-bad">
+                        {errors.body.message}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-col gap-8">
+                    <p className="text-14 leading-tight font-semibold text-text">
+                      Attachments{" "}
+                      <span className="font-regular text-text-2">optional</span>
+                    </p>
+                    <button
+                      type="button"
+                      disabled={isSubmitting || files.length >= MAX_FILES}
+                      onClick={() => picker.current?.click()}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        setDragging(true);
+                      }}
+                      onDragLeave={() => {
+                        setDragging(false);
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        setDragging(false);
+                        if (!isSubmitting) take([...event.dataTransfer.files]);
+                      }}
+                      className={cn(
+                        "flex items-center justify-center gap-8 rounded-m px-12 py-12 text-14 text-text-2 disabled:cursor-not-allowed disabled:opacity-60",
+                        dragging ? "bg-accent-soft text-text" : "bg-sunken",
+                        focusRing,
+                      )}
+                    >
+                      <Upload aria-hidden="true" size={15} />
+                      Drop files or browse · up to 10 files, 10 MiB each
+                    </button>
+                    <input
+                      ref={picker}
+                      type="file"
+                      multiple
+                      hidden
+                      aria-label="Attach files"
+                      onChange={(event) => {
+                        take([...(event.target.files ?? [])]);
+                        event.target.value = "";
+                      }}
+                    />
+                    {files.length > 0 ? (
+                      <ul
+                        aria-label="Attached files"
+                        className="flex flex-col gap-8"
+                      >
+                        {files.map((file, index) => (
+                          <FileRow
+                            key={`${file.name}:${String(index)}`}
+                            file={file}
+                            disabled={isSubmitting}
+                            onRemove={() => {
+                              setFiles(files.filter((_, i) => i !== index));
+                              setRefused(0);
+                            }}
+                          />
+                        ))}
+                      </ul>
+                    ) : null}
+                    {blocking || refused > 0 ? (
+                      <p role="alert" className="text-13 font-medium text-bad">
+                        {blocking ?? refusedText(refused)}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
               </div>
-              <div className="flex flex-col gap-8">
-                <p className="text-14 leading-tight font-semibold text-text">
-                  Attachments{" "}
-                  <span className="font-regular text-text-2">optional</span>
+              <div className="flex shrink-0 items-center gap-12 px-24 pt-4 pb-20">
+                <p className="flex min-w-0 flex-1 items-center gap-6 text-14 text-text-2">
+                  <UserRound
+                    aria-hidden="true"
+                    size={15}
+                    className="shrink-0"
+                  />
+                  {human === null
+                    ? "Tell fold your name first, then create the request."
+                    : isSubmitting
+                      ? `Creating as ${human}. The request appears in the list when fold confirms.`
+                      : `Requested as ${human}`}
                 </p>
-                <button
-                  type="button"
-                  disabled={isSubmitting || files.length >= MAX_FILES}
-                  onClick={() => picker.current?.click()}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    setDragging(true);
-                  }}
-                  onDragLeave={() => {
-                    setDragging(false);
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    setDragging(false);
-                    if (!isSubmitting) take([...event.dataTransfer.files]);
-                  }}
-                  className={cn(
-                    "flex items-center justify-center gap-8 rounded-m px-12 py-12 text-14 text-text-2 disabled:cursor-not-allowed disabled:opacity-60",
-                    dragging ? "bg-accent-soft text-text" : "bg-sunken",
-                    focusRing,
-                  )}
+                <Button disabled={isSubmitting} onClick={close}>
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  pending={isSubmitting}
+                  pendingLabel="Creating request…"
+                  disabled={blocking !== null}
+                  icon={<Send aria-hidden="true" size={15} />}
                 >
-                  <Upload aria-hidden="true" size={15} />
-                  Drop files or browse · up to 10 files, 10 MiB each
-                </button>
-                <input
-                  ref={picker}
-                  type="file"
-                  multiple
-                  hidden
-                  aria-label="Attach files"
-                  onChange={(event) => {
-                    take([...(event.target.files ?? [])]);
-                    event.target.value = "";
-                  }}
-                />
-                {files.length > 0 ? (
-                  <ul
-                    aria-label="Attached files"
-                    className="flex flex-col gap-8"
-                  >
-                    {files.map((file, index) => (
-                      <FileRow
-                        key={`${file.name}:${String(index)}`}
-                        file={file}
-                        disabled={isSubmitting}
-                        onRemove={() => {
-                          setFiles(files.filter((_, i) => i !== index));
-                          setRefused(0);
-                        }}
-                      />
-                    ))}
-                  </ul>
-                ) : null}
-                {blocking || refused > 0 ? (
-                  <p role="alert" className="text-13 font-medium text-bad">
-                    {blocking ?? refusedText(refused)}
-                  </p>
-                ) : null}
+                  Create request
+                </Button>
               </div>
-            </div>
-            <div className="flex items-center gap-12 px-24 pt-4 pb-20">
-              <p className="flex min-w-0 flex-1 items-center gap-6 text-14 text-text-2">
-                <UserRound aria-hidden="true" size={15} className="shrink-0" />
-                {human === null
-                  ? "Tell fold your name first, then create the request."
-                  : isSubmitting
-                    ? `Creating as ${human}. The request appears in the list when fold confirms.`
-                    : `Requested as ${human}`}
-              </p>
-              <Button disabled={isSubmitting} onClick={close}>
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                variant="primary"
-                pending={isSubmitting}
-                pendingLabel="Creating request…"
-                disabled={blocking !== null}
-                icon={<Send aria-hidden="true" size={15} />}
-              >
-                Create request
-              </Button>
-            </div>
-          </form>
-        </RadixDialog.Content>
+            </form>
+          </RadixDialog.Content>
+        </RadixDialog.Overlay>
       </RadixDialog.Portal>
     </RadixDialog.Root>
   );

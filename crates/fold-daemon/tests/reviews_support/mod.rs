@@ -250,7 +250,23 @@ impl Fixture {
         std::fs::create_dir_all(link.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink("../README.md", link).unwrap();
         self.reviews
-            .create_proposal(&author, t(1), "Add the report", Some("tests pass"))
+            .create_proposal(
+                &author,
+                t(1),
+                "Add the report",
+                crate::common::intents::intent_of(
+                    "Adds the report.\n\nIt does not change the schema.",
+                    &[
+                        (
+                            "Report",
+                            "Adds z and renames x to y.",
+                            &["src/lib.rs", "src/new.rs"],
+                        ),
+                        ("Docs link", "Links the readme from docs.", &["docs/readme"]),
+                    ],
+                ),
+                Some("tests pass"),
+            )
             .await
             .unwrap()
             .detail()

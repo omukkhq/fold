@@ -10,10 +10,13 @@ import {
   MessageSquare,
   type LucideIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useId, useState, type ReactNode } from "react";
+import { proposalVersionQuery } from "@/api/queries";
 import type {
   CheckRun,
   GateStatus,
+  Intent,
   ProposalDetail,
   ReviewComment,
   Verdict,
@@ -48,6 +51,17 @@ import {
 } from "./history";
 import { IdLink } from "@/components/id/IdLink";
 import type { IntegrationView } from "./integration";
+import {
+  NO_INTENT,
+  checkedBy,
+  coverage,
+  intentByline,
+  intentCard,
+  intentInHistory,
+  versionIntent,
+  type IntentCardModel,
+} from "./intent";
+import { IntentBody } from "./IntentView";
 import {
   currentVersion,
   evidenceLines,
@@ -211,6 +225,204 @@ function IntegrationCard({
   );
 }
 
+/** How the current version works in the code: its summary, that every changed file belongs to a part, the parts with their files and the sections the intent has. A person reads it, with the reviewer's verdict beside it, instead of every line. */
+function IntentCard({
+  slug,
+  proposal,
+  model,
+}: {
+  slug: string;
+  proposal: ProposalDetail;
+  model: IntentCardModel;
+}) {
+  const checker = checkedBy(model);
+  const byline = intentByline(model);
+  const intent = model.intent;
+  const covered =
+    intent === null
+      ? null
+      : coverage(
+          intent,
+          proposal.files.map((file) => file.path),
+        );
+  return (
+    <section
+      aria-label="Intent"
+      className={cn(CARD, "flex flex-col gap-14 rounded-l px-20 py-18")}
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-x-12 gap-y-4">
+        <h2 className="text-16 leading-tight font-semibold text-text">
+          Intent of v{model.version}
+        </h2>
+        {byline === null && checker === null ? null : (
+          <span className="text-13 text-text-2">
+            {byline === null ? null : byline.kind === "kept" ? (
+              `kept from v${String(byline.from)}`
+            ) : (
+              <>
+                {byline.words} <PersonName name={byline.by} />
+              </>
+            )}
+            {checker === null ? null : (
+              <>
+                {byline === null ? "checked by " : " · checked by "}
+                <PersonName name={checker} />
+              </>
+            )}
+          </span>
+        )}
+      </div>
+      {intent === null ? (
+        <p className="text-15 leading-normal text-text-2">{NO_INTENT}</p>
+      ) : (
+        <>
+          <MentionText
+            text={intent.summary}
+            slug={slug}
+            className="max-w-measure text-16 leading-normal"
+          />
+          <p
+            className={cn(
+              "rounded-m px-14 py-10 text-14 text-text",
+              covered !== null && covered.outside > 0
+                ? "bg-warn-soft"
+                : "bg-ok-soft",
+            )}
+          >
+            {covered?.text}
+          </p>
+          <IntentBody
+            slug={slug}
+            id={proposal.summary.id}
+            version={model.version}
+            intent={intent}
+            files={proposal.files}
+          />
+        </>
+      )}
+    </section>
+  );
+}
+
+/** The reviewer's verdict on the current version and the summary of the review, beside the intent. */
+function ReviewCard({
+  slug,
+  model,
+  entry,
+  now,
+}: {
+  slug: string;
+  model: IntentCardModel;
+  entry: HistoryEntry;
+  now: number;
+}) {
+  const summary = model.summary;
+  const spec = summary === null ? null : VERDICT_ICONS[summary.review.verdict];
+  const Icon = spec?.icon;
+  return (
+    <section
+      aria-label="Review"
+      className={cn(CARD, "flex flex-col gap-10 px-16 py-14")}
+    >
+      <h2 className="text-16 leading-tight font-semibold text-text">Review</h2>
+      {summary === null || spec === null || Icon === undefined ? (
+        <p className="text-14 text-text-2">
+          No reviewer has reviewed v{model.version} yet.
+        </p>
+      ) : (
+        <div
+          data-verdict={summary.review.verdict}
+          className="flex min-w-0 flex-col gap-6"
+        >
+          <p className="flex flex-wrap items-center gap-x-8 text-14">
+            <Icon
+              aria-hidden="true"
+              size={14}
+              className={cn("shrink-0", spec.className)}
+            />
+            <span className={cn("font-semibold", spec.className)}>
+              {summary.head}
+            </span>
+            <PersonName name={summary.review.reviewer} />
+            <span className="text-13 text-text-2">
+              {formatAsOfMinute(now, summary.review.created_at)}
+            </span>
+          </p>
+          {summary.excerpt.text === "" ? null : (
+            <MentionText
+              text={summary.excerpt.text}
+              slug={slug}
+              className={cn(
+                "text-14 leading-normal text-text",
+                textFlow("lines"),
+              )}
+            />
+          )}
+          {summary.excerpt.cut ||
+          summary.review.comments > 0 ||
+          summary.comments.length > 0 ? (
+            <FullReview slug={slug} entry={entry} item={summary} now={now} />
+          ) : null}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** A version's intent in its History card: the summary, which opens to the whole intent. */
+function HistoryIntent({
+  slug,
+  proposal,
+  intent,
+  version,
+}: {
+  slug: string;
+  proposal: ProposalDetail;
+  intent: Intent;
+  version: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const bodyId = useId();
+  // The version's own changed files give its parts their line counts; they are read once the parts open.
+  const read = useQuery({
+    ...proposalVersionQuery(slug, proposal.summary.id, version),
+    enabled: open,
+  });
+  return (
+    <div className="flex min-w-0 flex-col gap-8">
+      <MentionText
+        text={intent.summary}
+        slug={slug}
+        className="max-w-measure text-15 leading-normal"
+      />
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={open ? bodyId : undefined}
+        className={cn("self-start text-14 font-semibold", LINK)}
+        onClick={() => {
+          setOpen((old) => !old);
+        }}
+      >
+        {open
+          ? "Hide the parts"
+          : `Show the whole intent of v${String(version)}`}
+      </button>
+      {open ? (
+        <div id={bodyId}>
+          <IntentBody
+            slug={slug}
+            id={proposal.summary.id}
+            version={version}
+            intent={intent}
+            files={read.data?.files ?? []}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ReviewCommentItem({
   slug,
   comment,
@@ -246,6 +458,7 @@ function FullReview({
 }) {
   return (
     <Dialog
+      wide
       title={`${item.head} on v${String(entry.version.version)}`}
       trigger={
         <button
@@ -256,37 +469,33 @@ function FullReview({
         </button>
       }
     >
-      <div className="flex w-dialog max-w-full flex-col gap-10">
-        <p className="text-13 text-text-2">
-          <PersonName name={item.review.reviewer} /> ·{" "}
-          {formatAsOfMinute(now, item.review.created_at)}
-          {item.scope === null ? "" : ` · ${item.scope}`}
-        </p>
-        <div className="flex max-h-review-dialog flex-col gap-14 overflow-y-auto">
-          <MentionText
-            text={item.review.body.trim() || item.head}
-            slug={slug}
-            className="text-15 leading-normal"
-          />
-          {item.comments.length === 0 ? null : (
-            <section
-              aria-label="Comments of the review"
-              className="flex flex-col gap-8"
-            >
-              <h3 className={LABEL}>Comments</h3>
-              <ul className="flex flex-col gap-8">
-                {item.comments.map((comment) => (
-                  <ReviewCommentItem
-                    key={comment.id}
-                    slug={slug}
-                    comment={comment}
-                  />
-                ))}
-              </ul>
-            </section>
-          )}
-        </div>
-      </div>
+      <p className="text-13 text-text-2">
+        <PersonName name={item.review.reviewer} /> ·{" "}
+        {formatAsOfMinute(now, item.review.created_at)}
+        {item.scope === null ? "" : ` · ${item.scope}`}
+      </p>
+      <MentionText
+        text={item.review.body.trim() || item.head}
+        slug={slug}
+        className="text-15 leading-normal"
+      />
+      {item.comments.length === 0 ? null : (
+        <section
+          aria-label="Comments of the review"
+          className="flex flex-col gap-8"
+        >
+          <h3 className={LABEL}>Comments</h3>
+          <ul className="flex flex-col gap-8">
+            {item.comments.map((comment) => (
+              <ReviewCommentItem
+                key={comment.id}
+                slug={slug}
+                comment={comment}
+              />
+            ))}
+          </ul>
+        </section>
+      )}
     </Dialog>
   );
 }
@@ -362,13 +571,16 @@ function VersionCard({
   proposal,
   entry,
   now,
+  showIntent,
 }: {
   slug: string;
   proposal: ProposalDetail;
   entry: HistoryEntry;
   now: number;
+  showIntent: boolean;
 }) {
   const v = entry.version;
+  const intent = versionIntent(v);
   const id = proposal.summary.id;
   return (
     <article
@@ -404,6 +616,20 @@ function VersionCard({
         </HrefLink>
       </header>
       <dl className="grid grid-cols-[var(--width-fact-label)_minmax(0,1fr)] gap-x-14 gap-y-10 px-16 pt-8 pb-14 text-14">
+        {showIntent ? (
+          <VersionFact label="Intent">
+            {intent === null ? (
+              <p className="text-text-2">{NO_INTENT}</p>
+            ) : (
+              <HistoryIntent
+                slug={slug}
+                proposal={proposal}
+                intent={intent}
+                version={v.version}
+              />
+            )}
+          </VersionFact>
+        ) : null}
         <VersionFact label="Checks">
           {entry.runsFailed ? (
             <p role="alert" className="font-medium text-bad">
@@ -523,6 +749,7 @@ function AboutCard({
   area,
   threads,
   onTab,
+  review,
 }: {
   slug: string;
   proposal: ProposalDetail;
@@ -530,6 +757,8 @@ function AboutCard({
   area: string | null;
   threads: readonly ConversationThread[] | null;
   onTab: (search: DetailSearch) => string;
+  /** The reviewer's verdict on the current version, drawn above the facts. */
+  review: ReactNode;
 }) {
   const summary = proposal.summary;
   const current = currentVersion(proposal);
@@ -538,6 +767,7 @@ function AboutCard({
   const mark = summary.human_review;
   return (
     <aside className="flex min-w-0 flex-col gap-20 lg:w-side-panel lg:shrink-0">
+      {review}
       <section
         aria-label="About"
         className={cn(CARD, "flex flex-col gap-12 px-16 py-14")}
@@ -699,9 +929,14 @@ export function OverviewTab({
     comments,
     failed: failedVersions,
   });
+  const intent = intentCard(entries);
+  const currentEntry = entries.find((entry) => entry.current) ?? entries[0];
   return (
     <div className="flex min-w-0 flex-col gap-20 px-16 pt-20 pb-28 md:px-24 lg:flex-row lg:items-start">
       <div className="flex min-w-0 flex-1 flex-col gap-20">
+        {intent === null ? null : (
+          <IntentCard slug={slug} proposal={proposal} model={intent} />
+        )}
         <IntegrationCard
           slug={slug}
           proposal={proposal}
@@ -726,6 +961,7 @@ export function OverviewTab({
               proposal={proposal}
               entry={entry}
               now={now}
+              showIntent={intentInHistory(entry, intent)}
             />
           ))}
         </section>
@@ -737,6 +973,16 @@ export function OverviewTab({
         area={area}
         threads={threads}
         onTab={tabHref}
+        review={
+          intent === null || currentEntry === undefined ? null : (
+            <ReviewCard
+              slug={slug}
+              model={intent}
+              entry={currentEntry}
+              now={now}
+            />
+          )
+        }
       />
     </div>
   );

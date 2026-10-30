@@ -582,3 +582,142 @@ fn a_lone_carriage_return_ends_a_line_of_an_excerpt() {
     assert_eq!(line_excerpt(text, 4, 4), Some(("four".to_owned(), false)));
     assert_eq!(line_excerpt(text, 4, 5), None);
 }
+
+fn set_question(text: &str, choices: &[&str]) -> fold_core::SetQuestion {
+    fold_core::SetQuestion {
+        text: text.to_owned(),
+        header: None,
+        choices: labels(choices),
+    }
+}
+
+fn reason(error: &FoldError) -> Option<&serde_json::Value> {
+    error.details().and_then(|details| details.get("reason"))
+}
+
+#[test]
+fn a_question_set_holds_one_to_four_trimmed_questions_with_or_without_choices() {
+    use fold_core::QuestionSet;
+    let set = QuestionSet::parse(&[
+        set_question("  Is the MCP server connected again? ", &["Yes", "Not yet"]),
+        fold_core::SetQuestion {
+            header: Some("  Keys ".to_owned()),
+            ..set_question("Which keys must the workers use?", &[])
+        },
+    ])
+    .unwrap();
+    assert_eq!(
+        set.questions()[0].text,
+        "Is the MCP server connected again?"
+    );
+    assert_eq!(set.questions()[0].choices.len(), 2);
+    assert_eq!(set.questions()[1].header.as_deref(), Some("Keys"));
+    assert!(set.questions()[1].choices.is_empty());
+
+    let five: Vec<_> = (0..5)
+        .map(|n| set_question(&format!("q{n}"), &[]))
+        .collect();
+    for questions in [Vec::new(), five] {
+        let error = QuestionSet::parse(&questions).unwrap_err();
+        assert_eq!(error.code(), codes::INVALID_REQUEST);
+        assert_eq!(reason(&error), Some(&json!("questions")));
+    }
+    let long = "x".repeat(fold_core::messages::MAX_QUESTION_LEN + 1);
+    for text in ["  ", long.as_str()] {
+        let error = QuestionSet::parse(&[set_question(text, &[])]).unwrap_err();
+        assert_eq!(reason(&error), Some(&json!("questions")));
+    }
+    let header = fold_core::SetQuestion {
+        header: Some("a header far longer than forty characters in all".to_owned()),
+        ..set_question("Which?", &[])
+    };
+    assert_eq!(
+        reason(&QuestionSet::parse(&[header]).unwrap_err()),
+        Some(&json!("questions"))
+    );
+    let one_choice = QuestionSet::parse(&[set_question("Which?", &["Only"])]).unwrap_err();
+    assert_eq!(reason(&one_choice), Some(&json!("choices")));
+}
+
+#[test]
+fn a_question_with_choices_and_a_marked_ask_are_sets_of_one_with_the_body_as_question() {
+    use fold_core::messages::{AskParts, ask_questions};
+    let stored = [set_question("Stored?", &[])];
+    let choices = labels(&["Red", "Blue"]);
+    let parts = |stored, choices, marked| AskParts {
+        stored,
+        body: " Which colour? ",
+        choices,
+        header: Some("Colour"),
+        marked,
+    };
+    assert_eq!(ask_questions(parts(&stored, &[], false)), stored.to_vec());
+    let single = ask_questions(parts(&[], &choices, false));
+    assert_eq!(single.len(), 1);
+    assert_eq!(single[0].text, "Which colour?");
+    assert_eq!(single[0].header.as_deref(), Some("Colour"));
+    assert_eq!(single[0].choices, choices);
+    let marked = ask_questions(parts(&[], &[], true));
+    assert_eq!(marked.len(), 1);
+    assert!(marked[0].choices.is_empty());
+    assert!(ask_questions(parts(&[], &[], false)).is_empty());
+}
+
+#[test]
+fn set_answers_take_one_answer_per_question_and_the_labels_own_spelling() {
+    use fold_core::messages::set_answers;
+    let questions = [
+        set_question("Connected?", &["Yes, it is reconnected", "Not yet"]),
+        set_question("Keys?", &[]),
+    ];
+    let answers = set_answers(
+        &questions,
+        &[
+            " yes, IT is reconnected ".to_owned(),
+            " mock the calls ".to_owned(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(answers, ["Yes, it is reconnected", "mock the calls"]);
+
+    for wrong in [
+        vec!["Yes".to_owned()],
+        vec!["Yes".to_owned(), "a".to_owned(), "b".to_owned()],
+        vec!["Yes".to_owned(), "  ".to_owned()],
+    ] {
+        let error = set_answers(&questions, &wrong).unwrap_err();
+        assert_eq!(error.code(), codes::INVALID_REQUEST);
+        assert_eq!(reason(&error), Some(&json!("answers")));
+        assert_eq!(
+            error.details().and_then(|details| details.get("questions")),
+            Some(&json!(2))
+        );
+    }
+    assert!(set_answers(&[], &[]).is_err());
+}
+
+#[test]
+fn the_reply_of_a_set_of_one_is_its_answer_and_of_a_larger_set_each_question_with_its_answer() {
+    use fold_core::messages::answers_body;
+    let one = [set_question("Connected?", &["Yes", "No"])];
+    assert_eq!(answers_body(&one, &["Yes".to_owned()]), "Yes");
+    let two = [set_question("Connected?", &[]), set_question("Keys?", &[])];
+    assert_eq!(
+        answers_body(&two, &["Yes".to_owned(), "Mock them".to_owned()]),
+        "1. Connected?\nYes\n\n2. Keys?\nMock them"
+    );
+}
+
+#[test]
+fn the_first_line_of_an_ask_skips_blank_lines_and_is_cut_short() {
+    use fold_core::messages::{FIRST_LINE_LEN, first_line};
+    assert_eq!(
+        first_line("\n  \n  Both wait for the server.\nmore"),
+        "Both wait for the server."
+    );
+    let long = "y".repeat(FIRST_LINE_LEN + 10);
+    let cut = first_line(&long);
+    assert_eq!(cut.chars().count(), FIRST_LINE_LEN);
+    assert!(cut.ends_with('…'));
+    assert_eq!(first_line(""), "");
+}

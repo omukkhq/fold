@@ -23,6 +23,7 @@ export function requestSummary(
     requester: "human:tanim",
     drafter: null,
     latest_version: null,
+    code: null,
     created_at: T0,
     updated_at: T0,
     ...fields,
@@ -97,6 +98,10 @@ export function requestMessage(
     header: null,
     asks_human: false,
     lines: null,
+    questions: [],
+    answers: [],
+    answers_ask: null,
+    worker_question: false,
     body,
     sent_at: T0 + n * 1000,
     recipients: [

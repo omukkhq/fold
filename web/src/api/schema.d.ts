@@ -280,6 +280,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/asks/{id}/answer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human answers every question of an open ask in one reply. The reply joins the ask's thread, goes to the asker, holds each question with its answer and stores the answers, so the ask stops waiting while another ask of the same thread still waits. It appends `message.sent` like any reply. */
+        post: operations["answer_ask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/board": {
         parameters: {
             query?: never;
@@ -927,6 +944,23 @@ export interface paths {
         put?: never;
         /** A named human creates a request: the message and up to 10 files. The orchestrator that claims it sets the kind and the title. */
         post: operations["create_request"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/requests/from-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human creates a request about lines they selected in a revision of main or in a proposal version. It is the same request as `POST /requests` makes, with the code location and a short excerpt of the lines added. */
+        post: operations["create_code_request"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1877,6 +1911,17 @@ export interface components {
              */
             started_at: number;
         };
+        /** @description A human's answers to every question of an ask, in the order of its `questions`. */
+        AnswerRequest: {
+            /**
+             * @description One answer per question: a choice's label, or free text. A label matches without case and surrounding space.
+             * @example [
+             *       "Yes, it is reconnected",
+             *       "Mock the calls"
+             *     ]
+             */
+            answers: string[];
+        };
         AnswerWorkerQuestionBody: {
             behavior: components["schemas"]["Behavior"];
             /** @description A note for the worker: the tool error it gets with `deny`, or what it reads with the answer after a restart. */
@@ -2321,6 +2366,33 @@ export interface components {
             /** @description Why the request is closed. `#` names a fold item and `@` names a file; the daemon parses nothing. */
             reason: string;
         };
+        /** @description A request about lines a human selected. Name the lines by `revision`, or by `proposal`, `version` and `side`. */
+        CodeRequestBody: {
+            /** @description The message in Markdown. `#` names a fold item and `@` names a file; the daemon parses nothing. */
+            body: string;
+            /**
+             * Format: int32
+             * @description 1-based, at least `start_line`.
+             */
+            end_line: number;
+            /**
+             * @description The file the lines belong to, relative to the tree's root.
+             * @example web/src/board.ts
+             */
+            path: string;
+            /** @description A proposal, such as `P-3`, with `version` and `side`. */
+            proposal?: string | null;
+            /** @description A revision of main, such as `r17`. */
+            revision?: string | null;
+            side?: components["schemas"]["CommentSide"] | null;
+            /**
+             * Format: int32
+             * @description 1-based.
+             */
+            start_line: number;
+            /** Format: int32 */
+            version?: number | null;
+        };
         /** @description The comment of a review batch that a comment puts on its proposal. */
         CommentBatchLink: {
             /** @example rb-3 */
@@ -2745,6 +2817,7 @@ export interface components {
         EditFileBody: {
             /** @description The whole new content of the file, as UTF-8 text. */
             content: string;
+            intent?: components["schemas"]["Intent"] | null;
             /** @description The file, such as `src/lib.rs`: a text file of that version. */
             path: string;
             /**
@@ -3153,6 +3226,46 @@ export interface components {
         };
         /** @enum {string} */
         IntegrationResultKind: "succeeded" | "checks_failed" | "queued";
+        /** @description How the change of a proposal version works in the code, so a human understands and judges it without reading every line: the summary and the parts of the diff always, and the contracts, the decisions and what it does not change when they apply. A section without entries does not show. Every file the version changes belongs to exactly one part. */
+        Intent: {
+            /** @description The contracts by kind; a request may leave it out for none. */
+            contracts: components["schemas"]["IntentContracts"];
+            /** @description The choices the author made and why, and open questions with the message that asks them; empty when none apply, and a request may leave it out. */
+            decisions: string[];
+            /** @description What a reader may think the change touches but it does not; empty when nothing applies, and a request may leave it out. */
+            not_changed: string[];
+            /** @description The parts of the diff in reading order, 1 to 12. */
+            parts: components["schemas"]["IntentPart"][];
+            /** @description How the change works in the code: the flow, the states and the rules, at most 1200 characters; it may hold line breaks. */
+            summary: string;
+        };
+        /** @description The contracts a change adds or changes, by kind; a kind the change does not touch is empty, and a request may leave it out. Each entry is one line of at most 300 characters, at most 20 per kind. */
+        IntentContracts: {
+            commands: string[];
+            config: string[];
+            database: string[];
+            errors: string[];
+            events: string[];
+            rights: string[];
+            routes: string[];
+        };
+        /** @description One part of a version's diff. */
+        IntentPart: {
+            /** @description What this part of the code does, at most 800 characters; it may hold line breaks. */
+            does: string;
+            /**
+             * @description The changed files of the part, as the version's diff names them (a renamed file by its new path). A file belongs to one part only.
+             * @example [
+             *       "src/cases.rs"
+             *     ]
+             */
+            files: string[];
+            /**
+             * @description A short name, one line of at most 80 characters, unique in the intent.
+             * @example Case model and migration
+             */
+            name: string;
+        };
         Label: {
             /**
              * @description One of sage, slate, teal, ink, gold, moss, plum, stone.
@@ -3244,6 +3357,8 @@ export interface components {
         };
         /** @description The asks a human marks answered: those of one thread, or every ask linked to one task. */
         MarkAnsweredRequest: {
+            /** @description One ask, such as `m-31`, so another ask of its thread keeps waiting. Give one of `thread`, `task` and `ask`. */
+            ask?: string | null;
             /** @description The task whose asks are answered, such as `T-12`. */
             task?: string | null;
             /** @description Any message of the thread whose asks are answered, such as `m-31`. Give `thread` or `task`, not both. */
@@ -3312,6 +3427,13 @@ export interface components {
         };
         /** @description A stored message with public ids only. */
         MessageView: {
+            /** @description A human's reply that answers an ask with the answer route: one answer per question of `answers_ask`, in order. Empty for any other message. */
+            answers: string[];
+            /**
+             * @description The ask whose questions `answers` answer.
+             * @example m-30
+             */
+            answers_ask: string | null;
             /** @description The sending agent marked the message as asking a human for an answer. A question with choices and a worker's `AskUserQuestion` message ask without the mark. */
             asks_human: boolean;
             /** @description Plain text. */
@@ -3328,6 +3450,8 @@ export interface components {
             lines: components["schemas"]["MessageLines"] | null;
             /** @example P-3 */
             proposal: string | null;
+            /** @description The questions of an ask as one set, in order, which a human answers together with the answer route: the 1 to 4 questions of a question set, or the one question that a question with choices or a marked ask is, with the body as its text. Empty for a message that asks nothing. */
+            questions: components["schemas"]["SetQuestion"][];
             recipients: components["schemas"]["RecipientView"][];
             /** @example m-30 */
             reply_to: string | null;
@@ -3353,6 +3477,8 @@ export interface components {
              * @example m-31
              */
             thread: string;
+            /** @description The message stands for a worker's `AskUserQuestion` call: only a human's reply in its thread ends it, never Mark answered. */
+            worker_question: boolean;
         };
         ModelCost: {
             /** Format: int64 */
@@ -3415,6 +3541,8 @@ export interface components {
              * @example pq-3
              */
             question: string | null;
+            /** @description How many questions a `question` asks as one set, which a human answers together in one reply; 0 for every other kind. */
+            questions: number;
             /**
              * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again; what to check for a `worker_model_unreachable`.
              * @example Wait until the design is signed off
@@ -4002,6 +4130,7 @@ export interface components {
             files_modified: number;
             /** @description A human made this version by editing the one before it in a human review. It keeps the agent approvals of that version until it is sent for review again; a human approves it again. */
             human_edit: boolean;
+            intent: components["schemas"]["Intent"] | null;
             /** @description A human sent this version for review again, so the approvals it kept no longer count. */
             review_again: boolean;
             /** @description The reviewer that holds the review claim made this version by fixing the one before it in its review checkout. It starts without approvals like every version. */
@@ -4184,6 +4313,41 @@ export interface components {
              */
             size: number;
         };
+        /** @description The lines a request was made on: a run of lines of one file in a revision of main, or in one side of a proposal version. */
+        RequestCodeView: {
+            /**
+             * Format: int32
+             * @description 1-based, at least `start_line`.
+             */
+            end_line: number;
+            /** @description The lines as the tree held them when the request was made, joined by newlines. */
+            excerpt: string;
+            /** @description The excerpt was cut: it holds only the first lines, or the first characters of a first line that is too long. */
+            excerpt_cut: boolean;
+            /** @example web/src/board.ts */
+            path: string;
+            /**
+             * @description The proposal whose version the lines belong to; null for lines of a revision.
+             * @example P-3
+             */
+            proposal: string | null;
+            /**
+             * @description The revision of main the lines belong to; null for lines of a proposal version.
+             * @example r17
+             */
+            revision: string | null;
+            side: components["schemas"]["CommentSide"] | null;
+            /**
+             * Format: int32
+             * @description 1-based.
+             */
+            start_line: number;
+            /**
+             * Format: int32
+             * @description The proposal version; null for lines of a revision.
+             */
+            version: number | null;
+        };
         /** @description The requester's comment on one version, written when asking for changes. */
         RequestCommentView: {
             author: string;
@@ -4242,6 +4406,7 @@ export interface components {
         RequestState: "open" | "drafting" | "draft_ready" | "changes_requested" | "approved" | "closed";
         /** @description One request in a list. */
         RequestSummary: {
+            code: components["schemas"]["RequestCodeView"] | null;
             /**
              * Format: int64
              * @description UTC milliseconds.
@@ -4766,6 +4931,18 @@ export interface components {
         SetProjectNotifyBody: {
             /** @description Whether the host's targets get the project's notices too. */
             use_host_targets: boolean;
+        };
+        /** @description One question of a set. */
+        SetQuestion: {
+            /** @description The options a human may pick, in order; empty for a question that takes free text only. A human may always answer with free text. */
+            choices: components["schemas"]["MessageChoice"][];
+            /**
+             * @description A short header, such as `Chart library`.
+             * @example MCP server
+             */
+            header: string | null;
+            /** @example Is the MCP server connected again? */
+            text: string;
         };
         /** @description A change of the worker limits; a limit left out stays as it is. */
         SetWorkerLimitsBody: {
@@ -7136,7 +7313,7 @@ export interface operations {
                     "application/json": components["schemas"]["MarkedAnswered"];
                 };
             };
-            /** @description `invalid_request`: neither or both of `thread` and `task`; `invalid_id`: an id is malformed */
+            /** @description `invalid_request`: not exactly one of `thread`, `task` and `ask`; `invalid_id`: an id is malformed */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -7165,6 +7342,98 @@ export interface operations {
             };
             /** @description `message_not_found`, `task_not_found` or `project_not_found` */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    answer_ask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The ask, such as `m-31` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnswerRequest"];
+            };
+        };
+        responses: {
+            /** @description The reply that carries the answers */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageView"];
+                };
+            };
+            /** @description `invalid_request`: the answers do not match the questions one to one (`details.reason` `answers`); `invalid_id`: the id is malformed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `message_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `ask_not_open`: the ask was already answered or marked answered */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9916,7 +10185,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProposalVersion"];
                 };
             };
-            /** @description `invalid_request`, `invalid_path`, `invalid_id` or `invalid_name` */
+            /** @description `invalid_request`, `invalid_path`, `invalid_id`, `invalid_name` or `invalid_intent` (`details.field` names the part of the intent and `details.reason` is `missing` for no intent on a version that has none, `empty`, `too_long`, `control_character`, `no_parts`, `too_many_parts`, `too_many_entries`, `duplicate_part`, `file_in_two_parts`, `part_without_files`, `part_files_uncovered` with `details.uncovered` or `part_file_outside_diff` with `details.outside`) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -10961,6 +11230,96 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    create_code_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodeRequestBody"];
+            };
+        };
+        responses: {
+            /** @description The created request */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestDetailView"];
+                };
+            };
+            /** @description `invalid_request` (no body, or the lines are not named by a revision or by a proposal version and side), `invalid_id` or `invalid_path` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `revision_not_found`, `proposal_not_found` (also for a version the proposal does not have) or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_comment_path`: the tree has no text file at the path, with `details.reason` `missing`, `not_a_file` (a directory or a symlink), `binary` or `too_large`; `invalid_comment_range`: the lines are not in the file */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
             /** @description Internal error */
             500: {

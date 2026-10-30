@@ -1,4 +1,5 @@
 use fold_core::object::ObjectHash;
+use fold_core::reviews::ProposalIntent;
 use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{
     ChangesetId, IdKind, IntegrationId, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp,
@@ -66,6 +67,8 @@ pub struct IntegratedProposal {
     pub task_title: String,
     pub agent: String,
     pub worker: String,
+    /// The intent of the integrated version; `None` for a version made before intents existed.
+    pub intent: Option<ProposalIntent>,
 }
 
 /// The genesis revision `r0` for `tree`, the start of every project: no parent, no integration. The caller stores it with `fold-vcs` before `create_initial_revision`.
@@ -308,6 +311,7 @@ struct RawRow {
     worker: Option<String>,
     git_commit: Option<String>,
     batch_number: Option<i64>,
+    intent: Option<String>,
 }
 
 async fn one<'e, E>(executor: E, number: RevisionId) -> Result<Option<RevisionRow>, StoreError>
@@ -343,7 +347,8 @@ where
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
                   v.version AS "version?: i64", t.number AS "task_number?: i64",
                   t.title AS "task_title?", a.name AS "agent?", w.name AS "worker?",
-                  rc."commit" AS "git_commit?", rb.number AS "batch_number?: i64"
+                  rc."commit" AS "git_commit?", rb.number AS "batch_number?: i64",
+                  vi.intent AS "intent?: String"
            FROM revisions r
            LEFT JOIN revisions p ON p.id = r.parent_id
            LEFT JOIN integrations i ON i.id = r.integration_id
@@ -352,6 +357,7 @@ where
            LEFT JOIN workers w ON w.id = pr.author_worker_id
            LEFT JOIN agents a ON a.id = w.agent_id
            LEFT JOIN proposal_versions v ON v.id = i.version_id
+           LEFT JOIN proposal_version_intents vi ON vi.version_id = v.id
            LEFT JOIN revision_commits rc ON rc.revision_id = r.id
            LEFT JOIN changesets cs ON cs.id = i.changeset_id
            LEFT JOIN human_changes hc ON hc.integration_id = i.id
@@ -388,7 +394,8 @@ where
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
                   v.version AS "version?: i64", t.number AS "task_number?: i64",
                   t.title AS "task_title?", a.name AS "agent?", w.name AS "worker?",
-                  rc."commit" AS "git_commit?", rb.number AS "batch_number?: i64"
+                  rc."commit" AS "git_commit?", rb.number AS "batch_number?: i64",
+                  vi.intent AS "intent?: String"
            FROM revisions r
            LEFT JOIN revisions p ON p.id = r.parent_id
            LEFT JOIN integrations i ON i.id = r.integration_id
@@ -397,6 +404,7 @@ where
            LEFT JOIN workers w ON w.id = pr.author_worker_id
            LEFT JOIN agents a ON a.id = w.agent_id
            LEFT JOIN proposal_versions v ON v.id = i.version_id
+           LEFT JOIN proposal_version_intents vi ON vi.version_id = v.id
            LEFT JOIN revision_commits rc ON rc.revision_id = r.id
            LEFT JOIN changesets cs ON cs.id = i.changeset_id
            LEFT JOIN human_changes hc ON hc.integration_id = i.id
@@ -470,6 +478,10 @@ fn row(raw: RawRow) -> Result<RevisionRow, StoreError> {
                     task_title,
                     agent,
                     worker,
+                    intent: crate::reviews::intents::decode(
+                        raw.intent.as_deref(),
+                        "proposal_version_intents.intent",
+                    )?,
                 }),
                 _ => None,
             },

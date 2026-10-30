@@ -7,6 +7,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Comparison } from "@/api/diff";
 import {
@@ -14,10 +15,12 @@ import {
   comparedFile,
   comparison,
   ctx,
+  del,
   fileDiff,
   hunk,
   state,
 } from "@/test/diff";
+import { requestDetail, requestSummary } from "@/test/requests";
 import { stubFetch } from "@/test/stubFetch";
 import { DiffScreen } from "./DiffScreen";
 import type { DiffSearch } from "./search";
@@ -240,5 +243,193 @@ describe("DiffScreen", () => {
     expect(
       await screen.findByText("fold has no comparison for C-99."),
     ).toBeTruthy();
+  });
+
+  it("makes a request about lines of a revision side, and offers none on a workspace side", async () => {
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo/diff": () => ({
+        body: {
+          view: "file",
+          ...fileDiff(LOGIN, [hunk(1, 1, [ctx("a"), add("b")])]),
+          path: LOGIN.path,
+        },
+      }),
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects/demo/requests": {
+        body: {
+          items: [
+            requestSummary("RQ-2", {
+              code: {
+                path: LOGIN.path,
+                start_line: 1,
+                end_line: 1,
+                excerpt: "a",
+                excerpt_cut: false,
+                revision: "r7",
+                proposal: null,
+                version: null,
+                side: null,
+              },
+            }),
+          ],
+        },
+      },
+      "POST /api/v1/projects/demo/requests/from-code": {
+        status: 201,
+        body: requestDetail(requestSummary("RQ-3")),
+      },
+    });
+    const user = userEvent.setup();
+    show(
+      { from: "r7", to: "r8", path: LOGIN.path },
+      comparison([LOGIN], {
+        source: "recorded",
+        from: state("revision", "r7"),
+        to: state("revision", "r8"),
+      }),
+    );
+    const grid = await screen.findByRole("grid", {
+      name: `Diff of ${LOGIN.path}`,
+    });
+    // The request on r7 marks its line, which the old side of this comparison holds.
+    expect(
+      await within(grid).findByRole("link", {
+        name: "Request RQ-2 about line 1, open",
+      }),
+    ).toBeTruthy();
+    await user.click(
+      within(grid).getByRole("gridcell", { name: /^Added line/ }),
+    );
+    await user.click(
+      await within(grid).findByRole("button", { name: "Make a request" }),
+    );
+    const form = await within(grid).findByRole("form", {
+      name: "Make a request about line 2 · r8",
+    });
+    await user.type(within(form).getByLabelText("Request"), "Why b?");
+    await user.click(
+      within(form).getByRole("button", { name: "Make the request" }),
+    );
+    expect(await within(grid).findByText(/with these lines/)).toBeTruthy();
+    expect(
+      calls.find((c) => c.path.endsWith("/requests/from-code"))?.body,
+    ).toEqual({
+      body: "Why b?",
+      path: LOGIN.path,
+      start_line: 2,
+      end_line: 2,
+      revision: "r8",
+    });
+
+    cleanup();
+    show({ from: "r7", to: "ws-7", path: LOGIN.path }, WORKING);
+    const working = await screen.findByRole("grid", {
+      name: `Diff of ${LOGIN.path}`,
+    });
+    const rows = within(working).getAllByRole("row").length;
+    await user.click(
+      within(working).getByRole("gridcell", { name: /^Added line/ }),
+    );
+    expect(
+      within(working).queryByRole("button", { name: "Make a request" }),
+    ).toBeNull();
+    expect(within(working).getAllByRole("row")).toHaveLength(rows);
+  });
+
+  it("takes the old side of a renamed file at its previous path, and puts focus back on the line", async () => {
+    const renamed = comparedFile("src/routes/signin.tsx", "renamed", {
+      previous_path: "src/routes/login.tsx",
+    });
+    const onOld = (id: string, path: string) =>
+      requestSummary(id, {
+        code: {
+          path,
+          start_line: 1,
+          end_line: 1,
+          excerpt: "a",
+          excerpt_cut: false,
+          revision: "r7",
+          proposal: null,
+          version: null,
+          side: null,
+        },
+      });
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo/diff": () => ({
+        body: {
+          view: "file",
+          ...fileDiff(renamed, [hunk(1, 1, [del("a"), add("b")])]),
+          path: renamed.path,
+        },
+      }),
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects/demo/requests": {
+        body: {
+          items: [
+            onOld("RQ-2", "src/routes/login.tsx"),
+            onOld("RQ-4", "src/routes/signin.tsx"),
+          ],
+        },
+      },
+      "POST /api/v1/projects/demo/requests/from-code": {
+        status: 201,
+        body: requestDetail(requestSummary("RQ-3")),
+      },
+    });
+    const user = userEvent.setup();
+    show(
+      { from: "r7", to: "r8", path: renamed.path },
+      comparison([renamed], {
+        source: "recorded",
+        from: state("revision", "r7"),
+        to: state("revision", "r8"),
+      }),
+    );
+    const grid = await screen.findByRole("grid", {
+      name: `Diff of ${renamed.path}`,
+    });
+    expect(
+      await within(grid).findByRole("link", {
+        name: "Request RQ-2 about line 1, open",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(grid).queryByRole("link", { name: /^Request RQ-4/ }),
+    ).toBeNull();
+    const removed = within(grid).getByRole("gridcell", {
+      name: /^Removed line/,
+    });
+    await user.click(removed);
+    await user.click(
+      await within(grid).findByRole("button", { name: "Make a request" }),
+    );
+    const form = await within(grid).findByRole("form", {
+      name: "Make a request about line 1 · r7",
+    });
+    await user.click(within(form).getByRole("button", { name: "Cancel" }));
+    expect(document.activeElement).toBe(removed);
+    await user.click(
+      await within(grid).findByRole("button", { name: "Make a request" }),
+    );
+    await user.type(
+      within(
+        await within(grid).findByRole("form", {
+          name: "Make a request about line 1 · r7",
+        }),
+      ).getByLabelText("Request"),
+      "Why a?",
+    );
+    await user.click(
+      within(grid).getByRole("button", { name: "Make the request" }),
+    );
+    expect(
+      calls.find((c) => c.path.endsWith("/requests/from-code"))?.body,
+    ).toEqual({
+      body: "Why a?",
+      path: "src/routes/login.tsx",
+      start_line: 1,
+      end_line: 1,
+      revision: "r7",
+    });
   });
 });

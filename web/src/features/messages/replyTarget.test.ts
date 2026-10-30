@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { message, recipient, thread } from "@/test/messages";
-import {
-  askWaits,
-  asksYou,
-  freeAskWaitsForYou,
-  isAsk,
-  replyTarget,
-} from "./replyTarget";
+import { askWaits, asksYou, isAsk, replyTarget } from "./replyTarget";
 
 const toYou = [recipient("human:tanim")];
 const choices = [
@@ -27,7 +21,14 @@ const note = message("m-3", { sender: "frontend", recipients: toYou });
 const answer = message("m-4", { sender: "human:tanim" });
 
 describe("asks", () => {
-  it("counts a question with choices and a marked ask as asks", () => {
+  it("counts a question set, a question with choices and a marked ask as asks", () => {
+    expect(
+      isAsk(
+        message("m-9", {
+          questions: [{ text: "Connected?", header: null, choices: [] }],
+        }),
+      ),
+    ).toBe(true);
     expect([question, free, note].map(isAsk)).toEqual([true, true, false]);
   });
 
@@ -58,21 +59,11 @@ describe("asks", () => {
     expect(askWaits(answered, question)).toBe(false);
     expect(askWaits(answered, free)).toBe(false);
   });
-
-  it("marks only a waiting free ask to you", () => {
-    const open = thread("m-1", {
-      awaiting_human: true,
-      messages: [question, free],
-    });
-    expect(freeAskWaitsForYou(open, free, "tanim")).toBe(true);
-    expect(freeAskWaitsForYou(open, free, "rafeed")).toBe(false);
-    expect(freeAskWaitsForYou(open, question, "tanim")).toBe(false);
-  });
 });
 
 describe("replyTarget", () => {
   it("has nothing to reply to in an empty thread", () => {
-    expect(replyTarget(thread("m-1"), "tanim", null)).toBeNull();
+    expect(replyTarget(thread("m-1"), "tanim")).toBeNull();
   });
 
   it("replies to the newest message when no free ask waits for you", () => {
@@ -80,27 +71,10 @@ describe("replyTarget", () => {
       awaiting_human: true,
       messages: [question, note],
     });
-    expect(replyTarget(shown, "tanim", null)).toEqual({
+    expect(replyTarget(shown, "tanim")).toEqual({
       replyTo: "m-3",
       answers: null,
     });
-  });
-
-  it("answers the picked question while it waits, and forgets it once answered", () => {
-    const shown = thread("m-1", {
-      awaiting_human: true,
-      messages: [question, note],
-    });
-    expect(replyTarget(shown, "tanim", "m-1")).toEqual({
-      replyTo: "m-1",
-      answers: question,
-    });
-    const answered = { ...shown, messages: [question, note, answer] };
-    expect(replyTarget(answered, "tanim", "m-1")).toEqual({
-      replyTo: "m-4",
-      answers: null,
-    });
-    expect(replyTarget(shown, "tanim", "m-3")?.answers).toBeNull();
   });
 
   it("answers the newest free ask to you while it is the newest waiting ask", () => {
@@ -108,15 +82,39 @@ describe("replyTarget", () => {
       awaiting_human: true,
       messages: [question, free, note],
     });
-    expect(replyTarget(shown, "tanim", null)).toEqual({
+    expect(replyTarget(shown, "tanim")).toEqual({
       replyTo: "m-2",
       answers: free,
     });
-    expect(replyTarget(shown, "rafeed", null)?.answers).toBeNull();
+    expect(replyTarget(shown, "rafeed")?.answers).toBeNull();
     const later = { ...shown, messages: [free, question] };
-    expect(replyTarget(later, "tanim", null)).toEqual({
+    expect(replyTarget(later, "tanim")).toEqual({
       replyTo: "m-1",
       answers: null,
     });
+  });
+
+  it("leaves a set of several questions and a worker's question with choices to the card", () => {
+    const set = message("m-5", {
+      sender: "backend",
+      recipients: toYou,
+      questions: [
+        { text: "Connected?", header: null, choices: [] },
+        { text: "Keys?", header: null, choices: [] },
+      ],
+    });
+    const shown = thread("m-5", { awaiting_human: true, messages: [set] });
+    expect(replyTarget(shown, "tanim")).toEqual({
+      replyTo: "m-5",
+      answers: null,
+    });
+    const worker = message("m-6", {
+      sender: "backend",
+      recipients: toYou,
+      worker_question: true,
+      questions: [{ text: "Why?", header: null, choices: [] }],
+    });
+    const asked = thread("m-6", { awaiting_human: true, messages: [worker] });
+    expect(replyTarget(asked, "tanim")?.answers).toBe(worker);
   });
 });

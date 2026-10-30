@@ -98,7 +98,7 @@ export function AgentsControl({ slug }: { slug: string }) {
           sideOffset={6}
           collisionPadding={16}
           aria-label="Agents"
-          className="z-10 flex max-h-(--radix-popover-content-available-height) w-agents max-w-(--width-popover-max) flex-col overflow-hidden rounded-m bg-surface shadow-pop outline-none"
+          className="z-pop flex max-h-(--radix-popover-content-available-height) w-agents max-w-(--width-popover-max) flex-col overflow-hidden rounded-m bg-surface shadow-pop outline-none"
         >
           <div className="flex shrink-0 items-center gap-12 px-16 pt-14 pb-8">
             <h2 className="text-16 font-semibold text-text">Agents</h2>

@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorReply, stubFetch } from "../test/stubFetch";
 import { isApiError } from "./errors";
 import {
-  countAwaitingHuman,
   listProposalThreads,
   listThreads,
   markAnswered,
@@ -81,19 +80,6 @@ describe("sendMessage", () => {
     await expect(
       sendMessage("demo", { reply_to: "m-9", body: "x" }),
     ).rejects.toSatisfy((e: unknown) => isApiError(e, "message_not_found"));
-  });
-});
-
-describe("countAwaitingHuman", () => {
-  it("reads the signed-in human's count from a page of one thread", async () => {
-    const calls = stubFetch({
-      "GET /api/v1/projects/demo/messages": {
-        body: { items: [thread("m-9")], next: "m-9", total_awaiting_human: 3 },
-      },
-    });
-    await expect(countAwaitingHuman("demo")).resolves.toBe(3);
-    expect(calls[0]?.search.get("limit")).toBe("1");
-    expect(calls[0]?.search.get("mine")).toBe("true");
   });
 });
 

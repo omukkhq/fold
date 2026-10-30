@@ -1,0 +1,280 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.number AS \"number!: i64\", r.hash AS \"hash!\", r.tree_hash AS \"tree_hash!\",\n                  p.number AS \"parent?: i64\", r.created_at AS \"created_at!: i64\", r.import_source,\n                  i.number AS \"integration_number?: i64\", i.kind AS \"integration_kind?\",\n                  i.actor AS \"integration_actor?\",\n                  COALESCE(i.remote_commit, hc.commit_id) AS \"remote_commit?: String\",\n                  hc.commit_id AS \"human_commit?: String\",\n                  cs.number AS \"changeset_number?: i64\", i.message AS \"integration_message?\",\n                  pr.number AS \"proposal_number?: i64\", pr.title AS \"proposal_title?\",\n                  v.version AS \"version?: i64\", t.number AS \"task_number?: i64\",\n                  t.title AS \"task_title?\", a.name AS \"agent?\", w.name AS \"worker?\",\n                  rc.\"commit\" AS \"git_commit?\", rb.number AS \"batch_number?: i64\",\n                  vi.intent AS \"intent?: String\"\n           FROM revisions r\n           LEFT JOIN revisions p ON p.id = r.parent_id\n           LEFT JOIN integrations i ON i.id = r.integration_id\n           LEFT JOIN proposals pr ON pr.id = i.proposal_id\n           LEFT JOIN tasks t ON t.id = pr.task_id\n           LEFT JOIN workers w ON w.id = pr.author_worker_id\n           LEFT JOIN agents a ON a.id = w.agent_id\n           LEFT JOIN proposal_versions v ON v.id = i.version_id\n           LEFT JOIN proposal_version_intents vi ON vi.version_id = v.id\n           LEFT JOIN revision_commits rc ON rc.revision_id = r.id\n           LEFT JOIN changesets cs ON cs.id = i.changeset_id\n           LEFT JOIN human_changes hc ON hc.integration_id = i.id\n           LEFT JOIN review_batches rb ON rb.id = i.review_batch_id\n           WHERE r.number <= ?1\n           ORDER BY r.number DESC\n           LIMIT ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "hash!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "hash"
+          }
+        }
+      },
+      {
+        "name": "tree_hash!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "tree_hash"
+          }
+        }
+      },
+      {
+        "name": "parent?: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "created_at!: i64",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "import_source",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "import_source"
+          }
+        }
+      },
+      {
+        "name": "integration_number?: i64",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "integrations",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "integration_kind?",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integrations",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "integration_actor?",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integrations",
+            "name": "actor"
+          }
+        }
+      },
+      {
+        "name": "remote_commit?: String",
+        "ordinal": 9,
+        "type_info": "Null",
+        "origin": "Expression"
+      },
+      {
+        "name": "human_commit?: String",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "human_changes",
+            "name": "commit_id"
+          }
+        }
+      },
+      {
+        "name": "changeset_number?: i64",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "changesets",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "integration_message?",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integrations",
+            "name": "message"
+          }
+        }
+      },
+      {
+        "name": "proposal_number?: i64",
+        "ordinal": 13,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "proposal_title?",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "version?: i64",
+        "ordinal": 15,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "task_number?: i64",
+        "ordinal": 16,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "task_title?",
+        "ordinal": 17,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "agent?",
+        "ordinal": 18,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "worker?",
+        "ordinal": 19,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "git_commit?",
+        "ordinal": 20,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "revision_commits",
+            "name": "commit"
+          }
+        }
+      },
+      {
+        "name": "batch_number?: i64",
+        "ordinal": 21,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batches",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "intent?: String",
+        "ordinal": 22,
+        "type_info": "Null",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      null,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "572066770ce9bb545506e358ee99107de9956b328d4af5244c683140ed932375"
+}

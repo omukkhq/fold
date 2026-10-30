@@ -6,7 +6,7 @@ The user starts the main agent here with `fld claude`, which starts fold when ne
 
 Each role has its own skill with its full workflow: `fold-main`, `fold-area-lead`, `fold-review-lead`, `fold-task-worker` and `fold-reviewer`. Load the skill of your role before you start; the `fold` skill is the index for a session without a role.
 
-In text for people (messages, review comments, evidence, task descriptions), write `#T-12` to name a fold item and `@path` to name a file. The Mentions section of each role's skill lists the marks.
+In text for people (messages, review comments, intents, evidence, task descriptions), write `#T-12` to name a fold item and `@path` to name a file. The Mentions section of each role's skill lists the marks.
 
 Rules for files:
 

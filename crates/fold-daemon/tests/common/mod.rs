@@ -1,4 +1,5 @@
 pub mod acceptance;
+pub mod intents;
 pub mod invariants;
 pub mod roles;
 pub mod sse;

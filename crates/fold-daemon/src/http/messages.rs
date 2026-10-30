@@ -20,6 +20,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(show_thread))
         .routes(routes!(send_feedback))
         .routes(routes!(mark_asks_answered))
+        .routes(routes!(answer_ask))
         .routes(routes!(mark_thread_read))
 }
 
@@ -82,6 +83,37 @@ pub struct MessageView {
     /// The lines of a version of the message's proposal that a human's question to its author is about; null for any other message.
     #[schema(required = true)]
     pub lines: Option<MessageLines>,
+    /// The questions of an ask as one set, in order, which a human answers together with the answer route: the 1 to 4 questions of a question set, or the one question that a question with choices or a marked ask is, with the body as its text. Empty for a message that asks nothing.
+    pub questions: Vec<SetQuestion>,
+    /// A human's reply that answers an ask with the answer route: one answer per question of `answers_ask`, in order. Empty for any other message.
+    pub answers: Vec<String>,
+    /// The ask whose questions `answers` answer.
+    #[schema(required = true, example = "m-30")]
+    pub answers_ask: Option<String>,
+    /// The message stands for a worker's `AskUserQuestion` call: only a human's reply in its thread ends it, never Mark answered.
+    pub worker_question: bool,
+}
+
+/// One question of a set.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SetQuestion {
+    #[schema(example = "Is the MCP server connected again?")]
+    pub text: String,
+    /// A short header, such as `Chart library`.
+    #[schema(required = true, example = "MCP server")]
+    pub header: Option<String>,
+    /// The options a human may pick, in order; empty for a question that takes free text only. A human may always answer with free text.
+    pub choices: Vec<MessageChoice>,
+}
+
+impl From<fold_core::SetQuestion> for SetQuestion {
+    fn from(question: fold_core::SetQuestion) -> Self {
+        Self {
+            text: question.text,
+            header: question.header,
+            choices: question.choices.into_iter().map(Into::into).collect(),
+        }
+    }
 }
 
 /// A run of lines of one file of a proposal version, with their text.
@@ -169,6 +201,10 @@ impl From<service::MessageView> for MessageView {
             header: message.header,
             asks_human: message.asks_human,
             lines: message.lines.map(Into::into),
+            questions: message.questions.into_iter().map(Into::into).collect(),
+            answers: message.answers,
+            answers_ask: message.answers_ask.map(|id| id.to_string()),
+            worker_question: message.worker_question,
         }
     }
 }
@@ -416,6 +452,9 @@ pub struct MarkAnsweredRequest {
     /// The task whose asks are answered, such as `T-12`.
     #[serde(default)]
     pub task: Option<String>,
+    /// One ask, such as `m-31`, so another ask of its thread keeps waiting. Give one of `thread`, `task` and `ask`.
+    #[serde(default)]
+    pub ask: Option<String>,
 }
 
 /// The asks the call marked answered.
@@ -437,7 +476,7 @@ pub struct MarkedAnswered {
     request_body = MarkAnsweredRequest,
     responses(
         (status = 200, description = "The asks marked answered", body = MarkedAnswered),
-        (status = 400, description = "`invalid_request`: neither or both of `thread` and `task`; `invalid_id`: an id is malformed", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request`: not exactly one of `thread`, `task` and `ask`; `invalid_id`: an id is malformed", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
         (status = 404, description = "`message_not_found`, `task_not_found` or `project_not_found`", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
@@ -450,17 +489,27 @@ pub async fn mark_asks_answered(
     project: Project,
     ApiJson(request): ApiJson<MarkAnsweredRequest>,
 ) -> Result<Json<MarkedAnswered>, ApiError> {
-    let scope = match (request.thread.as_deref(), request.task.as_deref()) {
-        (Some(thread), None) => {
+    let scope = match (
+        request.thread.as_deref(),
+        request.task.as_deref(),
+        request.ask.as_deref(),
+    ) {
+        (Some(thread), None, None) => {
             DismissScope::Thread(thread.parse::<MessageId>().map_err(FoldError::from)?)
         }
-        (None, Some(task)) => DismissScope::Task(task.parse::<TaskId>().map_err(FoldError::from)?),
+        (None, Some(task), None) => {
+            DismissScope::Task(task.parse::<TaskId>().map_err(FoldError::from)?)
+        }
+        (None, None, Some(ask)) => {
+            DismissScope::Ask(ask.parse::<MessageId>().map_err(FoldError::from)?)
+        }
         _ => {
-            return Err(
-                FoldError::new(codes::INVALID_REQUEST, "give thread or task, not both")
-                    .with_hint("name the thread such as m-31, or the task such as T-12")
-                    .into(),
-            );
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                "give one of thread, task and ask",
+            )
+            .with_hint("name the thread such as m-31, the task such as T-12, or the ask such as m-31")
+            .into());
         }
     };
     let answered = project
@@ -471,6 +520,50 @@ pub async fn mark_asks_answered(
     Ok(Json(MarkedAnswered {
         answered: answered.iter().map(ToString::to_string).collect(),
     }))
+}
+
+/// A human's answers to every question of an ask, in the order of its `questions`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct AnswerRequest {
+    /// One answer per question: a choice's label, or free text. A label matches without case and surrounding space.
+    #[schema(example = json!(["Yes, it is reconnected", "Mock the calls"]))]
+    pub answers: Vec<String>,
+}
+
+/// A named human answers every question of an open ask in one reply. The reply joins the ask's thread, goes to the asker, holds each question with its answer and stores the answers, so the ask stops waiting while another ask of the same thread still waits. It appends `message.sent` like any reply.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/asks/{id}/answer",
+    operation_id = "answer_ask",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The ask, such as `m-31`"),
+    ),
+    request_body = AnswerRequest,
+    responses(
+        (status = 201, description = "The reply that carries the answers", body = MessageView),
+        (status = 400, description = "`invalid_request`: the answers do not match the questions one to one (`details.reason` `answers`); `invalid_id`: the id is malformed", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "`message_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`ask_not_open`: the ask was already answered or marked answered", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn answer_ask(
+    human: Human,
+    State(state): State<AppState>,
+    project: Project,
+    Path((_slug, id)): Path<(String, String)>,
+    ApiJson(request): ApiJson<AnswerRequest>,
+) -> Result<(StatusCode, Json<MessageView>), ApiError> {
+    let ask = id.parse::<MessageId>().map_err(FoldError::from)?;
+    let reply = project
+        .0
+        .messages(&state.registry)
+        .answer(&human.actor(), ask, &request.answers)
+        .await?;
+    Ok((StatusCode::CREATED, Json(reply.into())))
 }
 
 /// The messages a mark-read call acknowledged.

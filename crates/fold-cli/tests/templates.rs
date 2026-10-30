@@ -68,7 +68,7 @@ fn skill_identifiers() -> BTreeSet<String> {
         .collect()
 }
 
-const FOLD_TOOLS: [&str; 96] = [
+const FOLD_TOOLS: [&str; 97] = [
     "register_agent",
     "list_agents",
     "define_area",
@@ -165,13 +165,14 @@ const FOLD_TOOLS: [&str; 96] = [
     "get_review_plan",
     "list_review_plans",
     "integrate_review_batch",
+    "list_open_asks",
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 181] = [
+const FOLD_ERROR_CODES: [&str; 182] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -353,6 +354,7 @@ const FOLD_ERROR_CODES: [&str; 181] = [
     "plaintext_notify_target",
     "notify_send_not_found",
     "notify_target_inactive",
+    "invalid_intent",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
@@ -377,7 +379,8 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 51] = [
+const NON_TOOL_NAMES: [&str; 65] = [
+    "file_count",
     "human_review",
     "fold_failed",
     "left_out",
@@ -429,6 +432,19 @@ const NON_TOOL_NAMES: [&str; 51] = [
     "update_run",
     "related_tasks",
     "plan_hint",
+    "reply_only",
+    "answer_these",
+    "too_long",
+    "control_character",
+    "not_changed",
+    "no_parts",
+    "too_many_parts",
+    "too_many_entries",
+    "duplicate_part",
+    "file_in_two_parts",
+    "part_without_files",
+    "part_files_uncovered",
+    "part_file_outside_diff",
 ];
 
 /// The sections of the index before the shared ones.
@@ -526,6 +542,7 @@ fn role_steps(role: Role) -> &'static [&'static str] {
             "remove_from_batch",
             "list_review_batches",
             "get_review_batch",
+            "list_open_asks",
         ],
         Role::AreaLead => &[
             "get_task_graph",
@@ -909,6 +926,7 @@ fn each_role_skill_has_its_frontmatter_its_sections_then_the_shared_ones() {
         "agent_not_registered",
         "worker_claim_denied",
         "review_plan_denied",
+        "invalid_intent",
     ] {
         assert!(errors.contains(&format!("| `{code}` |")), "{code}");
     }
@@ -1367,6 +1385,52 @@ fn run_state_names() -> BTreeSet<&'static str> {
         .chain(RunReason::ALL.map(RunReason::as_str))
         .chain(Outcome::ALL.map(Outcome::as_str))
         .collect()
+}
+
+#[test]
+fn the_reference_names_the_claude_files_fold_keeps_out_of_main() {
+    for line in fold_vcs::ignore::claude_excludes()
+        .into_iter()
+        .chain([fold_vcs::ignore::EXCLUDE_NOTE.to_owned()])
+    {
+        assert!(
+            REFERENCE.contains(&format!("`{line}`")),
+            "REFERENCE.md does not name `{line}`"
+        );
+    }
+    assert!(REFERENCE.contains(fold_daemon::services::projects::FOLD_SKILLS_TITLE));
+    assert!(REFERENCE.contains("`fld untrack .claude/settings.local.json`"));
+}
+
+#[test]
+fn the_exclude_lines_leave_out_every_skill_file_fold_writes_and_only_those_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join(".fold")).unwrap();
+    fold_vcs::git_remote::exclude_claude_files(&root.join(".fold")).unwrap();
+    let rules = fold_vcs::ignore::IgnoreRules::new(root);
+    let ignored = |path: &str| {
+        rules.is_ignored(
+            &fold_vcs::paths::RepoPath::parse(path.as_bytes()).unwrap(),
+            false,
+        )
+    };
+    for path in SKILL_FILES {
+        assert!(ignored(path), "{path}");
+    }
+    for folder in &claude_files::FOLDERS[2..] {
+        let name = folder.strip_prefix(".claude/skills/").unwrap();
+        assert!(fold_core::layout::is_fold_skill(name), "{folder}");
+    }
+    for path in [
+        claude_files::SETTINGS_FILE,
+        claude_files::AGENTS_FILE,
+        ".claude/skills/deploy/SKILL.md",
+        ".claude/skills/fold-custom/SKILL.md",
+    ] {
+        assert!(!ignored(path), "{path}");
+    }
+    assert!(ignored(".claude/settings.local.json"));
 }
 
 #[test]

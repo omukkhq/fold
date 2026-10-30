@@ -93,7 +93,11 @@ export function MarkAnswered({
 export function useMarkAnsweredBar(
   slug: string,
   scope: AnsweredScope,
-): { button: ReactNode; lines: ReactNode } {
+): { button: ReactNode; lines: ReactNode; reset: () => void } {
   const mark = useMark(slug, scope);
-  return { button: <MarkButton mark={mark} bar />, lines: markLines(mark) };
+  return {
+    button: <MarkButton mark={mark} bar />,
+    lines: markLines(mark),
+    reset: mark.reset,
+  };
 }

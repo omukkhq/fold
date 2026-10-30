@@ -38,6 +38,10 @@ mod acceptance_27_request_batch;
 mod acceptance_28_untrack;
 mod acceptance_29_webhook_notices;
 mod acceptance_2_messaging;
+mod acceptance_30_proposal_intent;
+mod acceptance_31_code_comment_request;
+mod acceptance_32_question_sets;
+mod acceptance_33_main_answers_worker_questions;
 mod acceptance_3_parallel_workspaces;
 mod acceptance_4_live_diff;
 mod acceptance_5_review_and_integrate;
@@ -67,6 +71,8 @@ mod crash_checkpoint;
 #[cfg(feature = "failpoints")]
 mod crash_direct_change;
 #[cfg(feature = "failpoints")]
+mod crash_fold_skills;
+#[cfg(feature = "failpoints")]
 mod crash_folder;
 #[cfg(feature = "failpoints")]
 mod crash_git_commit;
@@ -92,6 +98,7 @@ mod enable_git;
 mod event_bus;
 mod events_service;
 mod exclude_file;
+mod fold_skills;
 mod folder_stash;
 mod folder_status;
 mod gc;
@@ -170,6 +177,7 @@ mod reviews;
 mod services_agents;
 mod services_inbox;
 mod services_messages;
+mod services_question_sets;
 mod session_context;
 mod session_push;
 mod socket_peers;

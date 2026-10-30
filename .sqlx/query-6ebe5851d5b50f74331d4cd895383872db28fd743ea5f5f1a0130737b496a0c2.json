@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT g.name AS \"name!: String\" FROM messages r\n           JOIN messages m ON m.thread_id = r.thread_id AND m.number < r.number\n           JOIN worker_question_messages wq ON wq.message_id = m.id\n           JOIN worker_permission_questions q ON q.id = wq.question_id\n           JOIN worker_processes w ON w.id = q.worker_process_id\n           JOIN agents g ON g.id = w.agent_id\n           WHERE r.number = ?1\n             AND NOT EXISTS (SELECT 1 FROM worker_permission_closures c WHERE c.question_id = q.id)\n             AND (\n                 EXISTS (SELECT 1 FROM message_answers a WHERE a.reply_id = r.id AND a.ask_id = m.id)\n                 OR (\n                     r.sender_kind = 'human'\n                     AND NOT EXISTS (SELECT 1 FROM message_questions s WHERE s.message_id = m.id)\n                     AND NOT EXISTS (SELECT 1 FROM message_answers o WHERE o.reply_id = r.id)\n                     AND NOT EXISTS (\n                         SELECT 1 FROM messages e\n                         WHERE e.thread_id = m.thread_id AND e.number > m.number AND e.number < r.number\n                           AND e.sender_kind = 'human'\n                           AND NOT EXISTS (\n                               SELECT 1 FROM message_answers x WHERE x.reply_id = e.id AND x.ask_id <> m.id\n                           )\n                     )\n                 )\n             )\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "name!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6ebe5851d5b50f74331d4cd895383872db28fd743ea5f5f1a0130737b496a0c2"
+}

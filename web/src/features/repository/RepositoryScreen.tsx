@@ -28,6 +28,8 @@ interface RepositoryScreenProps {
   revision?: string;
   /** A file to open first, with the directories above it expanded. */
   path?: string;
+  /** The line of `path` to open the file at. */
+  line?: number;
   /** Called with the revision the human picks; the route puts it in the address, which brings it back as `revision`. */
   onSelectRevision: (id: string) => void;
 }
@@ -36,6 +38,7 @@ export function RepositoryScreen({
   slug,
   revision,
   path,
+  line,
   onSelectRevision,
 }: RepositoryScreenProps) {
   const revisions = useQuery(revisionsQuery(slug));
@@ -202,7 +205,13 @@ export function RepositoryScreen({
           onOpenFile={setOpenPath}
         />
         {openPath === null || deciding ? null : (
-          <FileView slug={slug} revision={selected} path={openPath} />
+          <FileView
+            key={`${selected}:${openPath}`}
+            slug={slug}
+            revision={selected}
+            path={openPath}
+            line={openPath === path ? line : undefined}
+          />
         )}
         {mainCopy === null ? null : (
           <div className="flex items-start gap-10 rounded-m bg-sunken px-14 py-10 text-14 text-text">

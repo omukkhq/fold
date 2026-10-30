@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MessageView, ThreadView } from "@/api/messages";
 import {
-  answerPending,
   chosenAnswers,
   chosenOption,
   isQuestion,
@@ -22,6 +21,10 @@ function message(
     header: null,
     asks_human: false,
     lines: null,
+    questions: [],
+    answers: [],
+    answers_ask: null,
+    worker_question: false,
     proposal: null,
     recipients: [],
     reply_to: null,
@@ -85,18 +88,5 @@ describe("question", () => {
     const free = thread([question, message("m-4", "human:tanim", "Neither")]);
     expect(questionState(free, question).chosen).toBeNull();
     expect(chosenAnswers(free).size).toBe(0);
-  });
-
-  it("stays pending from the send until the thread holds an answer", () => {
-    const none = { answer: null, chosen: null };
-    expect(answerPending(true, false, none)).toBe(true);
-    expect(answerPending(false, true, none)).toBe(true);
-    expect(answerPending(false, false, none)).toBe(false);
-    expect(
-      answerPending(false, true, {
-        answer: message("m-4", "human:tanim", "x"),
-        chosen: null,
-      }),
-    ).toBe(false);
   });
 });

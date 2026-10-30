@@ -77,7 +77,7 @@ export function PhoneMenu({
       <RadixDialog.Portal>
         <RadixDialog.Content
           aria-describedby={undefined}
-          className="fixed inset-x-0 top-(--height-bar-compact) bottom-0 z-20 overflow-y-auto bg-surface pt-6 pb-20 outline-none"
+          className="fixed inset-x-0 top-(--height-bar-compact) bottom-0 z-dialog overflow-y-auto bg-surface pt-6 pb-20 outline-none"
         >
           <RadixDialog.Title className="sr-only">Menu</RadixDialog.Title>
           <nav aria-label="Project tabs">

@@ -11,9 +11,9 @@ axum = { version = "0.8.9", features = ["multipart"] }
 base64 = "0.23.1"
 blake3 = "1.8.7"
 fail = { version = "0.5.1", optional = true }
-fold-core = { version = "0.6.0", path = "../fold-core" }
-fold-store = { version = "0.6.0", path = "../fold-store" }
-fold-vcs = { version = "0.6.0", path = "../fold-vcs" }
+fold-core = { version = "0.7.0", path = "../fold-core" }
+fold-store = { version = "0.7.0", path = "../fold-store" }
+fold-vcs = { version = "0.7.0", path = "../fold-vcs" }
 futures-util = { version = "0.3.34", default-features = false }
 getrandom = "0.4.3"
 hyper = { version = "1.12.0", features = ["server", "http1"] }
@@ -25,6 +25,7 @@ rust-embed = "8.13.0"
 rustix = { version = "1.1.5", features = ["fs", "net", "process", "time"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+serde_path_to_error = "0.1.20"
 thiserror = "2.0.21"
 tokio = { version = "1.53.3", features = ["fs", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 toml_edit = "0.25.17"

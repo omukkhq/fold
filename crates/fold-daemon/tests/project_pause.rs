@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
@@ -278,7 +279,7 @@ async fn approved_proposals_still_integrate_while_paused() {
         .unwrap();
     fx.write(1, "src/lib.rs", "pub fn y() {}\n");
     fx.reviews()
-        .create_proposal(&author, t(1), "Change it", None)
+        .create_proposal_covering(&author, t(1), "Change it", None)
         .await
         .unwrap()
         .detail()

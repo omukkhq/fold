@@ -1,3 +1,4 @@
+use crate::common::intents::Covering as _;
 use crate::common::roles::give_role;
 use fold_core::roles::Role;
 use std::sync::Arc;
@@ -137,7 +138,7 @@ impl Fixture {
         fx.write("src/new.rs", "pub fn z() {}\npub fn w() {}\n");
         fx.write("logo.bin", "\0\u{1}\u{2}\0");
         fx.reviews
-            .create_proposal(&fx.author(), t(1), "Add the report", None)
+            .create_proposal_covering(&fx.author(), t(1), "Add the report", None)
             .await
             .unwrap()
             .detail()
@@ -163,7 +164,7 @@ impl Fixture {
     async fn new_version(&self, content: &str) {
         self.write("src/lib.rs", content);
         self.reviews
-            .update_proposal(&self.author(), p(1), None)
+            .update_proposal_covering(&self.author(), p(1), None)
             .await
             .unwrap()
             .detail()

@@ -120,6 +120,7 @@ function MergedBody({
         </EmptyPanel>
       ) : (
         <ChangedFiles
+          slug={slug}
           state={tree}
           comparison={{ files: diff.files, warnings: [] }}
           selectedPath={file?.path}

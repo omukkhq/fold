@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT later.body, later.sender_human AS \"human!: String\"\n           FROM messages m\n           JOIN messages later ON later.thread_id = m.thread_id AND later.number > m.number\n           WHERE m.number = ?1 AND later.sender_kind = 'human'\n             AND NOT EXISTS (\n                 SELECT 1 FROM message_answers o WHERE o.reply_id = later.id AND o.ask_id <> m.id\n             )\n           ORDER BY later.number LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "body",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "body"
+          }
+        }
+      },
+      {
+        "name": "human!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "sender_human"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "a7c0b8188a662ff882f76ee63370b725a527d043560214f4268373de0638e398"
+}

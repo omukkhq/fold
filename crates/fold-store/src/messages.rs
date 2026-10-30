@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use fold_core::reviews::Side;
 use fold_core::{
-    AddressedAs, AgentName, Choice, Directory, DirectoryAgent, HumanName, MessageId, ProposalId,
-    Recipient, RequestId, Sender, Tag, Target, TaskId, Timestamp, WorkerName,
+    AddressedAs, AgentName, Choice, Directory, DirectoryAgent, EventActor, HumanName, MessageId,
+    ProposalId, Recipient, RequestId, Sender, SetQuestion, Tag, Target, TaskId, Timestamp,
+    WorkerName,
 };
 use sqlx::{SqliteConnection, SqliteExecutor};
 
@@ -73,6 +74,14 @@ pub struct MessageRow {
     pub asks_human: bool,
     /// The lines of a proposal version the message asks about.
     pub lines: Option<MessageLines>,
+    /// The questions of a question set, in order; empty for any other message.
+    pub questions: Vec<SetQuestion>,
+    /// The answers a human's reply gives, one per question of the ask it answers, in order; empty for any other message.
+    pub answers: Vec<String>,
+    /// The ask whose questions `answers` answer.
+    pub answers_ask: Option<MessageId>,
+    /// The message stands for a worker's `AskUserQuestion` call.
+    pub worker_question: bool,
 }
 
 /// A run of lines of one file of a proposal version that a message asks about, 1-based and inclusive, in the version's base tree (`Old`) or its own tree (`New`). The version belongs to the message's proposal. The excerpt is file content, which is never logged, so the `Debug` form gives its length alone.
@@ -177,6 +186,68 @@ pub async fn insert_choices(
              VALUES ((SELECT id FROM messages WHERE number = ?1), ?2)",
             number,
             header
+        )
+        .execute(tx.conn())
+        .await?;
+    }
+    Ok(())
+}
+
+/// Stores the questions of a question set message, in their order, each with its header and options.
+pub async fn insert_questions(
+    tx: &mut WriteTx,
+    message: MessageId,
+    questions: &[SetQuestion],
+) -> Result<(), StoreError> {
+    let number = message.to_db();
+    for (position, question) in (1_i64..).zip(questions) {
+        let header = question.header.as_deref();
+        sqlx::query!(
+            "INSERT INTO message_questions (message_id, position, text, header)
+             VALUES ((SELECT id FROM messages WHERE number = ?1), ?2, ?3, ?4)",
+            number,
+            position,
+            question.text,
+            header
+        )
+        .execute(tx.conn())
+        .await?;
+        for (choice, option) in (1_i64..).zip(&question.choices) {
+            let description = option.description.as_deref();
+            sqlx::query!(
+                "INSERT INTO message_question_choices (message_id, question, position, label, description)
+                 VALUES ((SELECT id FROM messages WHERE number = ?1), ?2, ?3, ?4, ?5)",
+                number,
+                position,
+                choice,
+                option.label,
+                description
+            )
+            .execute(tx.conn())
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Stores the answers that the human reply `reply` gives to the ask `ask`, one per question in order. The database refuses a reply outside the ask's thread, a reply that already answers another ask, and a second answer to a question.
+pub async fn insert_answers(
+    tx: &mut WriteTx,
+    reply: MessageId,
+    ask: MessageId,
+    answers: &[String],
+) -> Result<(), StoreError> {
+    let reply = reply.to_db();
+    let ask = ask.to_db();
+    for (question, answer) in (1_i64..).zip(answers) {
+        sqlx::query!(
+            "INSERT INTO message_answers (reply_id, ask_id, question, answer)
+             VALUES ((SELECT id FROM messages WHERE number = ?1),
+                     (SELECT id FROM messages WHERE number = ?2), ?3, ?4)",
+            reply,
+            ask,
+            question,
+            answer
         )
         .execute(tx.conn())
         .await?;
@@ -1001,6 +1072,7 @@ struct RawMessage {
     body: String,
     created_at: i64,
     asks_human: bool,
+    worker_question: bool,
 }
 
 impl RawMessage {
@@ -1038,6 +1110,10 @@ impl RawMessage {
             header: asked.header,
             asks_human: self.asks_human,
             lines: asked.lines,
+            questions: asked.questions,
+            answers: asked.answers,
+            answers_ask: asked.answers_ask,
+            worker_question: self.worker_question,
         })
     }
 }
@@ -1061,7 +1137,9 @@ async fn raw_by_numbers(
         r#"SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS "worker?: String",
                   m.sender_human, t.number AS "task?: i64", p.number AS "proposal?: i64",
                   rq.number AS "request?: i64", m.body, m.created_at,
-                  m.asks_human AS "asks_human!: bool"
+                  m.asks_human AS "asks_human!: bool",
+                  EXISTS (SELECT 1 FROM worker_question_messages q WHERE q.message_id = m.id)
+                      AS "worker_question!: bool"
            FROM messages m
            LEFT JOIN workers w ON w.id = m.sender_worker_id
            LEFT JOIN tasks t ON t.id = m.task_id
@@ -1142,7 +1220,7 @@ async fn with_recipients(
         .collect()
 }
 
-/// The first message a human wrote in the thread of `message` after it: the human's answer to a question. Returns its body and its human.
+/// The first message a human wrote in the thread of `message` after it that answers no other ask of the thread: the human's answer to a question that is no set. Returns its body and its human.
 pub async fn first_human_reply(
     executor: impl SqliteExecutor<'_>,
     message: MessageId,
@@ -1153,6 +1231,9 @@ pub async fn first_human_reply(
            FROM messages m
            JOIN messages later ON later.thread_id = m.thread_id AND later.number > m.number
            WHERE m.number = ?1 AND later.sender_kind = 'human'
+             AND NOT EXISTS (
+                 SELECT 1 FROM message_answers o WHERE o.reply_id = later.id AND o.ask_id <> m.id
+             )
            ORDER BY later.number LIMIT 1"#,
         number
     )
@@ -1166,15 +1247,51 @@ pub async fn first_human_reply(
     .transpose()
 }
 
+/// The answers that a reply gave to the ask `ask`, one per question in order, and who gave them: the human, or the main agent's worker that answered for the user; `None` while no reply carries answers to it.
+pub async fn answers_of(
+    executor: impl SqliteExecutor<'_>,
+    ask: MessageId,
+) -> Result<Option<(Vec<String>, EventActor)>, StoreError> {
+    let number = ask.to_db();
+    let rows = sqlx::query!(
+        r#"SELECT a.answer, r.sender_human AS "human?: String", w.name AS "worker?: String"
+           FROM message_answers a
+           JOIN messages k ON k.id = a.ask_id
+           JOIN messages r ON r.id = a.reply_id
+           LEFT JOIN workers w ON w.id = r.sender_worker_id
+           WHERE k.number = ?1
+           ORDER BY a.question"#,
+        number
+    )
+    .fetch_all(executor)
+    .await?;
+    let Some(first) = rows.first() else {
+        return Ok(None);
+    };
+    let by = match (&first.human, &first.worker) {
+        (Some(human), None) => HumanName::parse(human)
+            .map(|human| EventActor::human(&human))
+            .map_err(|_| StoreError::Corrupt("messages.sender_human"))?,
+        (None, Some(worker)) => WorkerName::parse(worker)
+            .map(|worker| EventActor::worker(&worker))
+            .map_err(|_| StoreError::Corrupt("workers.name"))?,
+        _ => return Err(StoreError::Corrupt("message_answers.reply_id")),
+    };
+    Ok(Some((rows.into_iter().map(|row| row.answer).collect(), by)))
+}
+
 /// What a message asks beyond its body: the options and the header of a question, and the lines of a proposal version it asks about.
 #[derive(Debug, Clone, Default)]
 struct Asked {
     choices: Vec<Choice>,
     header: Option<String>,
     lines: Option<MessageLines>,
+    questions: Vec<SetQuestion>,
+    answers: Vec<String>,
+    answers_ask: Option<MessageId>,
 }
 
-/// The choices, the header and the lines of each message whose number is in the JSON list `numbers`, the choices in order.
+/// The choices, the header, the lines, the set questions and the answers of each message whose number is in the JSON list `numbers`, each list in order.
 async fn choices_of(
     conn: &mut SqliteConnection,
     numbers: &str,
@@ -1207,6 +1324,37 @@ async fn choices_of(
            WHERE m.number IN (SELECT value FROM json_each(?))"#,
         numbers
     )
+    .fetch_all(&mut *conn)
+    .await?;
+    let questions = sqlx::query!(
+        r#"SELECT m.number, q.position, q.text, q.header
+           FROM message_questions q
+           JOIN messages m ON m.id = q.message_id
+           WHERE m.number IN (SELECT value FROM json_each(?))
+           ORDER BY m.number, q.position"#,
+        numbers
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let set_choices = sqlx::query!(
+        r#"SELECT m.number, c.question, c.label, c.description
+           FROM message_question_choices c
+           JOIN messages m ON m.id = c.message_id
+           WHERE m.number IN (SELECT value FROM json_each(?))
+           ORDER BY m.number, c.question, c.position"#,
+        numbers
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let answers = sqlx::query!(
+        r#"SELECT m.number, k.number AS "ask!: i64", a.answer
+           FROM message_answers a
+           JOIN messages m ON m.id = a.reply_id
+           JOIN messages k ON k.id = a.ask_id
+           WHERE m.number IN (SELECT value FROM json_each(?))
+           ORDER BY m.number, a.question"#,
+        numbers
+    )
     .fetch_all(conn)
     .await?;
     let mut asked: HashMap<i64, Asked> = HashMap::new();
@@ -1231,6 +1379,36 @@ async fn choices_of(
             excerpt: row.excerpt,
             excerpt_cut: row.excerpt_cut,
         });
+    }
+    let mut positions: HashMap<(i64, i64), usize> = HashMap::new();
+    for row in questions {
+        let entry = asked.entry(row.number).or_default();
+        positions.insert((row.number, row.position), entry.questions.len());
+        entry.questions.push(SetQuestion {
+            text: row.text,
+            header: row.header,
+            choices: Vec::new(),
+        });
+    }
+    for row in set_choices {
+        let at = positions
+            .get(&(row.number, row.question))
+            .copied()
+            .ok_or(StoreError::Corrupt("message_question_choices.question"))?;
+        if let Some(question) = asked
+            .get_mut(&row.number)
+            .and_then(|entry| entry.questions.get_mut(at))
+        {
+            question.choices.push(Choice {
+                label: row.label,
+                description: row.description,
+            });
+        }
+    }
+    for row in answers {
+        let entry = asked.entry(row.number).or_default();
+        entry.answers_ask = Some(message_id(row.ask, "message_answers.ask_id")?);
+        entry.answers.push(row.answer);
     }
     Ok(asked)
 }

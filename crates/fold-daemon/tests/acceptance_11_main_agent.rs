@@ -339,7 +339,11 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
     )
     .await;
     let updated = h
-        .call(&item_task_worker, "update_proposal", json!({"id": "P-2"}))
+        .call(
+            &item_task_worker,
+            "update_proposal",
+            json!({"intent": "Make the change the task asks for.", "id": "P-2"}),
+        )
         .await;
     assert_eq!(updated["version"], "v2", "{updated}");
     until_state(&h, &item_task_worker, WorkerState::Stopped).await;

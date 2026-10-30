@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT m.number, k.number AS \"ask!: i64\", a.answer\n           FROM message_answers a\n           JOIN messages m ON m.id = a.reply_id\n           JOIN messages k ON k.id = a.ask_id\n           WHERE m.number IN (SELECT value FROM json_each(?))\n           ORDER BY m.number, a.question",
+  "describe": {
+    "columns": [
+      {
+        "name": "number",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "ask!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "answer",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "message_answers",
+            "name": "answer"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e13726f4522cfa20fbd87d20224184ae5384e735349b3fb312f66e03977c9585"
+}

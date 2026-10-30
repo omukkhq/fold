@@ -2,8 +2,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use fold_core::{
-    Address, Choice, FoldError, MessageBody, MessageChoices, MessageId, ProposalId, RequestId,
-    TaskId, Timestamp, codes,
+    Address, Choice, FoldError, MessageBody, MessageChoices, MessageId, ProposalId, QuestionSet,
+    RequestId, SetQuestion, TaskId, Timestamp, codes,
 };
 use fold_store::messages::MessageLines;
 use rmcp::handler::server::common::schema_for_type;
@@ -16,13 +16,14 @@ use super::error::{from_agent, from_message};
 use super::parse;
 use super::{FoldServer, FooterPart, FooterSource};
 use crate::services::agents::{AgentService, SessionContext};
-use crate::services::messages::{InboxItem, MessageService, MessageView, SendMessage};
+use crate::services::messages::{InboxItem, MessageService, MessageView, OpenAskView, SendMessage};
 
 pub const SEND_MESSAGE: &str = "send_message";
 pub const GET_INBOX: &str = "get_inbox";
 pub const GET_THREAD: &str = "get_thread";
 pub const ACKNOWLEDGE_MESSAGE: &str = "acknowledge_message";
 pub const MARK_ANSWERED: &str = "mark_answered";
+pub const LIST_OPEN_ASKS: &str = "list_open_asks";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -46,16 +47,57 @@ pub struct SendMessageInput {
     /// Make the message a multiple-choice question: 2 to 6 options, each a short single-line label or {label, description}. The recipient answers with a reply that names one option, or with free text. Ask a human with to: ["humans"] or ["human:<name>"].
     #[serde(default)]
     pub choices: Option<Vec<ChoiceInput>>,
-    /// Mark the message as asking a human for an answer, so it waits for the human on the board, in Needs you and in the Messages count until a human replies in its thread or someone calls mark_answered. Set it only when you need the human's answer; a report or a thank-you waits for no one. Needs a human recipient; a question with choices asks without it.
+    /// Mark the message as asking a human for an answer, so it waits for the human on the board, in Needs you and in the Messages count until a human replies in its thread or someone calls mark_answered. Set it only when you need the human's answer; a report or a thank-you waits for no one. Needs a human recipient; a question with choices or questions asks without it.
     #[serde(default)]
     pub asks_human: bool,
+    /// Ask the humans 1 to 4 questions as one set in this one message, with the body as a short line of context. The human answers them one by one and sends every answer in one reply, which holds each question with its answer. Ask everything you need now in one set and wait for the answer before you send another. Needs a human recipient; give questions or choices, not both.
+    #[serde(default)]
+    #[schemars(length(min = 1, max = 4))]
+    pub questions: Option<Vec<QuestionInput>>,
+}
+
+/// One question of a set.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct QuestionInput {
+    /// The question, at most 500 characters, such as "Is the MCP server connected again?".
+    pub text: String,
+    /// A short header of at most 40 characters that names the topic, such as "MCP server".
+    #[serde(default)]
+    pub header: Option<String>,
+    /// 2 to 6 options, each a short single-line label or {label, description}; leave out for a question that takes free text only. The human may always write an own answer.
+    #[serde(default)]
+    pub choices: Option<Vec<ChoiceInput>>,
+}
+
+impl From<QuestionInput> for SetQuestion {
+    fn from(input: QuestionInput) -> Self {
+        SetQuestion {
+            text: input.text,
+            header: input.header,
+            choices: input
+                .choices
+                .unwrap_or_default()
+                .into_iter()
+                .map(Choice::from)
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
+pub struct ListOpenAsksInput {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 pub struct MarkAnsweredInput {
-    /// The ask that the user answered outside its thread, such as m-31: a message your agent sent to a human with asks_human or choices, or, for the main agent, any agent's ask.
+    /// The ask that the user answered outside its thread, such as m-31: a message your agent sent to a human with asks_human, choices or questions, or, for the main agent, any agent's ask from list_open_asks.
     pub message: String,
+    /// Main agent only: the user's answers, one per question of the ask in order, each a choice's label or free text from the user's words. fold sends them as one reply from you in the ask's thread and stores them, so the asker gets them; a worker's AskUserQuestion (reply_only in list_open_asks) ends only this way and gets them as its tool's answer. Leave out to only record that the user answered.
+    #[serde(default)]
+    #[schemars(length(min = 1, max = 4))]
+    pub answers: Option<Vec<String>>,
 }
 
 /// One option of a question: a plain label, or a label with a one-line description that the human sees under it.
@@ -147,8 +189,13 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             MARK_ANSWERED,
-            "Record that the user answered an ask to a human outside its thread, such as in the main agent's session, so it stops waiting for a human. Only the asking agent or the main agent calls it. A worker's AskUserQuestion ends only with a human's reply in its thread.",
+            "Record that the user answered an ask to a human outside its thread, such as in the main agent's session, so it stops waiting for a human. Only the asking agent or the main agent calls it. The main agent may pass the user's answers, one per question: fold sends them to the asker as one reply in the thread. A worker's AskUserQuestion (reply_only) ends only with answers.",
             schema_for_type::<MarkAnsweredInput>(),
+        ),
+        Tool::new(
+            LIST_OPEN_ASKS,
+            "Main agent only: list every agent's open ask to the humans, oldest first, each with its id, agent, thread, links, first line and question count. When the user says something is done, find each ask this answers. For a reply_only ask, a worker's AskUserQuestion, call mark_answered with its id and the user's answers, one per question. For any other ask, reply to its agent in its thread with send_message reply_to, then call mark_answered with its id.",
+            schema_for_type::<ListOpenAsksInput>(),
         ),
     ]
 }
@@ -247,8 +294,40 @@ fn thread_json(message: &MessageView) -> Value {
     if let Some(lines) = &message.lines {
         object.insert("lines".into(), lines_json(lines));
     }
+    if is_set(&message.choices, message.asks_human, &message.questions) {
+        object.insert("questions".into(), questions_json(&message.questions));
+    }
+    if let Some(ask) = message.answers_ask {
+        object.insert("answers_ask".into(), json!(ask.to_string()));
+        object.insert("answers".into(), json!(message.answers));
+    }
     object.insert("sent_at".into(), json!(millis(message.sent_at)));
     Value::Object(object)
+}
+
+/// A message holds a question set when its questions come from neither its choices nor its `asks_human` mark; a single question shows as its body and choices alone.
+fn is_set(choices: &[Choice], asks_human: bool, questions: &[SetQuestion]) -> bool {
+    choices.is_empty() && !asks_human && !questions.is_empty()
+}
+
+/// The questions of a set as agents read them: each `{text, header?, choices?}`.
+fn questions_json(questions: &[SetQuestion]) -> Value {
+    json!(
+        questions
+            .iter()
+            .map(|question| {
+                let mut object = Map::new();
+                object.insert("text".into(), json!(question.text));
+                if let Some(header) = &question.header {
+                    object.insert("header".into(), json!(header));
+                }
+                if !question.choices.is_empty() {
+                    object.insert("choices".into(), choices_json(&question.choices));
+                }
+                Value::Object(object)
+            })
+            .collect::<Vec<_>>()
+    )
 }
 
 /// The lines of the message's proposal a human asks its author about, with their text; `excerpt_cut` appears only when the text holds just the first lines.
@@ -292,12 +371,35 @@ pub async fn send_message(server: &FoldServer, arguments: &JsonObject) -> Result
             MessageChoices::parse(&options, None)
         })
         .transpose()?;
+    let questions = input
+        .questions
+        .map(|questions| {
+            let questions: Vec<SetQuestion> =
+                questions.into_iter().map(SetQuestion::from).collect();
+            QuestionSet::parse(&questions)
+        })
+        .transpose()?;
     let actor = server.actor().await?;
-    let sent = server
-        .messages
-        .send_marked(&actor, message, request, choices, input.asks_human)
-        .await
-        .map_err(from_message)?;
+    let sent = match (choices, questions) {
+        (Some(_), Some(_)) => {
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                "give questions or choices, not both",
+            )
+            .with_details([("reason", json!("questions"))])
+            .with_hint("put a single question's options in questions[0].choices"));
+        }
+        (None, Some(questions)) => server
+            .messages
+            .send_set(&actor, message, request, questions)
+            .await
+            .map_err(from_message)?,
+        (choices, None) => server
+            .messages
+            .send_marked(&actor, message, request, choices, input.asks_human)
+            .await
+            .map_err(from_message)?,
+    };
     Ok(json!({
         "id": sent.id.to_string(),
         "thread": sent.thread.to_string(),
@@ -375,12 +477,67 @@ pub async fn mark_answered(
     let input: MarkAnsweredInput = parse(arguments)?;
     let id = message_id(&input.message)?;
     let actor = server.actor().await?;
+    if let Some(answers) = input.answers {
+        let reply = server
+            .messages
+            .answer(&actor, id, &answers)
+            .await
+            .map_err(from_message)?;
+        return Ok(json!({ "answered": id.to_string(), "reply": reply.id.to_string() }));
+    }
     let closed = server
         .messages
         .mark_answered(&actor, id)
         .await
         .map_err(from_message)?;
     Ok(json!({ "answered": closed.to_string() }))
+}
+
+pub async fn list_open_asks(
+    server: &FoldServer,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let _: ListOpenAsksInput = parse(arguments)?;
+    let actor = server.actor().await?;
+    let asks = server
+        .messages
+        .open_asks(&actor)
+        .await
+        .map_err(from_message)?;
+    Ok(json!({ "asks": asks.iter().map(open_ask_json).collect::<Vec<_>>() }))
+}
+
+/// One open ask, compact: its links only when it has them, and for a worker's `AskUserQuestion`, which ends only with its answers, `reply_only` with the questions to answer in order, each its text and its choices' labels.
+fn open_ask_json(ask: &OpenAskView) -> Value {
+    let mut object = Map::new();
+    object.insert("id".into(), json!(ask.id.to_string()));
+    object.insert("agent".into(), json!(ask.agent.to_string()));
+    object.insert("thread".into(), json!(ask.thread.to_string()));
+    insert_references(&mut object, None, ask.task, ask.proposal, ask.request);
+    object.insert("first_line".into(), json!(ask.first_line));
+    object.insert("questions".into(), json!(ask.questions.len()));
+    if ask.worker_question {
+        object.insert("reply_only".into(), json!(true));
+        let questions: Vec<Value> = ask
+            .questions
+            .iter()
+            .map(|question| {
+                let mut object = Map::new();
+                object.insert("text".into(), json!(question.text));
+                if !question.choices.is_empty() {
+                    let labels: Vec<&str> = question
+                        .choices
+                        .iter()
+                        .map(|choice| choice.label.as_str())
+                        .collect();
+                    object.insert("choices".into(), json!(labels));
+                }
+                Value::Object(object)
+            })
+            .collect();
+        object.insert("answer_these".into(), Value::Array(questions));
+    }
+    Value::Object(object)
 }
 
 /// The `unread` part of the footer: the unacknowledged messages of the calling agent's worker.

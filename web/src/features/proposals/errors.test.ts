@@ -103,6 +103,66 @@ describe("describeFailure", () => {
       "Only a text file can be edited here.",
     );
     expect(text("version_unchanged").place).toBe("inline");
+    expect(text("invalid_intent", { reason: "too_long" }).text).toBe(
+      "A text of the intent is too long.",
+    );
+    expect(
+      text("invalid_intent", { reason: "too_long", max_chars: 800 }).text,
+    ).toBe("A text of the intent is too long. Keep it to 800 characters.");
+    expect(text("invalid_intent", { reason: "empty" })).toMatchObject({
+      place: "inline",
+      text: "Write the summary and the parts of the intent, each with what it does and its files.",
+    });
+    const reasons: [Record<string, unknown>, string][] = [
+      [
+        { reason: "missing" },
+        "This version has no intent. Write one for the new version.",
+      ],
+      [
+        { reason: "control_character" },
+        "A text of the intent holds a control character. Remove it.",
+      ],
+      [{ reason: "no_parts" }, "The intent needs at least one part."],
+      [
+        { reason: "too_many_parts", max: 12 },
+        "The intent has too many parts. Keep it to 12.",
+      ],
+      [
+        { reason: "too_many_parts" },
+        "The intent has too many parts. Keep it to 12.",
+      ],
+      [
+        { reason: "too_many_entries", max: 20 },
+        "A list of the intent has too many entries. Keep it to 20.",
+      ],
+      [
+        { reason: "too_many_entries" },
+        "A list of the intent has too many entries. Keep it to 20.",
+      ],
+      [
+        { reason: "duplicate_part" },
+        "Two parts have the same name. Give each part its own name.",
+      ],
+      [
+        { reason: "file_in_two_parts", files: ["a.rs", 3, "b.rs"] },
+        "A file is in more than one part: a.rs, b.rs. Keep each file in one part.",
+      ],
+      [
+        { reason: "part_without_files" },
+        "A part names no file. Give it its files or remove it.",
+      ],
+      [
+        { reason: "part_files_uncovered", uncovered: ["src/new.rs"] },
+        "These changed files belong to no part: src/new.rs. Add each to the part whose code it changes.",
+      ],
+      [
+        { reason: "part_file_outside_diff", outside: "src/x.rs" },
+        "The version does not change these files: . Remove them from the parts.",
+      ],
+    ];
+    for (const [details, expected] of reasons) {
+      expect(text("invalid_intent", details).text).toBe(expected);
+    }
   });
 
   it("reads the gate details it names", () => {

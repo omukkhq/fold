@@ -1,12 +1,14 @@
 use fold_core::events::types;
 use fold_core::messages::{
-    MAX_CHOICE_DESCRIPTION_LEN, MAX_QUESTION_HEADER_LEN, chosen_answer, short_line,
+    MAX_CHOICE_DESCRIPTION_LEN, MAX_QUESTION_HEADER_LEN, MAX_QUESTION_LEN, MAX_SET_QUESTIONS,
+    chosen_answer, short_line,
 };
 use fold_core::roles::{PermissionBehavior, ask_answer_turn, permission_answer_turn};
+use fold_core::text::shorten;
 use fold_core::{
-    Actor, AgentName, Choice, Event, EventActor, FoldError, HumanName, IdKind, MessageBody,
-    MessageChoices, MessageId, NewEvent, PermissionQuestionId, WorkerName, WorkerState, codes,
-    policy,
+    Actor, AgentName, Choice, Event, EventActor, FoldError, IdKind, MessageBody, MessageChoices,
+    MessageId, NewEvent, PermissionQuestionId, QuestionSet, SetQuestion, WorkerName, WorkerState,
+    codes, policy,
 };
 use fold_store::agents::{self, NewQuestion, QuestionKind, QuestionRow};
 use fold_store::{StoreError, counters, messages, projects};
@@ -34,6 +36,9 @@ const DENIED: &str = "the human denied this tool call";
 
 /// The tool error of a call fold could not put to a human.
 const NO_HUMAN: &str = "fold could not put this tool call to a human; continue without it";
+
+/// The tool error of an `AskUserQuestion` call of more questions than one set holds.
+const TOO_MANY_QUESTIONS: &str = "fold asks the humans at most 4 questions in one set; ask again with 4 or fewer questions, the most important first";
 
 impl From<MessageError> for AgentError {
     fn from(error: MessageError) -> Self {
@@ -259,7 +264,7 @@ impl Supervisor {
         Ok(())
     }
 
-    /// A new `ask` question: each question of the `AskUserQuestion` call goes to every human as a question message from the worker, with the call's options as choices, linked to the worker's task when it has exactly one.
+    /// A new `ask` question: the `AskUserQuestion` call goes to every human as one message from the worker, linked to the worker's task when it has exactly one. A call of one question is a question with the call's options as choices; a call of several is one question set, which the humans answer together in one reply.
     async fn ask_humans(
         &self,
         process: &Process,
@@ -270,6 +275,20 @@ impl Supervisor {
             .call
             .questions()
             .filter(|asked| !asked.questions.is_empty());
+        if asked
+            .as_ref()
+            .is_some_and(|asked| asked.questions.len() > MAX_SET_QUESTIONS)
+        {
+            self.reply(
+                &waiter.agent,
+                waiter.generation,
+                &waiter.request_id,
+                PermissionDecision::Deny {
+                    message: TOO_MANY_QUESTIONS.to_owned(),
+                },
+            );
+            return Ok(());
+        }
         let registry = lock(&self.inner.registry).clone();
         let (Some(asked), Some(registry)) = (asked, registry) else {
             return Err(FoldError::new(
@@ -280,6 +299,7 @@ impl Supervisor {
         };
         let humans = projects::list_humans(registry.read()).await?;
         let mut bodies = Vec::with_capacity(asked.questions.len());
+        let mut set = Vec::with_capacity(asked.questions.len());
         for question in &asked.questions {
             // A description or header that fold would refuse is left out, so the question keeps its options.
             let options: Vec<Choice> = question
@@ -297,11 +317,29 @@ impl Supervisor {
                 .header
                 .as_deref()
                 .and_then(|text| short_line(text, MAX_QUESTION_HEADER_LEN));
-            bodies.push((
-                MessageBody::parse(question.question.clone())?,
-                MessageChoices::parse(&options, header.as_deref()).ok(),
-            ));
+            let choices = MessageChoices::parse(&options, header.as_deref()).ok();
+            set.push(SetQuestion {
+                text: shorten(question.question.trim(), MAX_QUESTION_LEN),
+                header: header.clone(),
+                choices: choices
+                    .as_ref()
+                    .map(|choices| choices.options().to_vec())
+                    .unwrap_or_default(),
+            });
+            bodies.push((MessageBody::parse(question.question.clone())?, choices));
         }
+        // Several questions are one set, so the humans see and answer them as one ask; the body holds the set's own texts, so both say the same.
+        let set = if bodies.len() > 1 {
+            let text = set
+                .iter()
+                .map(|question| question.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            bodies = vec![(MessageBody::parse(text)?, None)];
+            Some(QuestionSet::parse(&set)?)
+        } else {
+            None
+        };
         let worker = WorkerName::main(&process.agent);
         let now = self.inner.clock.now();
         let mut buffer = EventBuffer::new();
@@ -342,6 +380,7 @@ impl Supervisor {
                             task,
                             body,
                             choices: choices.as_ref(),
+                            questions: set.as_ref(),
                             now,
                         },
                     )
@@ -397,22 +436,29 @@ impl Supervisor {
         })
     }
 
-    /// Each question of an `ask` question with the first human reply to its message, and the human who replied last; `None` while a message has no reply.
+    /// Each question of an `ask` question with its answer, and who answered last; `None` while a message has no answer. A message's answer is the answers a reply stored for it, from a human or from the main agent for the user; a message that is no set also takes the first human reply in its thread that answers no other ask.
     async fn ask_answers(
         &self,
         question: &QuestionRow,
-    ) -> Result<Option<(Vec<(String, String)>, HumanName)>, AgentError> {
+    ) -> Result<Option<(Vec<(String, String)>, EventActor)>, AgentError> {
         let Ok(asked) = serde_json::from_value::<AskUserQuestion>(question.input.clone()) else {
             return Ok(None);
         };
         let ids = agents::question_messages(self.inner.store.read(), question.id).await?;
+        if let [message] = ids.as_slice()
+            && asked.questions.len() > 1
+        {
+            return self.set_answers(&asked, *message).await;
+        }
         let mut answers = Vec::with_capacity(ids.len());
         let mut last = None;
         for (asked, message) in asked.questions.iter().zip(ids) {
-            let Some((body, human)) =
-                messages::first_human_reply(self.inner.store.read(), message).await?
-            else {
-                return Ok(None);
+            let (body, by) = match messages::answers_of(self.inner.store.read(), message).await? {
+                Some((mut stored, by)) if !stored.is_empty() => (stored.swap_remove(0), by),
+                _ => match messages::first_human_reply(self.inner.store.read(), message).await? {
+                    Some((body, human)) => (body, EventActor::human(&human)),
+                    None => return Ok(None),
+                },
             };
             let labels: Vec<String> = asked
                 .options
@@ -420,9 +466,35 @@ impl Supervisor {
                 .map(|option| option.label.clone())
                 .collect();
             answers.push((asked.question.clone(), chosen_answer(&labels, &body)));
-            last = Some(human);
+            last = Some(by);
         }
-        Ok(last.map(|human| (answers, human)))
+        Ok(last.map(|by| (answers, by)))
+    }
+
+    /// Each question of a call asked as one set with the answer its reply stored for it, and who answered. A set takes only stored answers: a free reply in its thread answers none of its questions. `None` while the set has no answers.
+    async fn set_answers(
+        &self,
+        asked: &AskUserQuestion,
+        message: MessageId,
+    ) -> Result<Option<(Vec<(String, String)>, EventActor)>, AgentError> {
+        let Some((replies, by)) = messages::answers_of(self.inner.store.read(), message).await?
+        else {
+            return Ok(None);
+        };
+        let answers = asked
+            .questions
+            .iter()
+            .zip(replies)
+            .map(|(asked, reply)| {
+                let labels: Vec<String> = asked
+                    .options
+                    .iter()
+                    .map(|option| option.label.clone())
+                    .collect();
+                (asked.question.clone(), chosen_answer(&labels, &reply))
+            })
+            .collect();
+        Ok(Some((answers, by)))
     }
 
     /// Sends an answered question's decision to every live request that waits for it. A worker whose process ended while it waited, at a daemon stop, resumes with the answer as its first turn, and its first repeat of the call takes the stored answer.
@@ -564,9 +636,9 @@ impl Supervisor {
         Ok(true)
     }
 
-    /// Reads a stored event for the question flow: a human message in the thread of an open `ask` question may complete its answers.
+    /// Reads a stored event for the question flow: a human's message or the main agent's answers in the thread of an open `ask` question may complete its answers.
     pub(super) async fn on_event(&self, event: &Event) {
-        if event.event_type != types::MESSAGE_SENT || !event.actor.is_human() {
+        if event.event_type != types::MESSAGE_SENT || event.actor.as_str() == EventActor::FOLD {
             return;
         }
         let Some(thread) = event
@@ -643,14 +715,14 @@ impl Supervisor {
         if !question.is_open() {
             return Ok(());
         }
-        let Some((_, human)) = self.ask_answers(&question).await? else {
+        let Some((_, by)) = self.ask_answers(&question).await? else {
             return Ok(());
         };
         let now = self.inner.clock.now();
         self.inner
             .store
             .write(async |tx| {
-                agents::insert_answer(tx, id, PermissionBehavior::Allow, &human, None, now).await
+                agents::insert_answer(tx, id, PermissionBehavior::Allow, &by, None, now).await
             })
             .await?;
         let Some(answered) = agents::question_by_id(self.inner.store.read(), id).await? else {
@@ -703,7 +775,15 @@ impl AgentService {
                 if !row.is_open() {
                     return Err(question_closed(question).into());
                 }
-                agents::insert_answer(tx, row.id, behavior, name, message.as_deref(), now).await?;
+                agents::insert_answer(
+                    tx,
+                    row.id,
+                    behavior,
+                    &EventActor::human(name),
+                    message.as_deref(),
+                    now,
+                )
+                .await?;
                 let event =
                     NewEvent::new(types::WORKER_PERMISSION_ANSWERED, EventActor::human(name))?
                         .data(json!({
