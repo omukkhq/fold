@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { comparedFile } from "@/test/diff";
 import { intent } from "@/test/proposals";
 import {
+  BACK_TO_BASE,
   OUTSIDE_INTENT,
+  fileNote,
   filterGroups,
   groupFiles,
   partGroups,
@@ -22,6 +24,26 @@ const CASES = intent("Opens a case.", [
 ]);
 
 describe("the changed files by part", () => {
+  it("puts the files a version changed back to the base into a quiet group of a change since an earlier version", () => {
+    const groups = partGroups(CASES, files, true);
+    expect(groups?.at(-1)).toMatchObject({
+      name: BACK_TO_BASE,
+      does: null,
+      outside: false,
+    });
+    expect(groups?.at(-1)?.files.map((file) => file.path)).toEqual([
+      "src/settings.rs",
+    ]);
+    expect(fileNote(CASES, "src/settings.rs", true)).toEqual({ kind: "back" });
+    expect(fileNote(CASES, "src/settings.rs", false)).toEqual({
+      kind: "outside",
+    });
+    expect(fileNote(CASES, "src/routes.rs", true)).toMatchObject({
+      kind: "part",
+      part: { name: "Routes" },
+    });
+  });
+
   it("groups the files by part in the intent's order, then the files no part names", () => {
     const groups = partGroups(CASES, files);
     expect(

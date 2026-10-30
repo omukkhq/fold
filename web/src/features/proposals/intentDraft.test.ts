@@ -9,6 +9,7 @@ import {
   draftProblem,
   intentOf,
   lines,
+  partAfterRemove,
   removePart,
   sameIntent,
 } from "./intentDraft";
@@ -141,5 +142,14 @@ describe("the intent form", () => {
     expect(draftProblem({ ...start, summary: "é".repeat(1200) }, path)).toBe(
       null,
     );
+  });
+});
+
+describe("focus after a part is removed", () => {
+  it("moves to the part that took its place, or the one before the last", () => {
+    expect(partAfterRemove(0, 3)).toBe(0);
+    expect(partAfterRemove(1, 3)).toBe(1);
+    expect(partAfterRemove(2, 3)).toBe(1);
+    expect(partAfterRemove(1, 2)).toBe(0);
   });
 });
