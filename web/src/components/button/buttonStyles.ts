@@ -12,9 +12,12 @@ export type PendingProps =
       pendingLabel: string;
     };
 
+/** The look of a control that cannot be pressed, shared by the buttons and by any control drawn as a row or a card, so every disabled control reads the same. */
+export const DISABLED_CLASSES =
+  "disabled:cursor-not-allowed disabled:opacity-60";
+
 // Buttons draw no outline: the fill tells a quiet button from the surface. `leading-tight` follows the type size in each string, because tailwind-merge drops a leading that comes before a size.
-const BASE =
-  "inline-flex items-center justify-center gap-8 rounded-s font-title font-semibold whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-60";
+const BASE = `inline-flex items-center justify-center gap-8 rounded-s font-title font-semibold whitespace-nowrap ${DISABLED_CLASSES}`;
 
 const VARIANTS: Record<ButtonVariant, string> = {
   primary: "bg-ink text-on-ink",

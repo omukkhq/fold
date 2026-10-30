@@ -1,6 +1,7 @@
 import { ArrowLeft, Loader2, Pencil } from "lucide-react";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { apiErrorCode } from "@/api/errors";
+import { DISABLED_CLASSES } from "@/components/button/buttonStyles";
 import { Id } from "@/components/id/Id";
 import { failureText } from "@/format/failure";
 import { cn } from "@/lib/cn";
@@ -236,7 +237,8 @@ export function QuestionSetCard({
                 className={cn(
                   ROW,
                   chosen === choice.label ? "bg-fill" : "bg-bg",
-                  "enabled:hover:bg-fill disabled:cursor-default",
+                  "enabled:hover:bg-fill",
+                  DISABLED_CLASSES,
                   focusRing,
                 )}
               >
@@ -284,7 +286,10 @@ export function QuestionSetCard({
                       headingRef.current?.focus();
                     }
                   }}
-                  className="min-w-0 flex-1 bg-transparent text-15 text-text outline-none placeholder:text-text-2"
+                  className={cn(
+                    "min-w-0 flex-1 bg-transparent text-15 text-text outline-none placeholder:text-text-2",
+                    DISABLED_CLASSES,
+                  )}
                 />
                 <span className="shrink-0 text-13 text-text-2">Enter</span>
               </form>
@@ -297,7 +302,8 @@ export function QuestionSetCard({
                 }}
                 className={cn(
                   ROW,
-                  "bg-bg text-text-2 enabled:hover:bg-fill disabled:cursor-default",
+                  "bg-bg text-text-2 enabled:hover:bg-fill",
+                  DISABLED_CLASSES,
                   focusRing,
                 )}
               >

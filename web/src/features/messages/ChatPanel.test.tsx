@@ -1073,6 +1073,15 @@ describe("ChatPanel with several threads", () => {
     // A one-question set that the daemon refused as closed offers no step and takes no other answer.
     expect(within(card()).queryByRole("button", { name: "Back" })).toBeNull();
     expect(pick(/^Yes/).hasAttribute("disabled")).toBe(true);
+    // The disabled controls look disabled, as a disabled button does.
+    const own = within(card()).getByRole("button", {
+      name: "Write your own answer…",
+    });
+    expect(own.hasAttribute("disabled")).toBe(true);
+    for (const control of [pick(/^Yes/), own]) {
+      expect(control.className).toContain("disabled:opacity-60");
+      expect(control.className).toContain("disabled:cursor-not-allowed");
+    }
     act(() => {
       change([first, second, third], [ASK_B]);
     });

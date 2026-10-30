@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DISABLED_CLASSES,
   buttonClasses,
   buttonIconClass,
   iconButtonClasses,
@@ -10,6 +11,15 @@ import {
 } from "./buttonStyles";
 
 const VARIANTS: ButtonVariant[] = ["primary", "quiet", "ghost", "danger"];
+
+describe("the disabled look", () => {
+  it("is the same for every button and icon button", () => {
+    for (const variant of VARIANTS) {
+      expect(buttonClasses(variant, "md")).toContain(DISABLED_CLASSES);
+      expect(iconButtonClasses(variant, "sm")).toContain(DISABLED_CLASSES);
+    }
+  });
+});
 
 describe("buttonClasses", () => {
   it.each(VARIANTS)(
