@@ -50,17 +50,20 @@ export function IntentForm({
         Intent of {next}
       </h3>
       <p className="max-w-measure text-13 leading-normal text-text-2">{hint}</p>
-      <Textarea
-        label="Summary"
-        hint="How the change works in the code, in 2 to 4 sentences."
-        rows={3}
-        readOnly={readOnly}
-        value={draft.summary}
-        onChange={(event) => {
-          onChange({ ...draft, summary: event.target.value });
-        }}
-        className="resize-y"
-      />
+      {/* The form sits on the sunken tone, which the fill of a control matches in light mode, so its fields sit on surface cards as the parts do. */}
+      <div className="rounded-s bg-surface p-12">
+        <Textarea
+          label="Summary"
+          hint="How the change works in the code, in 2 to 4 sentences."
+          rows={3}
+          readOnly={readOnly}
+          value={draft.summary}
+          onChange={(event) => {
+            onChange({ ...draft, summary: event.target.value });
+          }}
+          className="resize-y"
+        />
+      </div>
       <h4 className={TITLE}>Parts</h4>
       <ol className="flex flex-col gap-12">
         {draft.parts.map((part, index) => {
@@ -149,7 +152,7 @@ export function IntentForm({
         </Button>
       ) : null}
       <h4 className={TITLE}>Only when they apply</h4>
-      <div className="grid grid-cols-1 gap-10 md:grid-cols-2">
+      <div className="grid grid-cols-1 gap-10 rounded-s bg-surface p-12 md:grid-cols-2">
         {SECTIONS.map(({ key, label }) => (
           <Textarea
             key={key}
