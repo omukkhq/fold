@@ -250,9 +250,24 @@ describe("answered sets", () => {
     ]);
   });
 
-  it("pairs nothing for a set of one, another message or a set outside the thread", () => {
-    const one = { ...reply, answers: ["Yes"] };
-    expect(answeredPairs(one, answered)).toBeNull();
+  it("pairs the one question of a set of one with its answer", () => {
+    const ask = message("m-8", {
+      sender: "web-worker",
+      body: "Keep the old keys?",
+      questions: [{ text: "Keep the old keys?", header: null, choices: [] }],
+    });
+    const one = message("m-9", {
+      sender: "main",
+      answers: ["No, keep them"],
+      answers_ask: "m-8",
+    });
+    expect(answeredPairs(one, thread("m-8", { messages: [ask, one] }))).toEqual(
+      [{ question: "Keep the old keys?", answer: "No, keep them" }],
+    );
+  });
+
+  it("pairs nothing for a reply without answers, another message or a set outside the thread", () => {
+    expect(answeredPairs({ ...reply, answers: [] }, answered)).toBeNull();
     expect(answeredPairs(note, answered)).toBeNull();
     expect(
       answeredPairs(reply, thread("m-1", { messages: [reply] })),

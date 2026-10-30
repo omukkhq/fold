@@ -769,7 +769,7 @@ describe("ChatPanel question set", () => {
       within(timeline)
         .getAllByRole("term")
         .map((term) => term.textContent),
-    ).toEqual(questions.map((q) => q.text));
+    ).toEqual(["Recharts or plain SVG?", ...questions.map((q) => q.text)]);
     expect(within(timeline).getByText("Mock the calls")).toBeTruthy();
     // A closed set keeps what it asked under its body.
     expect(
@@ -777,8 +777,44 @@ describe("ChatPanel question set", () => {
     ).toHaveLength(2);
     expect(within(timeline).getByText("Recharts · Plain SVG")).toBeTruthy();
     expect(
-      within(timeline).getByText("Chosen option of the question above"),
-    ).toBeTruthy();
+      within(timeline)
+        .getAllByRole("definition")
+        .map((answer) => answer.textContent)[0],
+    ).toBe("Plain SVG");
+  });
+
+  it("names the question above main's answer for you to a set of one", async () => {
+    const ONE = `m-${String(45)}`;
+    const keep = baseThread(ONE, {
+      participants: ["human:tanim", "web-worker", "main"],
+      messages: [
+        message(ONE, {
+          sender: "web-worker",
+          recipients: toYou,
+          body: "Keep the old keys?",
+          worker_question: true,
+          questions: [
+            { text: "Keep the old keys?", header: null, choices: [] },
+          ],
+          sent_at: NOW - 2000,
+        }),
+        message(`m-${String(46)}`, {
+          sender: "main",
+          reply_to: ONE,
+          body: "No, keep them",
+          answers: ["No, keep them"],
+          answers_ask: ONE,
+          sent_at: NOW - 1000,
+        }),
+      ],
+    });
+    renderSets([keep], [], () => Promise.resolve());
+    await screen.findByLabelText("Reply");
+    const timeline = screen.getByRole("region", { name: "Messages" });
+    expect(within(timeline).getByText("Answered for you")).toBeTruthy();
+    const term = within(timeline).getByRole("term");
+    expect(term.textContent).toBe("Keep the old keys?");
+    expect(term.nextElementSibling?.textContent).toBe("No, keep them");
   });
 
   it("quotes the lines a question to the author is about and links them to the proposal's diff", async () => {
@@ -1000,9 +1036,12 @@ describe("ChatPanel with several threads", () => {
     });
     expect(document.activeElement).toBe(next);
     expect(within(card()).queryByText(/more set/)).toBeNull();
-    expect(
-      screen.getByText("Chosen option of the question above"),
-    ).toBeTruthy();
+    // A set of one keeps its question above its answer in the timeline.
+    const answeredA = within(
+      screen.getByRole("region", { name: "Messages" }),
+    ).getByRole("term");
+    expect(answeredA.textContent).toBe("Use Recharts?");
+    expect(answeredA.nextElementSibling?.textContent).toBe("Yes");
     await userEvent.click(pick(/^No/));
     expect(onAnswer).toHaveBeenLastCalledWith(ASK_B, ["No"]);
     act(() => {

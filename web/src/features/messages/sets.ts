@@ -174,12 +174,12 @@ export interface AnsweredPair {
   answer: string;
 }
 
-/** The question and answer pairs of a reply that answered a set of the thread with the answer route; null for any other message, or for a set of one, whose reply is the answer alone. */
+/** The question and answer pairs of a reply that answered a set of the thread with the answer route, also of a set of one, so the timeline keeps what each answer answers; null for any other message. */
 export function answeredPairs(
   reply: MessageView,
   thread: ThreadView,
 ): AnsweredPair[] | null {
-  if (reply.answers_ask === null || reply.answers.length < 2) return null;
+  if (reply.answers_ask === null || reply.answers.length === 0) return null;
   const ask = thread.messages.find((m) => m.id === reply.answers_ask);
   if (ask === undefined) return null;
   const questions = setQuestions(ask);
