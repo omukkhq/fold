@@ -9,6 +9,8 @@ import {
   MAX_SUMMARY_CHARS,
 } from "./intent";
 
+export { sameIntent } from "./intent";
+
 /** A part as the edit form holds it: the files one path per line. */
 export interface PartDraft {
   name: string;
@@ -108,11 +110,6 @@ export function intentOf(draft: IntentDraft): Intent {
   };
 }
 
-/** Whether two intents say the same, so an unchanged form keeps the edited version's intent. */
-export function sameIntent(a: Intent, b: Intent): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
 // The daemon counts Unicode code points, as Array.from does.
 function length(text: string): number {
   return Array.from(text).length;
@@ -175,6 +172,11 @@ export function addPart(draft: IntentDraft): IntentDraft {
     ...draft,
     parts: [...draft.parts, { name: "", does: "", files: "" }],
   };
+}
+
+/** The part whose name takes focus once the part at `index` is removed from `count` parts: the one that moved into its place, else the one before it. */
+export function partAfterRemove(index: number, count: number): number {
+  return Math.max(0, Math.min(index, count - 2));
 }
 
 /** The form without the part at `index`. */
