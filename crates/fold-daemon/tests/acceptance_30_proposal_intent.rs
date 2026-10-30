@@ -59,7 +59,7 @@ async fn committed(h: &Harness) -> i64 {
     .unwrap()
 }
 
-/// Acceptance 30: backend sends its login endpoint with an intent, which fold refuses empty and refuses again while a changed file belongs to no part. The reviewer reads the intent part by part, sees that the diff does less than it says and asks for changes; backend sends v2 with its own intent, a second part for its test, and v1 keeps its own. The reviewer approves and integrates v2, and the Git commit of the integration has the title as its subject and v2's summary, parts and contracts as its body. No event carries the intent.
+/// Acceptance 30: backend sends its login endpoint with an intent, which fold refuses empty and refuses again while a changed file belongs to no part. The reviewer reads the intent part by part, sees that the diff does less than it says and asks for changes; backend sends v2 with its own intent, a second part for its test, and v1 keeps its own. The reviewer approves and integrates v2, and the Git commit of the integration has the title as its subject and v2's summary and parts as its body. No event carries the intent.
 #[tokio::test]
 async fn acceptance_30_each_version_states_its_intent_and_the_commit_body_carries_it() {
     let h = Harness::start().await;
@@ -174,7 +174,7 @@ async fn acceptance_30_each_version_states_its_intent_and_the_commit_body_carrie
     let body = git(&git_dir, &["log", "-1", "--format=%B", "refs/fold/head"]);
     assert!(
         body.starts_with(&format!(
-            "Add the login endpoint\n\n{SECOND}\n\nLogin route: POST /login checks the password and opens a session; GET answers 405.\nTests: A GET of /login gets 405.\n\nRoutes: POST /login; GET /login answers 405\n\n"
+            "Add the login endpoint\n\n{SECOND}\n\nLogin route: POST /login checks the password and opens a session; GET answers 405.\nTests: A GET of /login gets 405.\n\nFold-Proposal"
         )),
         "{body}"
     );

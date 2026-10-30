@@ -59,7 +59,7 @@ pub struct CreateProposalInput {
     pub task: String,
     /// The proposal title: one line of at most 200 characters.
     pub title: String,
-    /// How the change works in the code, so a human understands and judges it without reading every line and the reviewer checks every hunk against it: a summary and the parts of the diff, each with its files, so every file the version changes is in exactly one part; contracts, decisions and not_changed only when they apply. Its summary, parts and contracts become the body of the Git commit when the version integrates.
+    /// How the change works in the code, so a human understands and judges it without reading every line and the reviewer checks every hunk against it: a summary and the parts of the diff, each with its files, so every file the version changes is in exactly one part; contracts, decisions and not_changed only when they apply. Its summary and parts become the body of the Git commit when the version integrates.
     // serde reads a missing `Option` as `None`, so a missing intent reaches `missing_intent` while the schema lists it as required.
     #[schemars(required, with = "IntentInput")]
     pub intent: Option<IntentInput>,

@@ -35,21 +35,6 @@ define_names!(
     }
 );
 
-impl ContractKind {
-    /// The name a commit body gives the kind.
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::Routes => "Routes",
-            Self::Database => "Database",
-            Self::Rights => "Rights",
-            Self::Config => "Config",
-            Self::Errors => "Errors",
-            Self::Events => "Events",
-            Self::Commands => "Commands",
-        }
-    }
-}
-
 /// The intent of a proposal version: how the change works in the code, so a human understands and judges it without reading every line, and the reviewer checks the lines against it. The summary and the parts are always there, and every changed file of the version belongs to exactly one part; the contracts, the decisions and what the change does not change are there only when they apply, so an empty list is a section that does not show.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProposalIntent {
@@ -652,7 +637,6 @@ mod tests {
             serde_json::from_value(json!({"summary": "s", "parts": []})).unwrap();
         assert!(short.contracts.is_empty() && short.decisions.is_empty());
         assert_eq!(ContractKind::parse("events"), Some(ContractKind::Events));
-        assert_eq!(ContractKind::Commands.title(), "Commands");
         assert_eq!(ContractKind::ALL.len(), full.contracts.by_kind().len());
     }
 }

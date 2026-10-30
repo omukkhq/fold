@@ -296,7 +296,7 @@ fn merge_parents(row: &RevisionRow) -> Result<Vec<CommitId>, StoreError> {
     Ok(parents)
 }
 
-/// The message of the commit a revision becomes, ending in Git trailers that name it by public ids and never name an agent or a human: fold's names stay in fold. An integrated proposal gives its title as the subject and the intent of the integrated version as the body, so the history says how each change works: the summary, then one `<name>: <what it does>` line per part, then one `<Kind>: <entry>; <entry>` line per contract kind it touches, and never its decisions, what it does not change or its file lists; a version made before intents existed gives its task's title. Each member of a review batch becomes its own revision and so its own commit with its own intent. A direct change gives the message the main agent wrote, as it wrote it. A pull that merged a remote commit names that commit; an imported `r1` names its source; any other revision is `fold r<n>`.
+/// The message of the commit a revision becomes, ending in Git trailers that name it by public ids and never name an agent or a human: fold's names stay in fold. An integrated proposal gives its title as the subject and the intent of the integrated version as the body, so the history says how each change works: the summary, then one `<name>: <what it does>` line per part, and never its contracts, decisions, what it does not change or its file lists; a version made before intents existed gives its task's title. Each member of a review batch becomes its own revision and so its own commit with its own intent. A direct change gives the message the main agent wrote, as it wrote it. A pull that merged a remote commit names that commit; an imported `r1` names its source; any other revision is `fold r<n>`.
 pub fn commit_message(row: &RevisionRow) -> String {
     let revision = row.number;
     let Some(integration) = &row.integration else {
@@ -356,7 +356,7 @@ pub fn commit_message(row: &RevisionRow) -> String {
     }
 }
 
-/// The intent as a commit body: the summary's paragraphs, a blank line, a line per part, and a blank line and a line per contract kind when it names contracts.
+/// The intent as a commit body: the summary's paragraphs, a blank line and a line per part.
 fn intent_body(intent: &ProposalIntent) -> String {
     let mut body = paragraphs(&intent.summary);
     let parts: Vec<String> = intent
@@ -364,24 +364,11 @@ fn intent_body(intent: &ProposalIntent) -> String {
         .iter()
         .map(|part| format!("{}: {}", one_line(&part.name), one_line(&part.does)))
         .collect();
-    let contracts: Vec<String> = intent
-        .contracts
-        .by_kind()
-        .iter()
-        .filter(|(_, entries)| !entries.is_empty())
-        .map(|(kind, entries)| {
-            let entries: Vec<String> = entries.iter().map(|entry| one_line(entry)).collect();
-            format!("{}: {}", kind.title(), entries.join("; "))
-        })
-        .collect();
-    for block in [parts, contracts] {
-        if block.is_empty() {
-            continue;
-        }
+    if !parts.is_empty() {
         if !body.is_empty() {
             body.push_str("\n\n");
         }
-        body.push_str(&block.join("\n"));
+        body.push_str(&parts.join("\n"));
     }
     body
 }
@@ -560,7 +547,7 @@ mod tests {
                         )
                     })),
                 ),
-                "Add the reports schema\n\nThe report job writes one row per task.\n\nAdmins read it.\n\nReports table: Adds the reports table with one row per task.\nTests: Insert and read a report.\n\nDatabase: New table reports\nErrors: report_missing; report_locked\n\nFold-Proposal: P-4\nFold-Version: 2\nFold-Task: T-12\nFold-Revision: r14\n",
+                "Add the reports schema\n\nThe report job writes one row per task.\n\nAdmins read it.\n\nReports table: Adds the reports table with one row per task.\nTests: Insert and read a report.\n\nFold-Proposal: P-4\nFold-Version: 2\nFold-Task: T-12\nFold-Revision: r14\n",
             ),
             (
                 row(
