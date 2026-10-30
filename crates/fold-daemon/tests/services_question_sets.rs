@@ -203,10 +203,10 @@ async fn one_reply_answers_every_question_of_a_set_and_goes_to_the_asker() {
     }
     let by_agent = fixture
         .messages
-        .answer(&agent("main"), set.id, &answers(&["Yes", "x"]))
+        .answer(&agent("backend"), set.id, &answers(&["Yes", "x"]))
         .await
         .unwrap_err();
-    assert_eq!(code(by_agent), Some(codes::HUMAN_REQUIRED));
+    assert_eq!(code(by_agent), Some(codes::MAIN_AGENT_REQUIRED));
 
     let reply = fixture
         .messages
@@ -358,7 +358,7 @@ async fn the_main_agent_lists_every_open_set_and_closes_each_it_answered() {
     let asks = fixture.messages.open_asks(&agent("main")).await.unwrap();
     let listed: Vec<(MessageId, String, usize)> = asks
         .iter()
-        .map(|ask| (ask.id, ask.agent.to_string(), ask.questions))
+        .map(|ask| (ask.id, ask.agent.to_string(), ask.questions.len()))
         .collect();
     assert_eq!(
         listed,
@@ -445,4 +445,108 @@ async fn a_human_marks_one_ask_answered_and_another_ask_of_its_thread_keeps_wait
         .await
         .unwrap_err();
     assert_eq!(code(missing), Some(codes::MESSAGE_NOT_FOUND));
+}
+
+#[tokio::test]
+async fn a_free_reply_leaves_a_set_waiting_and_ends_an_ask_that_is_no_set() {
+    let fixture = Fixture::new().await;
+    let set = fixture
+        .ask("frontend", &[question("Connected?", &["Yes", "No"])], None)
+        .await;
+    let marked = fixture
+        .messages
+        .send_marked(
+            &agent("backend"),
+            message(&["humans"], "Is the token renewed?", None),
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+    for ask in [&set, &marked] {
+        fixture
+            .messages
+            .send(
+                &human("ana"),
+                message(&["frontend", "backend"], "yes", Some(ask.id)),
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        fixture.waiting().await,
+        [set.id],
+        "only the set's answers end the set"
+    );
+    let reply = fixture
+        .messages
+        .answer(&human("ana"), set.id, &answers(&["yes"]))
+        .await
+        .unwrap();
+    assert_eq!(reply.answers, ["Yes"]);
+    assert!(fixture.waiting().await.is_empty());
+}
+
+#[tokio::test]
+async fn the_main_agent_answers_an_ask_for_the_user_and_the_reply_names_it() {
+    let fixture = Fixture::new().await;
+    let set = fixture
+        .ask(
+            "frontend",
+            &[
+                question("Connected?", &["Yes", "Not yet"]),
+                question("Keys?", &[]),
+            ],
+            None,
+        )
+        .await;
+    let reply = fixture
+        .messages
+        .answer(&agent("main"), set.id, &answers(&["yes", "Mock the calls"]))
+        .await
+        .unwrap();
+    assert_eq!(
+        reply.sender,
+        Sender::Worker(WorkerName::parse("main").unwrap())
+    );
+    assert_eq!(reply.thread, set.thread);
+    assert_eq!(reply.answers, ["Yes", "Mock the calls"]);
+    assert_eq!(reply.answers_ask, Some(set.id));
+    let to: Vec<String> = reply
+        .recipients
+        .iter()
+        .map(|recipient| recipient.name.to_string())
+        .collect();
+    assert_eq!(to, ["frontend"]);
+    assert!(fixture.waiting().await.is_empty());
+    let (stored, by) = fold_store::messages::answers_of(fixture.project.store().read(), set.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored, reply.answers);
+    assert_eq!(by.as_str(), "main", "the stored answers name who gave them");
+
+    let marked = fixture
+        .messages
+        .send_marked(
+            &agent("backend"),
+            message(&["humans"], "Is the token renewed?", None),
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+    fixture
+        .messages
+        .mark_answered(&agent("main"), marked.id)
+        .await
+        .unwrap();
+    let closed = fixture
+        .messages
+        .answer(&agent("main"), marked.id, &answers(&["Yes"]))
+        .await
+        .unwrap_err();
+    assert_eq!(code(closed), Some(codes::ASK_NOT_OPEN));
 }

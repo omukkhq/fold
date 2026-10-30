@@ -1,8 +1,8 @@
 use fold_core::events::types;
 use fold_core::messages::first_line;
 use fold_core::{
-    Actor, AgentName, FoldError, MessageId, NewEvent, ProposalId, RequestId, Sender, TaskId,
-    Timestamp, codes, policy,
+    Actor, AgentName, FoldError, MessageId, NewEvent, ProposalId, RequestId, Sender, SetQuestion,
+    TaskId, Timestamp, codes, policy,
 };
 use fold_store::messages::{self, AskClosure, AskScope, OpenAsk};
 use fold_store::{StoreError, WriteTx, agents};
@@ -34,8 +34,8 @@ pub struct OpenAskView {
     pub request: Option<RequestId>,
     /// The first line of the ask's text.
     pub first_line: String,
-    /// How many questions the ask holds as one set.
-    pub questions: usize,
+    /// The questions of the ask as one set, in order.
+    pub questions: Vec<SetQuestion>,
     /// A worker's `AskUserQuestion` call, which only a human's reply in its thread ends.
     pub worker_question: bool,
 }
@@ -66,14 +66,14 @@ impl MessageService {
                     proposal: row.proposal,
                     request: row.request,
                     first_line: first_line(&row.body),
-                    questions: row_questions(&row).len(),
+                    questions: row_questions(&row),
                     worker_question: row.worker_question,
                 })
             })
             .collect())
     }
 
-    /// Records that the user answered the open ask `message` outside its thread, with `message.ask_closed` in the same transaction, so it stops waiting for a human. Only the asking agent or the main agent records it. A message that is no open ask is `ask_not_open`, and so is a worker's `AskUserQuestion` message, which ends only with a human's reply because its worker waits for that reply.
+    /// Records that the user answered the open ask `message` outside its thread, with `message.ask_closed` in the same transaction, so it stops waiting for a human. Only the asking agent or the main agent records it. A message that is no open ask is `ask_not_open`, and so is a worker's `AskUserQuestion` message (`details.reason` `reply_only`), which ends only with its answers because its worker waits for them.
     pub async fn mark_answered(
         &self,
         actor: &Actor,
@@ -94,7 +94,11 @@ impl MessageService {
                 };
                 if ask.worker_question {
                     return Err(not_open(message)
-                        .with_hint("the worker's question ends when a human replies in its thread")
+                        .with_details([
+                            ("message", json!(message.to_string())),
+                            ("reason", json!("reply_only")),
+                        ])
+                        .with_hint("a worker's AskUserQuestion ends only with its answers: call mark_answered with message and answers, one per question in order, from the user's words")
                         .into());
                 }
                 let standing = agents::standing_of(tx.conn(), actor).await?;

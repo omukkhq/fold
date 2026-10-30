@@ -794,3 +794,30 @@ async fn an_ask_user_question_of_several_questions_is_one_set_that_one_reply_ans
     );
     assert!(needs_you(&harness).await.is_empty());
 }
+
+#[tokio::test]
+async fn an_ask_user_question_of_more_than_four_questions_is_denied_with_the_reason() {
+    let fake = FakeClaude::new("ask_five_questions");
+    let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    let ana = fold_core::HumanName::parse("ana").unwrap();
+    let now = harness.project.now();
+    harness
+        .project
+        .registry()
+        .write(async |tx| fold_store::projects::ensure_human(tx, &ana, now).await)
+        .await
+        .unwrap();
+    let lead = start_lead(&harness).await;
+    let run = until_answered(&fake, &lead, 1, 1).await.remove(0);
+    let denied = responses(&run).remove(0);
+    assert_eq!(denied["behavior"], "deny");
+    assert!(
+        denied["message"]
+            .as_str()
+            .unwrap()
+            .contains("at most 4 questions in one set"),
+        "{denied}"
+    );
+    assert!(needs_you(&harness).await.is_empty());
+}

@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT a.answer, r.sender_human AS \"human?: String\", w.name AS \"worker?: String\"\n           FROM message_answers a\n           JOIN messages k ON k.id = a.ask_id\n           JOIN messages r ON r.id = a.reply_id\n           LEFT JOIN workers w ON w.id = r.sender_worker_id\n           WHERE k.number = ?1\n           ORDER BY a.question",
+  "describe": {
+    "columns": [
+      {
+        "name": "answer",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "message_answers",
+            "name": "answer"
+          }
+        }
+      },
+      {
+        "name": "human?: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "sender_human"
+          }
+        }
+      },
+      {
+        "name": "worker?: String",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "e52ccfbe8fc53b395712147769ad9e0db50498c5eaabc9bcf1bc0d87610576e4"
+}

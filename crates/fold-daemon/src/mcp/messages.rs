@@ -92,8 +92,12 @@ pub struct ListOpenAsksInput {}
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct MarkAnsweredInput {
-    /// The ask that the user answered outside its thread, such as m-31: a message your agent sent to a human with asks_human or choices, or, for the main agent, any agent's ask.
+    /// The ask that the user answered outside its thread, such as m-31: a message your agent sent to a human with asks_human, choices or questions, or, for the main agent, any agent's ask from list_open_asks.
     pub message: String,
+    /// Main agent only: the user's answers, one per question of the ask in order, each a choice's label or free text from the user's words. fold sends them as one reply from you in the ask's thread and stores them, so the asker gets them; a worker's AskUserQuestion (reply_only in list_open_asks) ends only this way and gets them as its tool's answer. Leave out to only record that the user answered.
+    #[serde(default)]
+    #[schemars(length(min = 1, max = 4))]
+    pub answers: Option<Vec<String>>,
 }
 
 /// One option of a question: a plain label, or a label with a one-line description that the human sees under it.
@@ -185,12 +189,12 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             MARK_ANSWERED,
-            "Record that the user answered an ask to a human outside its thread, such as in the main agent's session, so it stops waiting for a human. Only the asking agent or the main agent calls it. A worker's AskUserQuestion ends only with a human's reply in its thread.",
+            "Record that the user answered an ask to a human outside its thread, such as in the main agent's session, so it stops waiting for a human. Only the asking agent or the main agent calls it. The main agent may pass the user's answers, one per question: fold sends them to the asker as one reply in the thread. A worker's AskUserQuestion (reply_only) ends only with answers.",
             schema_for_type::<MarkAnsweredInput>(),
         ),
         Tool::new(
             LIST_OPEN_ASKS,
-            "Main agent only: list every agent's open ask to the humans, oldest first, each with its id, agent, thread, links, first line and question count. When the user says something is done, find each ask this answers, reply to its agent in its thread with send_message reply_to, then call mark_answered with its id.",
+            "Main agent only: list every agent's open ask to the humans, oldest first, each with its id, agent, thread, links, first line and question count. When the user says something is done, find each ask this answers. For a reply_only ask, a worker's AskUserQuestion, call mark_answered with its id and the user's answers, one per question. For any other ask, reply to its agent in its thread with send_message reply_to, then call mark_answered with its id.",
             schema_for_type::<ListOpenAsksInput>(),
         ),
     ]
@@ -473,6 +477,14 @@ pub async fn mark_answered(
     let input: MarkAnsweredInput = parse(arguments)?;
     let id = message_id(&input.message)?;
     let actor = server.actor().await?;
+    if let Some(answers) = input.answers {
+        let reply = server
+            .messages
+            .answer(&actor, id, &answers)
+            .await
+            .map_err(from_message)?;
+        return Ok(json!({ "answered": id.to_string(), "reply": reply.id.to_string() }));
+    }
     let closed = server
         .messages
         .mark_answered(&actor, id)
@@ -495,7 +507,7 @@ pub async fn list_open_asks(
     Ok(json!({ "asks": asks.iter().map(open_ask_json).collect::<Vec<_>>() }))
 }
 
-/// One open ask, compact: its links only when it has them, and `reply_only` for a worker's `AskUserQuestion`, which `mark_answered` refuses.
+/// One open ask, compact: its links only when it has them, and for a worker's `AskUserQuestion`, which ends only with its answers, `reply_only` with the questions to answer in order, each its text and its choices' labels.
 fn open_ask_json(ask: &OpenAskView) -> Value {
     let mut object = Map::new();
     object.insert("id".into(), json!(ask.id.to_string()));
@@ -503,9 +515,27 @@ fn open_ask_json(ask: &OpenAskView) -> Value {
     object.insert("thread".into(), json!(ask.thread.to_string()));
     insert_references(&mut object, None, ask.task, ask.proposal, ask.request);
     object.insert("first_line".into(), json!(ask.first_line));
-    object.insert("questions".into(), json!(ask.questions));
+    object.insert("questions".into(), json!(ask.questions.len()));
     if ask.worker_question {
         object.insert("reply_only".into(), json!(true));
+        let questions: Vec<Value> = ask
+            .questions
+            .iter()
+            .map(|question| {
+                let mut object = Map::new();
+                object.insert("text".into(), json!(question.text));
+                if !question.choices.is_empty() {
+                    let labels: Vec<&str> = question
+                        .choices
+                        .iter()
+                        .map(|choice| choice.label.as_str())
+                        .collect();
+                    object.insert("choices".into(), json!(labels));
+                }
+                Value::Object(object)
+            })
+            .collect();
+        object.insert("answer_these".into(), Value::Array(questions));
     }
     Value::Object(object)
 }

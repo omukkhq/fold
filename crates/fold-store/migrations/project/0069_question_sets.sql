@@ -50,7 +50,7 @@ BEGIN
     SELECT RAISE(ABORT, 'message_question_choices is append-only');
 END;
 
--- A human's answers to an ask, one row per question in the order of the set, all written with the one reply that carries them. A single question with choices and a marked ask are sets of one, so their answer is question 1. Each question of an ask has one answer.
+-- The answers to an ask, one row per question in the order of the set, all written with the one reply that carries them: a human's, or the main agent's with the answers the user gave it. A single question with choices and a marked ask are sets of one, so their answer is question 1. Each question of an ask has one answer.
 CREATE TABLE message_answers (
     reply_id INTEGER NOT NULL REFERENCES messages (id),
     ask_id INTEGER NOT NULL REFERENCES messages (id),
@@ -72,18 +72,40 @@ BEGIN
     SELECT RAISE(ABORT, 'message_answers is append-only');
 END;
 
--- The reply is a human's later message in the ask's thread, and it answers one ask only.
+-- The reply is a later message in the ask's thread from a human or from a worker of the agent tagged `main`, and it answers one ask only.
 CREATE TRIGGER message_answers_reply_in_thread BEFORE INSERT ON message_answers
 WHEN NOT EXISTS (
     SELECT 1 FROM messages r JOIN messages a ON a.id = NEW.ask_id
-    WHERE r.id = NEW.reply_id AND r.sender_kind = 'human' AND r.thread_id = a.thread_id AND r.number > a.number
+    WHERE r.id = NEW.reply_id AND r.thread_id = a.thread_id AND r.number > a.number
+        AND (
+            r.sender_kind = 'human'
+            OR EXISTS (
+                SELECT 1 FROM workers w JOIN agent_tags t ON t.agent_id = w.agent_id
+                WHERE w.id = r.sender_worker_id AND t.tag = 'main'
+            )
+        )
 )
     OR EXISTS (SELECT 1 FROM message_answers x WHERE x.reply_id = NEW.reply_id AND x.ask_id <> NEW.ask_id)
 BEGIN
     SELECT RAISE(ABORT, 'message_answers_reply_in_thread');
 END;
 
--- The asks from a worker to a human that still wait: a message marked as an ask, a question with choices, a question set or an `AskUserQuestion` message, addressed to a human or `humans`, with no later message from a human in its thread and no closure. A human's reply that answers another ask of the thread leaves this one waiting. The board's question mark, Needs you and the Messages count all read it.
+-- An ask marked answered takes no answers.
+CREATE TRIGGER message_answers_open_only BEFORE INSERT ON message_answers
+WHEN EXISTS (SELECT 1 FROM message_ask_closures x WHERE x.message_id = NEW.ask_id)
+BEGIN
+    SELECT RAISE(ABORT, 'message_answers_open_only');
+END;
+
+-- An answer names a question the ask has: one of a set's questions, or question 1 of any other ask.
+CREATE TRIGGER message_answers_question_of_ask BEFORE INSERT ON message_answers
+WHEN NEW.question > 1
+    AND NOT EXISTS (SELECT 1 FROM message_questions q WHERE q.message_id = NEW.ask_id AND q.position = NEW.question)
+BEGIN
+    SELECT RAISE(ABORT, 'message_answers_question_of_ask');
+END;
+
+-- The asks from a worker to a human that still wait: a message marked as an ask, a question with choices, a question set or an `AskUserQuestion` message, addressed to a human or `humans`, with no answers and no closure. A question set waits until its answers or its closure, whatever else the thread holds. Any other ask also ends with a later message from a human in its thread, unless that message answers another ask of the thread. The board's question mark, Needs you and the Messages count all read it.
 DROP VIEW open_human_questions;
 
 CREATE VIEW open_human_questions AS
@@ -100,9 +122,69 @@ WHERE m.sender_kind = 'worker'
         SELECT 1 FROM message_recipients r
         WHERE r.message_id = m.id AND r.addressed_as IN ('human', 'humans')
     )
-    AND NOT EXISTS (
-        SELECT 1 FROM messages later
-        WHERE later.thread_id = m.thread_id AND later.number > m.number AND later.sender_kind = 'human'
-            AND NOT EXISTS (SELECT 1 FROM message_answers o WHERE o.reply_id = later.id AND o.ask_id <> m.id)
+    AND NOT EXISTS (SELECT 1 FROM message_answers a WHERE a.ask_id = m.id)
+    AND (
+        EXISTS (SELECT 1 FROM message_questions s WHERE s.message_id = m.id)
+        OR NOT EXISTS (
+            SELECT 1 FROM messages later
+            WHERE later.thread_id = m.thread_id AND later.number > m.number AND later.sender_kind = 'human'
+                AND NOT EXISTS (SELECT 1 FROM message_answers o WHERE o.reply_id = later.id AND o.ask_id <> m.id)
+        )
     )
     AND NOT EXISTS (SELECT 1 FROM message_ask_closures x WHERE x.message_id = m.id);
+
+-- `worker_permission_answers` is rebuilt so the main agent can answer an `ask` question with the user's answers: `answered_by` is the human, or the main agent's worker that answered for the user. A `tool` question stays a named human's. Nothing refers to the table, so dropping it touches no other row; its triggers go with it and are made again, and the closure trigger that reads it is made again after the rename.
+DROP TRIGGER worker_permission_closures_open_only;
+
+CREATE TABLE worker_permission_answers_new (
+    id INTEGER PRIMARY KEY,
+    question_id INTEGER NOT NULL UNIQUE REFERENCES worker_permission_questions (id),
+    behavior TEXT NOT NULL CONSTRAINT worker_permission_answers_behavior_values CHECK (behavior IN ('allow', 'deny')),
+    answered_by TEXT NOT NULL CONSTRAINT worker_permission_answers_by_present CHECK (answered_by <> ''),
+    message TEXT,
+    created_at INTEGER NOT NULL
+);
+
+INSERT INTO worker_permission_answers_new (id, question_id, behavior, answered_by, message, created_at)
+SELECT id, question_id, behavior, answered_by, message, created_at FROM worker_permission_answers;
+
+DROP TABLE worker_permission_answers;
+
+ALTER TABLE worker_permission_answers_new RENAME TO worker_permission_answers;
+
+CREATE TRIGGER worker_permission_answers_no_update BEFORE UPDATE ON worker_permission_answers
+BEGIN
+    SELECT RAISE(ABORT, 'worker_permission_answers is append-only');
+END;
+
+CREATE TRIGGER worker_permission_answers_no_delete BEFORE DELETE ON worker_permission_answers
+BEGIN
+    SELECT RAISE(ABORT, 'worker_permission_answers is append-only');
+END;
+
+CREATE TRIGGER worker_permission_answers_open_only BEFORE INSERT ON worker_permission_answers
+WHEN EXISTS (SELECT 1 FROM worker_permission_closures WHERE question_id = NEW.question_id)
+BEGIN
+    SELECT RAISE(ABORT, 'worker_permission_answers_open_only');
+END;
+
+CREATE TRIGGER worker_permission_answers_ask_allows BEFORE INSERT ON worker_permission_answers
+WHEN NEW.behavior <> 'allow'
+    AND (SELECT kind FROM worker_permission_questions WHERE id = NEW.question_id) = 'ask'
+BEGIN
+    SELECT RAISE(ABORT, 'worker_permission_answers_ask_allows');
+END;
+
+-- A `tool` question exists because auto mode would not decide the call, so only a named human answers it.
+CREATE TRIGGER worker_permission_answers_tool_by_human BEFORE INSERT ON worker_permission_answers
+WHEN NEW.answered_by NOT LIKE 'human:_%'
+    AND (SELECT kind FROM worker_permission_questions WHERE id = NEW.question_id) <> 'ask'
+BEGIN
+    SELECT RAISE(ABORT, 'worker_permission_answers_tool_by_human');
+END;
+
+CREATE TRIGGER worker_permission_closures_open_only BEFORE INSERT ON worker_permission_closures
+WHEN EXISTS (SELECT 1 FROM worker_permission_answers WHERE question_id = NEW.question_id)
+BEGIN
+    SELECT RAISE(ABORT, 'worker_permission_closures_open_only');
+END;

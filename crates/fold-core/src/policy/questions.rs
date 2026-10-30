@@ -33,6 +33,19 @@ pub fn can_close_ask(
     }
 }
 
+/// A human answers an agent's ask with its answers; the main agent answers one with the answers the user gave it in its session, such as a worker's `AskUserQuestion` that waits for something the user did and told it. No other agent knows the user's words, so none answers for the user.
+pub fn can_answer_ask(actor: &Actor, standing: AgentStanding) -> Result<(), PolicyDenied> {
+    match actor {
+        Actor::Human { .. } => Ok(()),
+        Actor::Agent(_) if standing.is_main_agent() => Ok(()),
+        Actor::Agent(_) | Actor::System => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "only a human or the main agent answers an ask for the user",
+            hint: "send_message to the main agent with the thread id; a human answers it in fold's web interface",
+        }),
+    }
+}
+
 /// Only the main agent and a human list the open asks of every agent: the main agent hears from the user what others wait for, and finds there each ask a word of the user answers. Another agent reads its own asks in its threads.
 pub fn can_list_open_asks(actor: &Actor, standing: AgentStanding) -> Result<(), PolicyDenied> {
     match actor {
@@ -96,6 +109,33 @@ mod tests {
             codes::ASK_CLOSE_DENIED
         );
         assert!(can_close_ask(&Actor::System, none, &asker).is_err());
+    }
+
+    #[test]
+    fn a_human_or_the_main_agent_answers_an_ask() {
+        let agent = |name: &str| {
+            let worker = WorkerName::parse(name).unwrap();
+            Actor::Agent(AgentActor {
+                agent: worker.agent(),
+                worker,
+                tags: Vec::new(),
+            })
+        };
+        let main = AgentStanding {
+            holds_main: true,
+            role: None,
+        };
+        let none = AgentStanding::NO_RIGHTS;
+        assert!(can_answer_ask(&agent("main"), main).is_ok());
+        let human = Actor::human(HumanName::parse("ana").unwrap());
+        assert!(can_answer_ask(&human, none).is_ok());
+        let denied = can_answer_ask(&agent("web-lead"), none).unwrap_err();
+        assert_eq!(denied.code, codes::MAIN_AGENT_REQUIRED);
+        assert_eq!(
+            denied.message,
+            "only a human or the main agent answers an ask for the user"
+        );
+        assert!(can_answer_ask(&Actor::System, none).is_err());
     }
 
     #[test]

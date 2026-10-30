@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use fold_core::reviews::Side;
 use fold_core::{
-    AddressedAs, AgentName, Choice, Directory, DirectoryAgent, HumanName, MessageId, ProposalId,
-    Recipient, RequestId, Sender, SetQuestion, Tag, Target, TaskId, Timestamp, WorkerName,
+    AddressedAs, AgentName, Choice, Directory, DirectoryAgent, EventActor, HumanName, MessageId,
+    ProposalId, Recipient, RequestId, Sender, SetQuestion, Tag, Target, TaskId, Timestamp,
+    WorkerName,
 };
 use sqlx::{SqliteConnection, SqliteExecutor};
 
@@ -1219,7 +1220,7 @@ async fn with_recipients(
         .collect()
 }
 
-/// The first message a human wrote in the thread of `message` after it: the human's answer to a question. Returns its body and its human.
+/// The first message a human wrote in the thread of `message` after it that answers no other ask of the thread: the human's answer to a question that is no set. Returns its body and its human.
 pub async fn first_human_reply(
     executor: impl SqliteExecutor<'_>,
     message: MessageId,
@@ -1230,6 +1231,9 @@ pub async fn first_human_reply(
            FROM messages m
            JOIN messages later ON later.thread_id = m.thread_id AND later.number > m.number
            WHERE m.number = ?1 AND later.sender_kind = 'human'
+             AND NOT EXISTS (
+                 SELECT 1 FROM message_answers o WHERE o.reply_id = later.id AND o.ask_id <> m.id
+             )
            ORDER BY later.number LIMIT 1"#,
         number
     )
@@ -1243,32 +1247,37 @@ pub async fn first_human_reply(
     .transpose()
 }
 
-/// The answers a human's reply gave to the ask `ask`, one per question in order, and that human; `None` while no reply carries answers to it.
+/// The answers that a reply gave to the ask `ask`, one per question in order, and who gave them: the human, or the main agent's worker that answered for the user; `None` while no reply carries answers to it.
 pub async fn answers_of(
     executor: impl SqliteExecutor<'_>,
     ask: MessageId,
-) -> Result<Option<(Vec<String>, HumanName)>, StoreError> {
+) -> Result<Option<(Vec<String>, EventActor)>, StoreError> {
     let number = ask.to_db();
     let rows = sqlx::query!(
-        r#"SELECT a.answer, r.sender_human AS "human!: String"
+        r#"SELECT a.answer, r.sender_human AS "human?: String", w.name AS "worker?: String"
            FROM message_answers a
            JOIN messages k ON k.id = a.ask_id
            JOIN messages r ON r.id = a.reply_id
+           LEFT JOIN workers w ON w.id = r.sender_worker_id
            WHERE k.number = ?1
            ORDER BY a.question"#,
         number
     )
     .fetch_all(executor)
     .await?;
-    let Some(human) = rows.first().map(|row| row.human.clone()) else {
+    let Some(first) = rows.first() else {
         return Ok(None);
     };
-    let human =
-        HumanName::parse(&human).map_err(|_| StoreError::Corrupt("messages.sender_human"))?;
-    Ok(Some((
-        rows.into_iter().map(|row| row.answer).collect(),
-        human,
-    )))
+    let by = match (&first.human, &first.worker) {
+        (Some(human), None) => HumanName::parse(human)
+            .map(|human| EventActor::human(&human))
+            .map_err(|_| StoreError::Corrupt("messages.sender_human"))?,
+        (None, Some(worker)) => WorkerName::parse(worker)
+            .map(|worker| EventActor::worker(&worker))
+            .map_err(|_| StoreError::Corrupt("workers.name"))?,
+        _ => return Err(StoreError::Corrupt("message_answers.reply_id")),
+    };
+    Ok(Some((rows.into_iter().map(|row| row.answer).collect(), by)))
 }
 
 /// What a message asks beyond its body: the options and the header of a question, and the lines of a proposal version it asks about.

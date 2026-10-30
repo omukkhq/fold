@@ -296,20 +296,21 @@ impl MessageService {
         self.send_inner(actor, input, request, None, send).await
     }
 
-    /// A human answers every question of the open ask `ask` in one reply: one answer per question in order, each a choice of its question or free text. The reply joins the ask's thread, goes to the asker, holds each question with its answer, and stores the answers, so the ask stops waiting while another ask of the thread still waits. An ask that is not open is `ask_not_open`; answers that do not match the questions one to one are `invalid_request`.
+    /// A human, or the main agent with the answers the user gave it, answers every question of the open ask `ask` in one reply: one answer per question in order, each a choice of its question or free text. The reply joins the ask's thread from the one who answers, goes to the asker, holds each question with its answer, and stores the answers, so the ask stops waiting while another ask of the thread still waits; a worker's `AskUserQuestion` gets them as its tool's answer. Another agent is `main_agent_required`; an ask that is not open is `ask_not_open`; answers that do not match the questions one to one are `invalid_request`.
     pub async fn answer(
         &self,
         actor: &Actor,
         ask: MessageId,
         answers: &[String],
     ) -> Result<MessageView, MessageError> {
-        policy::can_send_feedback(actor).map_err(FoldError::from)?;
         let mut conn = self
             .store
             .read()
             .acquire()
             .await
             .map_err(StoreError::from)?;
+        let standing = agents::standing_of(&mut *conn, actor).await?;
+        policy::can_answer_ask(actor, standing).map_err(FoldError::from)?;
         let row = messages::get(&mut conn, ask)
             .await?
             .ok_or_else(|| message_not_found(ask))?;

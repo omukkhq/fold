@@ -573,7 +573,7 @@ async fn a_set_keeps_its_questions_and_a_reply_that_answers_one_set_leaves_the_o
         "{from_agent}"
     );
 
-    // A free reply without answers ends every ask before it in the thread.
+    // A free reply in the thread answers no set: both sets keep waiting for their answers.
     exec(
         store,
         "INSERT INTO messages (id, number, thread_id, reply_to, sender_kind, sender_human, body, created_at)
@@ -581,7 +581,7 @@ async fn a_set_keeps_its_questions_and_a_reply_that_answers_one_set_leaves_the_o
     )
     .await
     .unwrap();
-    assert_eq!(count(store, open).await, 0);
+    assert_eq!(count(store, open).await, 1, "m-2 still waits");
     let again = exec(
         store,
         "INSERT INTO message_answers (reply_id, ask_id, question, answer) VALUES (5, 3, 1, 'No')",
@@ -591,6 +591,54 @@ async fn a_set_keeps_its_questions_and_a_reply_that_answers_one_set_leaves_the_o
     assert!(
         again.to_string().contains("message_answers_once") || again.to_string().contains("UNIQUE"),
         "{again}"
+    );
+    let beyond = exec(
+        store,
+        "INSERT INTO message_answers (reply_id, ask_id, question, answer) VALUES (5, 2, 3, 'x')",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        beyond
+            .to_string()
+            .contains("message_answers_question_of_ask"),
+        "m-2 has two questions: {beyond}"
+    );
+
+    // The main agent answers for the user; a worker of an agent without the `main` tag cannot.
+    for sql in [
+        "INSERT INTO agents (id, name, created_at) VALUES (2, 'lead', 0)",
+        "INSERT INTO agent_tags (agent_id, tag, created_at) VALUES (2, 'main', 0)",
+        "INSERT INTO workers (id, agent_id, name, created_at) VALUES (2, 2, 'lead', 0)",
+        "INSERT INTO messages (id, number, thread_id, reply_to, sender_kind, sender_worker_id, body, created_at)
+         VALUES (6, 6, 2, 2, 'worker', 2, 'for the user', 0)",
+        "INSERT INTO message_answers (reply_id, ask_id, question, answer) VALUES (6, 2, 1, 'Yes'), (6, 2, 2, 'Mock')",
+    ] {
+        exec(store, sql).await.unwrap();
+    }
+    assert_eq!(count(store, open).await, 0);
+
+    // An ask marked answered takes no answers.
+    for sql in [
+        "INSERT INTO messages (id, number, thread_id, sender_kind, sender_worker_id, body, created_at)
+         VALUES (7, 7, 7, 'worker', 1, 'ask', 0)",
+        "INSERT INTO message_recipients (message_id, human, addressed_as) VALUES (7, 'ana', 'humans')",
+        "INSERT INTO message_questions (message_id, position, text) VALUES (7, 1, 'Ready?')",
+        "INSERT INTO message_ask_closures (message_id, reason, closed_by, created_at) VALUES (7, 'dismissed', 'human:ana', 0)",
+        "INSERT INTO messages (id, number, thread_id, reply_to, sender_kind, sender_human, body, created_at)
+         VALUES (8, 8, 7, 7, 'human', 'ana', 'Yes', 0)",
+    ] {
+        exec(store, sql).await.unwrap();
+    }
+    let closed = exec(
+        store,
+        "INSERT INTO message_answers (reply_id, ask_id, question, answer) VALUES (8, 7, 1, 'Yes')",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        closed.to_string().contains("message_answers_open_only"),
+        "{closed}"
     );
     for table in [
         "message_questions",
