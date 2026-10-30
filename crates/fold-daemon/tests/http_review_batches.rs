@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use fold_core::object::{ObjectHash, ObjectKind, hash_object};
@@ -44,7 +45,7 @@ async fn batched_with(files: [(&str, &str); 2]) -> Fixture {
             .unwrap();
         fx.write(task, path, content);
         fx.reviews()
-            .create_proposal(&author, t(task), "Add a file", None)
+            .create_proposal_covering(&author, t(task), "Add a file", None)
             .await
             .unwrap()
             .detail()
@@ -158,7 +159,7 @@ async fn a_member_with_a_new_version_shows_the_change_since_the_reviewed_one() {
     fx.write(1, "src/one.rs", "one line\ntwo lines\n");
     let frontend = fx.agent("frontend").await;
     fx.reviews()
-        .update_proposal(&frontend, ProposalId::from_number(1).unwrap(), None)
+        .update_proposal_covering(&frontend, ProposalId::from_number(1).unwrap(), None)
         .await
         .unwrap()
         .detail()
@@ -350,7 +351,7 @@ async fn a_view_after_main_moved_merges_once_onto_the_new_head() {
             .unwrap();
         fx.write(task, path, "one line\n");
         fx.reviews()
-            .create_proposal(&author, t(task), "Add a file", None)
+            .create_proposal_covering(&author, t(task), "Add a file", None)
             .await
             .unwrap();
     }

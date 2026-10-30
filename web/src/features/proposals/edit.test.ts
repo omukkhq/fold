@@ -2,19 +2,23 @@ import { describe, expect, it } from "vitest";
 import type { VersionFile } from "@/api/proposals";
 import { comparedFile } from "@/test/diff";
 import {
+  intent,
   proposalDetail,
   proposalSummary,
   proposalVersion,
 } from "@/test/proposals";
+import { draftOf } from "./intentDraft";
 import {
   canEdit,
   canSendForReviewAgain,
   changed,
+  editIntent,
   editNotice,
   editRequest,
   editSource,
   editableFile,
   inHumanReview,
+  intentHint,
   keptApprovalsNote,
   savedContent,
 } from "./edit";
@@ -111,7 +115,17 @@ describe("the edit box content", () => {
     if (source.kind !== "text") throw new Error("text expected");
     expect(changed(source, "a\nb\n")).toBe(false);
     expect(changed(source, "a\n")).toBe(true);
-    expect(editRequest({ version: 2 }, "src/lib.rs", "a\n", source)).toEqual({
+    const kept = intent("Adds a.", [["Lib", "Adds a.", ["src/lib.rs"]]]);
+    expect(
+      editRequest(
+        { version: 2 },
+        "src/lib.rs",
+        "a\n",
+        source,
+        draftOf(kept, []),
+        kept,
+      ),
+    ).toEqual({
       version: 2,
       path: "src/lib.rs",
       content: "a\r\n",
@@ -166,5 +180,51 @@ describe("a human edit's approvals", () => {
     );
     expect(keptApprovalsNote(edited(), 1)).toBeNull();
     expect(keptApprovalsNote(edited(), 9)).toBeNull();
+  });
+});
+
+describe("the intent of a human edit", () => {
+  const source = {
+    kind: "text" as const,
+    text: "a\n",
+    lineEnding: "\n" as const,
+  };
+  const KEPT = intent("Adds the table.", [["Table", "Adds it.", ["a.txt"]]]);
+
+  it("starts as the edited version's intent", () => {
+    const p = proposalDetail(proposalSummary("P-4", { current_version: 2 }), {
+      versions: [proposalVersion(1), proposalVersion(2, { intent: KEPT })],
+    });
+    expect(editIntent(p, 2)).toBe(KEPT);
+    expect(editIntent(p, 1)).toBeNull();
+    expect(editIntent(p, 9)).toBeNull();
+  });
+
+  it("sends the intent only when the human changed it or the version has none", () => {
+    const base = { version: 2, path: "a.txt", content: "b\n" };
+    const same = draftOf(KEPT, []);
+    expect(
+      editRequest({ version: 2 }, "a.txt", "b\n", source, same, KEPT),
+    ).toEqual(base);
+    const spaced = { ...same, summary: "  Adds the table.  " };
+    expect(
+      editRequest({ version: 2 }, "a.txt", "b\n", source, spaced, KEPT),
+    ).toEqual(base);
+    const written = { ...same, summary: " Returns 3. " };
+    expect(
+      editRequest({ version: 2 }, "a.txt", "b\n", source, written, KEPT),
+    ).toEqual({ ...base, intent: { ...KEPT, summary: "Returns 3." } });
+    expect(
+      editRequest({ version: 2 }, "a.txt", "b\n", source, same, null),
+    ).toEqual({ ...base, intent: KEPT });
+  });
+
+  it("says what the intent holds and where the form starts", () => {
+    expect(intentHint(2, null)).toBe(
+      "How v3 works in the code, and its parts: every file v3 changes belongs to exactly one part. v2 has no intent, so write one for v3.",
+    );
+    expect(intentHint(2, KEPT)).toBe(
+      "How v3 works in the code, and its parts: every file v3 changes belongs to exactly one part. It starts as the intent of v2; change what your edit changes.",
+    );
   });
 });

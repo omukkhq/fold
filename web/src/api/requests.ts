@@ -17,6 +17,8 @@ export type RequestAttachment = Schemas["RequestAttachmentView"];
 export type RequestThread = Schemas["ThreadView"];
 export type RequestMessage = Schemas["MessageView"];
 export type NewDraft = Schemas["EditDraftBody"];
+export type RequestCode = Schemas["RequestCodeView"];
+export type CodeRequestBody = Schemas["CodeRequestBody"];
 
 /**
  * A body over the daemon's size limit is refused before any handler runs, as plain text with no error envelope. The web gives that answer its own code so the dialog can branch on it.
@@ -78,6 +80,19 @@ export async function createRequest(
     );
   }
   return unwrap(Promise.resolve(answer));
+}
+
+/** Creates a request about lines of a revision or of a proposal version; the request keeps the lines and an excerpt of them. */
+export async function createCodeRequest(
+  slug: string,
+  body: CodeRequestBody,
+): Promise<RequestDetail> {
+  return unwrap(
+    api.POST("/api/v1/projects/{slug}/requests/from-code", {
+      params: { path: { slug } },
+      body,
+    }),
+  );
 }
 
 /** Sends the latest version back to the drafter; `version` is the one the requester read, and an older one is `stale_version`. */

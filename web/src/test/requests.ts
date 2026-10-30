@@ -23,6 +23,7 @@ export function requestSummary(
     requester: "human:tanim",
     drafter: null,
     latest_version: null,
+    code: null,
     created_at: T0,
     updated_at: T0,
     ...fields,

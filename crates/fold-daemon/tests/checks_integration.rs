@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use std::path::Path;
 use std::time::Duration;
 
@@ -30,7 +31,7 @@ async fn approved(fx: &Fixture, task: u32, edit: impl FnOnce(&Path)) -> u32 {
     edit(&fx.project.paths().root().join(format!(".fold/ws/t-{task}")));
     let detail = fx
         .reviews
-        .create_proposal(&author, t(task), "Change", None)
+        .create_proposal_covering(&author, t(task), "Change", None)
         .await
         .unwrap()
         .detail()
@@ -209,7 +210,7 @@ async fn red_integration_checks_send_the_proposal_back_to_its_author() {
     fx.write("README.md", "# next\n");
     let next = fx
         .reviews
-        .update_proposal(&by(&fx.frontend.worker), p(proposal), None)
+        .update_proposal_covering(&by(&fx.frontend.worker), p(proposal), None)
         .await
         .unwrap()
         .detail()
@@ -639,6 +640,7 @@ async fn an_invalid_checks_file_of_the_merge_sends_the_proposal_back() {
             1,
             "fold-checks.toml",
             "[[check]]\nname = \"e2e\"\nrun = \"true\"\nstage = \"integration\"\nretries = 2\n",
+            None,
         )
         .await
         .unwrap();

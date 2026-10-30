@@ -95,6 +95,25 @@ const TEXTS: Record<string, string | ((details: Details) => string)> = {
   },
   [REQUEST_TOO_LARGE]:
     "The files are larger than fold takes in one request. Remove a file, then try once more.",
+  unknown_comment_path: (d) => {
+    switch (d.reason) {
+      case "missing":
+        return "That revision or version has no file at this path, so its lines take no request.";
+      case "binary":
+        return "This file is binary, so its lines take no request.";
+      case "too_large":
+        return "This file is too large for fold to read, so its lines take no request.";
+      case "not_a_file":
+        return "This path is not a file in that revision or version, so it takes no request.";
+      default:
+        return "This file is not a text file of that revision or version, so it takes no request on its lines.";
+    }
+  },
+  invalid_comment_range:
+    "These lines are not in the file now. Select the lines again.",
+  revision_not_found: "fold has no such revision.",
+  proposal_not_found: "fold has no such proposal or version.",
+  invalid_path: "fold does not accept this file path.",
 };
 
 export interface Failure {

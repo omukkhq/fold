@@ -215,6 +215,11 @@ export function lineLabel(row: LineRow): string {
   return `${LINE_WORDS[row.kind]}, ${numbers.join(", ")}: ${row.text}${tail}`;
 }
 
+/** The name a screen reader gives a line of a file: its number and its text. */
+export function fileLineLabel(row: LineRow): string {
+  return `Line ${String(row.newNo ?? row.oldNo ?? 0)}: ${row.text}`;
+}
+
 export function hiddenLinesText(hidden: number): string {
   return `Show ${plural(hidden, "unchanged line")}`;
 }

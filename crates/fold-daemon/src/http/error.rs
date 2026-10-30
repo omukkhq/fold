@@ -138,7 +138,9 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::WORKER_LIMIT_REACHED
         | codes::WORKER_EXISTS
         | codes::PERMISSION_QUESTION_CLOSED => Some(StatusCode::CONFLICT),
-        codes::INVALID_TASK_KIND | codes::INVALID_HOLD_REASON => Some(StatusCode::BAD_REQUEST),
+        codes::INVALID_TASK_KIND | codes::INVALID_HOLD_REASON | codes::INVALID_INTENT => {
+            Some(StatusCode::BAD_REQUEST)
+        }
         codes::TASK_KIND_DENIED
         | codes::TASK_CHECK_DENIED
         | codes::TASK_HOLD_DENIED
@@ -420,6 +422,7 @@ mod tests {
             (codes::AGENT_APPROVAL_REQUIRED, StatusCode::CONFLICT),
             (codes::PROJECT_PAUSED, StatusCode::CONFLICT),
             (codes::INVALID_HOLD_REASON, StatusCode::BAD_REQUEST),
+            (codes::INVALID_INTENT, StatusCode::BAD_REQUEST),
             (codes::TASK_HOLD_DENIED, StatusCode::FORBIDDEN),
             (codes::CHECKLIST_DENIED, StatusCode::FORBIDDEN),
             (codes::CHECKLIST_AMBIGUOUS, StatusCode::CONFLICT),

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { byContent } from "@/test/content";
+import { comparedFile } from "@/test/diff";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import {
@@ -35,6 +36,7 @@ import {
   checkRun,
   conflictReport,
   humanGates,
+  intent,
   proposalDetail,
   proposalSummary,
   proposalVersion,
@@ -42,8 +44,10 @@ import {
   reviewComment,
   revision,
 } from "@/test/proposals";
+import { requestDetail, requestSummary } from "@/test/requests";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 import { needsItem } from "@/test/workers";
+import type { RequestCode, RequestSummary } from "@/api/requests";
 
 vi.mock("@/api/client", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/api/client")>();
@@ -52,6 +56,19 @@ vi.mock("@/api/client", async (importOriginal) => {
 });
 
 const SCHEMA = "migrations/0004_reports.sql";
+
+/** Writes an intent of one part named Reports table into the edit's intent form, whose part holds the edited file. */
+function writeIntent(form: HTMLElement, summary: string): void {
+  fireEvent.change(within(form).getByLabelText("Summary"), {
+    target: { value: summary },
+  });
+  fireEvent.change(within(form).getByLabelText("Part 1 name"), {
+    target: { value: "Reports table" },
+  });
+  fireEvent.change(within(form).getByLabelText("What part 1 does"), {
+    target: { value: "Adds a check note to the table." },
+  });
+}
 
 // The version diff is the proposal diff seam's to read; the proposal screens only name the range they read.
 const diffReads = vi.hoisted(() => ({
@@ -555,7 +572,7 @@ async function lineCell(container: HTMLElement, key: string) {
 /** Picks an action of the menu at the selected lines. */
 async function choose(
   user: ReturnType<typeof userEvent.setup>,
-  action: "Ask the author" | "Review comment",
+  action: "Ask the author" | "Review comment" | "Make a request",
 ): Promise<void> {
   const menu = await screen.findByRole("group", { name: "Selected lines" });
   await user.click(within(menu).getByRole("button", { name: action }));
@@ -1079,6 +1096,90 @@ describe("Proposal detail", () => {
     expect(writes("POST /api/v1/projects/demo/proposals/P-4/reviews")).toEqual(
       [],
     );
+  });
+
+  it("makes a request from selected lines apart from the review, pending until the daemon answers, then names it and marks the lines", async () => {
+    const made: RequestSummary[] = [];
+    daemon.on("GET /api/v1/projects/:slug/requests", () => ok({ items: made }));
+    daemon.on(
+      "POST /api/v1/projects/:slug/requests/from-code",
+      async (call) => {
+        if (held) await held;
+        const body = call.body as {
+          path: string;
+          start_line: number;
+          end_line: number;
+          proposal: string;
+          version: number;
+          side: "old" | "new";
+        };
+        const code: RequestCode = {
+          path: body.path,
+          start_line: body.start_line,
+          end_line: body.end_line,
+          excerpt: "x",
+          excerpt_cut: false,
+          revision: null,
+          proposal: body.proposal,
+          version: body.version,
+          side: body.side,
+        };
+        const summary = requestSummary("RQ-7", { code });
+        made.push(summary);
+        return ok(requestDetail(summary), 201);
+      },
+    );
+    const user = userEvent.setup();
+    const { container } = renderAt("/p/demo/proposals/P-4?tab=changes");
+    await user.click(await lineCell(container, "new:2"));
+    fireEvent.click(await lineCell(container, "new:3"), { shiftKey: true });
+    await choose(user, "Make a request");
+    const form = await screen.findByRole("form", {
+      name: "Make a request about lines 2–3 · new side · v2",
+    });
+    await user.click(
+      within(form).getByRole("button", { name: "Make the request" }),
+    );
+    expect(within(form).getByText("Say what you need first.")).toBeTruthy();
+    await user.type(within(form).getByLabelText("Request"), "Index the date.");
+    const release = hold();
+    await user.click(
+      within(form).getByRole("button", { name: "Make the request" }),
+    );
+    expect(
+      within(form)
+        .getByRole("button", { name: "Making the request…" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    release();
+    const note = await screen.findByText(/with these lines/);
+    expect(
+      within(note).getByRole("link", { name: "RQ-7" }).getAttribute("href"),
+    ).toBe("/p/demo/requests/RQ-7");
+    const markers = await screen.findAllByRole("link", {
+      name: "Request RQ-7 about lines 2–3, open",
+    });
+    expect(markers.map((m) => m.getAttribute("href"))).toEqual([
+      "/p/demo/requests/RQ-7",
+      "/p/demo/requests/RQ-7",
+    ]);
+    expect(
+      writes("POST /api/v1/projects/demo/requests/from-code")[0]?.body,
+    ).toEqual({
+      body: "Index the date.",
+      path: SCHEMA,
+      start_line: 2,
+      end_line: 3,
+      proposal: "P-4",
+      version: 2,
+      side: "new",
+    });
+    expect(writes("POST /api/v1/projects/demo/proposals/P-4/comments")).toEqual(
+      [],
+    );
+    expect(
+      writes("POST /api/v1/projects/demo/proposals/P-4/questions"),
+    ).toEqual([]);
   });
 
   it("marks the lines of a question on the version it asks about, answered once the author wrote back, and a click on the mark opens the thread without selecting the line", async () => {
@@ -1971,6 +2072,11 @@ describe("Human edit", () => {
   const AGAIN = "POST /api/v1/projects/demo/proposals/P-4/review-again";
 
   function editRoutes(): void {
+    // The version's whole diff, which the intent of a version without one starts with.
+    update("P-4", (p) => ({
+      ...p,
+      files: [comparedFile(SCHEMA, "added")],
+    }));
     daemon.on("GET /api/v1/projects/:slug/proposals/:id/file", () =>
       ok({
         path: SCHEMA,
@@ -2044,6 +2150,18 @@ describe("Human edit", () => {
     fireEvent.change(box, {
       target: { value: "CREATE TABLE reports (\n);\n-- checked\n" },
     });
+    expect(save).toHaveProperty("disabled", true);
+    const form = within(editor).getByRole("region", { name: "Intent of v3" });
+    expect(
+      within(form).getByText(
+        "How v3 works in the code, and its parts: every file v3 changes belongs to exactly one part. v2 has no intent, so write one for v3.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(form).getByLabelText<HTMLTextAreaElement>("Files of part 1").value,
+    ).toBe(SCHEMA);
+    writeIntent(form, "Marks the reports table as checked.");
+    expect(save).toHaveProperty("disabled", false);
     const release = hold();
     await user.click(save);
     expect(
@@ -2068,11 +2186,15 @@ describe("Human edit", () => {
       ),
     ).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "Overview" }));
-    expect(await screen.findByText("Approved (kept from v2)")).toBeTruthy();
+    const v3 = await screen.findByRole("article", { name: "Version v3" });
+    expect(within(v3).getByText("Approved (kept from v2)")).toBeTruthy();
     expect(writes(EDITS)[0]?.body).toEqual({
       version: 2,
       path: SCHEMA,
       content: "CREATE TABLE reports (\r\n);\r\n-- checked\r\n",
+      intent: intent("Marks the reports table as checked.", [
+        ["Reports table", "Adds a check note to the table.", [SCHEMA]],
+      ]),
     });
   });
 
@@ -2128,6 +2250,10 @@ describe("Human edit", () => {
     fireEvent.change(within(editor).getByLabelText(`Content of ${SCHEMA}`), {
       target: { value: "x\n" },
     });
+    writeIntent(
+      within(editor).getByRole("region", { name: "Intent of v3" }),
+      "Clears the table.",
+    );
     await user.click(
       within(editor).getByRole("button", { name: "Save as v3" }),
     );
@@ -2138,6 +2264,133 @@ describe("Human edit", () => {
     ).toBeTruthy();
     await user.click(within(editor).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("region", { name: `Edit ${SCHEMA}` })).toBeNull();
+  });
+
+  it("starts the intent of the edit from the edited version and sends the one the human writes", async () => {
+    editRoutes();
+    const kept = intent("Adds the reports table.", [
+      ["Reports table", "Creates the table.", [SCHEMA]],
+    ]);
+    update("P-4", (p) => ({
+      ...p,
+      versions: p.versions.map((v) =>
+        v.version === 2 ? { ...v, intent: kept } : v,
+      ),
+    }));
+    const user = userEvent.setup();
+    renderAt("/p/demo/proposals/P-4?tab=changes");
+    await user.click(
+      await screen.findByRole("button", { name: `Edit ${SCHEMA}` }),
+    );
+    const editor = await screen.findByRole("region", {
+      name: `Edit ${SCHEMA}`,
+    });
+    fireEvent.change(within(editor).getByLabelText(`Content of ${SCHEMA}`), {
+      target: { value: "CREATE TABLE reports (\n);\n-- checked\n" },
+    });
+    const form = within(editor).getByRole("region", { name: "Intent of v3" });
+    const summary = within(form).getByLabelText("Summary");
+    expect((summary as HTMLTextAreaElement).value).toBe(
+      "Adds the reports table.",
+    );
+    expect(
+      within(form).getByLabelText<HTMLInputElement>("Part 1 name").value,
+    ).toBe("Reports table");
+    const save = within(editor).getByRole("button", { name: "Save as v3" });
+    expect(save).toHaveProperty("disabled", false);
+    fireEvent.change(summary, { target: { value: " " } });
+    expect(save).toHaveProperty("disabled", true);
+    expect(
+      within(form).getByText(
+        "Write the summary: how the change works in the code.",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(within(form).getByLabelText("Files of part 1"), {
+      target: { value: "" },
+    });
+    fireEvent.change(summary, {
+      target: { value: "Adds the reports table, checked by a human." },
+    });
+    expect(
+      within(form).getByText(
+        `Put ${SCHEMA} in the part whose code it changes.`,
+      ),
+    ).toBeTruthy();
+    fireEvent.change(within(form).getByLabelText("Files of part 1"), {
+      target: { value: SCHEMA },
+    });
+    fireEvent.change(within(form).getByLabelText("Decisions"), {
+      target: { value: "A human checked the table.\n" },
+    });
+    await user.click(within(form).getByRole("button", { name: "Add a part" }));
+    expect(document.activeElement).toBe(
+      within(form).getByLabelText("Part 2 name"),
+    );
+    await user.click(
+      within(form).getByRole("button", { name: "Remove part 2" }),
+    );
+    expect(document.activeElement).toBe(
+      within(form).getByLabelText("Part 1 name"),
+    );
+    expect(within(form).queryByLabelText("Part 2 name")).toBeNull();
+    await user.click(save);
+    await waitFor(() => {
+      expect(writes(EDITS)).toHaveLength(1);
+    });
+    expect(writes(EDITS)[0]?.body).toEqual({
+      version: 2,
+      path: SCHEMA,
+      content: "CREATE TABLE reports (\r\n);\r\n-- checked\r\n",
+      intent: {
+        ...kept,
+        summary: "Adds the reports table, checked by a human.",
+        decisions: ["A human checked the table."],
+      },
+    });
+  });
+
+  it("keeps the edited version's intent when the human leaves it, and shows a refusal of its parts", async () => {
+    editRoutes();
+    const kept = intent("Adds the reports table.", [
+      ["Reports table", "Creates the table.", [SCHEMA]],
+    ]);
+    update("P-4", (p) => ({
+      ...p,
+      versions: p.versions.map((v) =>
+        v.version === 2 ? { ...v, intent: kept } : v,
+      ),
+    }));
+    daemon.on("POST /api/v1/projects/:slug/proposals/:id/edits", () =>
+      refuse(400, "invalid_intent", {
+        field: "intent.parts",
+        reason: "part_file_outside_diff",
+        outside: [SCHEMA],
+      }),
+    );
+    const user = userEvent.setup();
+    renderAt("/p/demo/proposals/P-4?tab=changes");
+    await user.click(
+      await screen.findByRole("button", { name: `Edit ${SCHEMA}` }),
+    );
+    const editor = await screen.findByRole("region", {
+      name: `Edit ${SCHEMA}`,
+    });
+    fireEvent.change(within(editor).getByLabelText(`Content of ${SCHEMA}`), {
+      target: { value: "x\n" },
+    });
+    await user.click(
+      within(editor).getByRole("button", { name: "Save as v3" }),
+    );
+    expect(
+      await within(editor).findByText(
+        `The version does not change these files: ${SCHEMA}. Remove them from the parts.`,
+      ),
+    ).toBeTruthy();
+    expect(writes(EDITS)[0]?.body).toEqual({
+      version: 2,
+      path: SCHEMA,
+      content: "x\r\n",
+    });
   });
 
   it("offers no edit box outside a human review", async () => {
@@ -2361,5 +2614,274 @@ describe("Checks", () => {
     expect(
       within(bar).getByRole("button", { name: "Integrate" }),
     ).toHaveProperty("disabled", false);
+  });
+});
+
+describe("Intent", () => {
+  const LARGE = intent(
+    "A candidate opens one case per kind at POST /v1/cases, linked to #T-9.\n\nStaff decide it.",
+    [
+      ["Reports table", "Creates the reports table.", [SCHEMA]],
+      ["Docs", "Describes the cases.", ["docs/cases.md"]],
+    ],
+    {
+      contracts: {
+        routes: ["POST /v1/cases"],
+        database: ["New table reports"],
+        rights: [],
+        config: [],
+        errors: ["case_open"],
+        events: [],
+        commands: [],
+      },
+      decisions: ["One open case per kind."],
+      not_changed: ["Sign-in."],
+    },
+  );
+
+  it("shows the current version's intent part by part first, the reviewer's verdict beside it and each earlier version's summary in the history", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      versions: p.versions.map((v) => ({
+        ...v,
+        intent:
+          v.version === 2
+            ? LARGE
+            : intent("Adds the reports table.", [
+                ["Table", "Creates it.", [SCHEMA]],
+              ]),
+      })),
+      reviews: p.reviews.map((r) =>
+        r.version === 2 ? { ...r, body: "The diff matches the intent." } : r,
+      ),
+      files: [
+        comparedFile(SCHEMA, "added"),
+        comparedFile("docs/cases.md", "added"),
+      ],
+    }));
+    const user = userEvent.setup();
+    renderAt("/p/demo/proposals/P-4");
+    const card = await screen.findByRole("region", { name: "Intent" });
+    expect(within(card).getByText("Intent of v2")).toBeTruthy();
+    expect(within(card).getByText(/checked by/)).toBeTruthy();
+    expect(within(card).getByText(/A candidate opens one case/)).toBeTruthy();
+    expect(
+      within(card).getByRole("link", { name: "T-9" }).getAttribute("href"),
+    ).toBe("/p/demo/t/T-9");
+    expect(
+      within(card).getByText("Both changed files belong to a part below."),
+    ).toBeTruthy();
+    const parts = within(card).getByRole("region", { name: "Parts" });
+    expect(within(parts).getByText("Reports table")).toBeTruthy();
+    expect(within(parts).getByText("Describes the cases.")).toBeTruthy();
+    expect(
+      within(parts).getByRole("link", { name: SCHEMA }).getAttribute("href"),
+    ).toContain("tab=changes");
+    const contracts = within(card).getByRole("region", { name: "Contracts" });
+    expect(within(contracts).getByText("Routes")).toBeTruthy();
+    expect(within(contracts).getByText("case_open")).toBeTruthy();
+    expect(within(contracts).queryByText("Rights")).toBeNull();
+    expect(
+      within(card).getByRole("region", { name: "Decisions" }),
+    ).toBeTruthy();
+    expect(
+      within(
+        within(card).getByRole("region", { name: "What it does not change" }),
+      ).getByText("Sign-in."),
+    ).toBeTruthy();
+    const verdict = screen.getByRole("region", { name: "Review" });
+    expect(within(verdict).getByText("Approved")).toBeTruthy();
+    expect(
+      within(verdict).getByText("The diff matches the intent."),
+    ).toBeTruthy();
+    const integration = screen.getByRole("region", { name: "Integration" });
+    expect(
+      card.compareDocumentPosition(integration) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const v1 = screen.getByRole("article", { name: "Version v1" });
+    expect(within(v1).getByText("Adds the reports table.")).toBeTruthy();
+    expect(within(v1).queryByText("Creates it.")).toBeNull();
+    await user.click(
+      within(v1).getByRole("button", { name: "Show the whole intent of v1" }),
+    );
+    expect(within(v1).getByText("Creates it.")).toBeTruthy();
+    expect(
+      within(v1).getByRole("link", { name: SCHEMA }).getAttribute("href"),
+    ).toBe(
+      `/p/demo/proposals/P-4?tab=changes&version=1&path=${encodeURIComponent(SCHEMA)}`,
+    );
+    expect(await within(v1).findByText("1 file · +1 −1")).toBeTruthy();
+    await user.click(
+      within(v1).getByRole("button", { name: "Hide the parts" }),
+    );
+    expect(within(v1).queryByText("Creates it.")).toBeNull();
+    const v2 = screen.getByRole("article", { name: "Version v2" });
+    expect(within(v2).queryByText(/A candidate opens/)).toBeNull();
+  });
+
+  it("shows a small change with one part and no other section", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      versions: p.versions.map((v) => ({
+        ...v,
+        intent: intent("Resets the page when a filter changes.", [
+          ["Reset the page", "setFilter writes page 1.", [SCHEMA]],
+        ]),
+      })),
+      files: [comparedFile(SCHEMA, "added")],
+    }));
+    renderAt("/p/demo/proposals/P-4");
+    const card = await screen.findByRole("region", { name: "Intent" });
+    expect(
+      within(card).getByText("The changed file belongs to the part below."),
+    ).toBeTruthy();
+    expect(
+      within(card).queryByRole("region", { name: "Contracts" }),
+    ).toBeNull();
+    expect(
+      within(card).queryByRole("region", { name: "Decisions" }),
+    ).toBeNull();
+    expect(
+      within(card).queryByRole("region", { name: "What it does not change" }),
+    ).toBeNull();
+  });
+
+  it("groups the changed files by part and shows the part above the file", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      versions: p.versions.map((v) => ({ ...v, intent: LARGE })),
+    }));
+    renderAt(`/p/demo/proposals/P-4?tab=changes&path=${SCHEMA}`);
+    const tree = await screen.findByRole("navigation", {
+      name: "Changed files",
+    });
+    expect(within(tree).getByText("Reports table")).toBeTruthy();
+    expect(within(tree).queryByText("Not in the intent")).toBeNull();
+    expect(
+      within(tree).queryByRole("button", { name: "Expand all" }),
+    ).toBeNull();
+    const file = await screen.findByRole("region", { name: SCHEMA });
+    expect(
+      within(file).getByText("Creates the reports table.", { exact: false }),
+    ).toBeTruthy();
+  });
+
+  it("warns on the Overview about changed files that no part names, and says a human edit kept the intent", async () => {
+    const kept = intent("Adds the reports table.", [
+      ["Table", "Creates it.", [SCHEMA]],
+    ]);
+    update("P-4", (p) => ({
+      ...p,
+      versions: p.versions.map((v) => ({
+        ...v,
+        intent: kept,
+        ...(v.version === 2
+          ? { human_edit: true, created_by: "human:tanim" }
+          : {}),
+      })),
+      files: [
+        comparedFile(SCHEMA, "added"),
+        comparedFile("src/extra.ts", "added"),
+      ],
+    }));
+    renderAt("/p/demo/proposals/P-4");
+    const card = await screen.findByRole("region", { name: "Intent" });
+    expect(
+      within(card).getByText("1 changed file belongs to no part."),
+    ).toBeTruthy();
+    expect(within(card).getByText(/kept from v1/)).toBeTruthy();
+    expect(within(card).queryByText(/written/)).toBeNull();
+    expect(
+      within(card).getByRole("link", { name: SCHEMA }).getAttribute("title"),
+    ).toBe(SCHEMA);
+  });
+
+  it("names nobody as the writer of a version without an intent", async () => {
+    update("P-4", (p) => ({ ...p, reviews: [] }));
+    renderAt("/p/demo/proposals/P-4");
+    const card = await screen.findByRole("region", { name: "Intent" });
+    expect(within(card).queryByText(/written by/)).toBeNull();
+  });
+
+  it("puts a file the version changed back to the base into a quiet group of a change since an earlier version", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      versions: p.versions.map((v) => ({
+        ...v,
+        intent: intent("Describes the cases.", [
+          ["Docs", "Describes the cases with #T-9.", ["docs/cases.md"]],
+        ]),
+      })),
+    }));
+    renderAt(
+      `/p/demo/proposals/P-4?tab=changes&version=2&since=1&path=${SCHEMA}`,
+    );
+    const tree = await screen.findByRole("navigation", {
+      name: "Changed files",
+    });
+    expect(within(tree).getByText("Changed back to the base")).toBeTruthy();
+    expect(within(tree).queryByText("Not in the intent")).toBeNull();
+    const file = await screen.findByRole("region", { name: SCHEMA });
+    expect(
+      within(file).getByText("as the base has it.", { exact: false }),
+    ).toBeTruthy();
+    expect(
+      within(file).queryByText("belongs to no part of the intent.", {
+        exact: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("links the mentions of what a part does above its file", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      versions: p.versions.map((v) => ({
+        ...v,
+        intent: intent("Adds the table.", [
+          ["Reports table", "Creates the table for #T-9.", [SCHEMA]],
+        ]),
+      })),
+    }));
+    renderAt("/p/demo/proposals/P-4?tab=changes");
+    const file = await screen.findByRole("region", { name: SCHEMA });
+    expect(
+      within(file).getByRole("link", { name: "T-9" }).getAttribute("href"),
+    ).toBe("/p/demo/t/T-9");
+  });
+
+  it("warns about a changed file that no part names", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      versions: p.versions.map((v) => ({
+        ...v,
+        intent: intent("Describes the cases.", [
+          ["Docs", "Describes the cases.", ["docs/cases.md"]],
+        ]),
+      })),
+    }));
+    renderAt(`/p/demo/proposals/P-4?tab=changes&path=${SCHEMA}`);
+    const tree = await screen.findByRole("navigation", {
+      name: "Changed files",
+    });
+    expect(within(tree).getByText("Not in the intent")).toBeTruthy();
+    const file = await screen.findByRole("region", { name: SCHEMA });
+    expect(
+      within(file).getByText("belongs to no part of the intent.", {
+        exact: false,
+      }),
+    ).toBeTruthy();
+  });
+
+  it("says when a version has no intent and nobody reviewed it", async () => {
+    update("P-4", (p) => ({ ...p, reviews: [] }));
+    renderAt("/p/demo/proposals/P-4");
+    const card = await screen.findByRole("region", { name: "Intent" });
+    expect(within(card).getByText("This version has no intent.")).toBeTruthy();
+    expect(
+      within(screen.getByRole("region", { name: "Review" })).getByText(
+        "No reviewer has reviewed v2 yet.",
+      ),
+    ).toBeTruthy();
   });
 });

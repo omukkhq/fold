@@ -159,7 +159,11 @@ pub async fn post_next_version(harness: &Harness, work: &Work) {
         )
         .await;
     let updated = harness
-        .call(TASK_WORKER, "update_proposal", json!({"id": "P-1"}))
+        .call(
+            TASK_WORKER,
+            "update_proposal",
+            json!({"intent": "Make the change the task asks for.", "id": "P-1"}),
+        )
         .await;
     assert_eq!(updated["version"], "v2", "{updated}");
 }
@@ -1112,7 +1116,7 @@ async fn red_proposal_checks_resume_a_stopped_task_worker_with_the_failed_check(
         .call(
             TASK_WORKER,
             "create_proposal",
-            json!({"task": "T-1", "title": "Draw the page"}),
+            json!({"intent": "Make the change the task asks for.", "task": "T-1", "title": "Draw the page"}),
         )
         .await;
     assert_eq!(created["checks"], "running", "{created}");

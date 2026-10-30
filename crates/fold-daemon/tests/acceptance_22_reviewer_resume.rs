@@ -266,7 +266,11 @@ async fn acceptance_22_a_reviewer_whose_session_is_gone_reviews_the_new_version_
         )
         .await;
     let updated = harness
-        .call("backend", "update_proposal", json!({"id": "P-1"}))
+        .call(
+            "backend",
+            "update_proposal",
+            json!({"intent": "Make the change the task asks for.", "id": "P-1"}),
+        )
         .await;
     assert_eq!(updated["version"], "v2", "{updated}");
 

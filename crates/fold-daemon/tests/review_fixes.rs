@@ -1,5 +1,8 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
+use crate::common::intents::{covering_with, whole_change};
+use fold_core::reviews::ProposalIntent;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
@@ -127,17 +130,27 @@ impl Scene {
     }
 
     async fn fix(&self, version: u32, fixes: &[ReviewFix]) -> Result<FixedVersion, ReviewError> {
-        self.fx
-            .reviews()
-            .submit_review_fix(
-                &self.review,
-                p(1),
-                version,
-                fixes,
-                "cargo test: 2 passed\nmake check: ok",
-            )
-            .await
-            .map(|outcome| outcome.fixed().unwrap())
+        let intent = ProposalIntent {
+            summary:
+                "Makes y return 1 as the task asks, with a regression test; nothing else changes."
+                    .to_owned(),
+            ..whole_change(&[])
+        };
+        covering_with(intent, async |intent| {
+            self.fx
+                .reviews()
+                .submit_review_fix(
+                    &self.review,
+                    p(1),
+                    version,
+                    fixes,
+                    "cargo test: 2 passed\nmake check: ok",
+                    intent,
+                )
+                .await
+        })
+        .await
+        .map(|outcome| outcome.fixed().unwrap())
     }
 
     async fn last_seq(&self) -> u64 {
@@ -212,6 +225,11 @@ async fn a_fix_in_the_checkout_becomes_the_reviewers_next_version_and_waits_in_t
     assert_eq!(v1.fixed_in_checkout, None);
     assert_eq!(v2.base, v1.base);
     assert!(!v2.human_edit);
+    assert_eq!(
+        v2.intent.as_ref().map(|intent| intent.summary.as_str()),
+        Some("Makes y return 1 as the task asks, with a regression test; nothing else changes."),
+        "the fix carries the reviewer's own intent"
+    );
     assert_eq!(
         v2.evidence.as_deref(),
         Some(
@@ -391,12 +409,16 @@ async fn only_the_review_claim_holder_fixes_and_never_on_a_stale_version() {
         (&human("tanim"), codes::REVIEW_CLAIM_REQUIRED),
         (&Actor::System, codes::REVIEW_CLAIM_REQUIRED),
     ] {
-        let error = refusal(reviews.submit_review_fix(actor, p(1), 1, &one, "ok").await);
+        let error = refusal(
+            reviews
+                .submit_review_fix_covering(actor, p(1), 1, &one, "ok")
+                .await,
+        );
         assert_eq!(error.code(), code, "{actor:?}");
     }
     let error = refusal(
         reviews
-            .submit_review_fix(&backend, p(1), 1, &one, "ok")
+            .submit_review_fix_covering(&backend, p(1), 1, &one, "ok")
             .await,
     );
     assert_eq!(
@@ -407,7 +429,7 @@ async fn only_the_review_claim_holder_fixes_and_never_on_a_stale_version() {
     // The author adds v2 while the reviewer fixes v1: nothing is written and the checkout keeps v1.
     scene.fx.write(1, "src/lib.rs", "pub fn y() -> u8 { 2 }\n");
     reviews
-        .update_proposal(&scene.frontend, p(1), None)
+        .update_proposal_covering(&scene.frontend, p(1), None)
         .await
         .unwrap();
     let error = refusal(scene.fix(1, &one).await);
@@ -465,10 +487,34 @@ async fn the_fixes_name_exactly_the_files_that_changed() {
         scene
             .fx
             .reviews()
-            .submit_review_fix(&scene.review, p(1), 1, &both_fixes(), " ")
+            .submit_review_fix_covering(&scene.review, p(1), 1, &both_fixes(), " ")
             .await,
     );
     assert_eq!(details(&error)["field"], "checks");
+    let error = refusal(
+        scene
+            .fx
+            .reviews()
+            .submit_review_fix(
+                &scene.review,
+                p(1),
+                1,
+                &both_fixes(),
+                "ok",
+                ProposalIntent {
+                    summary: "\n".to_owned(),
+                    ..whole_change(&[])
+                },
+            )
+            .await,
+    );
+    assert_eq!(error.code(), codes::INVALID_INTENT);
+    assert!(
+        error
+            .hint()
+            .unwrap()
+            .starts_with("call submit_review_fix again")
+    );
     let versions = scene.fx.reviews().get_proposal(p(1), None).await.unwrap();
     assert_eq!(versions.versions.len(), 1, "a refusal writes no version");
 }
@@ -486,7 +532,7 @@ async fn a_batch_member_is_fixed_in_its_own_checkout_and_left_out_of_the_batch_r
         .unwrap();
     scene.fx.write(2, "README.md", "# demo\nmore\n");
     reviews
-        .create_proposal(&backend, t(2), "Extend the readme", Some("read it"))
+        .create_proposal_covering(&backend, t(2), "Extend the readme", Some("read it"))
         .await
         .unwrap();
     reviews
@@ -517,7 +563,7 @@ async fn a_batch_member_is_fixed_in_its_own_checkout_and_left_out_of_the_batch_r
     assert_eq!(mode & 0o222, 0, "a batch checkout stays read-only");
     let error = refusal(
         reviews
-            .submit_review_fix(&scene.review, p(2), 1, &[fix("README.md", "r")], "ok")
+            .submit_review_fix_covering(&scene.review, p(2), 1, &[fix("README.md", "r")], "ok")
             .await,
     );
     assert_eq!(error.code(), codes::WORKSPACE_NOT_FOUND);
@@ -627,7 +673,7 @@ async fn the_edit_hook_admits_only_the_claim_holders_own_checkout_of_one_proposa
         .unwrap();
     fx.write(2, "README.md", "# demo\nmore\n");
     reviews
-        .create_proposal(&backend, t(2), "Extend the readme", None)
+        .create_proposal_covering(&backend, t(2), "Extend the readme", None)
         .await
         .unwrap();
     let batch = crate::common::roles::give_batch(
@@ -682,7 +728,7 @@ async fn scene_with_checks() -> Scene {
     );
     let reviews = fx.reviews();
     let proposed = reviews
-        .create_proposal(&frontend, t(1), "Add y", None)
+        .create_proposal_covering(&frontend, t(1), "Add y", None)
         .await
         .unwrap();
     assert!(matches!(
@@ -716,12 +762,19 @@ async fn scene_with_checks() -> Scene {
 
 #[cfg(test)]
 async fn checked_fix(scene: &Scene, fixes: &[ReviewFix]) -> fold_core::CheckRunId {
-    let outcome = scene
-        .fx
-        .reviews()
-        .submit_review_fix(&scene.review, p(1), 1, fixes, "grep: ok")
-        .await
-        .unwrap();
+    let intent = ProposalIntent {
+        summary: "Makes y return 1, checked by the proposal checks.".to_owned(),
+        ..whole_change(&[])
+    };
+    let outcome = covering_with(intent, async |intent| {
+        scene
+            .fx
+            .reviews()
+            .submit_review_fix(&scene.review, p(1), 1, fixes, "grep: ok", intent)
+            .await
+    })
+    .await
+    .unwrap();
     let fold_daemon::services::reviews::FixOutcome::Checking { run, checkout, .. } = outcome else {
         panic!("expected a check run of the fix");
     };
@@ -774,6 +827,14 @@ async fn a_fix_becomes_a_version_only_after_its_proposal_checks_pass() {
     .await;
     assert_eq!(detail.versions[1].created_by, "review");
     assert_eq!(detail.versions[1].fixed_in_checkout, Some(ws(2)));
+    assert_eq!(
+        detail.versions[1]
+            .intent
+            .as_ref()
+            .map(|intent| intent.summary.as_str()),
+        Some("Makes y return 1, checked by the proposal checks."),
+        "the run carries the fix's intent to its version"
+    );
     assert!(
         last_message_to_review(&scene)
             .await
@@ -929,7 +990,7 @@ async fn a_batch_approval_of_a_member_waits_while_a_fix_of_it_runs_its_checks() 
         .unwrap();
     fx.write(2, "README.md", "# demo\nmore\n");
     reviews
-        .create_proposal(&backend, t(2), "Extend the readme", Some("read it"))
+        .create_proposal_covering(&backend, t(2), "Extend the readme", Some("read it"))
         .await
         .unwrap();
     let (run, _) = fx.fix_p1(&review).await;

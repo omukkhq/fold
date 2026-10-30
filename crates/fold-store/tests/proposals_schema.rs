@@ -1,5 +1,6 @@
 use crate::common::{count, exec, open};
 use fold_core::object::{ObjectKind, hash_object};
+use fold_core::reviews::{Contracts, IntentPart, ProposalIntent};
 use fold_core::{ChangesetId, ProposalId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId};
 use fold_store::reviews::{self, NewProposal, NewVersion, ProposalState, RetiredState};
 use fold_store::testing::assert_append_only;
@@ -178,6 +179,18 @@ async fn a_proposal_title_is_one_non_empty_line() {
     assert!(trigger(&error).contains("proposals_title_single_line"));
 }
 
+/// The intent of every version the tests write through the store.
+#[cfg(test)]
+static REPORT: std::sync::LazyLock<ProposalIntent> = std::sync::LazyLock::new(|| ProposalIntent {
+    summary: "The report query reads the tasks and sums them by status.".to_owned(),
+    parts: vec![IntentPart {
+        name: "Report query".to_owned(),
+        does: "Sums the tasks by status.".to_owned(),
+        files: vec!["src/report.rs".to_owned()],
+    }],
+    ..ProposalIntent::default()
+});
+
 #[cfg(test)]
 fn p(number: u32) -> ProposalId {
     ProposalId::from_number(number).unwrap()
@@ -190,6 +203,7 @@ fn version(changeset: u32, created_by: &str) -> NewVersion<'_> {
         tree: hash_object(ObjectKind::Tree, b"tree"),
         head_changeset: ChangesetId::from_number(changeset).unwrap(),
         evidence: Some("tests pass"),
+        intent: Some(&REPORT),
         created_by,
         fixed_in_checkout: None,
     }
@@ -255,6 +269,7 @@ async fn the_store_functions_open_version_and_retire_a_proposal() {
         [1, 2]
     );
     assert_eq!(versions[0].evidence.as_deref(), Some("tests pass"));
+    assert_eq!(versions[0].intent.as_ref(), Some(&*REPORT));
     assert_eq!(versions[0].created_by, "backend");
     assert_eq!(
         (
@@ -491,4 +506,111 @@ async fn a_reviewer_fix_names_a_review_checkout_of_its_proposal_and_the_checkout
         .await,
         1
     );
+}
+
+#[tokio::test]
+async fn a_version_holds_its_intent_as_rows_and_reads_it_back_whole() {
+    let (_dir, store) = seeded().await;
+    exec(&store, &proposal_sql(1, 1, "open", "NULL"))
+        .await
+        .unwrap();
+    let tree = hash_object(ObjectKind::Tree, b"tree");
+    exec(
+        &store,
+        &format!(
+            "INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (1, 1, 1, '{tree}', 1, 'backend', 0)"
+        ),
+    )
+    .await
+    .unwrap();
+    let at = Timestamp::from_millis(9).unwrap();
+    let full = ProposalIntent {
+        summary: "A candidate opens a case per kind.\n\nStaff decide it.".to_owned(),
+        parts: vec![
+            IntentPart {
+                name: "Case model".to_owned(),
+                does: "Adds the cases table.".to_owned(),
+                files: vec!["src/models.rs".to_owned(), "migrations/1.sql".to_owned()],
+            },
+            IntentPart {
+                name: "Routes".to_owned(),
+                does: "Opens a case.".to_owned(),
+                files: vec!["src/routes.rs".to_owned()],
+            },
+        ],
+        contracts: Contracts {
+            routes: vec!["POST /cases".to_owned(), "GET /cases".to_owned()],
+            errors: vec!["case_open".to_owned()],
+            ..Contracts::default()
+        },
+        decisions: vec!["One open case per kind.".to_owned()],
+        not_changed: vec!["Sign-in.".to_owned()],
+    };
+    let new = NewVersion {
+        intent: Some(&full),
+        ..self::version(1, "backend")
+    };
+    store
+        .write(async |tx| reviews::add_version(tx, p(1), 2, &new, at).await)
+        .await
+        .unwrap();
+    let versions = reviews::list_versions(store.read(), p(1)).await.unwrap();
+    assert_eq!(versions[0].intent, None, "a version made before intents");
+    assert_eq!(versions[1].intent.as_ref(), Some(&full));
+    for table in [
+        "proposal_intent_parts",
+        "proposal_intent_files",
+        "proposal_intent_entries",
+    ] {
+        assert_append_only(&store, table).await;
+    }
+
+    let long = ProposalIntent {
+        summary: "x".repeat(1201),
+        ..REPORT.clone()
+    };
+    let twice = ProposalIntent {
+        parts: vec![
+            full.parts[0].clone(),
+            IntentPart {
+                files: vec!["src/models.rs".to_owned()],
+                ..full.parts[1].clone()
+            },
+        ],
+        ..REPORT.clone()
+    };
+    for (intent, constraint) in [
+        (&long, "proposal_versions_intent_summary_size"),
+        (
+            &twice,
+            "proposal_intent_files.version_id, proposal_intent_files.path",
+        ),
+    ] {
+        let new = NewVersion {
+            intent: Some(intent),
+            ..self::version(1, "backend")
+        };
+        let error = store
+            .write(async |tx| reviews::add_version(tx, p(1), 3, &new, at).await)
+            .await
+            .unwrap_err();
+        assert!(trigger(&error).contains(constraint), "{error}");
+    }
+    for (sql, refusal) in [
+        (
+            "INSERT INTO proposal_intent_parts (version_id, position, name, does) VALUES (1, 1, 'n', 'd')",
+            "proposal_intent_parts_need_summary",
+        ),
+        (
+            "INSERT INTO proposal_intent_entries (version_id, section, position, text) VALUES (1, 'decisions', 1, 't')",
+            "proposal_intent_entries_need_summary",
+        ),
+        (
+            "INSERT INTO proposal_intent_entries (version_id, section, position, text) VALUES (2, 'risks', 9, 't')",
+            "proposal_intent_entries_section_values",
+        ),
+    ] {
+        let error = exec(&store, sql).await.unwrap_err();
+        assert!(trigger(&error).contains(refusal), "{error}");
+    }
 }

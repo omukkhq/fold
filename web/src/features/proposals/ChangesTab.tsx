@@ -6,6 +6,7 @@ import {
   proposalChangesQuery,
   proposalFileDiffQuery,
   proposalFileQuery,
+  requestsQuery,
 } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
@@ -25,6 +26,14 @@ import {
 import type { LineSet } from "@/features/diff/gaps";
 import { currentFile, fileBody, listedFiles } from "@/features/diff/layout";
 import type { DiffSelection } from "@/features/diff/selection";
+import {
+  makeRequestTitle,
+  requestMarks,
+  type CodeAnchor,
+} from "@/features/requests/codeLocation";
+import { useCodeRequest } from "@/features/requests/useCodeRequest";
+import { MakeRequestBox } from "@/features/requests/MakeRequestBox";
+import { RequestMarker } from "@/features/requests/RequestMarker";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { ActorText } from "@/people/ActorText";
@@ -32,6 +41,8 @@ import { AskAuthorBox } from "./AskAuthorBox";
 import { canEdit, editableFile } from "./edit";
 import { describeFailure } from "./errors";
 import { FileEditor } from "./FileEditor";
+import { versionIntent } from "./intent";
+import { groupFiles, partGroups } from "./partGroups";
 import { ChangedFiles } from "./ChangedFiles";
 import { useChangedFiles } from "./changedFilesState";
 import {
@@ -54,6 +65,7 @@ import {
   versionTabs,
   type DetailSearch,
   type DetailView,
+  commentsOnSide,
 } from "./view";
 import { shownPath, viewedKey } from "./viewed";
 
@@ -65,7 +77,7 @@ function failureText(error: unknown): string {
 export type LineComment = DiffSelection & { body: string };
 
 /** What the selected lines show: the menu, or the box of the action the human chose there. */
-type SelectionMode = "menu" | "ask" | "comment";
+type SelectionMode = "menu" | "ask" | "comment" | "request";
 
 function Toolbar({
   slug,
@@ -193,7 +205,17 @@ function ChangeBody({
   };
   const [editing, setEditing] = useState<string | null>(null);
   const files = comparison.data ? listedFiles(comparison.data.files) : [];
-  const file = currentFile(files, search.path);
+  const version = shownVersion(view);
+  const shownVersionRow = proposal.versions.find((v) => v.version === version);
+  const shownIntent =
+    shownVersionRow === undefined ? null : versionIntent(shownVersionRow);
+  const since = view.kind === "since";
+  const groups = partGroups(shownIntent, files, since);
+  // The tree lists the files part by part, so with no file in the address the first file of the first part shows.
+  const file = currentFile(
+    groups === null ? files : groupFiles(groups),
+    search.path,
+  );
   const tree = useChangedFiles(
     viewedKey(slug, id, view.range),
     comparison.data ? shownPath(comparison.data, file?.path) : null,
@@ -202,7 +224,6 @@ function ChangeBody({
     proposalFileDiffQuery(slug, id, view.range, file?.path ?? ""),
     file !== null && fileBody(file) === "text",
   );
-  const version = shownVersion(view);
   const fileText = useFileText(
     proposalFileQuery(slug, id, version, file?.path ?? ""),
     needsFileText(file, fileDiff),
@@ -226,6 +247,18 @@ function ChangeBody({
   );
   const editable = canEdit(proposal, human, view) && editableFile(file);
   const questionById = new Map(questions.map((q) => [q.id, q]));
+  const requests = useQuery(requestsQuery(slug));
+  const makeRequest = useCodeRequest(slug);
+  const anchor: CodeAnchor = { kind: "version", proposal: id, version };
+  const requestById = new Map((requests.data ?? []).map((r) => [r.id, r]));
+  const marks = [
+    ...questionMarks(questions, view),
+    ...requestMarks(
+      requests.data ?? [],
+      anchor,
+      commentsOnSide(view, "old") ? ["old", "new"] : ["new"],
+    ),
+  ];
 
   if (comparison.isPending) return <Skeleton className="m-24" />;
   if (comparison.isError) {
@@ -245,8 +278,13 @@ function ChangeBody({
         <FileEditor
           slug={slug}
           id={id}
+          proposal={proposal}
           view={view}
           path={file.path}
+          files={(proposal.selected.version === version
+            ? proposal.files
+            : files
+          ).map((changedFile) => changedFile.path)}
           onCancel={() => {
             setEditing(null);
           }}
@@ -268,6 +306,9 @@ function ChangeBody({
       ) : (
         <ChangedFiles
           state={tree}
+          slug={slug}
+          intent={shownIntent}
+          since={since}
           comparison={data}
           selectedPath={file?.path}
           onSelectFile={showFile}
@@ -291,16 +332,22 @@ function ChangeBody({
             ) : null
           }
           threads={placed}
-          marks={questionMarks(questions, view)}
+          marks={marks}
           renderMark={(mark, first) => {
             const question = questionById.get(mark.id);
-            return question ? (
-              <QuestionMarker
-                href={questionHref(slug, question)}
-                label={questionLabel(question)}
-                answered={question.answered}
-                focusable={first}
-              />
+            if (question) {
+              return (
+                <QuestionMarker
+                  href={questionHref(slug, question)}
+                  label={questionLabel(question)}
+                  answered={question.answered}
+                  focusable={first}
+                />
+              );
+            }
+            const request = requestById.get(mark.id);
+            return request ? (
+              <RequestMarker slug={slug} request={request} focusable={first} />
             ) : null;
           }}
           renderThread={(anchor) => {
@@ -309,7 +356,7 @@ function ChangeBody({
               <ThreadBox slug={slug} thread={thread} now={now} />
             ) : null;
           }}
-          renderComposer={(sel) => {
+          renderComposer={(sel, focusLine) => {
             const menu = lineMenu(proposal, human, view, sel.side, sel.path);
             const key = `${sel.path}:${sel.side}:${String(sel.start_line)}:${String(sel.end_line)}`;
             if (mode === "ask" && menu.ask !== null) {
@@ -348,6 +395,24 @@ function ChangeBody({
                 />
               );
             }
+            if (mode === "request" && menu.request !== null) {
+              return (
+                <MakeRequestBox
+                  slug={slug}
+                  key={key}
+                  title={makeRequestTitle(anchor, sel)}
+                  onCancel={() => {
+                    focusLine();
+                    setMode("menu");
+                  }}
+                  onDone={() => {
+                    focusLine();
+                    select(null);
+                  }}
+                  onSubmit={(body) => makeRequest(anchor, sel, body)}
+                />
+              );
+            }
             return (
               <SelectionMenu
                 slug={slug}
@@ -358,6 +423,9 @@ function ChangeBody({
                 }}
                 onComment={() => {
                   setMode("comment");
+                }}
+                onRequest={() => {
+                  setMode("request");
                 }}
               />
             );

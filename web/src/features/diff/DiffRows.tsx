@@ -25,6 +25,7 @@ import type { DiffRow, GapRow, LineRow } from "./layout";
 import {
   GAP_ERROR,
   NO_NEWLINE,
+  fileLineLabel,
   hiddenLinesText,
   lineLabel,
   showAllText,
@@ -50,6 +51,7 @@ import {
   threadsEndingAt,
   type DiffSelection,
   type DiffThread,
+  type LinePoint,
   type SelectionAction,
 } from "./selection";
 
@@ -65,11 +67,19 @@ export interface DiffRowsProps {
   onGapRetry?: () => void;
   threads?: readonly DiffThread[];
   renderThread?: (thread: DiffThread) => ReactNode;
-  renderComposer?: (selection: DiffSelection) => ReactNode;
+  /** `focusLine` puts focus back on the last selected line, for a composer that closes. A composer of null draws no row. */
+  renderComposer?: (
+    selection: DiffSelection,
+    focusLine: () => void,
+  ) => ReactNode;
   /** Ranges that carry a mark at each of their lines besides the review threads, such as questions to the author. */
   marks?: readonly DiffThread[];
   /** `first` is true on the first line of the mark's range. */
   renderMark?: (mark: DiffThread, first: boolean) => ReactNode;
+  /** `file` draws the lines of one file: a single number column and no signs. */
+  variant?: "diff" | "file";
+  /** A line that takes focus once it is drawn, such as the line a link opened the file at. */
+  focusOn?: LinePoint | null;
 }
 
 // A row spans the panel, so its focus ring sits inside the row instead of outside it.
@@ -81,17 +91,24 @@ const ROW_FOCUS =
  */
 function UnderLine({
   thread = false,
+  plain = false,
   children,
 }: {
   thread?: boolean;
+  plain?: boolean;
   children: ReactNode;
 }) {
   return (
     <div role="row">
       <div role="gridcell" className="flex py-8 pr-16">
+        {plain ? null : (
+          <span aria-hidden="true" className="w-diff-number shrink-0" />
+        )}
         <span aria-hidden="true" className="w-diff-number shrink-0" />
-        <span aria-hidden="true" className="w-diff-number shrink-0" />
-        <span aria-hidden="true" className="w-24 shrink-0" />
+        <span
+          aria-hidden="true"
+          className={plain ? "w-14 shrink-0" : "w-24 shrink-0"}
+        />
         <div
           className={cn(
             "min-w-0 flex-1",
@@ -119,7 +136,10 @@ export function DiffRows({
   renderComposer,
   marks = [],
   renderMark,
+  variant = "diff",
+  focusOn = null,
 }: DiffRowsProps) {
+  const plain = variant === "file";
   const [state, setState] = useState(EMPTY_STATE);
   const stateRef = useRef(state);
   const cells = useRef(new Map<string, HTMLElement>());
@@ -134,6 +154,22 @@ export function DiffRows({
     if (key === null) return;
     focusAfter.current = null;
     cells.current.get(key)?.focus();
+  });
+  // A new object each time, so asking twice for the same line focuses it twice.
+  const [focusRequest, setFocusRequest] = useState<{ key: string } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (focusRequest !== null) cells.current.get(focusRequest.key)?.focus();
+  }, [focusRequest]);
+  const focusedOn = useRef<string | null>(null);
+  useEffect(() => {
+    if (focusOn === null) return;
+    const key = pointKey(focusOn);
+    const cell = cells.current.get(key);
+    if (cell === undefined || focusedOn.current === key) return;
+    focusedOn.current = key;
+    cell.focus();
   });
 
   function expand(row: GapRow, how: ExpandHow) {
@@ -266,6 +302,12 @@ export function DiffRows({
     const marked = renderMark ? marksAt(marks, path, drawn) : [];
     const selected = isSelected(selection, path, point);
     const lineTokens = rowTokens(syntax, tokens, row.key);
+    const composer =
+      renderComposer && selection && isLastSelected(selection, path, point)
+        ? (renderComposer(selection, () => {
+            setFocusRequest({ key });
+          }) ?? null)
+        : null;
     return (
       <Fragment key={row.key}>
         <div role="row">
@@ -273,7 +315,7 @@ export function DiffRows({
             role="gridcell"
             data-line={key}
             aria-selected={selected}
-            aria-label={lineLabel(row)}
+            aria-label={plain ? fileLineLabel(row) : lineLabel(row)}
             tabIndex={samePoint(point, stop) ? 0 : -1}
             ref={(el) => {
               if (el) cells.current.set(key, el);
@@ -283,6 +325,7 @@ export function DiffRows({
             oldNo={row.oldNo ?? undefined}
             newNo={row.newNo ?? undefined}
             selected={selected}
+            plain={plain}
             className={ROW_FOCUS}
             marker={
               covering.length > 0 || marked.length > 0 ? (
@@ -323,16 +366,14 @@ export function DiffRows({
         </div>
         {renderThread
           ? ending.map((thread) => (
-              <UnderLine key={thread.id} thread>
+              <UnderLine key={thread.id} thread plain={plain}>
                 {renderThread(thread)}
               </UnderLine>
             ))
           : null}
-        {renderComposer &&
-        selection &&
-        isLastSelected(selection, path, point) ? (
-          <UnderLine>{renderComposer(selection)}</UnderLine>
-        ) : null}
+        {composer === null ? null : (
+          <UnderLine plain={plain}>{composer}</UnderLine>
+        )}
       </Fragment>
     );
   }
@@ -340,7 +381,7 @@ export function DiffRows({
   return (
     <div
       role="grid"
-      aria-label={`Diff of ${path}`}
+      aria-label={plain ? `Lines of ${path}` : `Diff of ${path}`}
       aria-multiselectable="true"
       onKeyDown={onKeyDown}
     >

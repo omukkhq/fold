@@ -53,6 +53,23 @@ describe("path", () => {
     }
   });
 
+  it("keeps a line beside a path, as a number or its text, and drops any other", () => {
+    expect(parseRepositorySearch({ path: "a.ts", line: 12 })).toEqual({
+      path: "a.ts",
+      line: 12,
+    });
+    expect(parseRepositorySearch({ path: "a.ts", line: "7" })).toEqual({
+      path: "a.ts",
+      line: 7,
+    });
+    for (const line of [0, -3, 1.5, "07", "x", "", null, 1e12]) {
+      expect(parseRepositorySearch({ path: "a.ts", line })).toEqual({
+        path: "a.ts",
+      });
+    }
+    expect(parseRepositorySearch({ line: 4 })).toEqual({});
+  });
+
   it("lists the directories above a path", () => {
     expect(parentDirs("web/src/a.ts")).toEqual(["web", "web/src"]);
     expect(parentDirs("README.md")).toEqual([]);

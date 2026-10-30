@@ -1,5 +1,6 @@
 use fold_core::object::ObjectHash;
 use fold_core::reviews::checks::{Outcome, Purpose, RunReason, RunState, Stage};
+use fold_core::reviews::{IntentPart, ProposalIntent};
 use fold_core::{CheckRunId, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId};
 use fold_store::reviews::checks::{self, NewCheckResult, NewCheckRun};
 use fold_store::{Store, StoreError};
@@ -59,6 +60,7 @@ fn workspace_run(number: u32) -> NewCheckRun<'static> {
         actor: "backend",
         title: None,
         evidence: None,
+        intent: None,
         batch: None,
     }
 }
@@ -250,16 +252,66 @@ async fn the_columns_match_the_stage_and_purpose() {
         ..workspace_run(2)
     };
     assert!(insert(&store, &untitled).await.is_err());
+    let board = ProposalIntent {
+        summary: "The board reads the cards by status.".to_owned(),
+        parts: vec![IntentPart {
+            name: "Board".to_owned(),
+            does: "Reads the cards.".to_owned(),
+            files: vec!["src/board.rs".to_owned()],
+        }],
+        ..ProposalIntent::default()
+    };
     let titled = NewCheckRun {
         purpose: Purpose::CreateProposal,
         title: Some("Add the board"),
+        intent: Some(&board),
         ..workspace_run(3)
     };
     insert(&store, &titled).await.unwrap();
+    let stored = checks::get_run(store.read(), run_id(3))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.intent.as_ref(), Some(&board));
+    let changed = exec(
+        &store,
+        "UPDATE check_runs SET intent = json_set(intent, '$.summary', 'other') WHERE number = 3",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        changed.to_string().contains("check_runs_intent_fixed"),
+        "{changed}"
+    );
     let missing = store
         .write(async |tx| checks::finish_run(tx, run_id(3), RunState::Running, None, at(2)).await)
         .await;
     assert!(missing.is_err(), "a run never ends as running");
+    let long = ProposalIntent {
+        summary: "x".repeat(1201),
+        ..board.clone()
+    };
+    let partless = ProposalIntent {
+        parts: Vec::new(),
+        ..board.clone()
+    };
+    for (number, intent) in [(4, &long), (5, &partless)] {
+        let refused = insert(
+            &store,
+            &NewCheckRun {
+                purpose: Purpose::CreateProposal,
+                title: Some("Add the board"),
+                intent: Some(intent),
+                ..workspace_run(number)
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            refused.to_string().contains("check_runs_intent_shape"),
+            "{refused}"
+        );
+    }
 }
 
 #[tokio::test]

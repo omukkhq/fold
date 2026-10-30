@@ -1,4 +1,5 @@
 use fold_core::object::ObjectHash;
+use fold_core::reviews::ProposalIntent;
 use fold_core::reviews::checks::{Outcome, Purpose, RunReason, RunState, Stage};
 use fold_core::{
     CheckRunId, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId,
@@ -27,6 +28,8 @@ pub struct NewCheckRun<'a> {
     pub actor: &'a str,
     pub title: Option<&'a str>,
     pub evidence: Option<&'a str>,
+    /// The checked intent of the version the run waits to make.
+    pub intent: Option<&'a ProposalIntent>,
     /// The submitted review batch whose ready members an integration run checks together.
     pub batch: Option<ReviewBatchId>,
 }
@@ -47,6 +50,7 @@ pub struct CheckRunRow {
     pub actor: String,
     pub title: Option<String>,
     pub evidence: Option<String>,
+    pub intent: Option<ProposalIntent>,
     pub state: RunState,
     pub reason: Option<RunReason>,
     pub created_at: Timestamp,
@@ -100,10 +104,11 @@ pub async fn insert_run(
     let (stage, purpose) = (new.stage.as_str(), new.purpose.as_str());
     let (base, tree, now) = (new.base.to_db(), new.tree.to_string(), now.as_millis());
     let batch = new.batch.map(ReviewBatchId::to_db);
+    let intent = new.intent.map(super::intents::encode).transpose()?;
     let inserted = sqlx::query!(
         "INSERT INTO check_runs (number, stage, purpose, task_id, workspace_id, worker_id, proposal_id,
                                  version_id, base_revision_id, tree_hash, actor, title, evidence, created_at,
-                                 review_batch_id)
+                                 review_batch_id, intent)
          SELECT ?1, ?2, ?3, t.id,
                 (SELECT w.id FROM workspaces w WHERE w.number = ?4),
                 ?5,
@@ -111,7 +116,7 @@ pub async fn insert_run(
                 (SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id
                  WHERE p.number = ?6 AND v.version = ?7),
                 r.id, ?9, ?10, ?11, ?12, ?13,
-                (SELECT b.id FROM review_batches b WHERE b.number = ?15)
+                (SELECT b.id FROM review_batches b WHERE b.number = ?15), ?16
          FROM tasks t, revisions r WHERE t.number = ?14 AND r.number = ?8",
         number,
         stage,
@@ -127,7 +132,8 @@ pub async fn insert_run(
         new.evidence,
         now,
         task,
-        batch
+        batch,
+        intent
     )
     .execute(tx.conn())
     .await?
@@ -249,6 +255,7 @@ struct RawRun {
     actor: String,
     title: Option<String>,
     evidence: Option<String>,
+    intent: Option<String>,
     state: String,
     reason: Option<String>,
     created_at: i64,
@@ -297,6 +304,7 @@ impl RawRun {
             actor: row.actor,
             title: row.title,
             evidence: row.evidence,
+            intent: super::intents::decode(row.intent.as_deref(), "check_runs.intent")?,
             state: RunState::parse(&row.state).ok_or(StoreError::Corrupt("check_runs.state"))?,
             reason: row
                 .reason
@@ -329,7 +337,7 @@ macro_rules! select_runs {
                       p.number AS "proposal?: i64",
                       v.version AS "version?: i64",
                       r.number AS "base!: i64",
-                      c.tree_hash, c.actor, c.title, c.evidence, c.state, c.reason,
+                      c.tree_hash, c.actor, c.title, c.evidence, c.intent, c.state, c.reason,
                       c.created_at, c.finished_at, b.number AS "batch?: i64"
                FROM check_runs c
                JOIN tasks t ON t.id = c.task_id

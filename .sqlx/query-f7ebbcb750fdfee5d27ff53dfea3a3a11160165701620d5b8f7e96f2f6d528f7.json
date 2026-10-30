@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash,\n                                        head_changeset_id, evidence, created_by, created_at,\n                                        fixed_in_checkout_id, intent_summary)\n         SELECT p.id, ?2, r.id, ?4, c.id, ?6, ?7, ?8,\n                (SELECT w.id FROM workspaces w WHERE w.number = ?9), ?10\n         FROM proposals p, revisions r, changesets c\n         WHERE p.number = ?1 AND r.number = ?3 AND c.number = ?5\n           AND (?9 IS NULL OR EXISTS (SELECT 1 FROM workspaces w WHERE w.number = ?9))\n         RETURNING id AS \"id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "f7ebbcb750fdfee5d27ff53dfea3a3a11160165701620d5b8f7e96f2f6d528f7"
+}

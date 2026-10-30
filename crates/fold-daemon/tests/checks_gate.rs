@@ -1,5 +1,8 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
+use crate::common::intents::{covering_with, whole_change};
+use fold_core::reviews::ProposalIntent;
 use std::time::Duration;
 
 use fold_core::policy::CHECKS_FILE_REASON;
@@ -59,10 +62,19 @@ async fn create_proposal_waits_for_green_checks_and_then_opens_the_proposal() {
     workspace_with_checks(&fx, PASSING).await;
     let author = by(&fx.frontend.worker);
     let run = checking(
-        fx.reviews
-            .create_proposal(&author, t(1), "Add checks", Some("ran them"))
-            .await
-            .unwrap(),
+        covering_with(
+            ProposalIntent {
+                summary: "Adds the checks file; the code stays as it is.".to_owned(),
+                ..whole_change(&[])
+            },
+            async |intent| {
+                fx.reviews
+                    .create_proposal(&author, t(1), "Add checks", intent, Some("ran them"))
+                    .await
+            },
+        )
+        .await
+        .unwrap(),
     );
     assert_eq!(ended(&fx.reviews, run).await.run.state, RunState::Passed);
     let detail = eventually(WAIT, async || {
@@ -74,6 +86,15 @@ async fn create_proposal_waits_for_green_checks_and_then_opens_the_proposal() {
     .await;
     assert_eq!(detail.summary.title, "Add checks");
     assert_eq!(detail.selected.evidence.as_deref(), Some("ran them"));
+    assert_eq!(
+        detail
+            .selected
+            .intent
+            .as_ref()
+            .map(|intent| intent.summary.as_str()),
+        Some("Adds the checks file; the code stays as it is."),
+        "the run carries the intent to the version it makes"
+    );
     assert_eq!(fx.status(1).await, TaskStatus::Review);
     assert_eq!(
         last_fold_message(&fx).await,
@@ -100,7 +121,7 @@ async fn a_check_of_both_stages_runs_under_one_name_on_the_proposal_and_at_integ
     let author = by(&fx.frontend.worker);
     let run = checking(
         fx.reviews
-            .create_proposal(&author, t(1), "Add checks", None)
+            .create_proposal_covering(&author, t(1), "Add checks", None)
             .await
             .unwrap(),
     );
@@ -171,7 +192,7 @@ async fn red_checks_make_no_proposal_and_tell_the_worker() {
     let author = by(&fx.frontend.worker);
     let run = checking(
         fx.reviews
-            .create_proposal(&author, t(1), "Add checks", None)
+            .create_proposal_covering(&author, t(1), "Add checks", None)
             .await
             .unwrap(),
     );
@@ -201,7 +222,7 @@ async fn a_green_run_of_the_same_files_is_reused_and_a_change_runs_again() {
     ended(&fx.reviews, run).await;
     let made = fx
         .reviews
-        .create_proposal(&author, t(1), "Add checks", None)
+        .create_proposal_covering(&author, t(1), "Add checks", None)
         .await
         .unwrap()
         .detail()
@@ -212,7 +233,7 @@ async fn a_green_run_of_the_same_files_is_reused_and_a_change_runs_again() {
     fx.write("src/lib.rs", "pub fn changed() {}\n");
     let run = checking(
         fx.reviews
-            .update_proposal(&author, p(1), None)
+            .update_proposal_covering(&author, p(1), None)
             .await
             .unwrap(),
     );
@@ -231,7 +252,11 @@ async fn a_green_run_of_the_same_files_is_reused_and_a_change_runs_again() {
         last_fold_message(&fx).await,
         "fold made P-1 v2 for T-1: its checks passed (cr-2)."
     );
-    let unchanged = refusal(fx.reviews.update_proposal(&author, p(1), None).await);
+    let unchanged = refusal(
+        fx.reviews
+            .update_proposal_covering(&author, p(1), None)
+            .await,
+    );
     assert_eq!(
         unchanged.code(),
         codes::VERSION_UNCHANGED,
@@ -247,7 +272,7 @@ async fn a_red_update_adds_no_version() {
     let author = by(&fx.frontend.worker);
     let run = checking(
         fx.reviews
-            .create_proposal(&author, t(1), "Add checks", None)
+            .create_proposal_covering(&author, t(1), "Add checks", None)
             .await
             .unwrap(),
     );
@@ -263,7 +288,7 @@ async fn a_red_update_adds_no_version() {
     std::fs::remove_file(fx.task_dir().join("src/lib.rs")).unwrap();
     let run = checking(
         fx.reviews
-            .update_proposal(&author, p(1), None)
+            .update_proposal_covering(&author, p(1), None)
             .await
             .unwrap(),
     );
@@ -295,7 +320,7 @@ async fn a_proposal_command_waits_its_turn_behind_a_running_check() {
     let run = running(fx.reviews.run_checks(&author, t(1)).await.unwrap());
     let busy = refusal(
         fx.reviews
-            .create_proposal(&author, t(1), "Add checks", None)
+            .create_proposal_covering(&author, t(1), "Add checks", None)
             .await,
     );
     assert_eq!(busy.code(), codes::CHECKS_RUNNING);
@@ -319,7 +344,7 @@ async fn a_green_run_whose_proposal_was_refused_is_reused() {
     let author = by(&fx.frontend.worker);
     let run = checking(
         fx.reviews
-            .create_proposal(&author, t(1), "Add checks", None)
+            .create_proposal_covering(&author, t(1), "Add checks", None)
             .await
             .unwrap(),
     );
@@ -333,7 +358,7 @@ async fn a_green_run_whose_proposal_was_refused_is_reused() {
     fx.tasks.claim_task(&author, t(1)).await.unwrap();
     let made = fx
         .reviews
-        .create_proposal(&author, t(1), "Add checks", None)
+        .create_proposal_covering(&author, t(1), "Add checks", None)
         .await
         .unwrap()
         .detail()
@@ -348,7 +373,7 @@ async fn an_invalid_checks_file_refuses_the_proposal_at_once() {
     workspace_with_checks(&fx, "[[check]]\nname = \"t\"\n").await;
     let refused = refusal(
         fx.reviews
-            .create_proposal(&by(&fx.frontend.worker), t(1), "Add checks", None)
+            .create_proposal_covering(&by(&fx.frontend.worker), t(1), "Add checks", None)
             .await,
     );
     assert_eq!(refused.code(), codes::CHECKS_FILE_INVALID);
@@ -363,7 +388,7 @@ async fn main_with_checks(fx: &Fixture) {
     let author = by(&fx.frontend.worker);
     let run = checking(
         fx.reviews
-            .create_proposal(&author, t(1), "Add checks", None)
+            .create_proposal_covering(&author, t(1), "Add checks", None)
             .await
             .unwrap(),
     );
@@ -432,7 +457,7 @@ async fn gated_proposal(fx: &Fixture, task: u32, edit: impl FnOnce(&std::path::P
     let before = fx.count("SELECT COUNT(*) FROM proposals").await;
     match fx
         .reviews
-        .create_proposal(&author, t(task), "Change", None)
+        .create_proposal_covering(&author, t(task), "Change", None)
         .await
         .unwrap()
     {
@@ -494,7 +519,7 @@ async fn a_proposal_that_changes_or_removes_the_checks_file_needs_a_human() {
     .unwrap();
     let made = fx
         .reviews
-        .create_proposal(&author, t(removed), "Drop the checks", None)
+        .create_proposal_covering(&author, t(removed), "Drop the checks", None)
         .await
         .unwrap()
         .detail()
@@ -517,7 +542,7 @@ async fn a_marked_task_keeps_its_own_mark() {
     workspace_with_checks(&fx, PASSING).await;
     let run = checking(
         fx.reviews
-            .create_proposal(&by(&fx.frontend.worker), t(1), "Add checks", None)
+            .create_proposal_covering(&by(&fx.frontend.worker), t(1), "Add checks", None)
             .await
             .unwrap(),
     );
@@ -551,7 +576,7 @@ async fn proposal_behind_a_gate(fx: &Fixture, go: &std::path::Path) {
     .await;
     let run = checking(
         fx.reviews
-            .create_proposal(&by(&fx.frontend.worker), t(1), "Add checks", None)
+            .create_proposal_covering(&by(&fx.frontend.worker), t(1), "Add checks", None)
             .await
             .unwrap(),
     );
@@ -576,7 +601,7 @@ async fn an_approval_of_the_current_version_waits_while_an_update_runs_its_check
     fx.write("src/lib.rs", "pub fn z() {}\n");
     let update = checking(
         fx.reviews
-            .update_proposal(&by(&fx.frontend.worker), p(1), None)
+            .update_proposal_covering(&by(&fx.frontend.worker), p(1), None)
             .await
             .unwrap(),
     );
@@ -661,7 +686,7 @@ async fn an_approved_version_integrates_on_its_own_only_after_a_red_update_run_e
     std::fs::remove_file(fx.task_dir().join("src/lib.rs")).unwrap();
     let update = checking(
         fx.reviews
-            .update_proposal(&by(&fx.frontend.worker), p(1), None)
+            .update_proposal_covering(&by(&fx.frontend.worker), p(1), None)
             .await
             .unwrap(),
     );

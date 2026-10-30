@@ -16,15 +16,21 @@ export function lineRefText(lines: MessageLines): string {
   return `${lines.path} · v${String(lines.version)} · ${range} · ${lines.side} side`;
 }
 
+/** The part of a quoted run that its excerpt shows: a question's lines or a request's code. */
+export type Quoted = Pick<
+  MessageLines,
+  "excerpt" | "excerpt_cut" | "start_line" | "end_line"
+>;
+
 /** The excerpt's lines, numbered from the first line of the run. */
-export function quotedLines(lines: MessageLines): QuotedLine[] {
+export function quotedLines(lines: Quoted): QuotedLine[] {
   return lines.excerpt
     .split("\n")
     .map((text, index) => ({ number: lines.start_line + index, text }));
 }
 
 /** The note under an excerpt that holds only the first lines of its run, or null. */
-export function cutNote(lines: MessageLines): string | null {
+export function cutNote(lines: Quoted): string | null {
   if (!lines.excerpt_cut) return null;
   const shown = quotedLines(lines).length;
   const total = lines.end_line - lines.start_line + 1;

@@ -1,5 +1,6 @@
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
+use fold_core::reviews::ProposalIntent;
 use fold_core::reviews::checks::{
     ChecksFile, Outcome, Purpose, RunReason, RunState, Stage, checks_file_changed, runs_any,
 };
@@ -433,6 +434,7 @@ impl ReviewService {
             snapped,
             recorded: &snapshot,
             evidence: run.evidence.as_deref(),
+            intent: run.intent.as_ref(),
             checks_changed: job.checks_changed,
             now: snapshot.taken_at,
         };
@@ -595,6 +597,7 @@ pub(super) async fn insert_proposal_run(
         actor: new.actor.as_str(),
         title: new.waiting.title,
         evidence: new.waiting.evidence,
+        intent: new.waiting.intent,
         batch: None,
     };
     match checks::insert_run(tx, &row, now).await {
@@ -674,6 +677,7 @@ pub(super) struct Waiting<'a> {
     pub proposal: Option<ProposalId>,
     pub title: Option<&'a str>,
     pub evidence: Option<&'a str>,
+    pub intent: Option<&'a ProposalIntent>,
 }
 
 /// Writes the results and the end of a running run with `checks.finished`, in the caller's write. False, with nothing written, when the run had already ended, as after a daemon start ended it as stopped.
@@ -978,6 +982,7 @@ mod tests {
             actor: "backend".to_owned(),
             title: None,
             evidence: None,
+            intent: None,
             state: RunState::Running,
             reason: None,
             created_at: Timestamp::from_millis(0).unwrap(),

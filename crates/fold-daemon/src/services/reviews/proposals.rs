@@ -3,9 +3,9 @@ use fold_core::claims::stale_cutoff;
 use fold_core::events::types;
 use fold_core::merge::ConflictReport;
 use fold_core::object::ObjectHash;
-use fold_core::reviews::MAX_REASON_CHARS;
 use fold_core::reviews::checks::Purpose;
 use fold_core::reviews::{HumanReviewMark, ReviewFact, Verdict, human_approval_standing};
+use fold_core::reviews::{MAX_REASON_CHARS, ProposalIntent, intent_coverage, proposal_intent};
 use fold_core::status::ProposalFact;
 use fold_core::tree::ChangeCounts;
 use fold_core::{
@@ -31,7 +31,7 @@ use crate::services::tasks::{
     closed_refusal, proposal_kind_refusal, recompute, task_not_found, worker_row,
 };
 use crate::services::workspaces::{
-    ArchiveReason, ProposalSnapshot, archive_in_tx, auto_checkpoint_in_tx,
+    ArchiveReason, ProposalSnapshot, StateRef, archive_in_tx, auto_checkpoint_in_tx, file_path,
 };
 
 /// The longest proposal title, in characters.
@@ -121,7 +121,7 @@ impl ProposalSummary {
     }
 }
 
-/// One version: what it was based on, the tree it proposes with the file counts of its head changeset, and the author's evidence.
+/// One version: what it was based on, the tree it proposes with the file counts of its head changeset, what it is for, and the author's evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionView {
     pub version: u32,
@@ -130,6 +130,8 @@ pub struct VersionView {
     pub changeset: ChangesetId,
     pub stats: ChangeCounts,
     pub evidence: Option<String>,
+    /// How the change works in the code, part by part; `None` on a version made before intents existed.
+    pub intent: Option<ProposalIntent>,
     pub created_by: String,
     pub created_at: Timestamp,
     /// A human made this version by editing the one before it in a human review, so it keeps that version's agent approvals until it is sent for review again.
@@ -150,6 +152,7 @@ impl From<VersionRow> for VersionView {
             human_edit: is_human_edit(&row.created_by),
             stats: row.stats,
             evidence: row.evidence,
+            intent: row.intent,
             created_by: row.created_by,
             created_at: row.created_at,
             review_again: row.review_again,
@@ -264,6 +267,8 @@ pub(super) struct VersionInput<'a> {
     pub snapped: &'a WorkspaceRow,
     pub recorded: &'a ProposalSnapshot,
     pub evidence: Option<&'a str>,
+    /// The checked intent; `None` keeps the current version's, as for a run started before intents existed.
+    pub intent: Option<&'a ProposalIntent>,
     /// The version adds, changes or removes the checks file, so it needs a human.
     pub checks_changed: bool,
     pub now: Timestamp,
@@ -276,9 +281,11 @@ impl ReviewService {
         actor: &Actor,
         task: TaskId,
         title: &str,
+        intent: ProposalIntent,
         evidence: Option<&str>,
     ) -> Result<Proposed, ReviewError> {
         let title = check_title(title)?;
+        let intent = proposal_intent(intent, "create_proposal")?;
         let evidence = check_evidence(evidence);
         let read = self.store.read();
         let facts = OpenFacts {
@@ -289,6 +296,8 @@ impl ReviewService {
         };
         let workspace = open_checks(actor, task, facts)?.1;
         let recorded = self.workspaces.snapshot_for_proposal(&workspace).await?;
+        self.check_coverage(&intent, workspace.base, recorded.tree, "create_proposal")
+            .await?;
         let gate = self.proposal_gate(&workspace, recorded.tree).await?;
         let checks_changed = match gate {
             GateDecision::Ready { checks_changed } => checks_changed,
@@ -299,6 +308,7 @@ impl ReviewService {
                     proposal: None,
                     title: Some(title),
                     evidence: evidence.as_deref(),
+                    intent: Some(&intent),
                 };
                 return self
                     .start_gate(
@@ -317,6 +327,7 @@ impl ReviewService {
             snapped: &workspace,
             recorded: &recorded,
             evidence: evidence.as_deref(),
+            intent: Some(&intent),
             checks_changed,
             now: recorded.taken_at,
         };
@@ -333,13 +344,15 @@ impl ReviewService {
         Ok(Proposed::Made(Box::new(self.get_proposal(id, None).await?)))
     }
 
-    /// Adds the next version to an open proposal, by the author's worker: the task workspace is snapshotted as `create_proposal` does, and the version takes the workspace's current base; its automatic checkpoint has the reason `before_proposal_update`. `evidence` replaces the current version's evidence; `None` keeps it. A version whose base, tree and evidence all equal the current one is refused with `version_unchanged`. The proposal checks gate the version as they gate `create_proposal`. The conflict flag is cleared and the task returns to Review; earlier versions, their reviews and their approvals stay as they are.
+    /// Adds the next version to an open proposal, by the author's worker: the task workspace is snapshotted as `create_proposal` does, and the version takes the workspace's current base; its automatic checkpoint has the reason `before_proposal_update`. `intent` is the new version's own intent, checked as for `create_proposal`. `evidence` replaces the current version's evidence; `None` keeps it. A version whose base, tree, intent and evidence all equal the current one is refused with `version_unchanged`. The proposal checks gate the version as they gate `create_proposal`. The conflict flag is cleared and the task returns to Review; earlier versions, their reviews and their approvals stay as they are.
     pub async fn update_proposal(
         &self,
         actor: &Actor,
         proposal: ProposalId,
+        intent: ProposalIntent,
         evidence: Option<&str>,
     ) -> Result<Proposed, ReviewError> {
+        let intent = proposal_intent(intent, "update_proposal")?;
         let evidence = check_evidence(evidence);
         let read = self.store.read();
         let row = update_checks(
@@ -350,6 +363,8 @@ impl ReviewService {
         let live = workspaces::live_task_workspace(read, row.task).await?;
         let workspace = usable_workspace(live, row.task, &row.author)?;
         let recorded = self.workspaces.snapshot_for_proposal(&workspace).await?;
+        self.check_coverage(&intent, workspace.base, recorded.tree, "update_proposal")
+            .await?;
         let current = reviews::list_versions(read, proposal)
             .await?
             .pop()
@@ -360,6 +375,7 @@ impl ReviewService {
             workspace.base,
             recorded.tree,
             evidence.clone().or(current.evidence.clone()).as_deref(),
+            Some(&intent),
         )?;
         let gate = self.proposal_gate(&workspace, recorded.tree).await?;
         let checks_changed = match gate {
@@ -371,6 +387,7 @@ impl ReviewService {
                     proposal: Some(proposal),
                     title: None,
                     evidence: evidence.as_deref(),
+                    intent: Some(&intent),
                 };
                 return self
                     .start_gate(
@@ -389,6 +406,7 @@ impl ReviewService {
             snapped: &workspace,
             recorded: &recorded,
             evidence: evidence.as_deref(),
+            intent: Some(&intent),
             checks_changed,
             now: recorded.taken_at,
         };
@@ -565,6 +583,7 @@ pub(super) async fn open_in_tx(
         tree: recorded.tree,
         head_changeset: head,
         evidence: input.evidence,
+        intent: input.intent,
         created_by: worker.name.as_str(),
         fixed_in_checkout: None,
     };
@@ -615,12 +634,14 @@ pub(super) async fn add_version_in_tx(
         .evidence
         .map(str::to_owned)
         .or(current.evidence.clone());
+    let intent = input.intent.cloned().or(current.intent.clone());
     unchanged_refusal(
         proposal,
         &current,
         live.base,
         recorded.tree,
         evidence.as_deref(),
+        intent.as_ref(),
     )?;
     let author = row.author.clone();
     let head = record_in_tx(
@@ -640,6 +661,7 @@ pub(super) async fn add_version_in_tx(
         tree: recorded.tree,
         head_changeset: head,
         evidence: evidence.as_deref(),
+        intent: intent.as_ref(),
         created_by: author.as_str(),
         fixed_in_checkout: None,
     };
@@ -656,15 +678,20 @@ pub(super) async fn add_version_in_tx(
     Ok(version)
 }
 
-/// `version_unchanged` when a new version would hold the current one's base, tree and evidence.
+/// `version_unchanged` when a new version would hold the current one's base, tree, evidence and intent.
 fn unchanged_refusal(
     proposal: ProposalId,
     current: &VersionRow,
     base: RevisionId,
     tree: ObjectHash,
     evidence: Option<&str>,
+    intent: Option<&ProposalIntent>,
 ) -> Result<(), ReviewError> {
-    if current.base != base || current.tree != tree || current.evidence.as_deref() != evidence {
+    if current.base != base
+        || current.tree != tree
+        || current.evidence.as_deref() != evidence
+        || current.intent.as_ref() != intent
+    {
         return Ok(());
     }
     Err(FoldError::new(
@@ -675,8 +702,32 @@ fn unchanged_refusal(
         ("proposal", json!(proposal.to_string())),
         ("version", json!(current.version)),
     ])
-    .with_hint("change the workspace or the evidence, then call update_proposal")
+    .with_hint("change the workspace, the intent or the evidence, then call update_proposal")
     .into())
+}
+
+impl ReviewService {
+    /// Refuses with `invalid_intent` unless the parts of the checked `intent` cover the files that `tree` changes against `base`, as the Changes tab lists them (a rename by its new path), by [`intent_coverage`]. A part's path that is not a relative, normalised path inside the project is `invalid_path`. `again` names the call that sends the intent again.
+    pub(super) async fn check_coverage(
+        &self,
+        intent: &ProposalIntent,
+        base: RevisionId,
+        tree: ObjectHash,
+        again: &str,
+    ) -> Result<(), ReviewError> {
+        for path in intent.files() {
+            file_path(path)?;
+        }
+        let changed: Vec<String> = self
+            .workspaces
+            .compare_states(StateRef::Revision(base), StateRef::Tree(tree))
+            .await?
+            .files
+            .iter()
+            .map(|file| file.path.to_string())
+            .collect();
+        Ok(intent_coverage(intent, &changed, again)?)
+    }
 }
 
 /// Gives the task the human review mark fold sets for a change of the checks file, with `task.human_review_set`, when the version changes the file and the task has no mark.

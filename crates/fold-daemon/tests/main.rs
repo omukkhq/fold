@@ -38,6 +38,8 @@ mod acceptance_27_request_batch;
 mod acceptance_28_untrack;
 mod acceptance_29_webhook_notices;
 mod acceptance_2_messaging;
+mod acceptance_30_proposal_intent;
+mod acceptance_31_code_comment_request;
 mod acceptance_32_question_sets;
 mod acceptance_33_main_answers_worker_questions;
 mod acceptance_3_parallel_workspaces;

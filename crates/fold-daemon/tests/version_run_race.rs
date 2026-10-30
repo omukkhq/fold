@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -133,7 +134,7 @@ async fn an_update_that_starts_after_the_integration_plan_keeps_the_older_versio
     a_run_after_the_plan_holds_the_integration(&fx, &review, &go, "update_proposal", async || {
         match fx
             .reviews()
-            .update_proposal(&author, p1(), None)
+            .update_proposal_covering(&author, p1(), None)
             .await
             .unwrap()
         {
@@ -161,7 +162,7 @@ async fn a_fix_that_starts_after_the_integration_plan_keeps_the_older_version_of
         };
         match fx
             .reviews()
-            .submit_review_fix(reviewer, p1(), 1, &[fix], "cargo test: ok")
+            .submit_review_fix_covering(reviewer, p1(), 1, &[fix], "cargo test: ok")
             .await
             .unwrap()
         {

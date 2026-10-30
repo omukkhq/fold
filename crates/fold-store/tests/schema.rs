@@ -42,9 +42,16 @@ INSERT INTO message_question_choices (message_id, question, position, label) VAL
 INSERT INTO messages (id, number, thread_id, reply_to, sender_kind, sender_human, body, created_at) VALUES (12, 12, 11, 11, 'human', 'ana', 'answers', 0);
 INSERT INTO message_answers (reply_id, ask_id, question, answer) VALUES (12, 11, 1, 'Yes'), (12, 11, 2, 'Mock');
 INSERT INTO worker_turns (worker_process_id, role, cost_micro_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, failed, interrupted, created_at) VALUES (1, 'review_lead', 10, 0, 0, 0, 0, 0, 0, 0);
+INSERT INTO requests (id, number, body, requester, created_at, updated_at) VALUES (1, 1, 'b', 'human:ana', 0, 0), (2, 2, 'b', 'human:ana', 0, 0);
+INSERT INTO request_code_refs (request_id, revision_id, path, start_line, end_line, excerpt, excerpt_cut) VALUES (1, 1, 'a.rs', 1, 2, 'a', 0);
+INSERT INTO request_code_refs (request_id, version_id, side, path, start_line, end_line, excerpt, excerpt_cut) VALUES (2, 1, 'old', 'a.rs', 3, 3, 'c', 1);
+INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at, intent_summary) VALUES (2, 1, 9, 1, 't2', 1, 'frontend', 0, 's');
+INSERT INTO proposal_intent_parts (id, version_id, position, name, does) VALUES (1, 2, 1, 'n', 'd');
+INSERT INTO proposal_intent_files (part_id, version_id, position, path) VALUES (1, 2, 1, 'a.rs');
+INSERT INTO proposal_intent_entries (version_id, section, position, text) VALUES (2, 'decisions', 1, 'e');
 ";
 
-const APPEND_ONLY: [&str; 24] = [
+const APPEND_ONLY: [&str; 28] = [
     "completions",
     "revisions",
     "changesets",
@@ -66,17 +73,25 @@ const APPEND_ONLY: [&str; 24] = [
     "message_ask_closures",
     "message_line_refs",
     "worker_turns",
+    "request_code_refs",
+    "proposal_intent_parts",
+    "proposal_intent_files",
+    "proposal_intent_entries",
     "message_questions",
     "message_question_choices",
     "message_answers",
 ];
 
 /// The append-only tables whose rows are derived in the transaction of a row that carries the time, so they have no `created_at` of their own.
-const WITHOUT_CREATED_AT: [&str; 7] = [
+const WITHOUT_CREATED_AT: [&str; 11] = [
     "review_batch_lines",
     "worker_question_messages",
     "message_choices",
     "message_line_refs",
+    "request_code_refs",
+    "proposal_intent_parts",
+    "proposal_intent_files",
+    "proposal_intent_entries",
     "message_questions",
     "message_question_choices",
     "message_answers",
@@ -148,11 +163,15 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "notify_sends",
         "notify_state",
         "project_pause",
+        "proposal_intent_entries",
+        "proposal_intent_files",
+        "proposal_intent_parts",
         "proposal_versions",
         "proposals",
         "refs",
         "remote_states",
         "request_attachments",
+        "request_code_refs",
         "request_comments",
         "request_draft_cards",
         "request_draft_edges",

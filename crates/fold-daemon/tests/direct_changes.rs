@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use fold_core::events::types;
 use fold_core::reviews::Verdict;
 use fold_core::roles::Role;
@@ -53,7 +54,7 @@ async fn recorded(
 /// The author proposes `T-1` from its workspace, and a reviewer approves and integrates it, so main moves under the main workspace.
 async fn integrate_task(fx: &Fixture, author: &Actor) {
     fx.reviews
-        .create_proposal(author, t(1), "Readme", Some("tests pass"))
+        .create_proposal_covering(author, t(1), "Readme", Some("tests pass"))
         .await
         .unwrap()
         .detail()
