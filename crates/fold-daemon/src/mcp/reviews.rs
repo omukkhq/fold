@@ -4,7 +4,7 @@ use fold_core::policy::{Gate, GateState, GateStatus};
 use fold_core::reviews::plans::{PlanCandidate, plan_hint};
 use fold_core::reviews::{
     Contracts, HumanReviewMark, IntentPart, ProposalIntent, ReviewScope, ReviewScopeRecord,
-    ScopeChoice, Side, Verdict, missing_intent,
+    ScopeChoice, Side, Verdict, misshapen_intent, missing_intent,
 };
 use fold_core::text::shorten;
 use fold_core::{
@@ -60,9 +60,9 @@ pub struct CreateProposalInput {
     /// The proposal title: one line of at most 200 characters.
     pub title: String,
     /// How the change works in the code, so a human understands and judges it without reading every line and the reviewer checks every hunk against it: a summary and the parts of the diff, each with its files, so every file the version changes is in exactly one part; contracts, decisions and not_changed only when they apply. Its summary and parts become the body of the Git commit when the version integrates.
-    // serde reads a missing `Option` as `None`, so a missing intent reaches `missing_intent` while the schema lists it as required.
+    // The intent is read as a `Value` and decoded by `intent_arg`, so a missing or misshapen intent is `invalid_intent` with its field, while the schema lists it as a required `IntentInput`.
     #[schemars(required, with = "IntentInput")]
-    pub intent: Option<IntentInput>,
+    pub intent: Option<Value>,
     /// What shows the work is done, such as the tests you ran and their result. Leave it out for none. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub evidence: Option<String>,
@@ -71,6 +71,7 @@ pub struct CreateProposalInput {
 /// The intent of a proposal version as an agent writes it.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
 pub struct IntentInput {
     /// How the change works in the code, in 2 to 4 sentences of at most 1200 characters: the flow, the states and the rules it adds or changes, in the terms of the code (functions, tables, routes), not the task's words.
     pub summary: String,
@@ -89,6 +90,7 @@ pub struct IntentInput {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
 pub struct IntentPartInput {
     /// A short name of the part, one line of at most 80 characters, such as "Case model and migration" or "Generated API client". Each part has its own name.
     pub name: String,
@@ -100,6 +102,7 @@ pub struct IntentPartInput {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
 pub struct ContractsInput {
     /// HTTP or other routes added or changed, such as "POST /v1/cases (staff only)".
     #[serde(default)]
@@ -151,6 +154,48 @@ impl From<IntentInput> for ProposalIntent {
             not_changed: input.not_changed,
         }
     }
+}
+
+/// The intent argument of `tool` decoded: a missing or `null` intent is `invalid_intent` with the reason `missing`, and one that does not have the form of [`IntentInput`] is `invalid_intent` with the reason `shape` and the path of the first value that does not fit, such as `intent.parts[0].files`. The path stops before the first key that is not one of the schema's field names, such as an unknown key, so it never holds the agent's text.
+fn intent_arg(intent: Option<Value>, tool: &str) -> Result<ProposalIntent, FoldError> {
+    let intent = intent.ok_or_else(|| missing_intent(tool))?;
+    serde_path_to_error::deserialize::<_, IntentInput>(intent)
+        .map(ProposalIntent::from)
+        .map_err(|error| misshapen_intent(tool, &intent_field(error.path())))
+}
+
+/// The names of the fields of [`IntentInput`] and the types inside it.
+const INTENT_FIELDS: [&str; 15] = [
+    "summary",
+    "parts",
+    "contracts",
+    "decisions",
+    "not_changed",
+    "name",
+    "does",
+    "files",
+    "routes",
+    "database",
+    "rights",
+    "config",
+    "errors",
+    "events",
+    "commands",
+];
+
+fn intent_field(path: &serde_path_to_error::Path) -> String {
+    let mut field = "intent".to_owned();
+    for segment in path.iter() {
+        match segment {
+            serde_path_to_error::Segment::Seq { index } => field.push_str(&format!("[{index}]")),
+            serde_path_to_error::Segment::Map { key } if INTENT_FIELDS.contains(&key.as_str()) => {
+                field.push('.');
+                field.push_str(key);
+            }
+            _ => break,
+        }
+    }
+    field
 }
 
 /// An intent as `get_proposal` gives it. The short form holds the summary and each part's name with its `file_count`; the full form adds what each part does, its files, and the contracts, decisions and not_changed the intent has. A section without entries is left out.
@@ -253,7 +298,7 @@ pub struct UpdateProposalInput {
     pub id: String,
     /// The intent of the new version as a whole, written for it as for create_proposal: the summary and the parts covering every file the version changes against its base, and only the sections that apply.
     #[schemars(required, with = "IntentInput")]
-    pub intent: Option<IntentInput>,
+    pub intent: Option<Value>,
     /// New evidence for the new version. Leave it out to keep the current evidence. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub evidence: Option<String>,
@@ -437,14 +482,14 @@ pub struct SubmitReviewFixInput {
     pub checks: String,
     /// The intent of the fixed version as a whole, as for create_proposal: start from the intent of the version you fixed (get_proposal with detail full), say what your fix changes in the summary and in the part it touches, and keep every file the fixed version changes against its base in exactly one part.
     #[schemars(required, with = "IntentInput")]
-    pub intent: Option<IntentInput>,
+    pub intent: Option<Value>,
 }
 
 pub fn tools() -> Vec<Tool> {
     let mut tools = vec![
         Tool::new(
             CREATE_PROPOSAL,
-            "Send the work in your task workspace for review as a new proposal (v1), with its intent: a summary of how the change works in the code and the parts of the diff, each with what it does and its files, so every changed file is in exactly one part; contracts, decisions and not_changed only when they apply. invalid_intent names the field and the reason in its details: missing, empty, too_long, control_character, no_parts, too_many_parts, too_many_entries, duplicate_part, file_in_two_parts, part_without_files, part_files_uncovered (details.uncovered lists the changed files no part names) or part_file_outside_diff (details.outside lists the files the version does not change). You must hold the task's claim. The task moves to Review. When fold-checks.toml has proposal checks for your change and no passed run_checks of the same files stands, it returns at once with checks running and a run id: fold runs the checks and opens the proposal only when they pass; the result comes as a message from fold. Wait for checks.finished with wait_for_events. A change of fold-checks.toml puts the human review mark on the task.",
+            "Send the work in your task workspace for review as a new proposal (v1), with its intent: a summary of how the change works in the code and the parts of the diff, each with what it does and its files, so every changed file is in exactly one part; contracts, decisions and not_changed only when they apply. invalid_intent names the field and the reason in its details: missing, shape (the intent does not have the schema's form; details.field gives the path of the value that does not fit), empty, too_long, control_character, no_parts, too_many_parts, too_many_entries, duplicate_part, file_in_two_parts, part_without_files, part_files_uncovered (details.uncovered lists the changed files no part names) or part_file_outside_diff (details.outside lists the files the version does not change). You must hold the task's claim. The task moves to Review. When fold-checks.toml has proposal checks for your change and no passed run_checks of the same files stands, it returns at once with checks running and a run id: fold runs the checks and opens the proposal only when they pass; the result comes as a message from fold. Wait for checks.finished with wait_for_events. A change of fold-checks.toml puts the human review mark on the task.",
             schema_for_type::<CreateProposalInput>(),
         ),
         Tool::new(
@@ -910,10 +955,7 @@ async fn create_proposal(
             actor,
             task_id(&input.task)?,
             &input.title,
-            input
-                .intent
-                .map(ProposalIntent::from)
-                .ok_or_else(|| missing_intent(CREATE_PROPOSAL))?,
+            intent_arg(input.intent, CREATE_PROPOSAL)?,
             input.evidence.as_deref(),
         )
         .await
@@ -1069,10 +1111,7 @@ async fn update_proposal(
         .update_proposal(
             actor,
             proposal_id(&input.id)?,
-            input
-                .intent
-                .map(ProposalIntent::from)
-                .ok_or_else(|| missing_intent(UPDATE_PROPOSAL))?,
+            intent_arg(input.intent, UPDATE_PROPOSAL)?,
             input.evidence.as_deref(),
         )
         .await
@@ -1199,10 +1238,7 @@ async fn submit_review_fix(
             input.version,
             &fixes,
             &input.checks,
-            input
-                .intent
-                .map(ProposalIntent::from)
-                .ok_or_else(|| missing_intent(SUBMIT_REVIEW_FIX))?,
+            intent_arg(input.intent, SUBMIT_REVIEW_FIX)?,
         )
         .await
         .map_err(from_review)?;

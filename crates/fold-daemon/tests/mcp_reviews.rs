@@ -1442,6 +1442,7 @@ async fn every_proposal_version_tool_requires_an_intent_and_get_proposal_shows_i
         let intent = &schema["properties"]["intent"];
         assert_eq!(intent["type"], "object", "{name}");
         assert_eq!(intent["required"], json!(["summary", "parts"]), "{name}");
+        assert_eq!(intent["additionalProperties"], false, "{name}");
     }
 
     ok(&frontend, "create_workspace", json!({"task": "T-1"})).await;
@@ -1490,6 +1491,54 @@ async fn every_proposal_version_tool_requires_an_intent_and_get_proposal_shows_i
     assert_eq!(control["code"], "invalid_intent");
     assert_eq!(control["details"]["field"], "intent.summary");
     assert_eq!(control["details"]["reason"], "control_character");
+    let summary = "Renames x to y.";
+    for (intent, field) in [
+        (json!("Renames x to y."), "intent"),
+        (json!({"summary": summary}), "intent"),
+        (
+            json!({"summary": summary, "parts": [{"name": "Rename", "does": "Renames.", "files": "src/lib.rs"}]}),
+            "intent.parts[0].files",
+        ),
+        (
+            json!({"summary": summary, "parts": [{"name": "Rename", "files": ["src/lib.rs"]}]}),
+            "intent.parts[0]",
+        ),
+        (
+            json!({"summary": summary, "parts": [part], "notChanged": ["the API"]}),
+            "intent",
+        ),
+        (
+            json!({"summary": summary, "parts": [part], "contracts": {"api": ["GET /x"]}}),
+            "intent.contracts",
+        ),
+        (
+            json!({"summary": summary, "parts": [{"name": "Rename", "does": "Renames.", "files": [], "why": "it reads better"}]}),
+            "intent.parts[0]",
+        ),
+    ] {
+        let refused = err(
+            &frontend,
+            "create_proposal",
+            json!({"task": "T-1", "title": "Rename x", "intent": intent}),
+        )
+        .await;
+        assert_eq!(refused["code"], "invalid_intent", "{intent}: {refused}");
+        assert_eq!(
+            refused["details"],
+            json!({"field": field, "reason": "shape"}),
+            "{intent}: {refused}"
+        );
+        assert!(
+            refused["hint"]
+                .as_str()
+                .unwrap()
+                .starts_with("call create_proposal again with `intent`"),
+            "{refused}"
+        );
+        for text in ["Renames x to y.", "it reads better", "GET /x", "the API"] {
+            assert!(!refused.to_string().contains(text), "{refused}");
+        }
+    }
     let long = "x".repeat(1201);
     let refused = err(
         &frontend,

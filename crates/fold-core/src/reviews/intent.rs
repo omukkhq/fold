@@ -281,6 +281,11 @@ pub fn missing_intent(again: &str) -> FoldError {
     refusal(again, "intent", "missing", [])
 }
 
+/// `invalid_intent` with the reason `shape`: the intent at `field`, such as `intent.parts[0].files`, is not of the form the tool's schema gives, as a value of the wrong type, a missing field or a field the schema does not have.
+pub fn misshapen_intent(again: &str, field: &str) -> FoldError {
+    refusal(again, field, "shape", [])
+}
+
 fn first_paths(paths: &[&str]) -> String {
     const SHOWN: usize = 5;
     let mut text = paths
@@ -364,6 +369,9 @@ fn refusal<const N: usize>(
 fn problem(reason: &str) -> &'static str {
     match reason {
         "missing" => "a new version needs an intent",
+        "shape" => {
+            "the value does not have the schema's form: a wrong type, a missing field or a field the schema does not have"
+        }
         "empty" => "the text is empty",
         "too_long" => "the text is too long",
         "control_character" => {
