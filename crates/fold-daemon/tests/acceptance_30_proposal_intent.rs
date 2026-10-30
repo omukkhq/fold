@@ -145,7 +145,7 @@ async fn acceptance_30_each_version_states_its_intent_and_the_commit_body_carrie
         .await;
     assert_eq!(
         short["intent"],
-        json!({"summary": SECOND, "parts": [{"name": "Login route", "files": 1}, {"name": "Tests", "files": 1}]})
+        json!({"summary": SECOND, "parts": [{"name": "Login route", "file_count": 1}, {"name": "Tests", "file_count": 1}]})
     );
     let earlier = h
         .call(

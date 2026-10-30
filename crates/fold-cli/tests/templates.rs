@@ -378,7 +378,8 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 62] = [
+const NON_TOOL_NAMES: [&str; 63] = [
+    "file_count",
     "human_review",
     "fold_failed",
     "left_out",

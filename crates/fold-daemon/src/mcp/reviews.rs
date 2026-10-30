@@ -153,14 +153,14 @@ impl From<IntentInput> for ProposalIntent {
     }
 }
 
-/// An intent as `get_proposal` gives it. The short form holds the summary and each part's name with its file count; the full form adds what each part does, its files, and the contracts, decisions and not_changed the intent has. A section without entries is left out.
+/// An intent as `get_proposal` gives it. The short form holds the summary and each part's name with its `file_count`; the full form adds what each part does, its files, and the contracts, decisions and not_changed the intent has. A section without entries is left out.
 pub(super) fn intent_json(intent: &ProposalIntent, full: bool) -> Value {
     if !full {
         return json!({
             "summary": intent.summary,
             "parts": intent.parts.iter().map(|part| json!({
                 "name": part.name,
-                "files": part.files.len(),
+                "file_count": part.files.len(),
             })).collect::<Vec<_>>(),
         });
     }
@@ -225,7 +225,7 @@ pub struct GetProposalInput {
     /// A version number, such as 2 for v2. Leave it out for the current version.
     #[serde(default)]
     pub version: Option<u32>,
-    /// full adds the evidence text, the whole intent (what each part does, its files, and the contracts, decisions and not_changed it has), the task description and the whole body of each review of an earlier version. Leave it out for the short form, which gives evidence_chars, the intent's summary with each part's name and file count, and the first 200 characters of those bodies with body_chars.
+    /// full adds the evidence text, the whole intent (what each part does, its files, and the contracts, decisions and not_changed it has), the task description and the whole body of each review of an earlier version. Leave it out for the short form, which gives evidence_chars, the intent's summary with each part's name and file_count, and the first 200 characters of those bodies with body_chars.
     #[serde(default)]
     pub detail: Option<String>,
 }
@@ -454,7 +454,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_PROPOSAL,
-            "Read one proposal: versions, the intent of the version (its summary of how the change works and the parts of the diff with their files; check every hunk against its part), the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related open proposals without a review, each with its proposal, and the related tasks that can still open proposals, strongest link first, with the create_review_plan or start_worker call that has one reviewer review them together), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. The short form gives evidence_chars for the evidence, the intent's summary with each part's name and file count, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the whole intent (what each part does, its files, contracts, decisions and not_changed), the task description and every whole body, such as before a review or when the task description matters.",
+            "Read one proposal: versions, the intent of the version (its summary of how the change works and the parts of the diff with their files; check every hunk against its part), the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related open proposals without a review, each with its proposal, and the related tasks that can still open proposals, strongest link first, with the create_review_plan or start_worker call that has one reviewer review them together), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. The short form gives evidence_chars for the evidence, the intent's summary with each part's name and file_count, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the whole intent (what each part does, its files, contracts, decisions and not_changed), the task description and every whole body, such as before a review or when the task description matters.",
             schema_for_type::<GetProposalInput>(),
         ),
         Tool::new(

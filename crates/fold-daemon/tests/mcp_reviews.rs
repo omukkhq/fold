@@ -1538,7 +1538,7 @@ async fn every_proposal_version_tool_requires_an_intent_and_get_proposal_shows_i
     let short = ok(&frontend, "get_proposal", json!({"id": "P-1"})).await;
     assert_eq!(
         short["intent"],
-        json!({"summary": intent["summary"], "parts": [{"name": "Rename", "files": 1}]})
+        json!({"summary": intent["summary"], "parts": [{"name": "Rename", "file_count": 1}]})
     );
     let full = ok(
         &frontend,
