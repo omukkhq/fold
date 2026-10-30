@@ -1214,7 +1214,7 @@ async fn every_version_holds_its_own_checked_intent_whose_parts_cover_its_files(
                     ("Report", "Adds total.", &["src/report.rs", "src/lib.rs"]),
                 ],
             ),
-            json!({"field": "intent.parts", "reason": "file_in_two_parts", "files": ["src/lib.rs"]}),
+            json!({"field": "intent.parts", "reason": "file_in_two_parts", "files": ["src/lib.rs"], "files_count": 1}),
         ),
     ];
     for (intent, expected) in refusals {

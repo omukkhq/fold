@@ -118,7 +118,7 @@ impl ProposalIntent {
     }
 }
 
-/// Checks the shape of an intent and returns it as it is stored: every text trimmed with each line break as `\n`, so it becomes part of the version's Git commit byte for byte. The summary and what a part does may hold line breaks and tabs; a part's name, its paths and every entry are one line. A refusal is `invalid_intent`, whose details name the `field` (such as `intent.parts[1].does`) and the `reason` and never repeat the text: `empty`, `too_long` (with `max_chars`), `control_character`, `no_parts`, `too_many_parts` or `too_many_entries` (with `max`), `duplicate_part`, or `file_in_two_parts` (with the paths in `files`). `again` names the call that sends it again. Whether the parts cover the version's files is [`intent_coverage`], which needs the diff.
+/// Checks the shape of an intent and returns it as it is stored: every text trimmed with each line break as `\n`, so it becomes part of the version's Git commit byte for byte. The summary and what a part does may hold line breaks and tabs; a part's name, its paths and every entry are one line. A refusal is `invalid_intent`, whose details name the `field` (such as `intent.parts[1].does`) and the `reason` and never repeat the text: `empty`, `too_long` (with `max_chars`), `control_character`, `no_parts`, `too_many_parts` or `too_many_entries` (with `max`), `duplicate_part`, or `file_in_two_parts` (with at most 50 of the paths in `files` and their number in `files_count`). `again` names the call that sends it again. Whether the parts cover the version's files is [`intent_coverage`], which needs the diff.
 pub fn proposal_intent(intent: ProposalIntent, again: &str) -> Result<ProposalIntent, FoldError> {
     let summary = text(
         &intent.summary,
@@ -184,12 +184,13 @@ pub fn proposal_intent(intent: ProposalIntent, again: &str) -> Result<ProposalIn
         parts.push(IntentPart { name, does, files });
     }
     if !twice.is_empty() {
-        let files: Vec<String> = twice.into_iter().collect();
+        let count = twice.len();
+        let files: Vec<String> = twice.into_iter().take(MAX_LISTED_FILES).collect();
         return Err(refusal(
             again,
             "intent.parts",
             "file_in_two_parts",
-            [("files", json!(files))],
+            [("files", json!(files)), ("files_count", json!(count))],
         ));
     }
     let mut contracts = Contracts::default();
@@ -512,7 +513,7 @@ mod tests {
             ),
             (
                 intent(vec![part("Board", &["a", "b"]), part("Cards", &["b", "a"])]),
-                json!({"field": "intent.parts", "reason": "file_in_two_parts", "files": ["a", "b"]}),
+                json!({"field": "intent.parts", "reason": "file_in_two_parts", "files": ["a", "b"], "files_count": 2}),
             ),
             (
                 ProposalIntent {
@@ -618,6 +619,24 @@ mod tests {
         assert_eq!(details["uncovered"].as_array().unwrap().len(), 50);
         assert_eq!(details["uncovered_count"], 60);
         assert!(error.hint().unwrap().ends_with("and 55 more"));
+        let twice = proposal_intent(
+            intent(vec![
+                part(
+                    "Board",
+                    &many.iter().map(String::as_str).collect::<Vec<_>>(),
+                ),
+                part(
+                    "Cards",
+                    &many.iter().map(String::as_str).collect::<Vec<_>>(),
+                ),
+            ]),
+            "create_proposal",
+        )
+        .unwrap_err();
+        let listed = self::details(&twice);
+        assert_eq!(listed["reason"], "file_in_two_parts");
+        assert_eq!(listed["files"].as_array().unwrap().len(), 50);
+        assert_eq!(listed["files_count"], 60);
     }
 
     #[test]
