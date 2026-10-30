@@ -50,7 +50,7 @@ jobs:
             os: ubuntu-22.04-arm
             asset: fld-aarch64-linux
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-15
             asset: fld-aarch64-macos
     runs-on: ${{ matrix.os }}
     env:
