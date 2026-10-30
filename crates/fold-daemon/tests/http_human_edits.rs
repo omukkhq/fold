@@ -124,7 +124,10 @@ async fn the_marked_human_reads_edits_and_sends_a_file_for_review_again() {
         &fx,
         Method::POST,
         "/proposals/P-1/edits",
-        Some(json!({"version": 1, "path": "src/lib.rs", "content": EDITED, "intent": http_intent("  The human's own intent.  ", &["src/lib.rs"])})),
+        Some(json!({"version": 1, "path": "src/lib.rs", "content": EDITED, "intent": {
+            "summary": "  The human's own intent.  ",
+            "parts": [{"name": "Edit", "does": "Applies the human's edit.", "files": ["src/lib.rs"]}],
+        }})),
         Some(TANIM),
     )
     .await;
@@ -257,6 +260,16 @@ async fn edit_refusals_carry_their_declared_status() {
             Some(TANIM),
             StatusCode::BAD_REQUEST,
             "invalid_intent",
+        ),
+        (
+            Some({
+                let mut intent = http_intent("Applies the edit.", &["src/lib.rs"]);
+                intent["contracts"]["api"] = json!(["GET /x"]);
+                json!({"version": 1, "path": "src/lib.rs", "content": EDITED, "intent": intent})
+            }),
+            Some(TANIM),
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
         ),
     ];
     for (body, human, status, expected) in cases {

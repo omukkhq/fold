@@ -358,20 +358,29 @@ pub struct ProposalVersion {
 
 /// How the change of a proposal version works in the code, so a human understands and judges it without reading every line: the summary and the parts of the diff always, and the contracts, the decisions and what it does not change when they apply. A section without entries does not show. Every file the version changes belongs to exactly one part.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Intent {
     /// How the change works in the code: the flow, the states and the rules, at most 1200 characters; it may hold line breaks.
     pub summary: String,
     /// The parts of the diff in reading order, 1 to 12.
     pub parts: Vec<IntentPart>,
+    /// The contracts by kind; a request may leave it out for none.
+    #[serde(default)]
+    #[schema(required = true)]
     pub contracts: IntentContracts,
-    /// The choices the author made and why, and open questions with the message that asks them; empty when none apply.
+    /// The choices the author made and why, and open questions with the message that asks them; empty when none apply, and a request may leave it out.
+    #[serde(default)]
+    #[schema(required = true)]
     pub decisions: Vec<String>,
-    /// What a reader may think the change touches but it does not; empty when nothing applies.
+    /// What a reader may think the change touches but it does not; empty when nothing applies, and a request may leave it out.
+    #[serde(default)]
+    #[schema(required = true)]
     pub not_changed: Vec<String>,
 }
 
 /// One part of a version's diff.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct IntentPart {
     /// A short name, one line of at most 80 characters, unique in the intent.
     #[schema(example = "Case model and migration")]
@@ -383,15 +392,30 @@ pub struct IntentPart {
     pub files: Vec<String>,
 }
 
-/// The contracts a change adds or changes, by kind; a kind the change does not touch is empty. Each entry is one line of at most 300 characters, at most 20 per kind.
+/// The contracts a change adds or changes, by kind; a kind the change does not touch is empty, and a request may leave it out. Each entry is one line of at most 300 characters, at most 20 per kind.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct IntentContracts {
+    #[serde(default)]
+    #[schema(required = true)]
     pub routes: Vec<String>,
+    #[serde(default)]
+    #[schema(required = true)]
     pub database: Vec<String>,
+    #[serde(default)]
+    #[schema(required = true)]
     pub rights: Vec<String>,
+    #[serde(default)]
+    #[schema(required = true)]
     pub config: Vec<String>,
+    #[serde(default)]
+    #[schema(required = true)]
     pub errors: Vec<String>,
+    #[serde(default)]
+    #[schema(required = true)]
     pub events: Vec<String>,
+    #[serde(default)]
+    #[schema(required = true)]
     pub commands: Vec<String>,
 }
 

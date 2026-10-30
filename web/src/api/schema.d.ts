@@ -3200,17 +3200,18 @@ export interface components {
         IntegrationResultKind: "succeeded" | "checks_failed" | "queued";
         /** @description How the change of a proposal version works in the code, so a human understands and judges it without reading every line: the summary and the parts of the diff always, and the contracts, the decisions and what it does not change when they apply. A section without entries does not show. Every file the version changes belongs to exactly one part. */
         Intent: {
+            /** @description The contracts by kind; a request may leave it out for none. */
             contracts: components["schemas"]["IntentContracts"];
-            /** @description The choices the author made and why, and open questions with the message that asks them; empty when none apply. */
+            /** @description The choices the author made and why, and open questions with the message that asks them; empty when none apply, and a request may leave it out. */
             decisions: string[];
-            /** @description What a reader may think the change touches but it does not; empty when nothing applies. */
+            /** @description What a reader may think the change touches but it does not; empty when nothing applies, and a request may leave it out. */
             not_changed: string[];
             /** @description The parts of the diff in reading order, 1 to 12. */
             parts: components["schemas"]["IntentPart"][];
             /** @description How the change works in the code: the flow, the states and the rules, at most 1200 characters; it may hold line breaks. */
             summary: string;
         };
-        /** @description The contracts a change adds or changes, by kind; a kind the change does not touch is empty. Each entry is one line of at most 300 characters, at most 20 per kind. */
+        /** @description The contracts a change adds or changes, by kind; a kind the change does not touch is empty, and a request may leave it out. Each entry is one line of at most 300 characters, at most 20 per kind. */
         IntentContracts: {
             commands: string[];
             config: string[];
