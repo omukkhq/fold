@@ -37,16 +37,35 @@ export interface ChatReplyTarget extends ReplyTarget {
   thread: ThreadView;
 }
 
-/** The reply box replies in the chosen thread as that thread's own reply box would; the card answers the set's questions. */
+/** The reply box replies in the chosen thread as that thread's own reply box would; the card answers the set's questions. A reply never answers an open set, so it never claims to; `open` holds the asks that wait. */
 export function chatReplyTarget(
   chat: AgentChat,
   you: string | null,
   set: OpenSet | null,
   about: string | null,
+  open: ReadonlySet<string>,
 ): ChatReplyTarget | null {
   const value = aboutValue(chat, set, about);
   const thread = chat.threads.find((t) => t.id === value);
   if (thread === undefined) return null;
   const target = replyTarget(thread, you);
-  return target === null ? null : { ...target, thread };
+  if (target === null) return null;
+  const answers =
+    target.answers !== null && open.has(target.answers.id)
+      ? null
+      : target.answers;
+  return { ...target, answers, thread };
+}
+
+/** The reply box's note while the thread it writes in holds an open set: only the card's answers close a set. */
+export const REPLY_HINT =
+  "Your reply does not answer the open set; answer it in the card.";
+
+export function replyHint(
+  thread: ThreadView | null,
+  open: ReadonlySet<string>,
+): string | null {
+  return thread !== null && thread.messages.some((m) => open.has(m.id))
+    ? REPLY_HINT
+    : null;
 }

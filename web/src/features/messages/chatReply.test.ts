@@ -4,6 +4,8 @@ import {
   aboutOptions,
   aboutValue,
   chatReplyTarget,
+  REPLY_HINT,
+  replyHint,
   threadLabel,
 } from "./chatReply";
 import { groupChats, type AgentChat } from "./chats";
@@ -73,32 +75,59 @@ describe("aboutOptions and aboutValue", () => {
 
 describe("chatReplyTarget", () => {
   const chat = chatOf(asked, report, loose);
-  const [set] = chatSets(chat, new Set(["m-1"]));
+  const open = new Set(["m-1"]);
+  const [set] = chatSets(chat, open);
   if (!set) throw new Error("no set");
 
   it("writes in the thread of the set on the card, as that thread's reply box would", () => {
-    const target = chatReplyTarget(chat, "tanim", set, null);
+    const target = chatReplyTarget(chat, "tanim", set, null, open);
     expect(target?.replyTo).toBe("m-1");
     expect(target?.thread.id).toBe("m-1");
   });
 
   it("replies to the newest message of the newest thread without a set", () => {
-    const target = chatReplyTarget(chat, "tanim", null, null);
+    const target = chatReplyTarget(chat, "tanim", null, null, open);
     expect(target).toMatchObject({ replyTo: "m-3", answers: null });
     expect(target?.thread.id).toBe("m-2");
   });
 
   it("replies in the thread the person chose", () => {
-    const target = chatReplyTarget(chat, "tanim", set, "m-4");
+    const target = chatReplyTarget(chat, "tanim", set, "m-4", open);
     expect(target).toMatchObject({ replyTo: "m-4", answers: null });
+  });
+
+  it("never claims that a reply answers an open set, and says so under the box", () => {
+    const free = thread("m-30", {
+      awaiting_human: true,
+      messages: [
+        message("m-30", {
+          sender: "frontend",
+          recipients: [recipient("human:tanim")],
+          body: "Is Pencil open?",
+          asks_human: true,
+        }),
+      ],
+    });
+    const freeChat = chatOf(free);
+    const waiting = new Set(["m-30"]);
+    const [card] = chatSets(freeChat, waiting);
+    expect(
+      chatReplyTarget(freeChat, "tanim", card ?? null, null, waiting),
+    ).toMatchObject({ replyTo: "m-30", answers: null });
+    expect(replyHint(free, waiting)).toBe(REPLY_HINT);
+    expect(
+      chatReplyTarget(freeChat, "tanim", null, null, new Set())?.answers?.id,
+    ).toBe("m-30");
+    expect(replyHint(free, new Set())).toBeNull();
+    expect(replyHint(null, waiting)).toBeNull();
   });
 
   it("has no target for a chat without threads or messages", () => {
     expect(
-      chatReplyTarget({ ...chat, threads: [] }, null, null, null),
+      chatReplyTarget({ ...chat, threads: [] }, null, null, null, open),
     ).toBeNull();
     expect(
-      chatReplyTarget(chatOf(thread("m-20")), null, null, null),
+      chatReplyTarget(chatOf(thread("m-20")), null, null, null, open),
     ).toBeNull();
   });
 });

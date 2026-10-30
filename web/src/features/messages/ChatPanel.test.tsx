@@ -631,7 +631,7 @@ describe("ChatPanel question set", () => {
   it("shows a refused answer with its code and sends the same answers again", async () => {
     const onAnswer = vi
       .fn<(ask: string, answers: string[]) => Promise<void>>()
-      .mockRejectedValueOnce(new ApiError("ask_not_open", ""))
+      .mockRejectedValueOnce(new ApiError("invalid_request", ""))
       .mockResolvedValue(undefined);
     const one = baseThread(LATER, { ...later, messages: later.messages });
     renderSets([one], [LATER], onAnswer);
@@ -649,7 +649,7 @@ describe("ChatPanel question set", () => {
     );
     const alert = await within(card()).findByRole("alert");
     expect(alert.textContent).toContain("The answers were not sent.");
-    expect(alert.textContent).toContain("code: ask_not_open");
+    expect(alert.textContent).toContain("code: invalid_request");
     await userEvent.click(
       within(alert).getByRole("button", { name: "Send again" }),
     );
@@ -1013,6 +1013,67 @@ describe("ChatPanel with several threads", () => {
     ).toBeNull();
     expect(screen.getByText("Answers sent.")).toBeTruthy();
     expect(document.activeElement).toBe(screen.getByLabelText("Reply"));
+  });
+
+  it("says that a set was already answered when the daemon refuses it as closed, or when it leaves without an answer from here", async () => {
+    const onAnswer = vi
+      .fn<(ask: string, answers: string[]) => Promise<void>>()
+      .mockRejectedValue(new ApiError("ask_not_open", "closed"));
+    await renderChat(
+      [first, second, third],
+      () => Promise.resolve(),
+      undefined,
+      onAnswer,
+    );
+    await userEvent.click(pick(/^Yes/));
+    const alert = await within(card()).findByRole("alert");
+    expect(alert.textContent).toBe("This set was already answered.");
+    expect(
+      within(alert).queryByRole("button", { name: "Send again" }),
+    ).toBeNull();
+    act(() => {
+      change([first, second, third], [ASK_B]);
+    });
+    expect(screen.getByText("This set was already answered.")).toBeTruthy();
+    expect(
+      within(card()).getByRole("heading", { name: "Keep the old port?" }),
+    ).toBeTruthy();
+    // Main answers the next set for the person while the card shows it.
+    act(() => {
+      change([first, second, third], []);
+    });
+    expect(
+      screen.queryByRole("region", { name: "Open question set" }),
+    ).toBeNull();
+    expect(
+      screen.getByText("This set was already answered.").getAttribute("role"),
+    ).toBe("status");
+  });
+
+  it("picks a choice by its number key only while the focus is on the card", async () => {
+    const onAnswer = vi.fn(() => Promise.resolve());
+    await renderChat(
+      [first, second, third],
+      () => Promise.resolve(),
+      undefined,
+      onAnswer,
+    );
+    screen.getByRole("region", { name: "Messages" }).focus();
+    await userEvent.keyboard("1");
+    expect(onAnswer).not.toHaveBeenCalled();
+    within(card()).getByRole("heading", { name: "Use Recharts?" }).focus();
+    await userEvent.keyboard("1");
+    expect(onAnswer).toHaveBeenCalledWith(ASK_A, ["Yes"]);
+    expect(pick(/^Yes/).getAttribute("aria-keyshortcuts")).toBe("1");
+  });
+
+  it("says under the reply box that a reply does not answer the open set", async () => {
+    await renderChat([first, second, third], () => Promise.resolve());
+    expect(
+      screen.getByText(
+        "Your reply does not answer the open set; answer it in the card.",
+      ),
+    ).toBeTruthy();
   });
 
   it("shows the oldest set also when a link names a later one", async () => {

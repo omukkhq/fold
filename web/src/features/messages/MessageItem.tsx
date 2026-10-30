@@ -14,7 +14,12 @@ import { initial, messageSide, recipientsPhrase } from "./messageLayout";
 import { isQuestion } from "./question";
 import { QuotedLines } from "./QuotedLines";
 import { Receipts } from "./Receipts";
-import { answeredPairs, listedQuestions, type AnsweredPair } from "./sets";
+import {
+  answeredFor,
+  answeredPairs,
+  listedQuestions,
+  type AnsweredPair,
+} from "./sets";
 
 interface MessageItemProps {
   slug: string;
@@ -204,6 +209,9 @@ export function MessageItem({
           </span>
         </p>
         {lines}
+        {answeredFor(message) === null ? null : (
+          <p className="text-13 text-text-2">Answered for you</p>
+        )}
         <div className="max-w-measure">
           {docked === "queued" ? (
             <p className="text-14 text-text-2">

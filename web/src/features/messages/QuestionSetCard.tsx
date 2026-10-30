@@ -10,18 +10,19 @@ import { idHref } from "@/routes/paths";
 import { messageContext } from "./chats";
 import { MessageBody } from "./MessageBody";
 import {
+  alreadyAnswered,
   answerStep,
-  choiceKey,
   draftAnswers,
   draftComplete,
   headingQuestion,
+  keyChoice,
   moreSetsText,
   ownStart,
   setQuestions,
+  shownStep,
   startDraft,
   stepBack,
   stepText,
-  typesText,
   type OpenSet,
 } from "./sets";
 
@@ -75,7 +76,7 @@ export function QuestionSetCard({
   const [failure, setFailure] = useState<unknown>(null);
   const ownField = useRef<HTMLInputElement>(null);
   const pending = sending || sent;
-  const step = Math.min(draft.step, questions.length - 1);
+  const step = shownStep(draft);
   const question = questions[step];
   const context = messageContext(message, thread);
 
@@ -117,30 +118,6 @@ export function QuestionSetCard({
     headingRef.current?.focus();
   };
 
-  // A number key picks a choice while the focus is not in a field, so typing an own answer never picks one. Labels are single lines, so one string carries them.
-  const pick = useRef(answer);
-  useEffect(() => {
-    pick.current = answer;
-  });
-  const labels = (question?.choices ?? []).map((c) => c.label).join("\n");
-  useEffect(() => {
-    const list = labels === "" ? [] : labels.split("\n");
-    const onKey = (event: KeyboardEvent) => {
-      if (event.altKey || event.ctrlKey || event.metaKey) return;
-      if (typesText(event.target instanceof HTMLElement ? event.target : null))
-        return;
-      const index = choiceKey(event.key, list.length);
-      const label = index === null ? undefined : list[index];
-      if (label === undefined) return;
-      event.preventDefault();
-      pick.current(label);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [labels]);
-
   useEffect(() => {
     if (writing) ownField.current?.focus();
   }, [writing]);
@@ -148,9 +125,28 @@ export function QuestionSetCard({
   if (question === undefined) return null;
   const moreText = moreSetsText(more);
   const chosen = draft.answers[step] ?? null;
+  const stale = alreadyAnswered(failure);
   return (
     <section
       aria-label="Open question set"
+      // A number key picks a choice only while the focus is on the card and not in its field, so no key pressed elsewhere on the page, or on a hidden pane, answers a set.
+      onKeyDown={(event) => {
+        const index = keyChoice(
+          {
+            key: event.key,
+            altKey: event.altKey,
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            target: event.target instanceof HTMLElement ? event.target : null,
+          },
+          question.choices.length,
+        );
+        const label =
+          index === null ? undefined : question.choices[index]?.label;
+        if (label === undefined) return;
+        event.preventDefault();
+        answer(label);
+      }}
       className="flex max-h-3/5 shrink-0 flex-col overflow-y-auto px-10 pt-6 lg:px-28 lg:pt-8"
     >
       <div className="flex w-full max-w-thread-column flex-col gap-14 rounded-l bg-surface px-16 pt-18 pb-14 shadow-pop lg:gap-16 lg:px-24 lg:pt-22 lg:pb-18">
@@ -229,6 +225,7 @@ export function QuestionSetCard({
                 type="button"
                 disabled={pending}
                 aria-pressed={chosen === choice.label}
+                aria-keyshortcuts={String(i + 1)}
                 onClick={() => {
                   answer(choice.label);
                 }}
@@ -342,7 +339,11 @@ export function QuestionSetCard({
             them.
           </p>
         ) : null}
-        {failure === null ? null : (
+        {failure === null ? null : stale ? (
+          <p role="alert" className="text-13 font-medium text-text-2">
+            This set was already answered.
+          </p>
+        ) : (
           <p role="alert" className="text-13 font-medium text-bad">
             The answers were not sent. {failureText(failure)}
             {apiErrorCode(failure) ? (

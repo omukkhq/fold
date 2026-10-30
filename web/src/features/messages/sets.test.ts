@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { message, recipient, thread } from "@/test/messages";
+import { ApiError } from "@/api/errors";
 import { needsItem } from "@/test/workers";
 import { groupChats, type AgentChat } from "./chats";
 import {
+  alreadyAnswered,
   answerStep,
+  answeredFor,
   answeredAway,
   answeredPairs,
   chatSets,
@@ -12,12 +15,15 @@ import {
   draftComplete,
   headingQuestion,
   HEADING_QUESTION,
+  keyChoice,
+  leftText,
   listedQuestions,
   markScope,
   moreSetsText,
   openAskIds,
   ownStart,
   setQuestions,
+  shownStep,
   startDraft,
   stepBack,
   stepText,
@@ -134,11 +140,25 @@ describe("the draft of a set's answers", () => {
     draft = answerStep(draft, "Mock the calls");
     expect(draftComplete(draft)).toBe(true);
     expect(draftAnswers(draft)).toEqual(["Not yet", "Mock the calls"]);
-    expect(answerStep(draft, "more")).toBe(draft);
+  });
+
+  it("keeps the last question on screen after a failed send, so a new answer and Back act on it", () => {
+    const done = answerStep(answerStep(startDraft("m-1", 3), "a"), "b");
+    const complete = answerStep(done, "c");
+    expect(shownStep(complete)).toBe(2);
+    const changed = answerStep(complete, "d");
+    expect(draftAnswers(changed)).toEqual(["a", "b", "d"]);
+    const back = stepBack(complete);
+    expect(back.step).toBe(1);
+    expect(shownStep(back)).toBe(1);
+    const one = answerStep(startDraft("m-1", 1), "Yes");
+    expect(shownStep(one)).toBe(0);
+    expect(stepBack(one).step).toBe(0);
+    expect(draftAnswers(answerStep(one, "No"))).toEqual(["No"]);
   });
 
   it("goes back to change an earlier answer and keeps a written one", () => {
-    let draft = answerStep(startDraft("m-1", 2), "My own words");
+    let draft = answerStep(startDraft("m-1", 3), "My own words");
     draft = answerStep(draft, "Yes, it is reconnected");
     draft = stepBack(draft);
     expect(draft.step).toBe(1);
@@ -151,7 +171,7 @@ describe("the draft of a set's answers", () => {
     expect(ownStart(draft, keys)).toBe("My own words");
     expect(ownStart(startDraft("m-1", 2), keys)).toBe("");
     draft = answerStep(draft, "Not yet");
-    expect(draft.answers).toEqual(["Not yet", "Yes, it is reconnected"]);
+    expect(draft.answers).toEqual(["Not yet", "Yes, it is reconnected", null]);
   });
 });
 
@@ -163,6 +183,26 @@ describe("keys", () => {
     expect(choiceKey("0", 2)).toBeNull();
     expect(choiceKey("a", 2)).toBeNull();
     expect(choiceKey("12", 9)).toBeNull();
+  });
+
+  it("picks a choice from a key press on the card without a modifier or a field", () => {
+    const press = (key: string, fields = {}) => ({
+      key,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      target: { tagName: "H3" },
+      ...fields,
+    });
+    expect(keyChoice(press("2"), 2)).toBe(1);
+    expect(keyChoice(press("3"), 2)).toBeNull();
+    expect(keyChoice(press("1", { ctrlKey: true }), 2)).toBeNull();
+    expect(keyChoice(press("1", { altKey: true }), 2)).toBeNull();
+    expect(keyChoice(press("1", { metaKey: true }), 2)).toBeNull();
+    expect(
+      keyChoice(press("1", { target: { tagName: "INPUT" } }), 2),
+    ).toBeNull();
+    expect(keyChoice(press("1", { target: null }), 2)).toBe(0);
   });
 
   it("leaves a key typed into a field to the field", () => {
@@ -209,6 +249,27 @@ describe("answered sets", () => {
       messages: [{ ...first, questions: [] }, reply],
     });
     expect(answeredPairs(reply, short)?.[1]?.question).toBe("");
+  });
+});
+
+describe("who answered and what stays", () => {
+  it("names the agent that answered a set for the person, and nobody for the person's own answer", () => {
+    const own = message("m-5", { sender: "human:tanim", answers_ask: "m-1" });
+    const forYou = message("m-6", { sender: "main", answers_ask: "m-1" });
+    expect(answeredFor(own)).toBeNull();
+    expect(answeredFor(forYou)).toBe("main");
+    expect(answeredFor(message("m-7", { sender: "main" }))).toBeNull();
+  });
+
+  it("tells a set closed meanwhile from any other refusal", () => {
+    expect(alreadyAnswered(new ApiError("ask_not_open", "closed"))).toBe(true);
+    expect(alreadyAnswered(new ApiError("invalid_request", "bad"))).toBe(false);
+    expect(alreadyAnswered(new Error("offline"))).toBe(false);
+  });
+
+  it("says what happened to the set that left", () => {
+    expect(leftText(true)).toBe("Answers sent.");
+    expect(leftText(false)).toBe("This set was already answered.");
   });
 });
 
