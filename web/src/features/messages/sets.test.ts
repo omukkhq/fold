@@ -24,6 +24,7 @@ import {
   ownStart,
   setQuestions,
   shownStep,
+  canStepBack,
   startDraft,
   stepBack,
   stepText,
@@ -155,6 +156,17 @@ describe("the draft of a set's answers", () => {
     expect(shownStep(one)).toBe(0);
     expect(stepBack(one).step).toBe(0);
     expect(draftAnswers(answerStep(one, "No"))).toEqual(["No"]);
+  });
+
+  it("offers Back only for an earlier question, and never on a set refused as closed", () => {
+    const one = answerStep(startDraft("m-1", 1), "Yes");
+    expect(canStepBack(one, false)).toBe(false);
+    const two = answerStep(startDraft("m-1", 2), "a");
+    expect(canStepBack(two, false)).toBe(true);
+    const complete = answerStep(two, "b");
+    expect(canStepBack(complete, false)).toBe(true);
+    expect(canStepBack(complete, true)).toBe(false);
+    expect(canStepBack(startDraft("m-1", 2), false)).toBe(false);
   });
 
   it("goes back to change an earlier answer and keeps a written one", () => {

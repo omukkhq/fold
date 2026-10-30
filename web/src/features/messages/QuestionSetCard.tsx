@@ -12,6 +12,7 @@ import { MessageBody } from "./MessageBody";
 import {
   alreadyAnswered,
   answerStep,
+  canStepBack,
   draftAnswers,
   draftComplete,
   headingQuestion,
@@ -94,7 +95,7 @@ export function QuestionSetCard({
   };
 
   const answer = (text: string) => {
-    if (pending || text.trim() === "") return;
+    if (pending || alreadyAnswered(failure) || text.trim() === "") return;
     if (draft.step === 0) onStart();
     const next = answerStep(draft, text);
     setDraft(next);
@@ -126,6 +127,9 @@ export function QuestionSetCard({
   const moreText = moreSetsText(more);
   const chosen = draft.answers[step] ?? null;
   const stale = alreadyAnswered(failure);
+  // A set the daemon refused as closed takes no more answers; it leaves once the asks are read again.
+  const locked = pending || stale;
+  const backShown = !pending && canStepBack(draft, stale);
   return (
     <section
       aria-label="Open question set"
@@ -223,7 +227,7 @@ export function QuestionSetCard({
             <li key={choice.label}>
               <button
                 type="button"
-                disabled={pending}
+                disabled={locked}
                 aria-pressed={chosen === choice.label}
                 aria-keyshortcuts={String(i + 1)}
                 onClick={() => {
@@ -268,7 +272,7 @@ export function QuestionSetCard({
                 <input
                   ref={ownField}
                   value={own}
-                  disabled={pending}
+                  disabled={locked}
                   aria-label="Your own answer"
                   placeholder="Write your own answer…"
                   onChange={(event) => {
@@ -287,7 +291,7 @@ export function QuestionSetCard({
             ) : (
               <button
                 type="button"
-                disabled={pending}
+                disabled={locked}
                 onClick={() => {
                   setWriting(true);
                 }}
@@ -305,9 +309,9 @@ export function QuestionSetCard({
             )}
           </li>
         </ul>
-        {(draft.step > 0 && !pending) || moreText !== null ? (
+        {backShown || moreText !== null ? (
           <div className="flex min-h-24 items-center justify-between gap-12 text-13 text-text-2">
-            {draft.step > 0 && !pending ? (
+            {backShown ? (
               <button
                 type="button"
                 onClick={back}

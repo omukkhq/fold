@@ -1031,6 +1031,9 @@ describe("ChatPanel with several threads", () => {
     expect(
       within(alert).queryByRole("button", { name: "Send again" }),
     ).toBeNull();
+    // A one-question set that the daemon refused as closed offers no step and takes no other answer.
+    expect(within(card()).queryByRole("button", { name: "Back" })).toBeNull();
+    expect(pick(/^Yes/).hasAttribute("disabled")).toBe(true);
     act(() => {
       change([first, second, third], [ASK_B]);
     });

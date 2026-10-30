@@ -189,6 +189,11 @@ export function answeredPairs(
   }));
 }
 
+/** Back shows while a question before the one on screen can change; a set that the daemon refused as closed offers no step at all. */
+export function canStepBack(draft: SetDraft, closed: boolean): boolean {
+  return !closed && shownStep(draft) > 0;
+}
+
 /** The agent that answered a set for the person, such as main, which the timeline names over the answers; null when the person answered it. */
 export function answeredFor(reply: MessageView): string | null {
   return reply.answers_ask !== null && !isHumanName(reply.sender)
