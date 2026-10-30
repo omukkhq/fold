@@ -245,7 +245,7 @@ async fn the_default_reads_of_a_reviewed_proposal_are_smaller_and_keep_what_an_a
     assert_eq!(full["evidence"], prose("revised evidence", 1500));
     assert_eq!(
         short["intent"],
-        json!({"summary": prose("revised intent", 1200), "parts": [{"name": "Report", "files": 1}]}),
+        json!({"summary": prose("revised intent", 1200), "parts": [{"name": "Report", "file_count": 1}]}),
         "the short form names each part and counts its files"
     );
     assert_eq!(full["intent"], revised_intent());
