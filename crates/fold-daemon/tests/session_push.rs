@@ -483,6 +483,117 @@ async fn a_refused_connection_drops_the_socket_and_the_notice_silently() {
     until(|| targets.sockets(&name("backend")) == vec![live.path.clone()]).await;
 }
 
+/// The outcome of the first connect to each of `paths` that the push makes from now on.
+#[cfg(test)]
+async fn first_connects(fixture: &Fixture, paths: &[&Path]) -> Vec<Option<std::io::ErrorKind>> {
+    let mut connects = fixture.connects.lock().await;
+    let mut outcomes: Vec<Option<Option<std::io::ErrorKind>>> = vec![None; paths.len()];
+    tokio::time::timeout(WAIT, async {
+        while outcomes.iter().any(Option::is_none) {
+            let (to, outcome) = connects.recv().await.unwrap();
+            if let Some(index) = paths.iter().position(|path| *path == to)
+                && outcomes[index].is_none()
+            {
+                outcomes[index] = Some(outcome);
+            }
+        }
+    })
+    .await
+    .expect("a connect to each socket within the wait");
+    outcomes.into_iter().flatten().collect()
+}
+
+#[tokio::test]
+async fn a_notice_another_socket_carried_still_drops_an_ended_sessions_socket() {
+    let fixture = Fixture::keeping_files().await;
+    let backend = name("backend");
+    let mut live = fixture.inbox("backend", "live.sock").await;
+    let mut docs = fixture.inbox("docs", "docs.sock").await;
+    fixture
+        .send("frontend", &["backend", "docs"], "first")
+        .await;
+    let first = wire(TOKEN, &carried(1, &[(1, "frontend", "first")]));
+    assert_eq!(live.next().await, first);
+    assert_eq!(docs.next().await, first);
+    let m1 = fold_core::MessageId::from_number(1).unwrap();
+    delivered(&fixture, m1, |times| {
+        times.iter().all(|(_, at)| at.is_some())
+    })
+    .await;
+    while fixture.connects.lock().await.try_recv().is_ok() {}
+
+    // These sockets come after m-1 got through, so a notice about m-1 has nothing left to carry for any of them.
+    let blocked = Inbox::bind(fixture.path("blocked.sock"));
+    set_mode(&blocked.path, 0o000);
+    fixture
+        .agents
+        .register_push_target(&name("docs"), blocked.path.clone(), TOKEN)
+        .await
+        .unwrap();
+    let closed = fixture.path("closed.sock");
+    drop(std::os::unix::net::UnixListener::bind(&closed).unwrap());
+    let missing = fixture.path("missing.sock");
+    for socket in [&missing, &closed] {
+        fixture
+            .agents
+            .register_push_target(&backend, socket.clone(), TOKEN)
+            .await
+            .unwrap();
+    }
+    let file = kept_file(&fixture, "backend");
+    assert!(
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("closed.sock")
+    );
+
+    fixture
+        .commit(
+            NewEvent::new(types::MESSAGE_SENT, EventActor::parse("frontend").unwrap())
+                .unwrap()
+                .message(m1)
+                .data(json!({"message": "m-1", "thread": "m-1", "recipients": ["backend", "docs"]}))
+                .unwrap(),
+        )
+        .await;
+
+    assert_eq!(
+        first_connects(
+            &fixture,
+            &[&live.path, &docs.path, &blocked.path, &closed, &missing]
+        )
+        .await,
+        [
+            None,
+            None,
+            Some(std::io::ErrorKind::PermissionDenied),
+            Some(std::io::ErrorKind::ConnectionRefused),
+            Some(std::io::ErrorKind::NotFound),
+        ],
+        "every socket of a skipped notice is checked"
+    );
+    let targets = fixture.targets.clone();
+    until(|| targets.sockets(&backend) == vec![live.path.clone()]).await;
+    until(|| !file.exists()).await;
+    assert_eq!(
+        fixture.targets.sockets(&name("docs")),
+        [docs.path.clone(), blocked.path.clone()],
+        "a check that fails for another reason keeps the socket"
+    );
+    assert_eq!(fixture.agents.push_reach(&backend), push::PushReach::Socket);
+
+    fixture
+        .send("frontend", &["backend", "docs"], "second")
+        .await;
+    let second = wire(TOKEN, &carried(2, &[(2, "frontend", "second")]));
+    assert_eq!(
+        live.next().await,
+        second,
+        "the check of a live socket posts no line"
+    );
+    assert_eq!(docs.next().await, second);
+}
+
 #[tokio::test]
 async fn a_failed_post_keeps_the_socket_and_the_next_notice_is_attempted() {
     let fixture = Fixture::new().await;
