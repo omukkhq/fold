@@ -1,13 +1,13 @@
 import type { Gate, GateName, ProposalDetail } from "@/api/proposals";
 import {
   actorSegment,
-  joinSegments,
   reviewerSegment,
   seg,
   type Segment,
   type Segments,
 } from "@/people/segments";
-import { approvers } from "./present";
+import { approvals } from "./present";
+import { approverSegments } from "./stateLine";
 
 /** The order the integration procedure checks them in. */
 const ORDER: readonly GateName[] = [
@@ -27,10 +27,6 @@ export function shownGates(gates: readonly Gate[]): Gate[] {
       (g) => (g.gate !== "open" && g.gate !== "version") || g.status !== "met",
     )
     .sort((a, b) => ORDER.indexOf(a.gate) - ORDER.indexOf(b.gate));
-}
-
-function names(list: readonly string[]): Segment[] {
-  return joinSegments(list.map((name) => [actorSegment(name)]));
 }
 
 function unfinishedPrerequisites(p: ProposalDetail): string[] {
@@ -65,8 +61,10 @@ export function gateText(
           : "You cannot integrate this proposal",
       ];
     case "approval": {
-      const by = approvers(p.summary.current_version, p.reviews);
-      if (met && by.length > 0) return seg`Approved on ${v} by ${names(by)}`;
+      const by = approvals(p.summary.current_version, p.reviews);
+      if (met && by.length > 0) {
+        return seg`Approved on ${v} by ${approverSegments(by)}`;
+      }
       const changes =
         gate.code === "changes_requested" ||
         p.summary.latest_verdict === "request_changes";

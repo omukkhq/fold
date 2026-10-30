@@ -1,4 +1,4 @@
-import type { CheckRun, ProposalDetail } from "@/api/proposals";
+import type { CheckRun, ProposalDetail, Review } from "@/api/proposals";
 import {
   actorSegment,
   joinSegments,
@@ -6,23 +6,33 @@ import {
   type Segment,
   type Segments,
 } from "@/people/segments";
-import { approvers, versionVerdict } from "./present";
+import { approvals, keptNote, versionVerdict } from "./present";
 
 export type StateTone = "approved" | "changes" | "neutral";
 
-/** The review half of the Changes tab's one-line state: who approved the version, else its latest verdict. */
+/** The people whose approvals stand, each kept approval followed by the version it was kept from. */
+export function approverSegments(standing: readonly Review[]): Segment[] {
+  return joinSegments(
+    standing.map((r): Segments => {
+      const note = keptNote(r);
+      return note === ""
+        ? [actorSegment(r.reviewer)]
+        : [actorSegment(r.reviewer), note];
+    }),
+  );
+}
+
+/** The review half of the Changes tab's one-line state: who approved the version, each kept approval with the version it was kept from, else its latest verdict. */
 export function approvalLine(
   p: ProposalDetail,
   version: number,
 ): { tone: StateTone; segments: Segment[] } {
   const v = `v${String(version)}`;
-  const names = approvers(version, p.reviews);
-  if (names.length > 0) {
+  const standing = approvals(version, p.reviews);
+  if (standing.length > 0) {
     return {
       tone: "approved",
-      segments: seg`Approved on ${v} by ${joinSegments(
-        names.map((name): Segments => [actorSegment(name)]),
-      )}`,
+      segments: seg`Approved on ${v} by ${approverSegments(standing)}`,
     };
   }
   const verdict = versionVerdict(version, p.reviews);
