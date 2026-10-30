@@ -768,10 +768,14 @@ struct Sender {
 }
 
 impl Sender {
-    /// Posts one notice at a time until the target is dropped. Every failure drops only the notice and marks the target failing until a post succeeds, except a missing socket or one with no listener: the session has ended, so the socket and its kept file are dropped too.
+    /// Posts one notice at a time until the target is dropped. Every failure drops only the notice and marks the target failing until a post succeeds, except a missing socket or one with no listener: the session has ended, so the socket and its kept file are dropped too. A notice that another target of the agent has already carried posts nothing here, but the sender still checks its socket with [`Sender::probe`], so the socket of an ended session goes with the agent's next notice whichever target takes that notice first.
     async fn run(self) {
         while let Some(notice) = self.queue.next().await {
             let Some(prepared) = prepare(&self.targets, &self.agent, &notice).await else {
+                if self.probe().await.is_err_and(|error| session_gone(&error)) {
+                    self.drop_gone(notice.seq).await;
+                    return;
+                }
                 continue;
             };
             let Err(error) = self.post(&prepared.text).await else {
@@ -779,16 +783,8 @@ impl Sender {
                 record(&self.targets, &self.agent, &notice, &prepared).await;
                 continue;
             };
-            if matches!(
-                error.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-            ) {
-                tracing::warn!(agent = %self.agent, seq = notice.seq, "session push found the session gone and dropped its socket");
-                if let Some(inner) = self.targets.upgrade() {
-                    let targets = PushTargets { inner };
-                    targets.forget(&self.agent, &self.queue);
-                    targets.drop_file(&self.agent, &self.socket).await;
-                }
+            if session_gone(&error) {
+                self.drop_gone(notice.seq).await;
                 return;
             }
             self.queue.failing.store(true, Ordering::Relaxed);
@@ -796,11 +792,30 @@ impl Sender {
         }
     }
 
+    /// Drops the target and its kept file once its session has ended; `seq` is the event of the notice that found it gone.
+    async fn drop_gone(&self, seq: u64) {
+        tracing::warn!(agent = %self.agent, seq, "session push found the session gone and dropped its socket");
+        if let Some(inner) = self.targets.upgrade() {
+            let targets = PushTargets { inner };
+            targets.forget(&self.agent, &self.queue);
+            targets.drop_file(&self.agent, &self.socket).await;
+        }
+    }
+
+    async fn open(&self) -> io::Result<UnixStream> {
+        tokio::time::timeout(CONNECT_TIMEOUT, (self.connect)(self.socket.clone()))
+            .await
+            .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))?
+    }
+
+    /// Connects and closes without sending a line, as the check of a kept socket does, which delivers nothing to the session. It is not a post, so neither outcome changes whether the target is failing.
+    async fn probe(&self) -> io::Result<()> {
+        self.open().await.map(drop)
+    }
+
     /// Sends the auth line and the notice line, shuts the write half and closes without reading: the session never replies.
     async fn post(&self, text: &str) -> io::Result<()> {
-        let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, (self.connect)(self.socket.clone()))
-            .await
-            .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
+        let mut stream = self.open().await?;
         let bytes = frames(&self.token, text)?;
         tokio::time::timeout(WRITE_TIMEOUT, async {
             stream.write_all(&bytes).await?;
@@ -860,6 +875,14 @@ fn frames(token: &PushToken, text: &str) -> io::Result<Vec<u8>> {
     .map_err(io::Error::other)?;
     bytes.push(b'\n');
     Ok(bytes)
+}
+
+/// A connect that finds the socket missing or nobody listening on it: the session has ended.
+fn session_gone(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+    )
 }
 
 /// One agent's kept socket and token. Not `Debug`, as it holds the token.
@@ -976,12 +999,7 @@ fn read_live_target(dir: &Path, agent: &AgentName) -> io::Result<Option<(PathBuf
     }
     match std::os::unix::net::UnixStream::connect(&stored.socket) {
         Ok(_) => Ok(Some((stored.socket, token))),
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-            ) =>
-        {
+        Err(error) if session_gone(&error) => {
             remove_target(dir, agent, &stored.socket)?;
             Ok(None)
         }
