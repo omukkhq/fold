@@ -43,6 +43,7 @@ mod acceptance_31_code_comment_request;
 mod acceptance_32_question_sets;
 mod acceptance_33_main_answers_worker_questions;
 mod acceptance_34_stash_drop;
+mod acceptance_35_folder_reset;
 mod acceptance_3_parallel_workspaces;
 mod acceptance_4_live_diff;
 mod acceptance_5_review_and_integrate;
@@ -86,6 +87,8 @@ mod crash_messages;
 #[cfg(feature = "failpoints")]
 mod crash_record;
 #[cfg(feature = "failpoints")]
+mod crash_reset;
+#[cfg(feature = "failpoints")]
 mod crash_stash;
 #[cfg(feature = "failpoints")]
 mod crash_workspace_removal;
@@ -100,6 +103,7 @@ mod event_bus;
 mod events_service;
 mod exclude_file;
 mod fold_skills;
+mod folder_reset;
 mod folder_stash;
 mod folder_stash_drop;
 mod folder_status;

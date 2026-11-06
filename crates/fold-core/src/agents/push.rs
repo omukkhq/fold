@@ -231,11 +231,22 @@ fn human_change_rules(
     if kind == types::HUMAN_CHANGE_WITHDRAWN {
         // The folder holds none of the change any more, so a main workspace that holds its merge holds nothing to submit.
         let text = format!("{human} took back the waiting change; nothing is left to merge");
+        let abandoned = event
+            .data
+            .get("workspace_abandoned")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         let rule = match event
             .data
             .get("workspace")
             .and_then(serde_json::Value::as_str)
         {
+            // `fld reset` abandons the workspace itself in the same command.
+            Some(workspace) if abandoned => (
+                main,
+                format!("{text}; fold abandoned {workspace}, which held its merge; tell the user"),
+                "get_repository_state",
+            ),
             Some(workspace) => (
                 main,
                 format!("{text}; abandon {workspace}, which holds its merge, and tell the user"),
@@ -2640,6 +2651,16 @@ mod tests {
             vec![row(
                 "main",
                 "fold: human:ana took back the waiting change; nothing is left to merge; tell the user. Call get_repository_state.",
+                "get_repository_state"
+            )]
+        );
+        event.data["workspace"] = json!("ws-9");
+        event.data["workspace_abandoned"] = json!(true);
+        assert_eq!(
+            sent(&notice_for(&event, &main_ctx())),
+            vec![row(
+                "main",
+                "fold: human:ana took back the waiting change; nothing is left to merge; fold abandoned ws-9, which held its merge; tell the user. Call get_repository_state.",
                 "get_repository_state"
             )]
         );

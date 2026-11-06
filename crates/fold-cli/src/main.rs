@@ -80,6 +80,10 @@ enum Command {
     Stash(commands::stash::StashArgs),
     /// Merge the newest stash entry into the project folder as it is now; a conflict writes conflict markers and keeps the entry until fld record
     Unstash(commands::stash::UnstashArgs),
+    /// Put the project folder back to main: fold stashes your unrecorded changes as stash@{0} first and drops your change that waits for the main agent, with its merge workspace. Asks first
+    Reset(commands::reset::ResetArgs),
+    /// Put the named files or folders back to main's files, after the same safety stash. Asks first
+    Restore(commands::reset::RestoreArgs),
     /// Show the project folder against main: the files fld record would record, what keeps the folder from following main with the next step, and the stash; it changes nothing
     Status(commands::folder_status::StatusArgs),
     /// Print this process's environment for the daemon, which runs it through the user's login shell at its start
@@ -186,6 +190,14 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::Unstash(args)) => {
             commands::stash::run_unstash(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Reset(args)) => {
+            commands::reset::run_reset(&args, &mut std::io::BufReader::new(std::io::stdin()), out)
+                .map_err(Failure::Remote)
+        }
+        Some(Command::Restore(args)) => {
+            commands::reset::run_restore(&args, &mut std::io::BufReader::new(std::io::stdin()), out)
+                .map_err(Failure::Remote)
         }
         Some(Command::Status(args)) => {
             commands::folder_status::run_status(&args, out).map_err(Failure::Remote)

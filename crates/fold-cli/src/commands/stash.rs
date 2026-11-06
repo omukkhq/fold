@@ -257,7 +257,7 @@ fn stash_lines(response: &Response) -> Result<Vec<String>, RemoteError> {
 }
 
 /// Why fold leaves a new file out of the stash, as words.
-fn skipped_reason(reason: &str) -> &str {
+pub(super) fn skipped_reason(reason: &str) -> &str {
     match reason {
         "too_large" => "larger than the limit",
         "special" => "not a file, a directory or a symlink",

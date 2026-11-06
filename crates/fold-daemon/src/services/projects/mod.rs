@@ -62,6 +62,7 @@ pub mod notify;
 mod pull;
 mod record;
 mod remote;
+mod reset;
 mod stash;
 mod untrack;
 mod web_auth;
@@ -80,6 +81,7 @@ pub use pull::{PullOutcome, PulledConflict, pull};
 pub use record::{RecordOutcome, TouchedTask, record};
 pub(crate) use remote::push_with;
 pub use remote::{PushOutcome, RemoteContext, push};
+pub use reset::{DroppedChange, ResetOutcome, ResetScope, reset};
 pub use stash::{
     AfterUnstash, StashDrop, StashDropped, StashEntry, StashOutcome, UnstashConflict,
     UnstashOutcome, drop_stash_entries, stash, stash_list, unstash,

@@ -36,7 +36,7 @@ use crate::services::events::EventBuffer;
 use crate::services::fired;
 
 /// The most paths a stash event lists; the rest are counted.
-const LISTED_PATHS: usize = 50;
+pub(super) const LISTED_PATHS: usize = 50;
 
 /// What `fld stash` did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,7 +180,7 @@ pub struct StashDropped {
     pub entries: usize,
 }
 
-/// Drops entries of the stash for the named human who runs `fld stash drop` or `fld stash clear`: the changes they hold are gone from the stack for good, while their objects stay in the store until `fld gc`. No file of the project folder changes. Under the remote lock and folder lock, an unstash that a stop left part-way is finished first, so no journal row names a dropped entry; then one transaction records each drop and appends `stash.discarded`. An entry whose unstash conflict waits in the folder is refused, since its markers are still there: the human fixes them and runs `fld record`, which drops the entry. A place past the stack is refused; `fld stash clear` of an empty stash drops nothing.
+/// Drops entries of the stash for the named human who runs `fld stash drop` or `fld stash clear`: the changes they hold are gone from the stack for good, while their objects stay in the store until `fld gc`. No file of the project folder changes. Under the remote lock and folder lock, an unstash that a stop left part-way is finished first, so no journal row names a dropped entry; then one transaction records each drop and appends `stash.discarded`. An entry whose unstash conflict waits in the folder is refused, since its markers are still there: the human fixes them and runs `fld record`, which drops the entry, or runs `fld reset`. A place past the stack is refused; `fld stash clear` of an empty stash drops nothing.
 pub async fn drop_stash_entries(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
@@ -254,7 +254,9 @@ async fn run_drop(
         .iter()
         .find(|(_, entry)| entry.state == StashState::Conflicted)
     {
-        return Err(markers_wait(&entry.conflicts).into());
+        return Err(markers_wait(&entry.conflicts)
+            .with_hint("fix the conflict markers in these files and run `fld record`, or run `fld reset`, which drops the entry and stashes the files with their markers")
+            .into());
     }
     let mut dropped = Vec::with_capacity(chosen.len());
     for (position, entry) in &chosen {
@@ -443,7 +445,7 @@ async fn stash_folder(
 }
 
 /// Refuses a stash, before anything is written, that could not put its paths back: a file of the checkout record that the folder read left out, too large, special or unreadable, would be a removal in the entry that no follow makes while the file is there. Returns the paths of the newest entry where `tree` holds the markers or `.fold-stash` sides of an unstash, which must not go into a new entry.
-async fn refuse_unstashable(
+pub(super) async fn refuse_unstashable(
     handle: &ProjectHandle,
     record: ObjectHash,
     tree: ObjectHash,
@@ -506,7 +508,7 @@ async fn refuse_unstashable(
 }
 
 /// Brings the paths that differ between `base`, the checkout record, and `tree`, what fold read from the folder, back to `base`'s entries, as a follow from `tree` to `base`: nothing is written when one of them no longer holds what fold read.
-async fn put_back(
+pub(super) async fn put_back(
     handle: &ProjectHandle,
     base: ObjectHash,
     tree: ObjectHash,
@@ -1026,7 +1028,7 @@ pub(super) fn refuse_branch(branch: &str, followed: &FolderFollowed) -> Result<(
     }
 }
 
-async fn stack(handle: &ProjectHandle) -> Result<Vec<StashRow>, ProjectError> {
+pub(super) async fn stack(handle: &ProjectHandle) -> Result<Vec<StashRow>, ProjectError> {
     let mut conn = handle
         .store
         .read()
@@ -1044,7 +1046,7 @@ async fn entry_files(
 }
 
 /// The paths that differ between the stored trees `base` and `tree`, in path order.
-async fn changed(
+pub(super) async fn changed(
     handle: &ProjectHandle,
     base: ObjectHash,
     tree: ObjectHash,
@@ -1062,13 +1064,13 @@ async fn changed(
     .await
 }
 
-fn paths_of(rows: &[ConflictRow]) -> Vec<String> {
+pub(super) fn paths_of(rows: &[ConflictRow]) -> Vec<String> {
     rows.iter()
         .map(|row| String::from_utf8_lossy(&row.path).into_owned())
         .collect()
 }
 
-fn stash_event(
+pub(super) fn stash_event(
     kind: fold_core::EventType,
     actor: &Actor,
     base: RevisionId,
@@ -1084,7 +1086,7 @@ fn stash_event(
 }
 
 /// The refusal while the markers of an unstash wait in the folder.
-fn markers_wait(conflicts: &[ConflictRow]) -> FoldError {
+pub(super) fn markers_wait(conflicts: &[ConflictRow]) -> FoldError {
     let paths = paths_of(conflicts);
     FoldError::new(
         codes::INVALID_REQUEST,

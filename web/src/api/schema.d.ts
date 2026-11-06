@@ -468,6 +468,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/folder/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Puts the whole project folder back to the files fold last wrote there, as `fld reset` asks, so it follows main: the changes that no revision records are first stashed as `stash@{0}`, which `fld unstash` brings back, then their paths go back. The conflicted human change that waits for the main agent is dropped with `human_change.withdrawn`, and the main workspace its merge made is abandoned in the same transaction. A stash entry whose unstash conflict waits in the folder is dropped with `stash.discarded`; the safety entry holds the files with their markers. A reset never moves Git. Only a named human resets, over the socket or signed in to the web app. */
+        post: operations["reset_project_folder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/folder/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Puts the named files and directories of the project folder back to the files fold last wrote there, as `fld restore` asks: their changes that no revision records are first stashed as `stash@{0}`, which `fld unstash` brings back. The conflicted human change that waits for the main agent is dropped as `fld reset` drops it only when the named paths held every unrecorded change. Only a named human restores, over the socket or signed in to the web app. */
+        post: operations["restore_project_folder_paths"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/gc": {
         parameters: {
             query?: never;
@@ -2778,6 +2812,17 @@ export interface components {
              */
             prerequisite: string;
         };
+        DroppedChangeView: {
+            /** @description The human's Git commit; null for a change `fld record` read from the project folder. */
+            commit: string | null;
+            /** @description The paths that conflicted with main, in path order. */
+            conflicted: string[];
+            /**
+             * @description The main workspace that held its merge, which the reset abandoned; null when the main agent had opened none.
+             * @example ws-9
+             */
+            workspace: string | null;
+        };
         /** @description A stored event. The related ids are public ids. */
         DurableEvent: {
             /** @description A worker (`frontend`), a human (`human:ana`) or `fold`. */
@@ -4474,10 +4519,37 @@ export interface components {
             /** Format: int32 */
             messages: number;
         };
+        ResetResult: {
+            /** @description False while something still keeps the folder on an older revision than main's head, such as unrecorded changes that a restore left on a path main changed. */
+            at_head: boolean;
+            dropped_change: components["schemas"]["DroppedChangeView"] | null;
+            /** @description The conflicted paths of the stash entry whose unstash conflict waited in the folder, which the reset dropped; the safety entry holds those files with their markers. */
+            dropped_unstash: string[];
+            /** @description The entries on the stack now. */
+            entries: number;
+            /** @description The paths that went back to fold's entries, in path order. */
+            files: string[];
+            /**
+             * @description The main revision the project folder holds now, apart from the changes that no revision records.
+             * @example r8
+             */
+            revision: string;
+            /** @description New files the read left out, which stay in the folder. */
+            skipped: components["schemas"]["RecordSkipped"][];
+            /** @description Whether the discarded changes are the newest stash entry, `stash@{0}`, which `fld unstash` brings back. */
+            stashed: boolean;
+            /** @description The named paths of a restore where the folder held no change. */
+            unchanged: string[];
+            unstash: components["schemas"]["UnstashResult"] | null;
+        };
         /** @description What a human adds to the first turn of a worker's new session. */
         RestartWorkerBody: {
             /** @description Added to the first turn of the new session; it is never stored. */
             instructions?: string | null;
+        };
+        RestoreRequest: {
+            /** @description The files or directories to put back, relative to the project folder, such as `src/app.rs`. */
+            paths: string[];
         };
         /** @description The human edit the human sends for review again. */
         ReviewAgainBody: {
@@ -8372,6 +8444,200 @@ export interface operations {
                 };
             };
             /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    reset_project_folder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The folder is back on fold's files, or held nothing to put back */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResetResult"];
+                };
+            };
+            /** @description The human name is not valid; the branch or HEAD shows a change fold did not make (`reason` `head_moved`); the human's Git commits wait for the main agent (`reason` `git_commits_wait`); a file fold tracks is too large or unreadable to stash (`reason` `skipped_tracked`, the files in `paths`); or files changed while fold put them back (`reason` `changed_during_stash`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_required`: only a human resets the project folder; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The config or sync map is invalid */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A Git command failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open, git is not on PATH, or the objects of the safety entry could not be stored */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    restore_project_folder_paths: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description The paths are back on fold's files, or held nothing to put back */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResetResult"];
+                };
+            };
+            /** @description No path is named (`reason` `no_paths`); a path is not inside the project folder (`reason` `invalid_path`); an unstash conflict waits in the folder (`reason` `stash_conflicted`, the files in `paths`); or a refusal of `fld reset` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_required`: only a human resets the project folder; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The config or sync map is invalid */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A Git command failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open, git is not on PATH, or the objects of the safety entry could not be stored */
             503: {
                 headers: {
                     [name: string]: unknown;
