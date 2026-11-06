@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   BellOff,
   Bot,
+  Link2,
   ChevronRight,
   CloudOff,
   FileWarning,
@@ -82,6 +83,7 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   claude_not_found: SearchX,
   notify_target_off: BellOff,
   agent_change: Bot,
+  shared_changed: Link2,
 };
 
 const MINUTE_MS = 60_000;

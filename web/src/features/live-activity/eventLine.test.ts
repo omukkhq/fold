@@ -626,6 +626,28 @@ describe("eventLine", () => {
     );
   });
 
+  it("names the shared files that changed while a worker worked and their dismissal", () => {
+    expect(
+      eventLine(
+        event("shared.changed", {
+          data: {
+            agent: "web-worker",
+            paths: ["design/home.pen"],
+            path_count: 1,
+          },
+        }),
+      ).text,
+    ).toBe(
+      "found design/home.pen of the shared files changed while web-worker worked",
+    );
+    expect(eventLine(event("shared.changed")).text).toBe(
+      "found shared files that changed while an agent worked",
+    );
+    expect(eventLine(event("shared.changes_dismissed")).text).toBe(
+      "dismissed the changes of shared files",
+    );
+  });
+
   it("keeps a backtick in a path from pairing with the marks of a command", () => {
     const line = eventLine(
       event("git.uncommitted_changes", {

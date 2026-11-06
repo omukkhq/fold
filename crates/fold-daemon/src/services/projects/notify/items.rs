@@ -19,7 +19,8 @@ pub fn item_key(item: &NeedsYouItem) -> String {
         | NeedsYouKind::HeadMoved
         | NeedsYouKind::UnstashConflicted
         | NeedsYouKind::ChecksFileInvalidOnMain
-        | NeedsYouKind::AgentChange => item.about.clone(),
+        | NeedsYouKind::AgentChange
+        | NeedsYouKind::SharedChanged => item.about.clone(),
         NeedsYouKind::FolderHeld => None,
     };
     match about {
@@ -36,7 +37,8 @@ fn public_id(item: &NeedsYouItem) -> Option<String> {
         | NeedsYouKind::FolderHeld
         | NeedsYouKind::UnstashConflicted
         | NeedsYouKind::ChecksFileInvalidOnMain
-        | NeedsYouKind::AgentChange => None,
+        | NeedsYouKind::AgentChange
+        | NeedsYouKind::SharedChanged => None,
         _ => item_key(item).split_once(':').map(|(_, id)| id.to_owned()),
     }
 }
@@ -89,6 +91,7 @@ fn title(item: &NeedsYouItem) -> String {
         NeedsYouKind::AgentChange => {
             format!("The project folder changed while {agent} worked")
         }
+        NeedsYouKind::SharedChanged => format!("A shared file changed while {agent} worked"),
     }
 }
 
@@ -118,7 +121,8 @@ fn path(item: &NeedsYouItem) -> String {
         | NeedsYouKind::FolderHeld
         | NeedsYouKind::UnstashConflicted
         | NeedsYouKind::ChecksFileInvalidOnMain
-        | NeedsYouKind::AgentChange => "repository".to_owned(),
+        | NeedsYouKind::AgentChange
+        | NeedsYouKind::SharedChanged => "repository".to_owned(),
         NeedsYouKind::WorkerUnreachable
         | NeedsYouKind::WorkerModelUnreachable
         | NeedsYouKind::ClaudeNotFound => "agents".to_owned(),

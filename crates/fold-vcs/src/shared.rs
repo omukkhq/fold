@@ -283,3 +283,69 @@ pub fn unshared_ignored(
     found.truncate(limit);
     Ok((found, count))
 }
+
+/// What fold notes of one shared file to tell a change: its size and modification time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileStamp {
+    pub size: u64,
+    pub modified: Option<std::time::SystemTime>,
+}
+
+/// The files at or below each of `shared` in the project folder `root`, by path relative to it, with their stamps: at most `limit` of them, in path order, so a large shared folder costs a bounded read. Symbolic links below a shared folder are not followed. Blocking.
+pub fn shared_files(
+    root: &Path,
+    shared: &[RepoPath],
+    limit: usize,
+) -> std::collections::BTreeMap<String, FileStamp> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut stack: Vec<(std::path::PathBuf, String)> = shared
+        .iter()
+        .rev()
+        .map(|path| (root.join(os_path(path)), path.to_string()))
+        .collect();
+    while let Some((at, name)) = stack.pop() {
+        if files.len() >= limit {
+            break;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(&at) else {
+            continue;
+        };
+        if meta.is_file() {
+            files.insert(
+                name,
+                FileStamp {
+                    size: meta.len(),
+                    modified: meta.modified().ok(),
+                },
+            );
+        } else if meta.is_dir() {
+            let Ok(entries) = std::fs::read_dir(&at) else {
+                continue;
+            };
+            let mut children: Vec<_> = entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| {
+                    let child = entry.file_name().to_str()?.to_owned();
+                    Some((entry.path(), format!("{name}/{child}")))
+                })
+                .collect();
+            children.sort_by(|a, b| b.1.cmp(&a.1));
+            stack.extend(children);
+        }
+    }
+    files
+}
+
+/// The largest shared file whose content fold hashes to tell a rewrite with the same bytes from a change.
+const MAX_HASHED: u64 = 256 << 20;
+
+/// The content hash of the file at `path`, or `None` when it cannot be read or is larger than fold hashes. Blocking.
+pub fn file_hash(path: &Path) -> Option<[u8; 32]> {
+    let meta = std::fs::metadata(path).ok()?;
+    if meta.len() > MAX_HASHED {
+        return None;
+    }
+    let mut hasher = blake3::Hasher::new();
+    hasher.update_reader(std::fs::File::open(path).ok()?).ok()?;
+    Some(*hasher.finalize().as_bytes())
+}

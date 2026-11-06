@@ -51,6 +51,8 @@ pub enum NeedsYouKind {
     NotifyTargetOff,
     /// Paths of the project folder changed during the tool calls of supervised workers, so fold does not offer them as the human's change: `agents` names the workers' agents, `agent` the first of them, `paths` the files and `reason` the choices, record, restore or ignore. The item ends when every path is settled.
     AgentChange,
+    /// Shared reference files changed during a supervised worker's tool call.
+    SharedChanged,
 }
 
 /// The screen on which a human answers an item.
@@ -85,6 +87,7 @@ impl NeedsYouKind {
             NeedsYouKind::ClaudeNotFound => "claude_not_found",
             NeedsYouKind::NotifyTargetOff => "notify_target_off",
             NeedsYouKind::AgentChange => "agent_change",
+            NeedsYouKind::SharedChanged => "shared_changed",
         }
     }
 
@@ -100,7 +103,8 @@ impl NeedsYouKind {
             | NeedsYouKind::FolderHeld
             | NeedsYouKind::UnstashConflicted
             | NeedsYouKind::ChecksFileInvalidOnMain
-            | NeedsYouKind::AgentChange => Screen::Repository,
+            | NeedsYouKind::AgentChange
+            | NeedsYouKind::SharedChanged => Screen::Repository,
             NeedsYouKind::WorkerUnreachable
             | NeedsYouKind::WorkerModelUnreachable
             | NeedsYouKind::ClaudeNotFound => Screen::Worker,
@@ -108,6 +112,10 @@ impl NeedsYouKind {
         }
     }
 }
+
+/// What a human does about a `SharedChanged` item.
+pub const SHARED_CHANGED_NEXT: &str =
+    "check the shared files in the project folder, then run `fld share --dismiss`";
 
 /// One item that waits for a human, with the public ids its screen opens.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -363,6 +371,14 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
             .iter()
             .map(|row| String::from_utf8_lossy(&row.path).into_owned())
             .collect();
+        items.push(item);
+    }
+    for change in fold_store::workspaces::open_shared_changes(&mut *conn).await? {
+        let mut item = NeedsYouItem::new(NeedsYouKind::SharedChanged, change.created_at);
+        item.about = Some(change.id.to_string());
+        item.agent = Some(change.agent);
+        item.paths = change.paths;
+        item.reason = Some(SHARED_CHANGED_NEXT.to_owned());
         items.push(item);
     }
     let changes = fold_store::workspaces::open_agent_changes(&mut *conn).await?;

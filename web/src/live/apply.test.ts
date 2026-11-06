@@ -581,6 +581,15 @@ describe("invalidation rules", () => {
     }
   });
 
+  it("refreshes Needs you when shared files changed while a worker worked or a human dismissed them", () => {
+    for (const type of ["shared.changed", "shared.changes_dismissed"]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type));
+      expect(hit(keys.needsYou(slug)), type).toBe(true);
+      expect(hit(keys.board(slug)), type).toBe(false);
+    }
+  });
+
   it("invalidates repository and board, and no proposal key, for a pull integration", () => {
     for (const type of [
       "integration.succeeded",

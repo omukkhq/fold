@@ -153,6 +153,8 @@ pub enum NeedsYouItemKind {
     NotifyTargetOff,
     /// Files of the project folder changed during the tool calls of supervised workers, so fold does not offer them as the human's change: `agents` names the workers' agents and `agent` the first, `paths` the files and `reason` the choices. The human records them with `record_agent_changes`, puts them aside with `restore_agent_changes` or takes them as their own with `ignore_agent_changes`; the item ends when every path is settled.
     AgentChange,
+    /// Shared reference files changed during a tool call of the supervised worker `agent`: `paths` names the files and `reason` what the human does, check the files and run `fld share --dismiss`, which ends the item. Workers read shared files through links into the project folder, where a write has no history to undo it.
+    SharedChanged,
 }
 
 /// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task, `repository` the history of main and `settings` the project's notice targets.
@@ -248,6 +250,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::ClaudeNotFound => NeedsYouItemKind::ClaudeNotFound,
             NeedsYouKind::NotifyTargetOff => NeedsYouItemKind::NotifyTargetOff,
             NeedsYouKind::AgentChange => NeedsYouItemKind::AgentChange,
+            NeedsYouKind::SharedChanged => NeedsYouItemKind::SharedChanged,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,

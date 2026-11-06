@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE shared_changes SET dismissed_at = ?, dismissed_by = ? WHERE dismissed_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "1eeba0e3e54e43707aaaaae90d5a7e9e2eba09675182ca93c847ceb2dfd9817c"
+}

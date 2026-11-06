@@ -170,6 +170,8 @@ define_event_types! {
     NOTIFY_TARGET_CHANGED = "notify.target_changed",
     FOLDER_AGENT_CHANGED = "folder.agent_changed",
     FOLDER_AGENT_CHANGE_CLEARED = "folder.agent_change_cleared",
+    SHARED_CHANGED = "shared.changed",
+    SHARED_CHANGES_DISMISSED = "shared.changes_dismissed",
 }
 
 impl EventType {

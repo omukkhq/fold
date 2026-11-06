@@ -15,13 +15,16 @@ pub struct ShareArgs {
     /// Ignored files or folders to share with every workspace, read-only, relative to the current directory
     #[arg(
         value_name = "PATH",
-        required_unless_present = "list",
-        conflicts_with = "list"
+        required_unless_present_any = ["list", "dismiss"],
+        conflicts_with_all = ["list", "dismiss"]
     )]
     paths: Vec<PathBuf>,
     /// List the shared paths and the ignored files workers cannot see
-    #[arg(long)]
+    #[arg(long, conflicts_with = "dismiss")]
     list: bool,
+    /// End the Needs you items of shared files that changed while a worker worked, once you checked the files
+    #[arg(long)]
+    dismiss: bool,
     /// Unix socket of the daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
     #[arg(long)]
     socket: Option<PathBuf>,
@@ -45,6 +48,33 @@ pub struct UnshareArgs {
 
 /// Shares the paths with every workspace through read-only links, or lists the shared paths, starting the daemon when none runs.
 pub fn run_share(args: &ShareArgs, out: &mut impl Write) -> Result<(), RemoteError> {
+    if args.dismiss {
+        let response = request_project_with(
+            args.socket.as_deref(),
+            args.project.as_deref(),
+            Method::POST,
+            "shared/dismiss",
+            None,
+        )?;
+        refusal(&response)?;
+        let dismissed = response.body["dismissed"]
+            .as_u64()
+            .ok_or(RemoteError::Answer)?;
+        let line = if dismissed == 0 {
+            "Nothing to dismiss: no shared file changed while a worker worked".to_owned()
+        } else {
+            format!(
+                "Dismissed {}",
+                output::count(
+                    usize::try_from(dismissed).unwrap_or(usize::MAX),
+                    "change of shared files",
+                    "changes of shared files"
+                )
+            )
+        };
+        output::line(out, &line)?;
+        return Ok(());
+    }
     if args.list {
         let response = request_project(
             args.socket.as_deref(),

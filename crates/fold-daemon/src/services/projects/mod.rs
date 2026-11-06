@@ -63,6 +63,7 @@ pub mod notify;
 mod pull;
 mod record;
 mod remote;
+mod shared_watch;
 mod stash;
 mod untrack;
 mod web_auth;
@@ -85,6 +86,7 @@ pub use pull::{PullOutcome, PulledConflict, pull};
 pub use record::{RecordOutcome, TouchedTask, record};
 pub(crate) use remote::push_with;
 pub use remote::{PushOutcome, RemoteContext, push};
+pub(crate) use shared_watch::SharedWatch;
 pub use stash::{
     AfterUnstash, RestoreOutcome, StashEntry, StashOutcome, UnstashConflict, UnstashOutcome,
     restore_agent_changes, stash, stash_list, unstash,

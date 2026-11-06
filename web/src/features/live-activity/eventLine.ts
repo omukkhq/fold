@@ -15,6 +15,7 @@ import {
   GitMerge,
   GitPullRequest,
   Hand,
+  Link2,
   ListChecks,
   MessageSquare,
   Milestone,
@@ -1010,6 +1011,21 @@ const SPECS: Record<EventType, Spec> = {
           return `saw ${files} that an agent changed hold main's version again`;
       }
     },
+  },
+  "shared.changed": {
+    icon: Link2,
+    text: (e) => {
+      const paths = heldText(e.data.paths, e.data.path_count);
+      const agent =
+        typeof e.data.agent === "string" ? codeData(e.data.agent) : "an agent";
+      return paths === null
+        ? `found shared files that changed while ${agent} worked`
+        : `found ${paths} of the shared files changed while ${agent} worked`;
+    },
+  },
+  "shared.changes_dismissed": {
+    icon: Check,
+    text: () => "dismissed the changes of shared files",
   },
 };
 

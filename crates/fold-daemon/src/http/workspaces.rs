@@ -38,6 +38,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_shared))
         .routes(routes!(share))
         .routes(routes!(unshare))
+        .routes(routes!(dismiss_shared_changes))
 }
 
 pub(super) fn service(project: &Project) -> WorkspaceService {
@@ -977,4 +978,35 @@ pub async fn unshare(
         .unshare_paths(&human.actor(), body.paths)
         .await?;
     Ok(Json(SharedRemoved { removed }))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SharedChangesDismissed {
+    /// How many Needs you items of changed shared files ended.
+    pub dismissed: u64,
+}
+
+/// Ends the Needs you items of shared files that changed during a worker's tool call, as `fld share --dismiss` asks once the human checked the files. Socket only; the human comes from `x-fold-human`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/shared/dismiss",
+    operation_id = "dismiss_shared_changes",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The items ended", body = SharedChangesDismissed),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn dismiss_shared_changes(
+    _socket: SocketOnly,
+    human: Human,
+    project: Project,
+) -> Result<Json<SharedChangesDismissed>, ApiError> {
+    let dismissed = service(&project)
+        .dismiss_shared_changes(&human.actor())
+        .await?;
+    Ok(Json(SharedChangesDismissed { dismissed }))
 }

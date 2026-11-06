@@ -839,6 +839,9 @@ async fn run_auto_commit(
 ) {
     let mut closing = context.bus.closing();
     let mut watch = FolderWatch::default();
+    // The shared files are noted at the start and read again at each tick, so a person's edit only moves what fold noted and a worker's write during its tool call is found within a tick.
+    let mut shared = crate::services::projects::SharedWatch::default();
+    shared.look(&context).await;
     // The files are noted before each run, so a change made while it runs starts the next one; a run that moved the branch itself costs one more run.
     watch.stamp(&context).await;
     // The handle becomes known once the opener shares it, which can be after this first run; until then a run cannot record the human's Git commits, such as those made while the daemon was down, so the first tick that finds the handle runs again.
@@ -858,6 +861,7 @@ async fn run_auto_commit(
             without_handle &= !shared_since;
             // A worker's tool call that ended may have changed the project folder, which only a follow reads.
             let call_ended = context.tool_windows.take_ended();
+            shared.look(&context).await;
             if shared_since || watch.changed(&context).await || call_ended {
                 commit_after_integration(&context, &git).await;
             }

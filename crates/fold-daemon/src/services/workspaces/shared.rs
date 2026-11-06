@@ -1,7 +1,8 @@
 use std::path::Path;
 
+use fold_core::events::types;
 use fold_core::policy::{self, Starter};
-use fold_core::{Actor, FoldError, codes};
+use fold_core::{Actor, FoldError, NewEvent, codes};
 use fold_store::{StoreError, agents};
 use fold_vcs::git_remote::{add_exclude_patterns, remove_exclude_patterns};
 use fold_vcs::ignore::IgnoreRules;
@@ -13,6 +14,7 @@ use fold_vcs::shared::{
 use serde_json::json;
 
 use super::{WorkspaceError, WorkspaceService, blocking};
+use crate::services::events::EventBuffer;
 
 /// The most paths one call names.
 const MAX_PATHS: usize = 50;
@@ -151,6 +153,36 @@ impl WorkspaceService {
                 .collect())
         })
         .await
+    }
+
+    /// Ends every Needs you item of shared files that changed during a worker's tool call, with `shared.changes_dismissed`, for a human or the main agent (`policy::can_share_paths`) once the human checked the files. Returns how many items ended.
+    pub async fn dismiss_shared_changes(&self, actor: &Actor) -> Result<u64, WorkspaceError> {
+        self.may_share(actor).await?;
+        let now = self.clock.now();
+        let event = NewEvent::new(types::SHARED_CHANGES_DISMISSED, actor.event_actor())
+            .map_err(|error| FoldError::new(codes::INTERNAL_ERROR, error.to_string()))?;
+        let by = actor.event_actor().to_string();
+        let mut buffer = EventBuffer::new();
+        let dismissed = self
+            .store
+            .write(async |tx| -> Result<u64, WorkspaceError> {
+                let dismissed =
+                    fold_store::workspaces::dismiss_shared_changes(tx, &by, now).await?;
+                if dismissed > 0 {
+                    let event =
+                        event
+                            .clone()
+                            .data(json!({"count": dismissed}))
+                            .map_err(|error| {
+                                FoldError::new(codes::INTERNAL_ERROR, error.to_string())
+                            })?;
+                    buffer.append(tx, &event, now).await?;
+                }
+                Ok(dismissed)
+            })
+            .await?;
+        self.bus.publish(buffer);
+        Ok(dismissed)
     }
 
     async fn may_share(&self, actor: &Actor) -> Result<(), WorkspaceError> {

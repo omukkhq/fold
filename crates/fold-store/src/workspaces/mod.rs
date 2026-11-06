@@ -10,6 +10,7 @@ mod lifecycle;
 mod refs;
 mod remotes;
 mod revisions;
+mod shared_changes;
 mod stashes;
 
 pub use agent_changes::{
@@ -54,6 +55,9 @@ pub use revisions::{
     IntegratedProposal, IntegrationInfo, IntegrationKind, MAX_PAGE, RevisionRow, ancestors,
     create_initial_revision, genesis, genesis_revision, get_by_hash, get_by_number, head,
     initial_revision, insert_revision, list_after, list_recent,
+};
+pub use shared_changes::{
+    SharedChangeRow, dismiss_shared_changes, insert_shared_change, open_shared_changes,
 };
 pub use stashes::{
     NewStash, NewUnstash, StashRow, StashState, UnstashEnd, UnstashRow, apply_stash, close_unstash,

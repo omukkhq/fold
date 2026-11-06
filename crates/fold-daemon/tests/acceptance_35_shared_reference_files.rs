@@ -144,3 +144,95 @@ async fn acceptance_35_a_worker_reads_a_shared_design_file_through_its_workspace
     );
     assert!(Path::new(&dir).join("src/home.html").is_file());
 }
+
+/// The Needs you items of `harness` of `kind`.
+async fn needs_you_of(harness: &Harness, kind: &str) -> Vec<Value> {
+    let (status, body) = harness
+        .http(
+            Method::GET,
+            &format!("/api/v1/projects/{SLUG}/needs-you"),
+            None,
+            HUMAN,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["kind"] == kind)
+        .cloned()
+        .collect()
+}
+
+/// A worker's shell command writes a shared file by its path in the project folder, which no guard reads from a script. fold sees the file change during the worker's tool call and Needs you names the agent and the file until a human dismisses it; the main agent's own edit outside any tool call is no item.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn acceptance_35_a_shared_file_a_worker_changed_waits_in_needs_you() {
+    let fake = crate::workers_support::FakeClaude::new("bash_call").running_tool_scripts();
+    let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(WORKER).await;
+    let root = PathBuf::from(harness.root());
+    let exclude = root.join(".fold/exclude");
+    let mut rules = fs::read_to_string(&exclude).unwrap_or_default();
+    rules.push_str("design/\n");
+    fs::write(&exclude, rules).unwrap();
+    fs::create_dir_all(root.join("design")).unwrap();
+    fs::write(root.join("design/home.pen"), "home v1").unwrap();
+    harness
+        .call(WORKER, "share_paths", json!({"paths": ["design"]}))
+        .await;
+    // The main agent's edit outside any tool call only moves what fold noted.
+    fs::write(root.join("design/notes.md"), "notes").unwrap();
+    fake.set_tool_script(&format!(
+        "printf 'v2' >> '{}'\n",
+        root.join("design/home.pen").display()
+    ));
+    harness
+        .call(
+            WORKER,
+            "create_label",
+            json!({"name": "web", "color": "sage"}),
+        )
+        .await;
+    harness
+        .call(
+            WORKER,
+            "define_area",
+            json!({"name": "web", "label": "web"}),
+        )
+        .await;
+    let started = harness
+        .call(
+            WORKER,
+            "start_worker",
+            json!({"role": "area_lead", "area": "web"}),
+        )
+        .await;
+    let lead = started["worker"]["name"].as_str().unwrap().to_owned();
+
+    let item = fold_store::testing::eventually(crate::common::acceptance::WAIT, async || {
+        let items = needs_you_of(&harness, "shared_changed").await;
+        items.into_iter().next().ok_or(())
+    })
+    .await;
+    assert_eq!(item["agent"], json!(lead));
+    assert_eq!(item["paths"], json!(["design/home.pen"]));
+    assert_eq!(item["screen"], "repository");
+    assert!(
+        item["reason"]
+            .as_str()
+            .unwrap()
+            .contains("fld share --dismiss")
+    );
+
+    let (status, dismissed) = harness
+        .socket(
+            Method::POST,
+            &format!("/api/v1/projects/{SLUG}/shared/dismiss"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{dismissed}");
+    assert_eq!(dismissed["dismissed"], 1);
+    assert!(needs_you_of(&harness, "shared_changed").await.is_empty());
+}

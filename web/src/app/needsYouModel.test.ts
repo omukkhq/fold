@@ -132,7 +132,7 @@ describe("needsYouGroups", () => {
     expect(new Set(Object.values(GROUP_OF))).toEqual(
       new Set(["ask", "wait", "project"]),
     );
-    expect(Object.keys(GROUP_OF)).toHaveLength(16);
+    expect(Object.keys(GROUP_OF)).toHaveLength(17);
   });
 
   it("drops an empty group and words a missing tool", () => {
@@ -328,6 +328,24 @@ describe("needsYouGroups", () => {
     expect(group?.lines[0]?.key).toBe("agent_change:0");
     expect(filesText(["a.txt"])).toBe("1 file: a.txt");
     expect(filesText([])).toBeNull();
+  });
+
+  it("shows shared files that changed while a worker worked, with the agent and the step that ends it", () => {
+    const [group] = needsYouGroups("demo", [
+      needsItem({
+        kind: "shared_changed",
+        screen: "repository",
+        agent: "web-worker",
+        paths: ["design/home.pen"],
+      }),
+    ]);
+    expect(group?.title).toBe("Project");
+    expect(group?.lines[0]).toMatchObject({
+      person: "web-worker",
+      title: "1 file: design/home.pen",
+      text: "A shared file changed while this agent worked. Check the files, then run `fld share --dismiss`",
+      href: "/p/demo/repository",
+    });
   });
 
   it("shows an unstash whose conflict markers wait with the conflicted files, opening nothing", () => {

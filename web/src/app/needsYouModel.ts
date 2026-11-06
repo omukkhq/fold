@@ -53,6 +53,7 @@ const KIND_ORDER: readonly NeedsYouKind[] = [
   "claude_not_found",
   "notify_target_off",
   "agent_change",
+  "shared_changed",
 ];
 
 /** Agents that ask, things that wait for the human's decision, and the project's own state, which includes workers fold cannot run. */
@@ -73,6 +74,7 @@ export const GROUP_OF: Readonly<Record<NeedsYouKind, NeedsYouGroupId>> = {
   claude_not_found: "project",
   notify_target_off: "project",
   agent_change: "project",
+  shared_changed: "project",
 };
 
 /** The kinds whose title is the item's own name, which the sentence ends with. */
@@ -310,6 +312,16 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         text: `The project folder changed while ${codeData(agentsText(item.agents))} worked`,
         href: null,
         settle: true,
+      };
+    case "shared_changed":
+      return {
+        ...base,
+        person: item.agent,
+        chip: null,
+        task: null,
+        title: filesText(item.paths),
+        text: "A shared file changed while this agent worked. Check the files, then run `fld share --dismiss`",
+        href: projectPath(slug, "repository"),
       };
     case "human_review":
       return {
