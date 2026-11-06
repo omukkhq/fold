@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { FolderClock, FolderLock, SearchX } from "lucide-react";
+import { FolderClock, FolderLock, Link2, SearchX } from "lucide-react";
 import { useState } from "react";
 import { useNow } from "@/live/useNow";
 import { olderNotListed } from "@/api/pages";
@@ -7,6 +7,7 @@ import {
   repositoryQuery,
   revisionQuery,
   revisionsQuery,
+  sharedQuery,
   treeQuery,
 } from "@/api/repositoryQueries";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
@@ -18,6 +19,8 @@ import { folderWaits, mainCopyText } from "./describe";
 import { isMissingRevision, pickRevision } from "./revision";
 import { folderAt, parentDirs, parentOf } from "./search";
 import { CommitId } from "@/components/mono/CommitId";
+import { Mono } from "@/components/mono/Mono";
+import { sharedNote } from "./sharedPaths";
 import { GitStatus } from "../git/GitStatus";
 import { RevisionList } from "./RevisionList";
 import { TreeView } from "./TreeView";
@@ -43,6 +46,7 @@ export function RepositoryScreen({
 }: RepositoryScreenProps) {
   const revisions = useQuery(revisionsQuery(slug));
   const repository = useQuery(repositoryQuery(slug));
+  const shared = useQuery(sharedQuery(slug));
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(
     () => new Set(path === undefined ? [] : parentDirs(path)),
   );
@@ -136,6 +140,7 @@ export function RepositoryScreen({
   )?.commit;
   const onlyFirst = history.length === 1;
   const mainCopy = mainCopyText(repository.data);
+  const sharing = sharedNote(shared.data);
 
   function toggle(path: string) {
     const next = new Set(expanded);
@@ -229,6 +234,24 @@ export function RepositoryScreen({
               />
             )}
             <p className="max-w-measure">{mainCopy}</p>
+          </div>
+        )}
+        {sharing === null ? null : (
+          <div className="flex items-start gap-10 rounded-m bg-sunken px-14 py-10 text-14 text-text">
+            <Link2
+              aria-hidden
+              size={16}
+              className="mt-3 shrink-0 text-text-2"
+            />
+            <div className="flex max-w-measure flex-col gap-4">
+              {sharing.shared === null ? null : <p>{sharing.shared}</p>}
+              {sharing.unseen === null ? null : (
+                <p>
+                  {sharing.unseen} Run <Mono>{sharing.hint}</Mono> in the
+                  project folder to share one with them, read-only.
+                </p>
+              )}
+            </div>
           </div>
         )}
         <GitStatus slug={slug} variant="panel" />

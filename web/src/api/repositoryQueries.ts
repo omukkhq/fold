@@ -5,6 +5,7 @@ import {
   getFile,
   getRepository,
   getRevision,
+  getShared,
   getTree,
   listRevisions,
 } from "./repository";
@@ -13,6 +14,12 @@ export const repositoryQuery = (slug: string) =>
   queryOptions({
     queryKey: [...keys.repository(slug), "state"] as const,
     queryFn: () => getRepository(slug),
+  });
+
+export const sharedQuery = (slug: string) =>
+  queryOptions({
+    queryKey: [...keys.repository(slug), "shared"] as const,
+    queryFn: () => getShared(slug),
   });
 
 export const revisionsQuery = (slug: string) =>
