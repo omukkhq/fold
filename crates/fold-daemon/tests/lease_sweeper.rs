@@ -13,8 +13,8 @@ use fold_core::object::ObjectKind;
 use fold_core::roles::Role;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{
-    Actor, AgentActor, AgentName, Event, EventActor, EventFilter, ProposalId, TaskDescription,
-    TaskId, TaskStatus, TaskTitle, Timestamp, WorkspaceId,
+    Actor, Address, AgentActor, AgentName, Event, EventActor, EventFilter, HumanName, MessageBody,
+    MessageId, ProposalId, TaskDescription, TaskId, TaskStatus, TaskTitle, Timestamp, WorkspaceId,
 };
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
@@ -23,6 +23,7 @@ use fold_daemon::jobs::{JobProgress, spawn_lease_sweeper, spawn_stalls};
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::BusMessage;
+use fold_daemon::services::messages::SendMessage;
 use fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME;
 use fold_daemon::services::reviews::ReviewService;
 use fold_daemon::services::reviews::checks::Started;
@@ -1008,4 +1009,298 @@ async fn a_worker_that_waits_for_its_checks_stalls_only_a_window_after_the_run()
         fx.agent_attention().await["frontend"],
         json!([{"kind": "stalled", "task": "T-1"}])
     );
+}
+
+/// Registers human `tanim`, who answers the workers in the tests below.
+#[cfg(test)]
+async fn tanim(fx: &Fixture) -> Actor {
+    let name = HumanName::parse("tanim").unwrap();
+    let now = fx.project.now();
+    fx.project
+        .registry()
+        .write(async |tx| fold_store::projects::insert_human(tx, &name, now).await)
+        .await
+        .unwrap();
+    Actor::human(name)
+}
+
+/// Sends a message about `T-1` from `actor` to `to`, marked as an ask when `asks_human` is true.
+#[cfg(test)]
+async fn say(
+    fx: &Fixture,
+    actor: &Actor,
+    to: &[&str],
+    reply_to: Option<MessageId>,
+    asks_human: bool,
+) -> MessageId {
+    fx.handle
+        .messages(fx.project.registry())
+        .send_marked(
+            actor,
+            SendMessage {
+                to: Address::parse_all(to).unwrap(),
+                body: MessageBody::parse("which one?").unwrap(),
+                task: Some(t(1)),
+                proposal: None,
+                reply_to,
+            },
+            None,
+            None,
+            asks_human,
+        )
+        .await
+        .unwrap()
+        .id
+}
+
+#[tokio::test]
+async fn a_worker_that_waits_for_an_answer_never_stalls_and_the_answer_starts_a_new_window() {
+    let fx = Fixture::new().await;
+    let human = tanim(&fx).await;
+    let (id, _) = fx.create(&fx.frontend, 1).await;
+    fx.advance(STALL);
+    assert_eq!(fx.check().await, 1);
+    assert_eq!(fx.attention("T-1").await, ["stalled"]);
+
+    let ask = say(&fx, &by(&fx.frontend.worker), &["humans"], None, true).await;
+    fx.check().await;
+    assert!(!fx.stalled(id), "the open ask clears the flag");
+    assert_eq!(fx.attention("T-1").await, ["question"]);
+    fx.advance(3 * STALL);
+    assert_eq!(fx.check().await, 0, "a worker that waits for a person");
+    assert!(!fx.stalled(id));
+
+    say(&fx, &human, &["frontend"], Some(ask), false).await;
+    fx.check().await;
+    assert!(!fx.stalled(id));
+    assert!(
+        fx.attention("T-1").await.is_empty(),
+        "no needs-you once the person answered"
+    );
+    fx.advance(STALL - Duration::from_millis(1));
+    assert_eq!(fx.check().await, 0, "the window counts from the answer");
+    assert!(!fx.stalled(id));
+    fx.advance(Duration::from_millis(1));
+    assert_eq!(fx.check().await, 1, "a new full window of silence");
+    assert_eq!(fx.attention("T-1").await, ["stalled"]);
+}
+
+#[tokio::test]
+async fn a_reviewers_ask_about_the_task_holds_the_stall_of_its_worker_until_the_answer() {
+    let fx = Fixture::new().await;
+    let human = tanim(&fx).await;
+    let (id, _) = fx.create(&fx.frontend, 1).await;
+    let ask = say(&fx, &by(&fx.backend.worker), &["humans"], None, true).await;
+    fx.advance(2 * STALL);
+    assert_eq!(fx.check().await, 0);
+    assert!(!fx.stalled(id));
+    say(&fx, &human, &["backend"], Some(ask), false).await;
+    fx.check().await;
+    assert!(!fx.stalled(id), "the answer starts the window");
+    fx.advance(STALL - Duration::from_millis(1));
+    assert_eq!(fx.check().await, 0);
+    fx.advance(Duration::from_millis(1));
+    assert_eq!(fx.check().await, 1, "a full window after the answer");
+    assert!(fx.stalled(id));
+}
+
+#[tokio::test]
+async fn a_persons_message_to_a_stalled_worker_clears_its_flag_without_waiting_for_a_tick() {
+    let fx = Fixture::new().await;
+    let human = tanim(&fx).await;
+    let (id, _) = fx.create(&fx.frontend, 1).await;
+    fx.advance(STALL);
+    assert_eq!(fx.check().await, 1);
+    assert!(fx.stalled(id));
+
+    say(&fx, &human, &["frontend"], None, false).await;
+    eventually(WAIT, async || {
+        if fx.stalled(id) {
+            Err("stalled")
+        } else {
+            Ok(())
+        }
+    })
+    .await;
+    assert!(fx.attention("T-1").await.is_empty());
+}
+
+#[tokio::test]
+async fn a_claim_stays_alive_while_its_holders_check_run_goes_and_lapses_a_full_lease_after_it() {
+    let fx = Fixture::new().await;
+    let (id, dir) = fx.create(&fx.frontend, 1).await;
+    let gate = tempfile::tempdir().unwrap();
+    let gate = gate.path().join("go");
+    let checks = format!(
+        "[[check]]\nname = \"slow\"\nrun = \"until [ -e '{}' ]; do sleep 0.05; done\"\n",
+        gate.display()
+    );
+    fs::write(dir.join("fold-checks.toml"), checks).unwrap();
+    fx.handle.live.rescan(id).await.unwrap();
+    // The main agent takes over any task; `backend` leads no area.
+    let mut ctx = fx.agents.start_session(1).await.unwrap();
+    fx.agents
+        .register_agent(
+            &mut ctx,
+            &AgentName::parse("main").unwrap(),
+            &[fold_core::Tag::parse("main").unwrap()],
+        )
+        .await
+        .unwrap();
+    let main = fx.agents.resolve_worker(&ctx).await.unwrap();
+    let reviews = fx.handle.reviews(fx.project.registry());
+    let run = match reviews
+        .run_checks(&by(&fx.frontend.worker), t(1))
+        .await
+        .unwrap()
+    {
+        Started::Running { run, .. } => run,
+        Started::NoChecks => panic!("expected a run"),
+    };
+
+    for _ in 0..3 {
+        let now = fx.advance(LEASE);
+        assert_eq!(fx.sweep().await, 0, "the holder waits for its own run");
+        let claim = claims::unreleased_for_task(fx.project.store().read(), t(1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(claim.renewed_at, now, "the sweep renews the waiting holder");
+        assert_eq!(claim.stale_at, None);
+    }
+    fx.advance(LEASE);
+    let refused = fx
+        .handle
+        .tasks
+        .takeover_claim(&by(&main), t(1))
+        .await
+        .unwrap_err();
+    let fold_daemon::services::tasks::TaskError::Fold(refused) = refused else {
+        panic!("expected a refusal, got {refused:?}");
+    };
+    assert_eq!(refused.code(), fold_core::codes::CLAIM_NOT_STALE);
+    assert!(
+        !fx.attention("T-1")
+            .await
+            .contains(&"stale_claim".to_owned())
+    );
+    assert_eq!(
+        card_check_run(&fx, "T-1").await["run"],
+        json!(run.to_string())
+    );
+
+    let end = fx.project.now();
+    fs::write(&gate, "").unwrap();
+    eventually(WAIT, async || {
+        let view = reviews.get_check_run(run, false).await.unwrap();
+        view.run.finished_at.ok_or(view.run.state)
+    })
+    .await;
+    let claim = claims::unreleased_for_task(fx.project.store().read(), t(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.renewed_at, end, "the run's end renews the claim");
+
+    fx.advance(LEASE - Duration::from_millis(1));
+    assert_eq!(fx.sweep().await, 0, "a full lease after the run");
+    fx.advance(Duration::from_millis(1));
+    assert_eq!(fx.sweep().await, 1, "silence for a lease after the run");
+    let stored = fx.stale_events().await;
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].data["renewed_at"], json!(end.as_millis()));
+    assert!(
+        fx.attention("T-1")
+            .await
+            .contains(&"stale_claim".to_owned())
+    );
+    let claimed = fx
+        .handle
+        .tasks
+        .takeover_claim(&by(&main), t(1))
+        .await
+        .unwrap();
+    assert_eq!(claimed.claim.holder, main.name);
+}
+
+/// The `proposal` of the task card `task` on `GET /board`.
+#[cfg(test)]
+async fn card_proposal(fx: &Fixture, task: &str) -> Value {
+    let board = fx.get_json("/api/v1/projects/demo/board").await;
+    board["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|column| column["cards"].as_array().unwrap().iter())
+        .find(|card| card["task"] == task)
+        .unwrap()["proposal"]
+        .clone()
+}
+
+#[tokio::test]
+async fn the_board_names_the_reviewer_while_it_holds_the_review_claim() {
+    let fx = Fixture::new().await;
+    let (_, dir) = fx.create(&fx.frontend, 1).await;
+    let proposal = fx.review_claim(&dir).await;
+    let card = card_proposal(&fx, "T-1").await;
+    assert_eq!(card["id"], json!(proposal.to_string()));
+    assert_eq!(card["state"], json!("open"));
+    assert_eq!(card["review_claim"], json!("backend"));
+
+    let reviews = fx.handle.reviews(fx.project.registry());
+    reviews
+        .submit_review(
+            &by(&fx.backend.worker),
+            proposal,
+            1,
+            fold_core::reviews::Verdict::RequestChanges,
+            "rename it",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let card = card_proposal(&fx, "T-1").await;
+    assert_eq!(card["state"], json!("changes_requested"));
+    assert_eq!(
+        card["review_claim"],
+        json!("backend"),
+        "the reviewer keeps the claim for the next version"
+    );
+
+    reviews
+        .release_review(&by(&fx.backend.worker), proposal, None)
+        .await
+        .unwrap();
+    let card = card_proposal(&fx, "T-1").await;
+    assert_eq!(card["review_claim"], Value::Null, "no reviewer holds it");
+}
+
+#[tokio::test]
+async fn a_restart_of_the_worker_starts_the_stall_window_again() {
+    let fx = Fixture::new().await;
+    let (id, _) = fx.create(&fx.frontend, 1).await;
+    fx.advance(STALL);
+    assert_eq!(fx.check().await, 1, "the lead's first start is no new turn");
+    assert!(fx.stalled(id));
+
+    let restarted = fx.advance(MINUTE);
+    let agent = fx.frontend.worker.name.agent();
+    fx.handle
+        .store
+        .write(async |tx| {
+            let process = fold_store::agents::find_worker_process(tx.conn(), &agent)
+                .await?
+                .expect("the area lead has a worker process");
+            fold_store::agents::restart_worker_process(tx, process.id, restarted).await
+        })
+        .await
+        .unwrap();
+    fx.check().await;
+    assert!(!fx.stalled(id), "the restart clears the flag");
+    assert!(fx.attention("T-1").await.is_empty());
+    fx.advance(STALL - Duration::from_millis(1));
+    assert_eq!(fx.check().await, 0, "the window counts from the restart");
+    fx.advance(Duration::from_millis(1));
+    assert_eq!(fx.check().await, 1, "a full window after the restart");
+    assert_eq!(fx.attention("T-1").await, ["stalled"]);
 }

@@ -14,6 +14,7 @@ function proposal(over: Partial<SentProposal> = {}): SentProposal {
     state: "open",
     version: 1,
     checks_failed: false,
+    review_claim: null,
     ...over,
   };
 }
@@ -136,6 +137,7 @@ describe("the sent texts", () => {
           "changes_requested",
           "human_review",
           "integration",
+          "reviewing",
           "review",
         ] as const
       ).map(waitText),
@@ -145,6 +147,7 @@ describe("the sent texts", () => {
       "changes requested",
       "waits for human review",
       "approved, waits for integration",
+      "being reviewed",
       "waits for review",
     ]);
   });

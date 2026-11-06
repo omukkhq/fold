@@ -71,7 +71,9 @@ describe("the proposal strip of the task dialog", () => {
         proposal: { ...proposal, review_claim: "review-lead" },
       }),
     );
-    expect(screen.getByText("P-7 v2 is with @review-lead")).toBeTruthy();
+    expect(
+      screen.getByText("P-7 v2 is being reviewed by @review-lead"),
+    ).toBeTruthy();
     expect(screen.getByLabelText("Proposal").className).toContain("bg-bg");
   });
 

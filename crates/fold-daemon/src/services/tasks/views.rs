@@ -103,6 +103,8 @@ pub struct CardProposal {
     pub revision: Option<RevisionId>,
     /// The review plan the open proposal waits in.
     pub review_plan: Option<ProposalPlan>,
+    /// The worker that holds the unreleased review claim.
+    pub review_claim: Option<String>,
 }
 
 /// A checklist item with the title and status of the task it links.
@@ -582,6 +584,7 @@ impl TaskService {
                 checks_failed: summary.checks_failed,
                 revision: summary.integration.as_ref().map(|record| record.revision),
                 review_plan: plans.remove(&summary.id),
+                review_claim: summary.review_claim.clone(),
             });
             let edits_after_version = self.edits_after_version(
                 snapshot.workspaces.get(&row.id).copied(),

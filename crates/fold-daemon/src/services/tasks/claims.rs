@@ -1,10 +1,11 @@
-use fold_core::claims::is_stale;
+use fold_core::claims::{is_lapsed, is_stale};
 use fold_core::events::types;
 use fold_core::{
     Actor, AgentActor, AgentName, EventActor, FoldError, LabelName, NewEvent, Role, TaskId,
     TaskStatus, Timestamp, WorkerName, WorkspaceId, codes, policy,
 };
 use fold_store::agents::{self, WorkerRow};
+use fold_store::reviews::checks;
 use fold_store::tasks::TaskRow;
 use fold_store::tasks::claims::{self, ClaimRow, ReleaseReason};
 use fold_store::{SqliteConnection, StoreError, WriteTx, tasks, workspaces};
@@ -329,7 +330,7 @@ pub(crate) async fn assign_in_tx(
     } = assign;
     if let Some(holder) = claims::unreleased_for_task(tx.conn(), task).await? {
         let movable = starter.is_some_and(|agent| holder.worker.belongs_to(agent))
-            || is_stale(holder.renewed_at, now, lease_minutes)
+            || holder_lapsed(tx.conn(), &holder, now, lease_minutes).await?
             || holder_has_ended(tx.conn(), &holder.worker).await?;
         if !movable {
             return Err(match already_claimed(&holder, now, lease_minutes) {
@@ -403,6 +404,17 @@ pub(crate) fn closed_refusal(row: &TaskRow) -> Option<TaskError> {
     )
 }
 
+/// Whether the lease of `holder` ran out at `now`, counted by [`is_lapsed`] with the holder's own check runs, so a holder that waits for its run is never taken over during it.
+async fn holder_lapsed(
+    conn: &mut SqliteConnection,
+    holder: &ClaimRow,
+    now: Timestamp,
+    lease_minutes: u64,
+) -> Result<bool, StoreError> {
+    let runs = checks::runs_of_holder(conn, holder.worker_id).await?;
+    Ok(is_lapsed(holder.renewed_at, runs, now, lease_minutes))
+}
+
 /// `already_claimed` naming the other worker that holds `holder`, with the staleness of its lease at `now`.
 pub(crate) fn already_claimed(holder: &ClaimRow, now: Timestamp, lease_minutes: u64) -> TaskError {
     let stale = is_stale(holder.renewed_at, now, lease_minutes);
@@ -465,7 +477,7 @@ async fn takeover_in_tx(
         .with_hint("the claim is yours; call get_task to see it")
         .into());
     }
-    if stale_only && !is_stale(holder.renewed_at, now, lease_minutes) {
+    if stale_only && !holder_lapsed(tx.conn(), &holder, now, lease_minutes).await? {
         return Err(FoldError::new(
             codes::CLAIM_NOT_STALE,
             format!("the claim of {} on {task} is not stale", holder.worker),

@@ -33,8 +33,8 @@ pub use previous_sessions::{
 };
 pub use questions::{
     AnswerRow, NewQuestion, QuestionKind, QuestionRow, asker_answered_by, close_open_questions,
-    find_question, insert_answer, insert_question, insert_question_message, open_ask_of_thread,
-    open_questions, question_by_id, question_messages, questions_of_worker,
+    find_question, insert_answer, insert_question, insert_question_message, last_answers_by_agent,
+    open_ask_of_thread, open_questions, question_by_id, question_messages, questions_of_worker,
 };
 pub use turns::{CostSlot, CostTotals, cost_groups, cost_slots, cost_totals};
 pub use workers::{
@@ -51,7 +51,8 @@ pub use workers::{
     unreviewed_claims_of_ended_reviewer,
 };
 pub use workers::{
-    clear_turn_error, forget_made_up_model, record_turn_error, set_exit_error, set_fold_fingerprint,
+    clear_turn_error, forget_made_up_model, process_starts, record_turn_error, set_exit_error,
+    set_fold_fingerprint,
 };
 
 /// Row ids of these tables stay inside the daemon; the public handles are the names.

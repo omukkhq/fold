@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT c.id AS \"id!: i64\", c.kind, t.number AS \"task!: i64\",\n                  p.number AS \"proposal?: i64\", w.name AS worker, c.renewed_at\n           FROM claims c\n           JOIN workers w ON w.id = c.worker_id\n           LEFT JOIN proposals p ON p.id = c.proposal_id\n           JOIN tasks t ON t.id = COALESCE(c.task_id, p.task_id)\n           WHERE c.released_at IS NULL AND c.stale_at IS NULL\n           ORDER BY c.id",
+  "query": "SELECT c.id AS \"id!: i64\", c.kind, c.worker_id, t.number AS \"task!: i64\",\n                  p.number AS \"proposal?: i64\", w.name AS worker, c.renewed_at\n           FROM claims c\n           JOIN workers w ON w.id = c.worker_id\n           LEFT JOIN proposals p ON p.id = c.proposal_id\n           JOIN tasks t ON t.id = COALESCE(c.task_id, p.task_id)\n           WHERE c.released_at IS NULL AND c.stale_at IS NULL\n           ORDER BY c.id",
   "describe": {
     "columns": [
       {
@@ -26,8 +26,19 @@
         }
       },
       {
-        "name": "task!: i64",
+        "name": "worker_id",
         "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "worker_id"
+          }
+        }
+      },
+      {
+        "name": "task!: i64",
+        "ordinal": 3,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -38,7 +49,7 @@
       },
       {
         "name": "proposal?: i64",
-        "ordinal": 3,
+        "ordinal": 4,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -49,7 +60,7 @@
       },
       {
         "name": "worker",
-        "ordinal": 4,
+        "ordinal": 5,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -60,7 +71,7 @@
       },
       {
         "name": "renewed_at",
-        "ordinal": 5,
+        "ordinal": 6,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -77,10 +88,11 @@
       false,
       false,
       false,
+      false,
       true,
       false,
       false
     ]
   },
-  "hash": "ed4173d11500cd6aefc30da6a55ed83c262be6f3f7b69439a067aeb6fba22aa9"
+  "hash": "3f5d251af6c3cbe84ab0c91195f84f9e84c862d700b63e7707857af65f3392eb"
 }

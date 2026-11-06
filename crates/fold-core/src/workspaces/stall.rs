@@ -56,32 +56,62 @@ pub enum WorkspaceChecks {
     Ended { at: Timestamp },
 }
 
-/// The time the stall window counts from: the last activity, the time the proposal came back to its author, or the end of the workspace's newest check run, whichever is latest, so the author gets the whole window to answer a verdict and the worker the whole window to act on its check results.
+/// What the worker of a task waits for from others and when they last gave it the turn, as the stall rule sees it beside its workspace and its checks. The default is a worker that waits for nobody and was never given the turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WorkerTurn {
+    /// An ask about the task or a permission question of the worker waits for a person.
+    pub waits_for_person: bool,
+    /// The newest answer of a person: a person's message about the task or to the worker, an answer for the user or the closure of an ask about the task, or the answer to a permission question of the worker.
+    pub answered_at: Option<Timestamp>,
+    /// The start of the worker's current process: a start, a resume or a hand-off.
+    pub started_at: Option<Timestamp>,
+}
+
+impl WorkerTurn {
+    /// The next move is someone else's, so the worker's silence says nothing.
+    pub fn waits(&self) -> bool {
+        self.waits_for_person
+    }
+
+    /// The latest time the worker was given the turn, or `None` when it never was.
+    pub fn given_at(&self) -> Option<Timestamp> {
+        self.answered_at.max(self.started_at)
+    }
+}
+
+/// The time the stall window counts from: the last activity, the time the proposal came back to its author, the end of the workspace's newest check run, or the time the worker was last given the turn, whichever is latest. The author gets the whole window to answer a verdict, the worker the whole window to act on its check results, an answer or a restart.
 pub fn stall_start(
     last_activity_at: Timestamp,
     turn: Option<ProposalTurn>,
     checks: WorkspaceChecks,
+    worker: WorkerTurn,
 ) -> Timestamp {
     let start = match turn {
         Some(ProposalTurn::Author { since }) => last_activity_at.max(since),
         Some(ProposalTurn::Others) | None => last_activity_at,
     };
-    match checks {
+    let start = match checks {
         WorkspaceChecks::Ended { at } => start.max(at),
         WorkspaceChecks::None | WorkspaceChecks::Running => start,
-    }
+    };
+    worker.given_at().map_or(start, |given| start.max(given))
 }
 
-/// A worker is stalled when it holds the unreleased implementation claim of the task whose active workspace has had no tracked content change for `stall_minutes` and runs no checks. The time counts from `last_activity_at`, which is the creation time of a workspace with no edits. Calls do not count: a stalled worker can hold a fresh lease. A `last_activity_at` later than `now` is not stalled.
+/// A worker is stalled when it holds the unreleased implementation claim of the task whose active workspace has had no tracked content change for `stall_minutes`, runs no checks and waits for nobody. The time counts from `last_activity_at`, which is the creation time of a workspace with no edits. Calls do not count: a stalled worker can hold a fresh lease. A `last_activity_at` later than `now` is not stalled.
 pub fn is_stalled(
     now: Timestamp,
     has_impl_claim: bool,
     workspace: WorkspaceFact,
     checks: WorkspaceChecks,
+    worker: WorkerTurn,
     last_activity_at: Timestamp,
     stall_minutes: u64,
 ) -> bool {
-    if !has_impl_claim || workspace != WorkspaceFact::Active || checks == WorkspaceChecks::Running {
+    if !has_impl_claim
+        || workspace != WorkspaceFact::Active
+        || checks == WorkspaceChecks::Running
+        || worker.waits()
+    {
         return false;
     }
     crate::tasks::claims::is_stale(last_activity_at, now, stall_minutes)
@@ -93,6 +123,11 @@ mod tests {
 
     const MINUTE: i64 = 60_000;
     const NONE: WorkspaceChecks = WorkspaceChecks::None;
+    const IDLE: WorkerTurn = WorkerTurn {
+        waits_for_person: false,
+        answered_at: None,
+        started_at: None,
+    };
 
     fn at(millis: i64) -> Timestamp {
         Timestamp::from_millis(millis).unwrap()
@@ -107,6 +142,7 @@ mod tests {
             true,
             active,
             NONE,
+            IDLE,
             edited,
             5
         ));
@@ -115,6 +151,7 @@ mod tests {
             true,
             active,
             NONE,
+            IDLE,
             edited,
             5
         ));
@@ -123,6 +160,7 @@ mod tests {
             true,
             active,
             NONE,
+            IDLE,
             edited,
             5
         ));
@@ -131,6 +169,7 @@ mod tests {
             true,
             active,
             NONE,
+            IDLE,
             edited,
             5
         ));
@@ -139,13 +178,30 @@ mod tests {
     #[test]
     fn the_window_follows_stall_minutes() {
         let active = WorkspaceFact::Active;
-        assert!(!is_stalled(at(9 * MINUTE), true, active, NONE, at(0), 10));
-        assert!(is_stalled(at(10 * MINUTE), true, active, NONE, at(0), 10));
+        assert!(!is_stalled(
+            at(9 * MINUTE),
+            true,
+            active,
+            NONE,
+            IDLE,
+            at(0),
+            10
+        ));
+        assert!(is_stalled(
+            at(10 * MINUTE),
+            true,
+            active,
+            NONE,
+            IDLE,
+            at(0),
+            10
+        ));
         assert!(!is_stalled(
             at(200_000_000_000_000),
             true,
             active,
             NONE,
+            IDLE,
             at(0),
             u64::MAX
         ));
@@ -159,6 +215,7 @@ mod tests {
             false,
             WorkspaceFact::Active,
             NONE,
+            IDLE,
             at(0),
             5
         ));
@@ -173,7 +230,7 @@ mod tests {
             WorkspaceFact::ReviewCheckout,
         ] {
             assert!(
-                !is_stalled(late, true, workspace, NONE, at(0), 5),
+                !is_stalled(late, true, workspace, NONE, IDLE, at(0), 5),
                 "{workspace:?}"
             );
         }
@@ -182,12 +239,21 @@ mod tests {
     #[test]
     fn a_workspace_that_holds_its_sent_version_does_not_stall() {
         let late = at(60 * MINUTE);
-        assert!(!is_stalled(late, true, WorkspaceFact::Sent, NONE, at(0), 5));
+        assert!(!is_stalled(
+            late,
+            true,
+            WorkspaceFact::Sent,
+            NONE,
+            IDLE,
+            at(0),
+            5
+        ));
         assert!(is_stalled(
             late,
             true,
             WorkspaceFact::Active,
             NONE,
+            IDLE,
             at(0),
             5
         ));
@@ -228,25 +294,52 @@ mod tests {
     fn requested_changes_stall_from_the_verdict_not_from_the_last_edit() {
         let verdict = at(30 * MINUTE);
         let turn = Some(ProposalTurn::Author { since: verdict });
-        let start = stall_start(at(0), turn, NONE);
+        let start = stall_start(at(0), turn, NONE, IDLE);
         assert_eq!(start, verdict);
         let fact = present_workspace(Some(false), turn);
-        assert!(!is_stalled(at(34 * MINUTE), true, fact, NONE, start, 5));
-        assert!(is_stalled(at(35 * MINUTE), true, fact, NONE, start, 5));
+        assert!(!is_stalled(
+            at(34 * MINUTE),
+            true,
+            fact,
+            NONE,
+            IDLE,
+            start,
+            5
+        ));
+        assert!(is_stalled(
+            at(35 * MINUTE),
+            true,
+            fact,
+            NONE,
+            IDLE,
+            start,
+            5
+        ));
         assert_eq!(
-            stall_start(at(40 * MINUTE), turn, NONE),
+            stall_start(at(40 * MINUTE), turn, NONE, IDLE),
             at(40 * MINUTE),
             "a later edit counts"
         );
-        assert_eq!(stall_start(at(3), Some(ProposalTurn::Others), NONE), at(3));
-        assert_eq!(stall_start(at(3), None, NONE), at(3));
+        assert_eq!(
+            stall_start(at(3), Some(ProposalTurn::Others), NONE, IDLE),
+            at(3)
+        );
+        assert_eq!(stall_start(at(3), None, NONE, IDLE), at(3));
     }
 
     #[test]
     fn activity_in_the_future_is_not_stalled() {
         let active = WorkspaceFact::Active;
-        assert!(!is_stalled(at(0), true, active, NONE, at(10 * MINUTE), 1));
-        assert!(!is_stalled(at(0), true, active, NONE, at(0), 5));
+        assert!(!is_stalled(
+            at(0),
+            true,
+            active,
+            NONE,
+            IDLE,
+            at(10 * MINUTE),
+            1
+        ));
+        assert!(!is_stalled(at(0), true, active, NONE, IDLE, at(0), 5));
     }
 
     #[test]
@@ -259,11 +352,12 @@ mod tests {
                 true,
                 active,
                 running,
+                IDLE,
                 at(0),
                 5
             ));
         }
-        assert_eq!(stall_start(at(7), None, running), at(7));
+        assert_eq!(stall_start(at(7), None, running, IDLE), at(7));
     }
 
     #[test]
@@ -272,18 +366,26 @@ mod tests {
         let ended = WorkspaceChecks::Ended {
             at: at(20 * MINUTE),
         };
-        let start = stall_start(at(0), None, ended);
+        let start = stall_start(at(0), None, ended, IDLE);
         assert_eq!(start, at(20 * MINUTE));
-        assert!(!is_stalled(at(24 * MINUTE), true, active, ended, start, 5));
+        assert!(!is_stalled(
+            at(24 * MINUTE),
+            true,
+            active,
+            ended,
+            IDLE,
+            start,
+            5
+        ));
         assert_eq!(
-            stall_start(at(30 * MINUTE), None, ended),
+            stall_start(at(30 * MINUTE), None, ended, IDLE),
             at(30 * MINUTE),
             "an edit after the run counts"
         );
         let back = Some(ProposalTurn::Author {
             since: at(40 * MINUTE),
         });
-        assert_eq!(stall_start(at(0), back, ended), at(40 * MINUTE));
+        assert_eq!(stall_start(at(0), back, ended, IDLE), at(40 * MINUTE));
     }
 
     #[test]
@@ -292,15 +394,149 @@ mod tests {
         let ended = WorkspaceChecks::Ended {
             at: at(12 * MINUTE),
         };
-        let start = stall_start(at(0), None, ended);
+        let start = stall_start(at(0), None, ended, IDLE);
         assert!(!is_stalled(
             at(17 * MINUTE - 1),
             true,
             active,
             ended,
+            IDLE,
             start,
             5
         ));
-        assert!(is_stalled(at(17 * MINUTE), true, active, ended, start, 5));
+        assert!(is_stalled(
+            at(17 * MINUTE),
+            true,
+            active,
+            ended,
+            IDLE,
+            start,
+            5
+        ));
+    }
+
+    #[test]
+    fn a_worker_that_waits_for_a_person_never_stalls() {
+        let active = WorkspaceFact::Active;
+        let asked = WorkerTurn {
+            waits_for_person: true,
+            ..IDLE
+        };
+        assert!(asked.waits());
+        for minutes in [5, 60, 24 * 60] {
+            assert!(!is_stalled(
+                at(minutes * MINUTE),
+                true,
+                active,
+                NONE,
+                asked,
+                at(0),
+                5
+            ));
+        }
+        assert!(!IDLE.waits());
+        assert!(is_stalled(
+            at(5 * MINUTE),
+            true,
+            active,
+            NONE,
+            IDLE,
+            at(0),
+            5
+        ));
+    }
+
+    #[test]
+    fn an_answer_clears_the_stall_and_only_a_new_full_window_brings_it_back() {
+        let active = WorkspaceFact::Active;
+        let edited = at(0);
+        let waiting = WorkerTurn {
+            waits_for_person: true,
+            ..IDLE
+        };
+        let start = stall_start(edited, None, NONE, waiting);
+        assert!(!is_stalled(
+            at(40 * MINUTE),
+            true,
+            active,
+            NONE,
+            waiting,
+            start,
+            5
+        ));
+        let answered = WorkerTurn {
+            answered_at: Some(at(40 * MINUTE)),
+            ..IDLE
+        };
+        let start = stall_start(edited, None, NONE, answered);
+        assert_eq!(start, at(40 * MINUTE));
+        assert!(
+            !is_stalled(at(40 * MINUTE), true, active, NONE, answered, start, 5),
+            "the answer clears the mark at once"
+        );
+        assert!(!is_stalled(
+            at(45 * MINUTE - 1),
+            true,
+            active,
+            NONE,
+            answered,
+            start,
+            5
+        ));
+        assert!(
+            is_stalled(at(45 * MINUTE), true, active, NONE, answered, start, 5),
+            "a new full window of silence"
+        );
+    }
+
+    #[test]
+    fn a_restart_of_the_worker_starts_the_window_again() {
+        let active = WorkspaceFact::Active;
+        let worker = WorkerTurn {
+            started_at: Some(at(20 * MINUTE)),
+            ..IDLE
+        };
+        assert_eq!(worker.given_at(), Some(at(20 * MINUTE)));
+        let start = stall_start(at(0), None, NONE, worker);
+        assert_eq!(start, at(20 * MINUTE));
+        assert!(!is_stalled(
+            at(25 * MINUTE - 1),
+            true,
+            active,
+            NONE,
+            worker,
+            start,
+            5
+        ));
+        assert!(is_stalled(
+            at(25 * MINUTE),
+            true,
+            active,
+            NONE,
+            worker,
+            start,
+            5
+        ));
+    }
+
+    #[test]
+    fn the_latest_of_every_restart_counts() {
+        let worker = WorkerTurn {
+            answered_at: Some(at(30)),
+            started_at: Some(at(20)),
+            ..IDLE
+        };
+        assert_eq!(worker.given_at(), Some(at(30)));
+        assert_eq!(IDLE.given_at(), None);
+        assert_eq!(WorkerTurn::default(), IDLE);
+        assert_eq!(
+            stall_start(at(50), None, NONE, worker),
+            at(50),
+            "an edit after the answer counts"
+        );
+        let back = Some(ProposalTurn::Author { since: at(40) });
+        assert_eq!(stall_start(at(0), back, NONE, worker), at(40));
+        let ended = WorkspaceChecks::Ended { at: at(45) };
+        assert_eq!(stall_start(at(0), back, ended, worker), at(45));
     }
 }

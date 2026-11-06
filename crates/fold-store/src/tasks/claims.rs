@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use fold_core::{ProposalId, TaskId, Timestamp, WorkerName};
+use fold_core::{CheckRunId, ProposalId, TaskId, Timestamp, WorkerName};
 use sqlx::SqliteExecutor;
 
 use crate::columns::time;
@@ -128,6 +128,25 @@ pub async fn renew(
     Ok(result.rows_affected())
 }
 
+/// Renews every unreleased claim of the worker that started proposal-stage run `run`, at its end `now`, so the claims get a full lease after the run the worker waited for. A run of another stage renews nothing.
+pub async fn renew_for_run(
+    tx: &mut WriteTx,
+    run: CheckRunId,
+    now: Timestamp,
+) -> Result<u64, StoreError> {
+    let (number, now) = (run.to_db(), now.as_millis());
+    let result = sqlx::query!(
+        "UPDATE claims SET renewed_at = MAX(renewed_at, ?2), stale_at = NULL
+         WHERE released_at IS NULL
+           AND worker_id = (SELECT worker_id FROM check_runs WHERE number = ?1 AND stage = 'proposal')",
+        number,
+        now
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Gives every unreleased claim of the project a full lease from `now` and clears its stale mark, as the end of a pause does.
 pub async fn renew_all(tx: &mut WriteTx, now: Timestamp) -> Result<u64, StoreError> {
     let now = now.as_millis();
@@ -232,14 +251,14 @@ pub struct StaleClaim {
     pub renewed_at: Timestamp,
 }
 
-/// Sets `stale_at = now` on each unreleased claim, of either kind, that has no `stale_at` yet and whose `renewed_at` passes `is_stale`, and returns them in the order they were taken. A marked claim is passed over until `renew` clears its `stale_at`, so each lapse is marked once.
+/// Sets `stale_at = now` on each unreleased claim, of either kind, that has no `stale_at` yet and whose `renewed_at` and holder's row id pass `is_stale`, and returns them in the order they were taken. A marked claim is passed over until `renew` clears its `stale_at`, so each lapse is marked once.
 pub async fn mark_stale(
     tx: &mut WriteTx,
     now: Timestamp,
-    is_stale: impl Fn(Timestamp) -> bool,
+    is_stale: impl Fn(Timestamp, i64) -> bool,
 ) -> Result<Vec<StaleClaim>, StoreError> {
     let rows = sqlx::query!(
-        r#"SELECT c.id AS "id!: i64", c.kind, t.number AS "task!: i64",
+        r#"SELECT c.id AS "id!: i64", c.kind, c.worker_id, t.number AS "task!: i64",
                   p.number AS "proposal?: i64", w.name AS worker, c.renewed_at
            FROM claims c
            JOIN workers w ON w.id = c.worker_id
@@ -254,7 +273,7 @@ pub async fn mark_stale(
     let mut marked = Vec::new();
     for row in rows {
         let renewed_at = time(row.renewed_at, "claims.renewed_at")?;
-        if !is_stale(renewed_at) {
+        if !is_stale(renewed_at, row.worker_id) {
             continue;
         }
         let task = TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?;

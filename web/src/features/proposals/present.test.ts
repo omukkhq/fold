@@ -133,6 +133,10 @@ describe("reviewPill", () => {
     expect(reviewPill({ ...p4, latest_verdict: null }).text).toBe(
       "Waiting for review",
     );
+    expect(
+      reviewPill({ ...p4, latest_verdict: null, review_claim: "review-4" })
+        .text,
+    ).toBe("Being reviewed");
   });
 });
 
@@ -168,7 +172,7 @@ describe("listPill", () => {
           review_claim: "review-4",
         }),
       ),
-    ).toEqual(["neutral", "Waiting for review · @review-4"]);
+    ).toEqual(["neutral", "Being reviewed by @review-4"]);
     expect(
       text(
         proposalSummary("P-5", { turn: "with_reviewer", review_claim: null }),

@@ -481,6 +481,26 @@ pub async fn list_worker_processes(
     with_bindings(conn, raw).await
 }
 
+/// The time each supervised agent's process last started: a start, a resume or a hand-off moves it.
+pub async fn process_starts(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<(AgentName, Timestamp)>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT g.name AS agent, w.started_at
+           FROM worker_processes w JOIN agents g ON g.id = w.agent_id
+           ORDER BY w.id"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let agent =
+                AgentName::parse(&row.agent).map_err(|_| StoreError::Corrupt("agents.name"))?;
+            Ok((agent, time(row.started_at, "worker_processes.started_at")?))
+        })
+        .collect()
+}
+
 /// The agent of the project's review lead, the first one started, or `None` before any.
 pub async fn review_lead(
     executor: impl SqliteExecutor<'_>,

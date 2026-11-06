@@ -145,7 +145,11 @@ export function reviewPill(
     }
     return { tone: "approved", icon: "approved", text: "Approved" };
   }
-  return { tone: "neutral", icon: "waiting", text: "Waiting for review" };
+  return {
+    tone: "neutral",
+    icon: "waiting",
+    text: p.review_claim === null ? "Waiting for review" : "Being reviewed",
+  };
 }
 
 /** Gold is only for a wait on a person; a waiting review and an end state are quiet. */
@@ -175,9 +179,11 @@ export function listPill(
   if (waiting === null) return { tone, icon: pill.icon, text: head };
   const who = waiting.actor === null ? "a human" : actorSegment(waiting.actor);
   const segments =
-    pill.icon === "waiting"
-      ? seg`${head} · ${who}`
-      : seg`${head} · waits for ${who}`;
+    pill.icon !== "waiting"
+      ? seg`${head} · waits for ${who}`
+      : p.review_claim === null
+        ? seg`${head} · ${who}`
+        : seg`${head} by ${who}`;
   return { tone, icon: pill.icon, text: segmentsText(segments), segments };
 }
 

@@ -9,6 +9,7 @@ use fold_core::{
     ProposalId, Recipient, Target, TaskId, Timestamp, WorkerName, WorkspaceId, codes, policy,
 };
 use fold_store::reviews::checks::{self, CheckResultRow, CheckRunRow, NewCheckResult, NewCheckRun};
+use fold_store::tasks::claims;
 use fold_store::workspaces::{self, WorkspaceRow, WorkspaceState};
 use fold_store::{SqliteConnection, Store, StoreError, WriteTx, counters, tasks};
 use serde_json::json;
@@ -680,7 +681,7 @@ pub(super) struct Waiting<'a> {
     pub intent: Option<&'a ProposalIntent>,
 }
 
-/// Writes the results and the end of a running run with `checks.finished`, in the caller's write. False, with nothing written, when the run had already ended, as after a daemon start ended it as stopped.
+/// Writes the results and the end of a running run with `checks.finished`, in the caller's write, and renews the claims of the worker that started a proposal-stage run, which waited for it without calls. False, with nothing written, when the run had already ended, as after a daemon start ended it as stopped.
 pub(super) async fn end_run_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
@@ -709,6 +710,7 @@ pub(super) async fn end_run_in_tx(
     if !checks::finish_run(tx, run.id, verdict.state, verdict.reason, now).await? {
         return Ok(false);
     }
+    claims::renew_for_run(tx, run.id, now).await?;
     let mut event = NewEvent::new(types::CHECKS_FINISHED, EventActor::fold())?
         .task(run.task)
         .revision(run.base);

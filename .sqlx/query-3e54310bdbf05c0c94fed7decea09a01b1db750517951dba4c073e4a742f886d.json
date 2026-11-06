@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT g.name AS \"agent!\", MAX(a.created_at) AS \"at!: i64\"\n           FROM worker_permission_answers a\n           JOIN worker_permission_questions q ON q.id = a.question_id\n           JOIN worker_processes w ON w.id = q.worker_process_id\n           JOIN agents g ON g.id = w.agent_id\n           GROUP BY g.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "at!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "3e54310bdbf05c0c94fed7decea09a01b1db750517951dba4c073e4a742f886d"
+}
