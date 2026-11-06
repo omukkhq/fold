@@ -8,7 +8,6 @@ use fold_core::stall::{
 use fold_core::{AgentName, ProjectPaths, ProposalId, TaskId, Timestamp, WorkerName, WorkspaceId};
 use fold_store::agents::{self, ClaimKind};
 use fold_store::reviews::checks;
-use fold_store::tasks::reports;
 use fold_store::{Store, StoreError, messages, reviews};
 
 use fold_core::events::types;
@@ -21,7 +20,7 @@ use crate::projects::ProjectHandle;
 use crate::services::events::{BusMessage, EventBus};
 use crate::services::projects::load_config;
 
-/// Decides the stalled flag of every live workspace of `project` at `now`, with the project's `stall_minutes`, and sets it in the live state, together with the check run that goes in each workspace. A workspace whose files are its open proposal's newest version never stalls while the proposal waits on others; once it comes back to its author, the stall time counts from that moment at the earliest. A workspace whose checks run never stalls, and the stall time counts from the end of its newest run at the earliest, so the worker gets the whole window to act on the result. A worker never stalls while an ask about its task or one of its permission questions waits for a person, or while its report waits for its lead check, and the stall time counts from a person's newest answer, the newest send-back and the start of its current process at the earliest, so an answer clears the flag and only a new full window of silence sets it again. A flag or run that changes publishes `workspace.changed`; nothing is stored and nothing else follows. Returns how many flags changed, the ones a starting run cleared included. While the project's agents are paused no flag changes except the clear at a run's start, and after a resume the stall time counts from the resume at the earliest, so the paused time never stalls a worker.
+/// Decides the stalled flag of every live workspace of `project` at `now`, with the project's `stall_minutes`, and sets it in the live state, together with the check run that goes in each workspace. A workspace whose files are its open proposal's newest version never stalls while the proposal waits on others; once it comes back to its author, the stall time counts from that moment at the earliest. A workspace whose checks run never stalls, and the stall time counts from the end of its newest run at the earliest, so the worker gets the whole window to act on the result. A worker never stalls while an ask about its task or one of its permission questions waits for a person, and the stall time counts from a person's newest answer and the start of its current process at the earliest, so an answer clears the flag and only a new full window of silence sets it again. A flag or run that changes publishes `workspace.changed`; nothing is stored and nothing else follows. Returns how many flags changed, the ones a starting run cleared included. While the project's agents are paused no flag changes except the clear at a run's start, and after a resume the stall time counts from the resume at the earliest, so the paused time never stalls a worker.
 pub async fn check_stalls(
     project: &ProjectHandle,
     now: Timestamp,
@@ -140,7 +139,7 @@ pub async fn follow_stall_turns(
     }
 }
 
-/// A message of a person or an agent, which can be an answer or an ask, the closure of an ask, a permission question or its answer, a verdict, a report or its send-back, and a start of a worker process. fold's own messages, such as check results, give no turn.
+/// A message of a person or an agent, which can be an answer or an ask, the closure of an ask, a permission question or its answer, a verdict, and a start of a worker process. fold's own messages, such as check results, give no turn.
 fn gives_a_turn(event: &Event) -> bool {
     if event.event_type == types::MESSAGE_SENT {
         return event.actor != EventActor::fold();
@@ -151,8 +150,6 @@ fn gives_a_turn(event: &Event) -> bool {
         types::WORKER_PERMISSION_ANSWERED,
         types::REVIEW_SUBMITTED,
         types::REVIEW_BATCH_SUBMITTED,
-        types::TASK_REPORTED,
-        types::TASK_SENT_BACK,
         types::WORKER_STARTED,
         types::WORKER_RESUMED,
         types::WORKER_REFRESHED,
@@ -182,15 +179,12 @@ struct StallInputs {
     permission_answers: HashMap<AgentName, Timestamp>,
     /// The last start of each supervised agent's process.
     starts: HashMap<AgentName, Timestamp>,
-    /// The reports of each task that has one.
-    reports: HashMap<TaskId, reports::ReportTurn>,
 }
 
 impl StallInputs {
     /// What `worker`, which works on `task`, waits for and when it was last given the turn.
     fn worker_turn(&self, task: TaskId, worker: &WorkerName) -> WorkerTurn {
         let agent = worker.agent();
-        let report = self.reports.get(&task);
         let answered_at = [
             self.task_answers.get(&task),
             self.worker_messages.get(worker),
@@ -202,9 +196,7 @@ impl StallInputs {
         .copied();
         WorkerTurn {
             waits_for_person: self.asked.contains(&task) || self.questioned.contains(&agent),
-            waits_for_lead_check: report.is_some_and(|report| report.open),
             answered_at,
-            sent_back_at: report.and_then(|report| report.sent_back_at),
             started_at: self.starts.get(&agent).copied(),
         }
     }
@@ -270,11 +262,6 @@ async fn stall_inputs(store: &Store) -> Result<StallInputs, StoreError> {
         .await?
         .into_iter()
         .collect();
-    let reports = reports::report_turns(&mut *tx)
-        .await?
-        .into_iter()
-        .map(|report| (report.task, report))
-        .collect();
     tx.commit().await?;
     Ok(StallInputs {
         paused: pause.is_paused(),
@@ -289,6 +276,5 @@ async fn stall_inputs(store: &Store) -> Result<StallInputs, StoreError> {
         worker_messages,
         permission_answers,
         starts,
-        reports,
     })
 }

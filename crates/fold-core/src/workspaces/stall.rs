@@ -61,12 +61,8 @@ pub enum WorkspaceChecks {
 pub struct WorkerTurn {
     /// An ask about the task or a permission question of the worker waits for a person.
     pub waits_for_person: bool,
-    /// The worker's report on a task without a proposal waits for its lead check.
-    pub waits_for_lead_check: bool,
     /// The newest answer of a person: a person's message about the task or to the worker, an answer for the user or the closure of an ask about the task, or the answer to a permission question of the worker.
     pub answered_at: Option<Timestamp>,
-    /// The newest time a lead check sent the task back to its worker.
-    pub sent_back_at: Option<Timestamp>,
     /// The start of the worker's current process: a start, a resume or a hand-off.
     pub started_at: Option<Timestamp>,
 }
@@ -74,16 +70,16 @@ pub struct WorkerTurn {
 impl WorkerTurn {
     /// The next move is someone else's, so the worker's silence says nothing.
     pub fn waits(&self) -> bool {
-        self.waits_for_person || self.waits_for_lead_check
+        self.waits_for_person
     }
 
     /// The latest time the worker was given the turn, or `None` when it never was.
     pub fn given_at(&self) -> Option<Timestamp> {
-        self.answered_at.max(self.sent_back_at).max(self.started_at)
+        self.answered_at.max(self.started_at)
     }
 }
 
-/// The time the stall window counts from: the last activity, the time the proposal came back to its author, the end of the workspace's newest check run, or the time the worker was last given the turn, whichever is latest. The author gets the whole window to answer a verdict, the worker the whole window to act on its check results, an answer, a send-back or a restart.
+/// The time the stall window counts from: the last activity, the time the proposal came back to its author, the end of the workspace's newest check run, or the time the worker was last given the turn, whichever is latest. The author gets the whole window to answer a verdict, the worker the whole window to act on its check results, an answer or a restart.
 pub fn stall_start(
     last_activity_at: Timestamp,
     turn: Option<ProposalTurn>,
@@ -129,9 +125,7 @@ mod tests {
     const NONE: WorkspaceChecks = WorkspaceChecks::None;
     const IDLE: WorkerTurn = WorkerTurn {
         waits_for_person: false,
-        waits_for_lead_check: false,
         answered_at: None,
-        sent_back_at: None,
         started_at: None,
     };
 
@@ -422,29 +416,23 @@ mod tests {
     }
 
     #[test]
-    fn a_worker_that_waits_for_a_person_or_its_lead_check_never_stalls() {
+    fn a_worker_that_waits_for_a_person_never_stalls() {
         let active = WorkspaceFact::Active;
         let asked = WorkerTurn {
             waits_for_person: true,
             ..IDLE
         };
-        let reported = WorkerTurn {
-            waits_for_lead_check: true,
-            ..IDLE
-        };
-        for worker in [asked, reported] {
-            assert!(worker.waits());
-            for minutes in [5, 60, 24 * 60] {
-                assert!(!is_stalled(
-                    at(minutes * MINUTE),
-                    true,
-                    active,
-                    NONE,
-                    worker,
-                    at(0),
-                    5
-                ));
-            }
+        assert!(asked.waits());
+        for minutes in [5, 60, 24 * 60] {
+            assert!(!is_stalled(
+                at(minutes * MINUTE),
+                true,
+                active,
+                NONE,
+                asked,
+                at(0),
+                5
+            ));
         }
         assert!(!IDLE.waits());
         assert!(is_stalled(
@@ -502,47 +490,39 @@ mod tests {
     }
 
     #[test]
-    fn a_send_back_or_a_restart_of_the_worker_starts_the_window_again() {
+    fn a_restart_of_the_worker_starts_the_window_again() {
         let active = WorkspaceFact::Active;
-        for worker in [
-            WorkerTurn {
-                sent_back_at: Some(at(20 * MINUTE)),
-                ..IDLE
-            },
-            WorkerTurn {
-                started_at: Some(at(20 * MINUTE)),
-                ..IDLE
-            },
-        ] {
-            assert_eq!(worker.given_at(), Some(at(20 * MINUTE)));
-            let start = stall_start(at(0), None, NONE, worker);
-            assert_eq!(start, at(20 * MINUTE));
-            assert!(!is_stalled(
-                at(25 * MINUTE - 1),
-                true,
-                active,
-                NONE,
-                worker,
-                start,
-                5
-            ));
-            assert!(is_stalled(
-                at(25 * MINUTE),
-                true,
-                active,
-                NONE,
-                worker,
-                start,
-                5
-            ));
-        }
+        let worker = WorkerTurn {
+            started_at: Some(at(20 * MINUTE)),
+            ..IDLE
+        };
+        assert_eq!(worker.given_at(), Some(at(20 * MINUTE)));
+        let start = stall_start(at(0), None, NONE, worker);
+        assert_eq!(start, at(20 * MINUTE));
+        assert!(!is_stalled(
+            at(25 * MINUTE - 1),
+            true,
+            active,
+            NONE,
+            worker,
+            start,
+            5
+        ));
+        assert!(is_stalled(
+            at(25 * MINUTE),
+            true,
+            active,
+            NONE,
+            worker,
+            start,
+            5
+        ));
     }
 
     #[test]
     fn the_latest_of_every_restart_counts() {
         let worker = WorkerTurn {
             answered_at: Some(at(30)),
-            sent_back_at: Some(at(10)),
             started_at: Some(at(20)),
             ..IDLE
         };
