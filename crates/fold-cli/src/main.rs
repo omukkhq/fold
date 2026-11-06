@@ -16,6 +16,7 @@ mod seed;
 mod serve;
 mod service;
 mod shell_env;
+mod shell_targets;
 mod status;
 mod token;
 

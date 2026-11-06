@@ -48,6 +48,24 @@ pub fn write_shared(fold_dir: &Path, paths: &[RepoPath]) -> io::Result<()> {
     write_atomic(&fold_dir.join(SHARED), text.as_bytes())
 }
 
+/// The `.fold/exclude` lines that fold added for shared folders, one per line, so an unshare removes those lines and never one of the user's.
+const ADDED_EXCLUDES: &str = "shared-excludes";
+
+/// The `.fold/exclude` lines fold added for shared paths. Blocking.
+pub fn added_excludes(fold_dir: &Path) -> io::Result<Vec<String>> {
+    match std::fs::read_to_string(fold_dir.join(ADDED_EXCLUDES)) {
+        Ok(text) => Ok(text.lines().map(str::to_owned).collect()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Replaces the list of [`added_excludes`] with `lines`. Blocking.
+pub fn write_added_excludes(fold_dir: &Path, lines: &[String]) -> io::Result<()> {
+    let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+    write_atomic(&fold_dir.join(ADDED_EXCLUDES), text.as_bytes())
+}
+
 /// Why a path cannot be shared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotShareable {

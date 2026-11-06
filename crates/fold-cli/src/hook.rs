@@ -417,7 +417,7 @@ fn edit_guard(cwd: &Path, file: &Path) -> EditGuard {
     EditGuard::Allow
 }
 
-/// The reason to refuse a shell command that would run in `cwd`, for a worker whose start folder is `start`; `None` lets it run. In its own project a worker's shell runs only in its start folder or in a directory below `.fold/ws/<workspace>/`, so a relative path of the command never lands in the project folder or in fold's data. A command that starts with `cd` into such a directory followed by `&&` runs there, which lets a shell that ended up elsewhere move back. Both paths are followed to their real paths first, so a symbolic link into the project folder counts as the project folder. A `cwd` outside the project is left to Claude Code's own rules. The guard sees only where the command starts, not the paths it names.
+/// The reason to refuse a shell command that would run in `cwd`, for a worker whose start folder is `start`; `None` lets it run. In its own project a worker's shell runs only in its start folder or in a directory below `.fold/ws/<workspace>/`, so a relative path of the command never lands in the project folder or in fold's data. A command that starts with `cd` into such a directory followed by `&&` runs there, which lets a shell that ended up elsewhere move back. Both paths are followed to their real paths first, so a symbolic link into the project folder counts as the project folder. A `cwd` outside the project is left to Claude Code's own rules. Where a command may run, it is refused still when it names a shared path as a write target in a common form (see [`shared_write`]); every other path it names is left to the worker, so only Claude Code's sandbox can refuse every write.
 fn shell_guard(cwd: &Path, command: &str, start: &Path) -> Option<String> {
     let start = std::fs::canonicalize(start).ok()?;
     let root = project_root_at_or_above(&start)?;
@@ -431,20 +431,40 @@ fn shell_guard(cwd: &Path, command: &str, start: &Path) -> Option<String> {
                 .and_then(|inside| inside.strip_prefix(fold_core::layout::WS_DIR).ok())
                 .is_some_and(|below| below.components().next().is_some())
     };
-    if allowed(&cwd) {
-        return None;
-    }
-    if let Some(target) = leading_cd(command)
-        && let Ok(target) = std::fs::canonicalize(cwd.join(target))
-        && target.starts_with(&root)
-        && allowed(&target)
-    {
-        return None;
+    let moves_back = || {
+        leading_cd(command)
+            .and_then(|target| std::fs::canonicalize(cwd.join(target)).ok())
+            .is_some_and(|target| target.starts_with(&root) && allowed(&target))
+    };
+    if allowed(&cwd) || moves_back() {
+        return shared_write(&root, &cwd, command).map(|path| {
+            format!(
+                "this command writes to {path}, a shared file of the project folder that your workspace links to; workers only read shared files, and a change there cannot be undone. Ask the main agent with send_message to change it."
+            )
+        });
     }
     Some(format!(
         "fold runs your shell commands only in your workspace under .fold/ws/ or in your start folder {}: the project folder is fold main and changes only through integration. Run the command again as cd '<absolute path of your workspace>' && <command>.",
         start.display()
     ))
+}
+
+/// The shared path of the project at `root` that `command`, run in `cwd`, names as a write target in one of the forms [`crate::shell_targets::write_targets`] reads, through a workspace's link or by its path in the project folder. A net for the common mistakes, not a boundary.
+fn shared_write(root: &Path, cwd: &Path, command: &str) -> Option<String> {
+    let shared = fold_vcs::shared::read_shared(&ProjectPaths::new(root).fold_dir()).ok()?;
+    if shared.is_empty() {
+        return None;
+    }
+    crate::shell_targets::write_targets(command)
+        .into_iter()
+        .find_map(|(dir, target)| {
+            let base = dir.map_or_else(|| cwd.to_path_buf(), |dir| cwd.join(dir));
+            let real = resolve(&base.join(target));
+            shared
+                .iter()
+                .find(|path| real.starts_with(root.join(path.to_string())))
+                .map(ToString::to_string)
+        })
 }
 
 /// The folder of a command that starts with `cd <folder>`, alone or followed by `&&`: one word, bare or in quotes, that holds no expansion, so the folder is the one the shell goes to. `None` for every other command.
@@ -972,5 +992,47 @@ mod tests {
         std::fs::create_dir_all(&start).unwrap();
         assert!(shell_guard(&workspace.join("design"), "touch x", &start).is_some());
         assert!(shell_guard(&workspace, "cat design/home.pen", &start).is_none());
+    }
+
+    #[test]
+    fn a_shell_command_that_writes_to_a_shared_path_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap().join("app");
+        let workspace = root.join(".fold/ws/t-1");
+        let start = root.join(".fold/workers/web-worker/start");
+        for folder in [&workspace, &start, &root.join("design")] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        std::fs::write(root.join(".fold/fold.db"), "").unwrap();
+        std::fs::write(root.join(".fold/shared"), "design\n").unwrap();
+        symlink(root.join("design"), workspace.join("design")).unwrap();
+        let ws = workspace.display().to_string();
+        for command in [
+            "echo x > design/home.pen".to_owned(),
+            "rm -rf design".to_owned(),
+            "sed -i s/a/b/ design/notes.md".to_owned(),
+            format!("echo x >> {}/design/a.md", root.display()),
+            format!("cd '{ws}' && touch design/new.pen"),
+        ] {
+            let cwd = if command.starts_with("cd") {
+                &start
+            } else {
+                &workspace
+            };
+            let reason = shell_guard(cwd, &command, &start);
+            assert!(
+                reason
+                    .as_deref()
+                    .is_some_and(|text| text.contains("design")),
+                "{command}"
+            );
+        }
+        for command in [
+            "cat design/home.pen",
+            "cp design/home.pen src/home.pen",
+            "echo x > src/a.md",
+        ] {
+            assert_eq!(shell_guard(&workspace, command, &start), None, "{command}");
+        }
     }
 }

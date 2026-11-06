@@ -124,6 +124,14 @@ async fn acceptance_35_a_worker_reads_a_shared_design_file_through_its_workspace
         .await;
     assert_eq!(status, StatusCode::OK, "{removed}");
     assert_eq!(paths(&removed["removed"]), ["design"]);
+    // The line that sharing added leaves `.fold/exclude`; the user's own line stays.
+    let lines: Vec<String> = fs::read_to_string(&exclude)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert!(!lines.iter().any(|line| line == "/design"), "{lines:?}");
+    assert!(lines.iter().any(|line| line == "design/"), "{lines:?}");
     // A link stays until the workspace's next sync, the point at which fold writes into it.
     assert!(fs::symlink_metadata(dir.join("design")).is_ok());
     harness

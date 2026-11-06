@@ -143,6 +143,34 @@ async fn green_integration_checks_let_the_proposal_reach_main() {
     assert!(checked.join("fold-checks.toml").is_file());
 }
 
+/// A shared reference folder of the project folder is linked into fold's check folder too, so an integration check reads it.
+#[tokio::test]
+async fn an_integration_check_reads_a_shared_path_through_its_link() {
+    let fx = Fixture::new().await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
+    let paths = fx.project.paths();
+    std::fs::create_dir_all(paths.root().join("design")).unwrap();
+    std::fs::write(paths.root().join("design/home.pen"), "pen").unwrap();
+    let exclude = paths.fold_dir().join("exclude");
+    let mut rules = std::fs::read_to_string(&exclude).unwrap_or_default();
+    rules.push_str("/design\n");
+    std::fs::write(&exclude, rules).unwrap();
+    std::fs::write(paths.fold_dir().join("shared"), "design\n").unwrap();
+    let proposal = approved(&fx, 1, |dir| {
+        checks_file(dir, "test -f design/home.pen && echo seen");
+    })
+    .await;
+    fx.reviews
+        .integrate_proposal(&human(), p(proposal), Some(1))
+        .await
+        .unwrap();
+    integrated(&fx, proposal).await;
+    assert_eq!(
+        std::fs::read_link(paths.checks_dir().join("design")).unwrap(),
+        paths.root().canonicalize().unwrap().join("design")
+    );
+}
+
 #[tokio::test]
 async fn red_integration_checks_send_the_proposal_back_to_its_author() {
     let fx = Fixture::new().await;

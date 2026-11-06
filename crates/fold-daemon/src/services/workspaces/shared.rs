@@ -3,11 +3,12 @@ use std::path::Path;
 use fold_core::policy::{self, Starter};
 use fold_core::{Actor, FoldError, codes};
 use fold_store::{StoreError, agents};
-use fold_vcs::git_remote::add_exclude_patterns;
+use fold_vcs::git_remote::{add_exclude_patterns, remove_exclude_patterns};
 use fold_vcs::ignore::IgnoreRules;
 use fold_vcs::paths::RepoPath;
 use fold_vcs::shared::{
-    NotShareable, check_shareable, link_shared, read_shared, unshared_ignored, write_shared,
+    NotShareable, added_excludes, check_shareable, link_shared, read_shared, unshared_ignored,
+    write_added_excludes, write_shared,
 };
 use serde_json::json;
 
@@ -61,7 +62,14 @@ impl WorkspaceService {
                 shared.push(shareable.path);
             }
             if !excludes.is_empty() {
-                add_exclude_patterns(&fold_dir, &excludes)?;
+                let made = add_exclude_patterns(&fold_dir, &excludes)?;
+                let mut own = added_excludes(&fold_dir).map_err(io_error)?;
+                own.extend(
+                    made.into_iter()
+                        .filter(|line| !own.contains(line))
+                        .collect::<Vec<_>>(),
+                );
+                write_added_excludes(&fold_dir, &own).map_err(io_error)?;
             }
             if !added.is_empty() {
                 shared.sort();
@@ -74,7 +82,7 @@ impl WorkspaceService {
         Ok(added)
     }
 
-    /// Takes `paths` off the shared list, for a human or the main agent (`policy::can_share_paths`). A workspace drops its link at its next sync; its files never change otherwise. Returns the paths removed; one the list does not hold is left out.
+    /// Takes `paths` off the shared list, for a human or the main agent (`policy::can_share_paths`), with the `.fold/exclude` line that sharing a path added; a line of the user's stays. A workspace drops its link at its next sync; its files never change otherwise. Returns the paths removed; one the list does not hold is left out.
     pub async fn unshare_paths(
         &self,
         actor: &Actor,
@@ -95,6 +103,18 @@ impl WorkspaceService {
             }
             if !removed.is_empty() {
                 write_shared(&fold_dir, &shared).map_err(io_error)?;
+                // Only the lines fold added for these paths leave `.fold/exclude`.
+                let mut own = added_excludes(&fold_dir).map_err(io_error)?;
+                let lines: Vec<String> = removed
+                    .iter()
+                    .map(|path| format!("/{path}"))
+                    .filter(|line| own.contains(line))
+                    .collect();
+                if !lines.is_empty() {
+                    remove_exclude_patterns(&fold_dir, &lines)?;
+                    own.retain(|line| !lines.contains(line));
+                    write_added_excludes(&fold_dir, &own).map_err(io_error)?;
+                }
             }
             Ok(removed)
         })
