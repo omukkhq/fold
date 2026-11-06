@@ -20,6 +20,7 @@ import { folderAt, parentDirs, parentOf } from "./search";
 import { CommitId } from "@/components/mono/CommitId";
 import { GitStatus } from "../git/GitStatus";
 import { RevisionList } from "./RevisionList";
+import { StashPanel } from "./StashPanel";
 import { TreeView } from "./TreeView";
 
 interface RepositoryScreenProps {
@@ -232,6 +233,7 @@ export function RepositoryScreen({
           </div>
         )}
         <GitStatus slug={slug} variant="panel" />
+        <StashPanel slug={slug} now={now} />
       </section>
     </div>
   );

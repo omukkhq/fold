@@ -559,11 +559,13 @@ describe("invalidation rules", () => {
       "stash.applied",
       "stash.conflicted",
       "stash.dropped",
+      "stash.discarded",
     ]) {
       invalidated = [];
       applyEvent(client, slug, ev(type));
       expect(hit(keys.needsYou(slug))).toBe(true);
       expect(hit(keys.project(slug))).toBe(true);
+      expect(hit(keys.stash(slug))).toBe(true);
       expect(hit(keys.board(slug))).toBe(false);
     }
   });

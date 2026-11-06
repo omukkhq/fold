@@ -86,6 +86,7 @@ export const keys = {
   revisionFile: (slug: string, revision: string, path: string) =>
     [slug, "revision-file", revision, path] as const,
   git: (slug: string) => [slug, "git"] as const,
+  stash: (slug: string) => [slug, "stash"] as const,
   /** Every task read of the project, under one prefix. */
   tasks: (slug: string) => [slug, "task"] as const,
   workspaces: (slug: string) => [slug, "workspaces"] as const,

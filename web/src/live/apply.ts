@@ -501,6 +501,7 @@ function invalidationKeys(
         keys.git(slug),
         keys.project(slug),
         keys.needsYou(slug),
+        keys.stash(slug),
       ];
     case "project":
       return [keys.project(slug), keys.workers(slug), keys.agents(slug)];
