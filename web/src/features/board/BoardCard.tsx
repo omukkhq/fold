@@ -143,7 +143,13 @@ function MetaLine({ card }: { card: BoardCardData }) {
     )),
   ];
   if (card.worker !== null) {
-    parts.push(<PersonName key="worker" name={card.worker} />);
+    parts.push(
+      <PersonName
+        key="worker"
+        name={card.worker}
+        className="min-w-0 truncate"
+      />,
+    );
   } else if (fact !== null) {
     parts.push(
       <span key="fact" className="min-w-0 truncate">
