@@ -1274,3 +1274,33 @@ async fn the_board_names_the_reviewer_while_it_holds_the_review_claim() {
     let card = card_proposal(&fx, "T-1").await;
     assert_eq!(card["review_claim"], Value::Null, "no reviewer holds it");
 }
+
+#[tokio::test]
+async fn a_restart_of_the_worker_starts_the_stall_window_again() {
+    let fx = Fixture::new().await;
+    let (id, _) = fx.create(&fx.frontend, 1).await;
+    fx.advance(STALL);
+    assert_eq!(fx.check().await, 1, "the lead's first start is no new turn");
+    assert!(fx.stalled(id));
+
+    let restarted = fx.advance(MINUTE);
+    let agent = fx.frontend.worker.name.agent();
+    fx.handle
+        .store
+        .write(async |tx| {
+            let process = fold_store::agents::find_worker_process(tx.conn(), &agent)
+                .await?
+                .expect("the area lead has a worker process");
+            fold_store::agents::restart_worker_process(tx, process.id, restarted).await
+        })
+        .await
+        .unwrap();
+    fx.check().await;
+    assert!(!fx.stalled(id), "the restart clears the flag");
+    assert!(fx.attention("T-1").await.is_empty());
+    fx.advance(STALL - Duration::from_millis(1));
+    assert_eq!(fx.check().await, 0, "the window counts from the restart");
+    fx.advance(Duration::from_millis(1));
+    assert_eq!(fx.check().await, 1, "a full window after the restart");
+    assert_eq!(fx.attention("T-1").await, ["stalled"]);
+}
