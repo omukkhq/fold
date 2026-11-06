@@ -18,7 +18,7 @@ pub const EXCLUDE: &str = "exclude";
 pub const EXCLUDE_NOTE: &str =
     "# fold writes this file. To keep a path, add a ! line to .foldignore.";
 
-/// The lines fold keeps in every project's `.fold/exclude`, after the user's own: one for each folder of fold's own skills (`layout::fold_skills`), which fold refreshes after each upgrade and every session reads from the project root, and one for Claude Code's settings of one person on one machine. Each skill has a line of its own, so a skill of the user's whose name starts with `fold-` stays tracked, and a role added in an upgrade gets its line at the next open. A `!` line of a `.gitignore` or `.foldignore` brings one back, and a file main tracks already stays tracked.
+/// The lines fold keeps in every project's `.fold/exclude`, after the user's own: one for each folder of fold's own skills (`layout::fold_skills`), which fold refreshes after each upgrade and every session reads from the project folder or a copy of it, and one for Claude Code's settings of one person on one machine. Each skill has a line of its own, so a skill of the user's whose name starts with `fold-` stays tracked, and a role added in an upgrade gets its line at the next open. A `!` line of a `.gitignore` or `.foldignore` brings one back, and a file main tracks already stays tracked.
 pub fn claude_excludes() -> Vec<String> {
     fold_core::layout::fold_skills()
         .map(|skill| format!("/{}/{skill}/", fold_core::layout::SKILLS_DIR))

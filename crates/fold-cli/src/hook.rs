@@ -5,6 +5,7 @@ use std::time::Duration;
 use clap::{Args, Subcommand};
 use fold_cli::claude_files;
 use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient};
+use fold_core::layout::{SHELL_TOOLS, START_DIR_ENV};
 use fold_core::{AgentName, ProjectPaths, codes};
 use hyper::Method;
 use serde_json::{Value, json};
@@ -34,7 +35,7 @@ enum HookCommand {
     SessionStart(HookOptions),
     /// Claude Code Stop hook: keep the turn going once while the agent has unread fold messages
     Stop(HookOptions),
-    /// Claude Code PreToolUse hook for the file tools: refuse an edit of the project folder outside the workspaces in .fold/ws/, and an edit of a review checkout other than the session's own
+    /// Claude Code PreToolUse hook for the file tools: refuse an edit of the project folder outside the workspaces in .fold/ws/, and an edit of a review checkout other than the session's own; for a worker in its start folder, also a shell command that would run in the project folder outside the workspaces
     PreToolUse(HookOptions),
 }
 
@@ -223,14 +224,19 @@ fn pre_tool_use(options: &HookOptions, agent: &str) -> Result<Option<Value>, Str
             None => Err(codes::INTERNAL_ERROR.to_owned()),
         }
     };
-    edit_decision(io::stdin().lock(), MAX_EDIT_INPUT, ask)
+    let start = std::env::var_os(START_DIR_ENV)
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from);
+    edit_decision(io::stdin().lock(), MAX_EDIT_INPUT, start.as_deref(), ask)
 }
 
 /// What the edit guard needs from the tool input. The content of a large `Write` is skipped while reading, so the input's size never hides the path from the guard.
 #[derive(Default)]
 struct EditTarget {
     cwd: Option<String>,
+    tool: Option<String>,
     file: Option<String>,
+    command: Option<String>,
 }
 
 impl<'de> serde::Deserialize<'de> for EditTarget {
@@ -249,7 +255,12 @@ impl<'de> serde::Deserialize<'de> for EditTarget {
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "cwd" => target.cwd = map.next_value::<Option<String>>()?,
-                        "tool_input" => target.file = map.next_value::<ToolInput>()?.0,
+                        "tool_name" => target.tool = map.next_value::<Option<String>>()?,
+                        "tool_input" => {
+                            let input = map.next_value::<ToolInput>()?;
+                            target.file = input.file;
+                            target.command = input.command;
+                        }
                         _ => {
                             map.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -262,7 +273,11 @@ impl<'de> serde::Deserialize<'de> for EditTarget {
     }
 }
 
-struct ToolInput(Option<String>);
+#[derive(Default)]
+struct ToolInput {
+    file: Option<String>,
+    command: Option<String>,
+}
 
 impl<'de> serde::Deserialize<'de> for ToolInput {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -276,30 +291,35 @@ impl<'de> serde::Deserialize<'de> for ToolInput {
                 self,
                 mut map: A,
             ) -> Result<ToolInput, A::Error> {
-                let (mut file, mut notebook) = (None, None);
+                let (mut file, mut notebook, mut command) = (None, None, None);
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "file_path" => file = map.next_value::<Option<String>>()?,
                         "notebook_path" => notebook = map.next_value::<Option<String>>()?,
+                        "command" => command = map.next_value::<Option<String>>()?,
                         _ => {
                             map.next_value::<serde::de::IgnoredAny>()?;
                         }
                     }
                 }
-                Ok(ToolInput(file.or(notebook)))
+                Ok(ToolInput {
+                    file: file.or(notebook),
+                    command,
+                })
             }
             fn visit_unit<E>(self) -> Result<ToolInput, E> {
-                Ok(ToolInput(None))
+                Ok(ToolInput::default())
             }
         }
         deserializer.deserialize_any(Fields)
     }
 }
 
-/// The guard's answer for one tool input. Input past `limit` bytes cannot be read to its end, so it is denied rather than left without a decision. `ask` gives the daemon's answer for a review checkout: `None` when the session may edit there, else the reason it may not. A daemon that cannot answer denies the edit too, since an error here would leave the decision to Claude Code's own rules.
+/// The guard's answer for one tool input. Input past `limit` bytes cannot be read to its end, so it is denied rather than left without a decision. `ask` gives the daemon's answer for a review checkout: `None` when the session may edit there, else the reason it may not. A daemon that cannot answer denies the edit too, since an error here would leave the decision to Claude Code's own rules. A shell tool's command is judged only for a worker with a start folder `start`.
 fn edit_decision(
     input: impl Read,
     limit: u64,
+    start: Option<&Path>,
     ask: impl FnOnce(&Path, &str) -> Result<Option<String>, String>,
 ) -> Result<Option<Value>, String> {
     let mut input = input.take(limit);
@@ -313,6 +333,12 @@ fn edit_decision(
         Err(_) => return Err(codes::INVALID_REQUEST.to_owned()),
     };
     let cwd = target.cwd.ok_or(codes::INVALID_REQUEST)?;
+    if let (Some(start), Some(tool)) = (start, target.tool.as_deref())
+        && SHELL_TOOLS.split('|').any(|shell| shell == tool)
+    {
+        let command = target.command.unwrap_or_default();
+        return Ok(shell_guard(Path::new(&cwd), &command, start).map(|reason| deny(&reason)));
+    }
     let Some(file) = target.file else {
         return Ok(None);
     };
@@ -389,6 +415,64 @@ fn edit_guard(cwd: &Path, file: &Path) -> EditGuard {
         };
     }
     EditGuard::Allow
+}
+
+/// The reason to refuse a shell command that would run in `cwd`, for a worker whose start folder is `start`; `None` lets it run. In its own project a worker's shell runs only in its start folder or in a directory below `.fold/ws/<workspace>/`, so a relative path of the command never lands in the project folder or in fold's data. A command that starts with `cd` into such a directory followed by `&&` runs there, which lets a shell that ended up elsewhere move back. Both paths are followed to their real paths first, so a symbolic link into the project folder counts as the project folder. A `cwd` outside the project is left to Claude Code's own rules. The guard sees only where the command starts, not the paths it names.
+fn shell_guard(cwd: &Path, command: &str, start: &Path) -> Option<String> {
+    let start = std::fs::canonicalize(start).ok()?;
+    let root = project_root_at_or_above(&start)?;
+    let cwd = std::fs::canonicalize(cwd).ok()?;
+    let allowed = |dir: &Path| {
+        !dir.starts_with(&root)
+            || dir.starts_with(&start)
+            || dir
+                .strip_prefix(&root)
+                .ok()
+                .and_then(|inside| inside.strip_prefix(fold_core::layout::WS_DIR).ok())
+                .is_some_and(|below| below.components().next().is_some())
+    };
+    if allowed(&cwd) {
+        return None;
+    }
+    if let Some(target) = leading_cd(command)
+        && let Ok(target) = std::fs::canonicalize(cwd.join(target))
+        && target.starts_with(&root)
+        && allowed(&target)
+    {
+        return None;
+    }
+    Some(format!(
+        "fold runs your shell commands only in your workspace under .fold/ws/ or in your start folder {}: the project folder is fold main and changes only through integration. Run the command again as cd '<absolute path of your workspace>' && <command>.",
+        start.display()
+    ))
+}
+
+/// The folder of a command that starts with `cd <folder>`, alone or followed by `&&`: one word, bare or in quotes, that holds no expansion, so the folder is the one the shell goes to. `None` for every other command.
+fn leading_cd(command: &str) -> Option<&str> {
+    let rest = command.trim_start().strip_prefix("cd")?;
+    let rest = rest.strip_prefix([' ', '\t'])?.trim_start();
+    let (folder, after) = match rest.chars().next()? {
+        quote @ ('\'' | '"') => {
+            let end = rest[1..].find(quote)? + 1;
+            let folder = &rest[1..end];
+            if quote == '"' && folder.contains(['$', '`', '\\']) {
+                return None;
+            }
+            (folder, &rest[end + 1..])
+        }
+        _ => {
+            let end = rest
+                .find(|c: char| c.is_whitespace() || "&;|<>()".contains(c))
+                .unwrap_or(rest.len());
+            let folder = &rest[..end];
+            if folder.contains(['$', '`', '\\', '\'', '"', '*', '?', '[', '{', '~']) {
+                return None;
+            }
+            (folder, &rest[end..])
+        }
+    };
+    let after = after.trim_start();
+    (!folder.is_empty() && (after.is_empty() || after.starts_with("&&"))).then_some(folder)
 }
 
 /// `path` with `.` and `..` removed and its longest existing ancestor replaced by its canonical form. A `..` follows the symlinks before it, as the operating system does, so `link/..` is the parent of the link's target.
@@ -608,6 +692,7 @@ mod tests {
         assert!(denied(edit_decision(
             into_main.as_bytes(),
             MAX_EDIT_INPUT,
+            None,
             no_daemon
         )));
 
@@ -615,6 +700,7 @@ mod tests {
         assert!(!denied(edit_decision(
             into_workspace.as_bytes(),
             MAX_EDIT_INPUT,
+            None,
             no_daemon
         )));
     }
@@ -622,13 +708,27 @@ mod tests {
     #[test]
     fn input_past_the_limit_is_denied_and_bad_input_is_an_error() {
         let (_dir, input) = project_with_input(1000, ".fold/ws/t-1/a.txt");
-        assert!(denied(edit_decision(input.as_bytes(), 100, no_daemon)));
-        assert!(edit_decision(&b"not json"[..], MAX_EDIT_INPUT, no_daemon).is_err());
-        assert!(edit_decision(&br#"{"tool_input":{}}"#[..], MAX_EDIT_INPUT, no_daemon).is_err());
+        assert!(denied(edit_decision(
+            input.as_bytes(),
+            100,
+            None,
+            no_daemon
+        )));
+        assert!(edit_decision(&b"not json"[..], MAX_EDIT_INPUT, None, no_daemon).is_err());
+        assert!(
+            edit_decision(
+                &br#"{"tool_input":{}}"#[..],
+                MAX_EDIT_INPUT,
+                None,
+                no_daemon
+            )
+            .is_err()
+        );
         assert!(
             edit_decision(
                 &br#"{"cwd":"/","tool_input":{}}"#[..],
                 MAX_EDIT_INPUT,
+                None,
                 no_daemon
             )
             .unwrap()
@@ -638,6 +738,7 @@ mod tests {
             edit_decision(
                 &br#"{"cwd":"/","tool_input":null}"#[..],
                 MAX_EDIT_INPUT,
+                None,
                 no_daemon
             )
             .unwrap()
@@ -697,7 +798,7 @@ mod tests {
         })
         .to_string();
         let mut asked = None;
-        let answer = edit_decision(input.as_bytes(), MAX_EDIT_INPUT, |root, workspace| {
+        let answer = edit_decision(input.as_bytes(), MAX_EDIT_INPUT, None, |root, workspace| {
             asked = Some((root.to_path_buf(), workspace.to_owned()));
             Ok(None)
         });
@@ -706,7 +807,7 @@ mod tests {
             asked,
             Some((root.clone(), ".fold/ws/review-p-1".to_owned()))
         );
-        let refused = edit_decision(input.as_bytes(), MAX_EDIT_INPUT, |_, _| {
+        let refused = edit_decision(input.as_bytes(), MAX_EDIT_INPUT, None, |_, _| {
             Ok(Some(
                 "this review checkout belongs to another reviewer".to_owned(),
             ))
@@ -718,7 +819,7 @@ mod tests {
             "this review checkout belongs to another reviewer"
         );
         // A daemon that cannot answer denies the edit; an error would leave it to Claude Code.
-        let unreachable = edit_decision(input.as_bytes(), MAX_EDIT_INPUT, no_daemon)
+        let unreachable = edit_decision(input.as_bytes(), MAX_EDIT_INPUT, None, no_daemon)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -731,5 +832,121 @@ mod tests {
                 .unwrap()
                 .contains(codes::DAEMON_UNREACHABLE)
         );
+    }
+
+    fn shell_input(cwd: &Path, tool: &str, command: &str) -> String {
+        json!({
+            "tool_name": tool,
+            "tool_input": {"command": command, "description": "x"},
+            "cwd": cwd.to_str().unwrap(),
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_confined_worker_runs_shell_commands_only_in_a_workspace_or_its_start_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("app");
+        let start = root.join(".fold/workers/web-worker/start");
+        for folder in [".fold/ws/t-1/src", ".fold/ws/review-rb-2", "src", "design"] {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+        }
+        std::fs::create_dir_all(&start).unwrap();
+        std::fs::write(root.join(".fold/fold.db"), "").unwrap();
+        // A link in a workspace that leads into the project folder, as a shared reference folder is.
+        symlink(root.join("design"), root.join(".fold/ws/t-1/design")).unwrap();
+        let workspace = root.join(".fold/ws/t-1");
+        let refused = |cwd: &Path, command: &str| shell_guard(cwd, command, &start).is_some();
+
+        for cwd in [
+            start.clone(),
+            workspace.clone(),
+            workspace.join("src"),
+            root.join(".fold/ws/review-rb-2"),
+            dir.path().to_path_buf(),
+        ] {
+            assert!(!refused(&cwd, "touch x"), "{}", cwd.display());
+        }
+        for cwd in [
+            root.clone(),
+            root.join("src"),
+            root.join(".fold"),
+            root.join(".fold/ws"),
+            root.join(".fold/workers/web-worker"),
+            workspace.join("design"),
+        ] {
+            assert!(refused(&cwd, "touch x"), "{}", cwd.display());
+        }
+        let back = format!("cd '{}' && touch x", workspace.display());
+        assert!(!refused(&root, &back));
+        assert!(!refused(&root, &format!("cd {}", workspace.display())));
+        assert!(!refused(&root, "cd .fold/ws/t-1 && cargo test"));
+        assert!(!refused(&root, "cd \".fold/ws/t-1/src\" && ls"));
+        for command in [
+            format!("cd '{}'; touch x", workspace.display()),
+            format!("cd '{}' || touch x", workspace.display()),
+            "cd src && touch x".to_owned(),
+            "cd $HOME && touch x".to_owned(),
+            "cd \"$WS\" && touch x".to_owned(),
+            "cd .fold/ws/t-1/design && touch x".to_owned(),
+            "cdx .fold/ws/t-1".to_owned(),
+            "cd".to_owned(),
+            "touch x".to_owned(),
+        ] {
+            assert!(refused(&root, &command), "{command}");
+        }
+        let reason = shell_guard(&root, "touch x", &start).unwrap();
+        assert!(reason.contains(".fold/workers/web-worker/start"));
+    }
+
+    #[test]
+    fn only_a_worker_with_a_start_folder_has_its_shell_commands_judged() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("app");
+        let start = root.join(".fold/workers/web-worker/start");
+        std::fs::create_dir_all(&start).unwrap();
+        std::fs::create_dir_all(root.join(".fold/ws/t-1")).unwrap();
+        std::fs::write(root.join(".fold/fold.db"), "").unwrap();
+        let in_root = shell_input(&root, "Bash", "echo > plan.md");
+        assert!(denied(edit_decision(
+            in_root.as_bytes(),
+            MAX_EDIT_INPUT,
+            Some(&start),
+            no_daemon
+        )));
+        let monitor = shell_input(&root, "Monitor", "tail -f log");
+        assert!(denied(edit_decision(
+            monitor.as_bytes(),
+            MAX_EDIT_INPUT,
+            Some(&start),
+            no_daemon
+        )));
+        // The main agent and a session opened by hand work in the project folder.
+        assert!(!denied(edit_decision(
+            in_root.as_bytes(),
+            MAX_EDIT_INPUT,
+            None,
+            no_daemon
+        )));
+        let in_workspace = shell_input(&root.join(".fold/ws/t-1"), "Bash", "echo > plan.md");
+        assert!(!denied(edit_decision(
+            in_workspace.as_bytes(),
+            MAX_EDIT_INPUT,
+            Some(&start),
+            no_daemon
+        )));
+        // A file tool is still judged by its path.
+        let write = json!({
+            "tool_name": "Write",
+            "tool_input": {"file_path": "plan.md", "content": ""},
+            "cwd": start.to_str().unwrap(),
+        })
+        .to_string();
+        assert!(denied(edit_decision(
+            write.as_bytes(),
+            MAX_EDIT_INPUT,
+            Some(&start),
+            no_daemon
+        )));
     }
 }

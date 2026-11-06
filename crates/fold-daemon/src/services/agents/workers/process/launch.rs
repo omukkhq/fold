@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use fold_core::config::RoleSettings;
 use fold_core::events::types;
 use fold_core::layout::{
-    AGENT_ENV, AGENT_TAGS_ENV, MCP_COMMAND, MCP_SERVER_NAME, MCP_SERVERS_KEY, session_settings,
+    AGENT_ENV, AGENT_TAGS_ENV, LOCAL_SETTINGS_FILE, MAINTAIN_DIR_ENV, MCP_COMMAND, MCP_SERVER_NAME,
+    MCP_SERVERS_KEY, SKILLS_DIR, START_DIR_ENV, WS_DIR, fold_skills, session_settings,
+    worker_settings,
 };
 use fold_core::roles::{
     CLAUDE_NOT_FOUND, FLD_MISSING, area_prompt, needs_restart, needs_update_note, with_update_note,
@@ -94,6 +96,7 @@ impl Supervisor {
             prompt,
             program,
             program_args,
+            start,
         } = match files {
             Ok(files) => files,
             Err(FilesError::FldMissing) => {
@@ -145,6 +148,11 @@ impl Supervisor {
             command.arg("--strict-mcp-config");
         }
         command.arg("--append-system-prompt-file").arg(&prompt);
+        if start.is_some() {
+            command
+                .arg("--add-dir")
+                .arg(self.inner.paths.root().join(WS_DIR));
+        }
         for name in SESSION_ENV {
             command.env_remove(name);
         }
@@ -155,8 +163,17 @@ impl Supervisor {
             .env("CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL", ttl)
             .envs(launcher.env.iter().map(|(key, value)| (key, value)))
             // A daemon that `fld claude`'s session started inherits its `main` tag request, which a worker never makes.
-            .env_remove(AGENT_TAGS_ENV)
-            .current_dir(self.inner.paths.root())
+            .env_remove(AGENT_TAGS_ENV);
+        match &start {
+            Some(start) => command
+                .env(START_DIR_ENV, start)
+                .env(MAINTAIN_DIR_ENV, "1")
+                .current_dir(start),
+            None => command
+                .env_remove(START_DIR_ENV)
+                .current_dir(self.inner.paths.root()),
+        };
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -442,9 +459,59 @@ struct WorkerFiles {
     program: PathBuf,
     /// The arguments before Claude Code's own: the subcommand of fld's stand-in, else none.
     program_args: &'static [&'static str],
+    /// The worker's start folder, which is its working directory; `None` for the supervised main, which works in the project folder.
+    start: Option<PathBuf>,
 }
 
-/// Writes the worker's MCP configuration, its settings and its prompt under the worker's folder. The settings allow the fold tools and run fold's hooks, so a worker never depends on the user's own Claude Code settings. The prompt is the role's text, shipped or the project's override, then the shared rules and the practices, then the area's instructions when there are any; the override file itself is never passed, because it lacks them. Returns the three paths Claude Code reads, with the program to run. An fld path that names no file writes nothing.
+/// Whether a worker of `role` starts in its own start folder instead of the project folder. Every role but the main agent changes files only in a workspace, so none of its commands needs the project folder as its working directory.
+pub(in crate::services::agents::workers) fn starts_apart(role: Role) -> bool {
+    role != Role::Main
+}
+
+/// The project's Claude Code files that a session reads from its working directory, which a worker's start folder holds copies of: the shared and local settings and the project's MCP servers.
+const START_COPIES: [&str; 3] = [".claude/settings.json", LOCAL_SETTINGS_FILE, ".mcp.json"];
+
+/// Fills the start folder `start` with copies of the project's Claude Code files of [`START_COPIES`] and of fold's skills, so a worker there reads the same settings, servers and skills as in the project folder. Copies, never links, because a shell command's write to a link would change the project folder. A file the project folder lacks loses its copy too. Blocking.
+fn fill_start_dir(root: &Path, start: &Path) -> std::io::Result<()> {
+    for name in START_COPIES {
+        copy_or_remove(&root.join(name), &start.join(name))?;
+    }
+    for skill in fold_skills() {
+        let from = root.join(SKILLS_DIR).join(skill);
+        let to = start.join(SKILLS_DIR).join(skill);
+        if to.is_dir() {
+            std::fs::remove_dir_all(&to)?;
+        }
+        let Ok(entries) = std::fs::read_dir(&from) else {
+            continue;
+        };
+        std::fs::create_dir_all(&to)?;
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                std::fs::copy(entry.path(), to.join(entry.file_name()))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Copies the file `from` to `to`, or removes `to` when `from` is no file.
+fn copy_or_remove(from: &Path, to: &Path) -> std::io::Result<()> {
+    if from.is_file() {
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(from, to)?;
+        return Ok(());
+    }
+    match std::fs::remove_file(to) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
+/// Writes the worker's MCP configuration, its settings and its prompt under the worker's folder, and fills its start folder when its role starts apart from the project folder. The settings allow the fold tools and run fold's hooks, with the hook of the shell tools for a worker in its start folder, so a worker never depends on the user's own Claude Code settings. The prompt is the role's text, shipped or the project's override, then the shared rules and the practices, then the area's instructions when there are any; the override file itself is never passed, because it lacks them. Returns the three paths Claude Code reads, with the program to run. An fld path that names no file writes nothing.
 async fn write_files(
     paths: &ProjectPaths,
     launcher: &Launcher,
@@ -462,6 +529,9 @@ async fn write_files(
     let prompt_text = row.role.prompt();
     let limit = settings.mcp.clone();
     let claude = launcher.claude.clone();
+    let root = paths.root().to_owned();
+    let start = starts_apart(role).then(|| paths.worker_start_dir(&row.agent));
+    let workspaces = paths.root().join(WS_DIR);
     tokio::task::spawn_blocking(move || {
         let Some(fold) = fold.or_else(own_binary).filter(|fold| fold.is_file()) else {
             return Err(FilesError::FldMissing);
@@ -472,7 +542,16 @@ async fn write_files(
         let mcp = dir.join("mcp.json");
         std::fs::write(&mcp, config.to_string())?;
         let own_settings = dir.join("settings.json");
-        std::fs::write(&own_settings, session_settings().to_string())?;
+        let worker_settings = match &start {
+            Some(start) => {
+                fold_vcs::platform::create_dir_below(&fold_dir, start)?;
+                fold_vcs::platform::create_dir_below(&fold_dir, &workspaces)?;
+                fill_start_dir(&root, start)?;
+                worker_settings()
+            }
+            None => session_settings(),
+        };
+        std::fs::write(&own_settings, worker_settings.to_string())?;
         let role_prompt = if override_prompt.is_file() {
             role.with_own_text(&std::fs::read_to_string(&override_prompt)?)
         } else {
@@ -496,6 +575,7 @@ async fn write_files(
             prompt,
             program,
             program_args,
+            start,
         })
     })
     .await

@@ -109,6 +109,11 @@ impl ProjectPaths {
         self.fold_dir().join("workers").join(agent.as_str())
     }
 
+    /// The folder a supervised worker other than the main agent starts in and its shell returns to after each command, so a relative path of its commands never lands in the project folder. It holds copies of the project's Claude Code files that a session reads from its folder; Claude Code names the worker's transcripts after it.
+    pub fn worker_start_dir(&self, agent: &AgentName) -> PathBuf {
+        self.worker_dir(agent).join(WORKER_START_DIR)
+    }
+
     /// The Claude Code session id of the last session that `fld claude` or `fld new` started as `agent`, which `fld claude --name <agent>` resumes. It holds that one id only, so each name continues its own session and never that of another.
     pub fn main_session(&self, agent: &AgentName) -> PathBuf {
         self.fold_dir().join("sessions").join(agent.as_str())
@@ -150,6 +155,18 @@ impl ProjectPaths {
 /// The environment variable that names the agent of a fold Claude Code session: `fld claude` sets it for the main agent, the worker supervisor for each worker, and `fld mcp` and `fld hook` read it.
 pub const AGENT_ENV: &str = "FOLD_AGENT";
 
+/// The environment variable that names the start folder of a supervised worker whose shell fold confines (see [`ProjectPaths::worker_start_dir`]); `fld hook` refuses that worker's shell commands that would run in the project folder outside a workspace.
+pub const START_DIR_ENV: &str = "FOLD_START_DIR";
+
+/// The name of [`ProjectPaths::worker_start_dir`] inside the worker's folder.
+pub const WORKER_START_DIR: &str = "start";
+
+/// The tools whose calls run a shell command in the session's working directory, which the `PreToolUse` hook of a confined worker sees.
+pub const SHELL_TOOLS: &str = "Bash|Monitor";
+
+/// The environment variable that makes Claude Code's shell go back to the session's folder after each command, so a `cd` never carries over to the next command.
+pub const MAINTAIN_DIR_ENV: &str = "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR";
+
 /// The environment variable that lists the tags a session's agent registers with; `fld claude` sets `main` in it.
 pub const AGENT_TAGS_ENV: &str = "FOLD_AGENT_TAGS";
 
@@ -169,7 +186,7 @@ pub const ALLOW_FOLD_TOOLS: &str = "mcp__fold";
 pub const HOOKS: [(&str, &str); 3] = [
     ("SessionStart", "fld hook session-start"),
     ("Stop", "fld hook stop"),
-    ("PreToolUse", "fld hook pre-tool-use"),
+    ("PreToolUse", PRE_TOOL_USE_COMMAND),
 ];
 
 /// The tools whose calls the `PreToolUse` hook sees: those that change a file named by its path.
@@ -199,6 +216,21 @@ pub fn session_settings() -> serde_json::Value {
     })
 }
 
+/// [`session_settings`] with the hook of a confined worker's shell tools as well, which only the workers fold starts outside the project folder get: the user's own settings and `fld claude` run no hook on a shell command.
+pub fn worker_settings() -> serde_json::Value {
+    let mut settings = session_settings();
+    if let Some(groups) = settings["hooks"]["PreToolUse"].as_array_mut() {
+        groups.push(serde_json::json!({
+            "matcher": SHELL_TOOLS,
+            "hooks": [{"type": "command", "command": PRE_TOOL_USE_COMMAND}],
+        }));
+    }
+    settings
+}
+
+/// The command of the `PreToolUse` entry of [`HOOKS`].
+const PRE_TOOL_USE_COMMAND: &str = "fld hook pre-tool-use";
+
 /// The folder of the project's Claude Code skills, relative to the project root.
 pub const SKILLS_DIR: &str = ".claude/skills";
 
@@ -208,7 +240,7 @@ pub const LOCAL_SETTINGS_FILE: &str = ".claude/settings.local.json";
 /// The name of the skill a session opened by hand loads, which indexes the skill of each role.
 pub const INDEX_SKILL: &str = "fold";
 
-/// The folders of [`SKILLS_DIR`] that fold writes whole and refreshes after each upgrade: the [`INDEX_SKILL`], then the skill of each role. Every session starts in the project root and reads them there, so main never needs them.
+/// The folders of [`SKILLS_DIR`] that fold writes whole and refreshes after each upgrade: the [`INDEX_SKILL`], then the skill of each role. Every session reads them in the project root, and a worker other than the main agent from the copy in its start folder, so main never needs them.
 pub fn fold_skills() -> impl Iterator<Item = &'static str> {
     std::iter::once(INDEX_SKILL).chain(Role::ALL.iter().map(|role| role.skill()))
 }
@@ -323,6 +355,26 @@ mod tests {
         }
         assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], FILE_TOOLS);
         assert!(settings["hooks"]["Stop"][0].get("matcher").is_none());
+    }
+
+    #[test]
+    fn a_confined_worker_also_hooks_its_shell_tools() {
+        let settings = worker_settings();
+        let groups = settings["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0]["matcher"], FILE_TOOLS);
+        assert_eq!(groups[1]["matcher"], SHELL_TOOLS);
+        assert_eq!(groups[1]["hooks"][0]["command"], "fld hook pre-tool-use");
+        assert_eq!(
+            settings["hooks"]["Stop"],
+            session_settings()["hooks"]["Stop"]
+        );
+        let paths = ProjectPaths::new("/app");
+        let agent = AgentName::parse("web-worker").unwrap();
+        assert_eq!(
+            paths.worker_start_dir(&agent),
+            Path::new("/app/.fold/workers/web-worker/start")
+        );
     }
 
     #[test]

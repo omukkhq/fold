@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -283,19 +283,35 @@ impl Supervisor {
         *lock(&self.inner.cleanup_due) = Some(due);
     }
 
-    /// Where the workers' Claude Code keeps the transcript of each session of `ids`, in the order of `ids`: the folder of the launcher's environment, a relative one in the project folder, where every worker runs, which is followed to its real path as Claude Code names it. Each is `None` when fold cannot tell; see [`transcript_path`].
-    pub async fn transcripts(&self, ids: Vec<String>) -> Vec<Option<PathBuf>> {
+    /// Where the workers' Claude Code keeps the transcript of each session of `sessions`, each an id with the agent and role of its worker, in the order of `sessions`: the folder of the launcher's environment, a relative one in the folder where the worker runs, which is followed to its real path as Claude Code names it. A worker that starts apart from the project folder runs in its start folder; a session it began in the project folder, before fold started workers there, keeps its transcript in the project folder's. Each is `None` when fold cannot tell; see [`transcript_path`].
+    pub async fn transcripts(
+        &self,
+        sessions: Vec<(String, AgentName, Role)>,
+    ) -> Vec<Option<PathBuf>> {
         let env = lock(&self.inner.launcher).env.clone();
-        let root = self.inner.paths.root().to_owned();
-        let count = ids.len();
+        let paths = self.inner.paths.clone();
+        let count = sessions.len();
         tokio::task::spawn_blocking(move || {
-            let root = root.canonicalize().unwrap_or(root);
-            let config = claude_config_dir(|name| env_value(&env, name)).map(|dir| root.join(dir));
-            ids.iter()
-                .map(|id| {
-                    config
-                        .as_deref()
-                        .and_then(|dir| transcript_path(dir, &root, id))
+            let canonical = |dir: PathBuf| dir.canonicalize().unwrap_or(dir);
+            let root = canonical(paths.root().to_owned());
+            let config = claude_config_dir(|name| env_value(&env, name));
+            let at = |folder: &Path, id: &str| {
+                config
+                    .as_deref()
+                    .and_then(|dir| transcript_path(&folder.join(dir), folder, id))
+            };
+            sessions
+                .iter()
+                .map(|(id, agent, role)| {
+                    if !launch::starts_apart(*role) {
+                        return at(&root, id);
+                    }
+                    let start = canonical(paths.worker_start_dir(agent));
+                    let own = at(&start, id);
+                    match &own {
+                        Some(path) if path.is_file() => own,
+                        _ => at(&root, id).filter(|path| path.is_file()).or(own),
+                    }
                 })
                 .collect()
         })

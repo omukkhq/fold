@@ -42,6 +42,7 @@ mod acceptance_30_proposal_intent;
 mod acceptance_31_code_comment_request;
 mod acceptance_32_question_sets;
 mod acceptance_33_main_answers_worker_questions;
+mod acceptance_34_worker_start_folder;
 mod acceptance_3_parallel_workspaces;
 mod acceptance_4_live_diff;
 mod acceptance_5_review_and_integrate;

@@ -12,6 +12,8 @@ The main agent (the agent with the `main` tag) and the reviewers that the review
 
 A worker reads project files only inside its own workspace under `.fold/ws/`. A task worker edits only its task workspace. A reviewer edits only its own review checkout of one proposal, and only for a fix it sends with `submit_review_fix`; builds may generate output there. Never edit main, another workspace or files outside the project. These limits also apply to shell commands. A `no_proposal` assignment permits only its named external resources and tools.
 
+A worker that fold supervises, other than the supervised main agent, starts in its own start folder `.fold/workers/<name>/start`, and its shell goes back there after each command. It runs each command on project files as `cd '<absolute path of the workspace>' && <command>`, and fold refuses a shell command of it that would start in the project folder outside `.fold/ws/`. The shell is the user's own, often zsh: an unquoted `$var` is not split into words, and every word of an unquoted redirect target becomes a file. Quote every path, and write loops and word splitting as `bash -c '...'` or with arrays.
+
 ## Messaging
 
 Use fold's `send_message`, `get_inbox`, `get_thread`, `acknowledge_message`, `mark_answered` and, as the main agent, `list_open_asks` for communication between fold agents and with humans. Native messages between your Claude Code subagents do not replace fold messages, claims or task state. Terminal output is not a message to a lead.
