@@ -122,11 +122,40 @@ fn a_workspace_links_each_shared_path_and_drops_the_link_once_unshared() {
     assert!(fs::symlink_metadata(ws.join("design")).is_err());
     assert!(fs::symlink_metadata(ws.join("docs/spec.pen")).is_ok());
     assert!(root.join("design/home.pen").is_file());
+
+    // A link the worker removed itself never stops a later sync from linking a new path.
+    let linked = link_shared(&root, &rules, &ws, &shared).unwrap();
+    assert_eq!(linked.linked, 2);
+    fs::remove_file(ws.join("design")).unwrap();
+    let linked = link_shared(&root, &rules, &ws, &[path("docs/spec.pen")]).unwrap();
+    assert_eq!(linked.linked, 1);
+    write(&root, "notes.pen", "notes");
+    let linked = link_shared(
+        &root,
+        &rules,
+        &ws,
+        &[path("docs/spec.pen"), path("notes.pen")],
+    )
+    .unwrap();
+    assert_eq!(linked.linked, 2);
+    assert!(fs::symlink_metadata(ws.join("notes.pen")).is_ok());
+    let made = fs::read_to_string(ws.join(".fold/shared-links")).unwrap();
+    assert_eq!(made, "docs/spec.pen\nnotes.pen\n");
+}
+
+#[test]
+fn a_folder_that_only_a_folder_pattern_leaves_out_gets_no_link_without_its_exclude_line() {
+    let (_dir, root, ws) = project();
+    let rules = IgnoreRules::new(&root);
+    let linked = link_shared(&root, &rules, &ws, &[path("design")]).unwrap();
+    assert_eq!((linked.linked, linked.skipped), (0, 0));
+    assert!(fs::symlink_metadata(ws.join("design")).is_err());
 }
 
 #[test]
 fn a_workspace_keeps_its_own_entry_and_never_links_through_a_link() {
     let (_dir, root, ws) = project();
+    write(&root, ".fold/exclude", "/.fold/\n/design\n");
     let rules = IgnoreRules::new(&root);
     write(&ws, "design/mine.txt", "mine");
     symlink(root.join("src"), ws.join("docs")).unwrap();
@@ -139,6 +168,7 @@ fn a_workspace_keeps_its_own_entry_and_never_links_through_a_link() {
     assert!(fs::symlink_metadata(root.join("src/spec.pen")).is_err());
     // A path that is no longer ignored is tracked, so the workspace holds its file and gets no link.
     write(&root, ".gitignore", "target/\n");
+    write(&root, ".fold/exclude", "/.fold/\n");
     let linked = link_shared(&root, &rules, &ws, &[path("design")]).unwrap();
     assert_eq!((linked.linked, linked.skipped), (0, 0));
 }

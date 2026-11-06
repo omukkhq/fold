@@ -111,7 +111,7 @@ pub struct Linked {
     pub skipped: usize,
 }
 
-/// Makes the workspace `ws` hold one symbolic link for each of `shared`, at the same path, to the absolute path of that file or folder in the project folder `root`, so a worker reads the project folder's current copy and no copy takes disk space. Missing folders above a link are made; a folder above it that is a link, or anything already at the path that is not fold's link, leaves that path without one. A link fold made at an earlier create or sync for a path no longer in `shared` is removed, only while it still is fold's link. A shared path that is no longer ignored in `rules` is tracked and in the workspace's files already, so it gets no link. fold calls it only when it creates or syncs a workspace, the points at which it writes into one. Blocking.
+/// Makes the workspace `ws` hold one symbolic link for each of `shared`, at the same path, to the absolute path of that file or folder in the project folder `root`, so a worker reads the project folder's current copy and no copy takes disk space. Missing folders above a link are made; a folder above it that is a link, or anything already at the path that is not fold's link, leaves that path without one. A link fold made at an earlier create or sync for a path no longer in `shared` is removed, only while it still is fold's link. A shared path that `rules` no longer leaves out as a file gets no link: the link would be recorded, and a tracked path is in the workspace's files already. fold calls it only when it creates or syncs a workspace, the points at which it writes into one. Blocking.
 pub fn link_shared(
     root: &Path,
     rules: &IgnoreRules,
@@ -125,18 +125,24 @@ pub fn link_shared(
     rules.reload();
     let mut outcome = Linked::default();
     for gone in previous.iter().filter(|path| !shared.contains(path)) {
-        if let Some((dir, name)) = parent_of(&workspace, gone, false)?
-            && dir.read_link(name)?.as_deref() == Some(target_of(root, gone).as_bytes())
-        {
-            dir.remove_file(name)?;
+        let Some((dir, name)) = parent_of(&workspace, gone, false)? else {
+            continue;
+        };
+        match dir.read_link(name) {
+            Ok(Some(current)) if current == target_of(root, gone).as_bytes() => {
+                dir.remove_file(name)?;
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
         }
     }
     let mut kept = Vec::new();
     for path in shared {
-        let Ok(meta) = std::fs::symlink_metadata(root.join(os_path(path))) else {
-            continue;
-        };
-        if !rules.is_ignored(path, meta.is_dir()) && !rules.is_ignored(path, false) {
+        // The link is no folder, so only a rule that leaves out a file at the path keeps it out of every record.
+        if std::fs::symlink_metadata(root.join(os_path(path))).is_err()
+            || !rules.is_ignored(path, false)
+        {
             continue;
         }
         let target = target_of(root, path);
