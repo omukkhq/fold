@@ -71,14 +71,24 @@ const PROPOSAL_TEXT: Record<CardProposalState, string> = {
   integrated: "integrated",
 };
 
-/** An open proposal that waits in a review plan reads as waiting for its batch; the plan holds only open proposals. */
+/** `being reviewed by @review-2` while a reviewer holds the review claim of an open proposal, in a review plan too; null otherwise. */
+export function reviewingText(
+  proposal: Pick<BoardProposal, "state" | "review_claim">,
+): string | null {
+  return proposal.state === "open" && proposal.review_claim !== null
+    ? `being reviewed by @${proposal.review_claim}`
+    : null;
+}
+
+/** An open proposal that a reviewer holds reads as being reviewed; else one that waits in a review plan reads as waiting for its batch, which holds only open proposals. */
 export function proposalText(proposal: BoardProposal): string {
   const state =
-    proposal.review_plan !== null && proposal.state === "open"
+    reviewingText(proposal) ??
+    (proposal.review_plan !== null && proposal.state === "open"
       ? planWaitLabel(proposal.review_plan)
       : proposal.state === "integrated" && proposal.revision !== null
         ? `integrated as ${proposal.revision}`
-        : PROPOSAL_TEXT[proposal.state];
+        : PROPOSAL_TEXT[proposal.state]);
   return `${proposal.id} · ${state}`;
 }
 

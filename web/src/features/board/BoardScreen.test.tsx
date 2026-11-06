@@ -274,6 +274,7 @@ describe("BoardScreen", () => {
         checks_failed: false,
         revision: null,
         review_plan: null,
+        review_claim: null,
       };
       first.activity = { path: "src/routes/login.tsx", at: Date.now() };
     }
@@ -317,6 +318,41 @@ describe("BoardScreen", () => {
     expect(line?.className).not.toContain("flex-wrap");
     const panel = await openPanel("Run the controlled web pilot");
     expect(rowText(panel, "Needs")).toBe(ids.join(", "));
+  });
+
+  it("says a proposal is being reviewed while a reviewer holds its claim, and waits for review otherwise", async () => {
+    const open = {
+      state: "open" as const,
+      version: 1,
+      checks_failed: false,
+      revision: null,
+      review_plan: null,
+    };
+    setup(
+      boardView([
+        boardCard("T-1", {
+          title: "Held by a reviewer",
+          status: "review",
+          proposal: { ...open, id: "P-1", review_claim: "review-2" },
+        }),
+        boardCard("T-2", {
+          title: "Waits for a reviewer",
+          status: "review",
+          proposal: { ...open, id: "P-2", review_claim: null },
+        }),
+      ]),
+    );
+    await screen.findByRole("region", { name: "Review" });
+    expect(
+      within(cardOf("T-1")).getByText(wholeText("P-1 being reviewed")),
+    ).toBeTruthy();
+    expect(
+      within(cardOf("T-2")).getByText(wholeText("P-2 waits for review")),
+    ).toBeTruthy();
+    const panel = await openPanel("Held by a reviewer");
+    expect(rowText(panel, "Proposal")).toBe(
+      "P-1 · being reviewed by @review-2",
+    );
   });
 
   it("gives a card its title, one line of facts and the rest in the detail panel", async () => {

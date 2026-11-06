@@ -94,6 +94,13 @@ function proposalChip(card: ChipCard): CardChip | null {
       text: `${proposal.id} changes requested`,
     };
   }
+  if (proposal?.state === "open" && proposal.review_claim !== null) {
+    return {
+      tone: "neutral",
+      icon: GitPullRequest,
+      text: `${proposal.id} being reviewed`,
+    };
+  }
   if (proposal?.state === "open") {
     return proposal.review_plan === null
       ? {

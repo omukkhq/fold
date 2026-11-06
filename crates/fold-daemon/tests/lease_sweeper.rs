@@ -1222,3 +1222,55 @@ async fn a_claim_stays_alive_while_its_holders_check_run_goes_and_lapses_a_full_
         .unwrap();
     assert_eq!(claimed.claim.holder, main.name);
 }
+
+/// The `proposal` of the task card `task` on `GET /board`.
+#[cfg(test)]
+async fn card_proposal(fx: &Fixture, task: &str) -> Value {
+    let board = fx.get_json("/api/v1/projects/demo/board").await;
+    board["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|column| column["cards"].as_array().unwrap().iter())
+        .find(|card| card["task"] == task)
+        .unwrap()["proposal"]
+        .clone()
+}
+
+#[tokio::test]
+async fn the_board_names_the_reviewer_while_it_holds_the_review_claim() {
+    let fx = Fixture::new().await;
+    let (_, dir) = fx.create(&fx.frontend, 1).await;
+    let proposal = fx.review_claim(&dir).await;
+    let card = card_proposal(&fx, "T-1").await;
+    assert_eq!(card["id"], json!(proposal.to_string()));
+    assert_eq!(card["state"], json!("open"));
+    assert_eq!(card["review_claim"], json!("backend"));
+
+    let reviews = fx.handle.reviews(fx.project.registry());
+    reviews
+        .submit_review(
+            &by(&fx.backend.worker),
+            proposal,
+            1,
+            fold_core::reviews::Verdict::RequestChanges,
+            "rename it",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let card = card_proposal(&fx, "T-1").await;
+    assert_eq!(card["state"], json!("changes_requested"));
+    assert_eq!(
+        card["review_claim"],
+        json!("backend"),
+        "the reviewer keeps the claim for the next version"
+    );
+
+    reviews
+        .release_review(&by(&fx.backend.worker), proposal, None)
+        .await
+        .unwrap();
+    let card = card_proposal(&fx, "T-1").await;
+    assert_eq!(card["review_claim"], Value::Null, "no reviewer holds it");
+}

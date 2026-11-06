@@ -13,6 +13,7 @@ const proposal = (
   checks_failed: false,
   revision: null,
   review_plan: null,
+  review_claim: null,
   ...over,
 });
 
@@ -140,6 +141,32 @@ describe("cardChip", () => {
         report: "Drew the icons.",
       }),
     ).toBe("Waits for lead check");
+  });
+
+  it("says an open proposal is being reviewed while a reviewer holds its claim, in a review plan too", () => {
+    const held = { review_claim: "review-2" };
+    const chip = cardChip(
+      boardCard("T-1", { proposal: proposal("open", held) }),
+    );
+    expect(chip?.text).toBe("P-3 being reviewed");
+    expect(chip?.tone).toBe("neutral");
+    expect(
+      chipText({
+        proposal: proposal("open", {
+          ...held,
+          review_plan: {
+            plan: "rp-1",
+            awaited: [],
+            deadline_at: 10,
+            wait_ended: true,
+            proposals: ["P-3", "P-4"],
+          },
+        }),
+      }),
+    ).toBe("P-3 being reviewed");
+    expect(chipText({ proposal: proposal("changes_requested", held) })).toBe(
+      "P-3 changes requested",
+    );
   });
 
   it("gives an approved proposal, a quiet card and a Done card no chip", () => {

@@ -9,6 +9,7 @@ import {
   planWaitText,
   proposalLook,
   proposalText,
+  reviewingText,
   taskPath,
 } from "./card";
 
@@ -22,6 +23,7 @@ const proposal = (
   checks_failed: false,
   revision,
   review_plan: null,
+  review_claim: null,
 });
 
 describe("taskPath", () => {
@@ -125,6 +127,28 @@ describe("proposalText", () => {
       "P-3 · integrated as r8",
     );
     expect(proposalText(proposal("integrated"))).toBe("P-3 · integrated");
+  });
+
+  it("says an open proposal is being reviewed by the reviewer that holds its claim, also in a review plan", () => {
+    const held = { ...proposal("open"), review_claim: "review-2" };
+    expect(proposalText(held)).toBe("P-3 · being reviewed by @review-2");
+    expect(
+      proposalText({
+        ...held,
+        review_plan: {
+          plan: "rp-1",
+          awaited: ["T-4"],
+          deadline_at: 10,
+          wait_ended: false,
+          proposals: ["P-3"],
+        },
+      }),
+    ).toBe("P-3 · being reviewed by @review-2");
+    expect(reviewingText(held)).toBe("being reviewed by @review-2");
+    expect(
+      reviewingText({ state: "approved", review_claim: "review-2" }),
+    ).toBeNull();
+    expect(reviewingText(proposal("open"))).toBeNull();
   });
 });
 

@@ -2159,6 +2159,11 @@ export interface components {
             checks_failed: boolean;
             /** @example P-3 */
             id: string;
+            /**
+             * @description The worker that holds the proposal's review claim, so the proposal is being reviewed; null while no reviewer holds it.
+             * @example review-2
+             */
+            review_claim: string | null;
             review_plan: components["schemas"]["ReviewPlanWait"] | null;
             /**
              * @description The revision an integrated proposal became; null before integration.
