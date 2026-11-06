@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.path AS \"path!: Vec<u8>\", a.name AS \"agent!: String\",\n                  c.changed_at AS \"changed_at!: i64\", c.seen_at AS \"seen_at!: i64\"\n           FROM agent_changes c JOIN agents a ON a.id = c.agent_id\n           WHERE c.cleared_at IS NULL\n           ORDER BY c.path, a.name",
+  "describe": {
+    "columns": [
+      {
+        "name": "path!: Vec<u8>",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "agent_changes",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "name": "agent!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "changed_at!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "agent_changes",
+            "name": "changed_at"
+          }
+        }
+      },
+      {
+        "name": "seen_at!: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "agent_changes",
+            "name": "seen_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "09aa2f49b24f2740a2593606b1c7173c33ceb009999a74016952b3e6d4fa75c8"
+}

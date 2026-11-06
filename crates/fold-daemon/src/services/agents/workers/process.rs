@@ -14,6 +14,7 @@ use tokio::task::JoinHandle;
 use crate::push::PushTargets;
 use crate::services::agents::claude::{LOCATION_ENV, env_value, transcript_path};
 use crate::services::events::EventBus;
+use crate::services::projects::ToolWindows;
 use crate::support::lock;
 use questions::Waiter;
 use watch::watch_done;
@@ -197,6 +198,8 @@ struct Inner {
     main_waking: Mutex<Option<Vec<String>>>,
     /// Wakes the project's removal of closed workspace directories, which follows only stored events: the supervised main's turn ends with none, and its closed workspaces become due once it is idle.
     cleanup_due: Mutex<Option<Arc<tokio::sync::Notify>>>,
+    /// The workers' tool calls that can write files, which place a change of the project folder in a worker's call.
+    tool_windows: Arc<ToolWindows>,
 }
 
 impl Drop for Inner {
@@ -261,6 +264,7 @@ impl Supervisor {
                 main_gate: Mutex::new(main::MainGate::default()),
                 main_waking: Mutex::new(None),
                 cleanup_due: Mutex::new(None),
+                tool_windows: Arc::default(),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();
@@ -276,6 +280,11 @@ impl Supervisor {
 
     pub fn set_launcher(&self, launcher: Launcher) {
         *lock(&self.inner.launcher) = launcher;
+    }
+
+    /// The tool calls of the project's workers that can write files, as their output tells them.
+    pub fn tool_windows(&self) -> Arc<ToolWindows> {
+        self.inner.tool_windows.clone()
     }
 
     /// The notifier of the project's removal of closed workspace directories, which the end of each turn of the supervised main wakes.

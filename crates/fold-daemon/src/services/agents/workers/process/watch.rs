@@ -2,10 +2,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use fold_core::agent_changes::may_write_files;
 use fold_core::events::types;
 use fold_core::roles::MCP_UNAVAILABLE;
 use fold_core::turn_errors::MODEL_UNREACHABLE_TURNS;
-use fold_core::{EventActor, LiveEvent, NewEvent, WorkerState, codes};
+use fold_core::{AgentName, EventActor, LiveEvent, NewEvent, WorkerState, codes};
 use fold_store::StoreError;
 use fold_store::agents::{self, ProcessEnd, TurnTotals};
 use serde_json::json;
@@ -21,9 +22,10 @@ use super::resume;
 use super::stop::stopped_event;
 use super::{Inner, Input, Process, Supervisor, lock};
 use crate::services::agents::AgentError;
-use crate::services::agents::claude::ClaudeMessage;
+use crate::services::agents::claude::{ClaudeMessage, ContentBlock, UserContent};
 use crate::services::agents::workers::code_of;
 use crate::services::events::{BusMessage, EventBuffer};
+use crate::services::projects::file_clock_now;
 
 /// How long the reader waits for one more line after the process ended.
 const LAST_LINES: Duration = Duration::from_millis(200);
@@ -64,6 +66,9 @@ impl Supervisor {
                 }
             }
         };
+        self.inner
+            .tool_windows
+            .close_all(&process.agent, file_clock_now());
         let code = status.ok().and_then(exit_code);
         if let Err(error) = self
             .on_exit(&process, code, detached.load(Ordering::SeqCst))
@@ -90,6 +95,7 @@ impl Supervisor {
             tracing::debug!(agent = %process.agent, "a worker wrote a line that is not JSON");
             return;
         };
+        self.track_tool_calls(&process.agent, &message);
         let LineEffect {
             step,
             mut change,
@@ -190,6 +196,32 @@ impl Supervisor {
             && written.is_ok()
         {
             self.after_turn(&process.agent, &windows).await;
+        }
+    }
+
+    /// Notes each tool call of the line that can write files as it starts, from its `tool_use` block, and ends, from the `tool_result` block that names it, so a change of the project folder made meanwhile counts as the worker's.
+    fn track_tool_calls(&self, agent: &AgentName, message: &ClaudeMessage) {
+        let windows = &self.inner.tool_windows;
+        match message {
+            ClaudeMessage::Assistant(assistant) => {
+                for block in &assistant.message.content {
+                    if let ContentBlock::ToolUse { id, name, .. } = block
+                        && may_write_files(name)
+                    {
+                        windows.open(agent, id, file_clock_now());
+                    }
+                }
+            }
+            ClaudeMessage::User(user) => {
+                if let UserContent::Blocks(blocks) = &user.message.content {
+                    for block in blocks {
+                        if let ContentBlock::ToolResult { tool_use_id, .. } = block {
+                            windows.close(agent, tool_use_id, file_clock_now());
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 

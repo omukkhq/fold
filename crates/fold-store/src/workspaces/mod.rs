@@ -1,3 +1,4 @@
+mod agent_changes;
 mod changesets;
 mod checkpoints;
 mod columns;
@@ -11,6 +12,9 @@ mod remotes;
 mod revisions;
 mod stashes;
 
+pub use agent_changes::{
+    AgentChangeEnd, AgentChangeRow, clear_agent_change, insert_agent_change, open_agent_changes,
+};
 pub(crate) use changesets::parse_stats;
 pub use changesets::{
     Changeset, ChangesetStats, get_changeset, insert_changeset, latest_changeset, list_changesets,

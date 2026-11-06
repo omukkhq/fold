@@ -151,6 +151,8 @@ pub enum NeedsYouItemKind {
     ClaudeNotFound,
     /// fold turned the notice target `target` off: its receiver answered 410 Gone, a send failed every try of its retry schedule (about 8.6 hours), or 20 tries in a row failed. `title` is its name and `reason` says why and what the human does. A test send that gets through turns it on again and ends the item.
     NotifyTargetOff,
+    /// Files of the project folder changed during the tool calls of supervised workers, so fold does not offer them as the human's change: `agents` names the workers' agents and `agent` the first, `paths` the files and `reason` the choices. The human records them with `record_agent_changes`, puts them aside with `restore_agent_changes` or takes them as their own with `ignore_agent_changes`; the item ends when every path is settled.
+    AgentChange,
 }
 
 /// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task, `repository` the history of main and `settings` the project's notice targets.
@@ -217,11 +219,14 @@ pub struct NeedsYouEntry {
     /// The human's Git commit of a `human_change`.
     #[schema(required = true, example = "9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c3b5d7f9e")]
     pub commit: Option<String>,
-    /// The files of a `human_change` that conflict with main, those of a `folder_held` that keep the project folder where it is, or those of an `unstash_conflicted` that hold the conflict, in path order; empty otherwise.
+    /// The files of a `human_change` that conflict with main, those of a `folder_held` that keep the project folder where it is, those of an `unstash_conflicted` that hold the conflict, or those of an `agent_change` that a worker changed, in path order; empty otherwise.
     pub paths: Vec<String>,
     /// The notice target of a `notify_target_off`.
     #[schema(required = true, example = "nt-3")]
     pub target: Option<String>,
+    /// The agents of an `agent_change`, in name order; empty for every other kind.
+    #[schema(example = json!(["reviewer-35"]))]
+    pub agents: Vec<String>,
 }
 
 impl From<NeedsYouItem> for NeedsYouEntry {
@@ -242,6 +247,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::WorkerModelUnreachable => NeedsYouItemKind::WorkerModelUnreachable,
             NeedsYouKind::ClaudeNotFound => NeedsYouItemKind::ClaudeNotFound,
             NeedsYouKind::NotifyTargetOff => NeedsYouItemKind::NotifyTargetOff,
+            NeedsYouKind::AgentChange => NeedsYouItemKind::AgentChange,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,
@@ -274,6 +280,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             commit: item.commit,
             paths: item.paths,
             target: item.target.map(|target| target.to_string()),
+            agents: item.agents.iter().map(ToString::to_string).collect(),
         }
     }
 }
@@ -341,7 +348,7 @@ pub async fn answer_worker_question(
     Ok(Json(answered.into()))
 }
 
-/// Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, a worker whose turns fail before they reach the model, and a notice target fold turned off, which a person's change of the target or a test send that gets through ends. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable` and `notify.target_changed`, and with the live `worker.output` steps `result` and `result_error`, which end a turn.
+/// Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, a worker whose turns fail before they reach the model, a notice target fold turned off, which a person's change of the target or a test send that gets through ends, and the files that changed in the project folder during supervised workers' tool calls, whose paths leave the waiting folder's item. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, `notify.target_changed`, `folder.agent_changed` and `folder.agent_change_cleared`, and with the live `worker.output` steps `result` and `result_error`, which end a turn.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/needs-you",

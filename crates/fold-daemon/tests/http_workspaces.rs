@@ -265,11 +265,15 @@ async fn the_revision_pages_reach_the_genesis_r0_and_end_there() {
     )
     .unwrap();
     let human = fold_core::Actor::human(fold_core::HumanName::parse(HUMAN).unwrap());
-    let recorded =
-        fold_daemon::services::projects::record(&h.handle, &human, &fold_vcs::git::Git::default())
-            .await
-            .unwrap()
-            .outcome;
+    let recorded = fold_daemon::services::projects::record(
+        &h.handle,
+        &human,
+        &fold_vcs::git::Git::default(),
+        None,
+    )
+    .await
+    .unwrap()
+    .outcome;
     assert!(
         matches!(
             &recorded,

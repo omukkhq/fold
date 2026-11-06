@@ -1,10 +1,12 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use fold_core::agent_changes::{MANY_EMPTY_FILES, RecordRisk, record_risk};
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
 use fold_core::{Actor, FoldError, HumanName, NewEvent, RevisionId, codes, policy};
 use fold_store::StoreError;
-use fold_store::workspaces::{self, ConflictRow, NewHumanChange};
+use fold_store::workspaces::{self, AgentChangeEnd, ConflictRow, NewHumanChange};
 use fold_vcs::checkout::overlay;
 use fold_vcs::compare::load_flat;
 use fold_vcs::git::{CommitId, Git};
@@ -20,6 +22,7 @@ use fold_vcs::scan::Skipped;
 use fold_vcs::stash::{changed_paths, open_conflicts};
 use serde_json::json;
 
+use super::agent_changes::end_agent_changes;
 use super::commits::commit_main;
 use super::folder::follow_folder;
 use super::pull::{PulledConflict, map_fast_forward, project_error};
@@ -77,10 +80,11 @@ pub async fn record(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
     git: &Git,
+    confirm: Option<ObjectHash>,
 ) -> Result<AfterUnstash<RecordOutcome>, ProjectError> {
     policy::can_record(actor).map_err(FoldError::from)?;
     let (handle, actor, git) = (Arc::clone(handle), actor.clone(), git.clone());
-    tokio::spawn(async move { run(&handle, &actor, &git).await })
+    tokio::spawn(async move { run(&handle, &actor, &git, confirm).await })
         .await
         .unwrap_or_else(|error| {
             Err(FoldError::new(
@@ -95,6 +99,7 @@ async fn run(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
     git: &Git,
+    confirm: Option<ObjectHash>,
 ) -> Result<AfterUnstash<RecordOutcome>, ProjectError> {
     let Actor::Human { name: human } = actor else {
         return Err(FoldError::new(
@@ -132,7 +137,7 @@ async fn run(
             Finish::Finished(outcome) => unstash = Some(outcome),
         }
     }
-    let outcome = record_folder(handle, actor, human, git, config.max_file_bytes).await?;
+    let outcome = record_folder(handle, actor, human, git, config.max_file_bytes, confirm).await?;
     Ok(AfterUnstash { outcome, unstash })
 }
 
@@ -143,6 +148,7 @@ async fn record_folder(
     human: &HumanName,
     git: &Git,
     max_file_bytes: u64,
+    confirm: Option<ObjectHash>,
 ) -> Result<RecordOutcome, ProjectError> {
     let record_tree = workspaces::checkout(handle.store.read())
         .await?
@@ -172,6 +178,17 @@ async fn record_folder(
             skipped,
             created: false,
         });
+    }
+    let from_agents = confirmed(handle, record_tree, human_tree, confirm).await?;
+    if !from_agents.is_empty() {
+        end_agent_changes(
+            handle,
+            actor,
+            AgentChangeEnd::Recorded,
+            Some(&from_agents),
+            false,
+        )
+        .await?;
     }
     let change = HumanFolderChange {
         human,
@@ -209,6 +226,96 @@ async fn record_folder(
         touched,
         skipped,
     })
+}
+
+/// Refuses, with `record_needs_confirmation` and the tree to confirm, a change of the folder from `record_tree` to `human_tree` that empties a tracked file, adds [`MANY_EMPTY_FILES`] empty files or more, or holds paths that changed during a worker's tool call, unless `confirm` names `human_tree`: a confirmation holds only for the folder the human saw. Returns the paths of the change that a worker made, which the record then ends as `recorded`.
+async fn confirmed(
+    handle: &ProjectHandle,
+    record_tree: ObjectHash,
+    human_tree: ObjectHash,
+    confirm: Option<ObjectHash>,
+) -> Result<BTreeSet<Vec<u8>>, ProjectError> {
+    let open = workspaces::open_agent_changes(handle.store.read()).await?;
+    let fold_dir = handle.paths.fold_dir();
+    let (risk, changed) = blocking(move || {
+        let objects = ObjectStore::open_existing(&fold_dir)?;
+        let record = load_flat(&objects, &record_tree)?;
+        let folder = load_flat(&objects, &human_tree)?;
+        Ok((
+            record_risk(&record, &folder),
+            changed_paths(&record, &folder),
+        ))
+    })
+    .await?;
+    let changed: BTreeSet<Vec<u8>> = changed.into_iter().collect();
+    let mut agents = BTreeSet::new();
+    let mut from_agents = BTreeSet::new();
+    for row in open {
+        if changed.contains(&row.path) {
+            agents.insert(row.agent.to_string());
+            from_agents.insert(row.path);
+        }
+    }
+    if confirm == Some(human_tree) || (!risk.needs_confirmation() && from_agents.is_empty()) {
+        return Ok(from_agents);
+    }
+    Err(needs_confirmation(human_tree, &risk, &from_agents, &agents).into())
+}
+
+/// The refusal of a record that waits for the human's confirmation, with the paths and counts of each reason and the tree the confirmation names.
+fn needs_confirmation(
+    tree: ObjectHash,
+    risk: &RecordRisk,
+    from_agents: &BTreeSet<Vec<u8>>,
+    agents: &BTreeSet<String>,
+) -> FoldError {
+    let count = |n: usize, one: &str, many: &str| {
+        if n == 1 {
+            format!("1 {one}")
+        } else {
+            format!("{n} {many}")
+        }
+    };
+    let many_empty = risk.empty_added.len() >= MANY_EMPTY_FILES;
+    let empty_added: &[String] = if many_empty { &risk.empty_added } else { &[] };
+    let agent_paths: Vec<String> = from_agents
+        .iter()
+        .map(|path| String::from_utf8_lossy(path).into_owned())
+        .collect();
+    let mut found = Vec::new();
+    if !risk.emptied.is_empty() {
+        found.push(format!(
+            "empties {}",
+            count(risk.emptied.len(), "tracked file", "tracked files")
+        ));
+    }
+    if many_empty {
+        found.push(format!("adds {} empty files", empty_added.len()));
+    }
+    if !agent_paths.is_empty() {
+        let who: Vec<&str> = agents.iter().map(String::as_str).collect();
+        found.push(format!(
+            "holds {} that changed while {} worked",
+            count(agent_paths.len(), "file", "files"),
+            who.join(", ")
+        ));
+    }
+    let listed = |paths: &[String]| paths.iter().take(LISTED_PATHS).cloned().collect::<Vec<_>>();
+    FoldError::new(
+        codes::RECORD_NEEDS_CONFIRMATION,
+        format!("the change {}; nothing was recorded", found.join(", and ")),
+    )
+    .with_hint("check the files, then run `fld record --yes` to record them as your change, or `fld agent-changes restore` to put a worker's change aside")
+    .with_details([
+        ("tree", json!(tree.to_string())),
+        ("emptied", json!(listed(&risk.emptied))),
+        ("emptied_count", json!(risk.emptied.len())),
+        ("empty_added", json!(listed(empty_added))),
+        ("empty_added_count", json!(empty_added.len())),
+        ("agent_changed", json!(listed(&agent_paths))),
+        ("agent_changed_count", json!(agent_paths.len())),
+        ("agents", json!(agents)),
+    ])
 }
 
 /// Refuses a folder whose `human_tree` still holds the conflict of an unstash on a path the newest stash entry changes: a line that starts a stash marker, or the `.fold-stash` side beside a file. Otherwise an entry whose unstash conflicted is dropped, in its own transaction with `stash.dropped`, before the record goes on: the folder holds the fixed files, which this record or the next brings onto main, or the human took the change back.
@@ -334,6 +441,14 @@ pub(super) async fn sync(
     raise: bool,
 ) -> Result<(FolderFollowed, Option<RecordOutcome>), ProjectError> {
     let (followed, from_branch) = follow_with_branch_commits(handle, git).await?;
+    super::note_agent_changes(
+        &handle.store,
+        &handle.bus,
+        &handle.tool_windows,
+        &followed.seen,
+        handle.clock.now(),
+    )
+    .await;
     let mut committed = commit_main(
         &handle.store,
         &handle.paths,

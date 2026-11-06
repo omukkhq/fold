@@ -301,6 +301,13 @@ function filesText(event: DurableEvent): string {
   return files === 1 ? "1 file" : `${String(files)} files`;
 }
 
+/** `1 file` or `3 files` of a count, `the files` without one. */
+function filesOf(value: unknown): string {
+  const files = count(value);
+  if (files === null) return "the files";
+  return files === 1 ? "1 file" : `${String(files)} files`;
+}
+
 function fixed(line: string): (event: DurableEvent) => string {
   return () => line;
 }
@@ -971,6 +978,37 @@ const SPECS: Record<EventType, Spec> = {
       return members.length === 0
         ? `${batchOf(e)} is ready to integrate`
         : `${batchOf(e)} is ready: ${members.join(", ")} integrate together`;
+    },
+  },
+  "folder.agent_changed": {
+    icon: Bot,
+    text: (e) => {
+      const paths = heldText(e.data.paths, e.data.path_count);
+      const agents = Array.isArray(e.data.agents)
+        ? e.data.agents
+            .filter((agent): agent is string => typeof agent === "string")
+            .map(codeData)
+        : [];
+      const who = agents.length === 0 ? "an agent" : agents.join(", ");
+      return paths === null
+        ? `found files of the project folder that changed while ${who} worked`
+        : `found ${paths} of the project folder changed while ${who} worked`;
+    },
+  },
+  "folder.agent_change_cleared": {
+    icon: Check,
+    text: (e) => {
+      const files = filesOf(e.data.path_count);
+      switch (e.data.how) {
+        case "restored":
+          return `put ${files} that an agent changed aside in the stash`;
+        case "ignored":
+          return `took ${files} that an agent changed as the human's own`;
+        case "recorded":
+          return `recorded ${files} that an agent changed`;
+        default:
+          return `saw ${files} that an agent changed hold main's version again`;
+      }
     },
   },
 };

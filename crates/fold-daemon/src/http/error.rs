@@ -178,6 +178,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::NOTIFY_SEND_FAILED => Some(StatusCode::BAD_GATEWAY),
         codes::NOTIFY_TARGET_INACTIVE => Some(StatusCode::CONFLICT),
         codes::NOTIFY_SETTINGS_IO => Some(StatusCode::INTERNAL_SERVER_ERROR),
+        codes::RECORD_NEEDS_CONFIRMATION => Some(StatusCode::CONFLICT),
+        codes::AGENT_CHANGE_NOT_FOUND => Some(StatusCode::NOT_FOUND),
         _ => None,
     }
 }

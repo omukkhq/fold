@@ -2,6 +2,7 @@ import type { NeedsYouItem, NeedsYouKind } from "@/api/workers";
 import { taskPath } from "@/features/board/card";
 import { messagesHref } from "@/features/messages/search";
 import { asksText } from "@/features/workers/permission";
+import { agentsText } from "./agentChanges";
 import { codeData, codeParts } from "@/format/codeText";
 import { projectPath, withQuery } from "@/routes/paths";
 
@@ -22,6 +23,8 @@ export interface NeedsYouLine {
   inline: boolean;
   /** What the line opens; null for a line that opens nothing. */
   href: string | null;
+  /** The line takes the human's choice in place: record, restore or ignore a worker's change of the project folder. */
+  settle: boolean;
 }
 
 export type NeedsYouGroupId = "ask" | "wait" | "project";
@@ -49,6 +52,7 @@ const KIND_ORDER: readonly NeedsYouKind[] = [
   "worker_model_unreachable",
   "claude_not_found",
   "notify_target_off",
+  "agent_change",
 ];
 
 /** Agents that ask, things that wait for the human's decision, and the project's own state, which includes workers fold cannot run. */
@@ -68,6 +72,7 @@ export const GROUP_OF: Readonly<Record<NeedsYouKind, NeedsYouGroupId>> = {
   worker_model_unreachable: "project",
   claude_not_found: "project",
   notify_target_off: "project",
+  agent_change: "project",
 };
 
 /** The kinds whose title is the item's own name, which the sentence ends with. */
@@ -129,6 +134,14 @@ export function pathsText(paths: readonly string[]): string | null {
     : `${codeData(first)} and ${String(paths.length - 1)} more`;
 }
 
+/** The files of a worker's change with their count, as `27 files: README.md and 26 more`; null when none is named. */
+export function filesText(paths: readonly string[]): string | null {
+  const named = pathsText(paths);
+  if (named === null) return null;
+  const count = paths.length === 1 ? "1 file" : `${String(paths.length)} files`;
+  return `${count}: ${named}`;
+}
+
 /** `asks 3 questions` for a set of several, else `asks about Chart library` with the question's header, else what kind of answer it wants. */
 export function questionText(
   item: Pick<NeedsYouItem, "header" | "choices" | "questions">,
@@ -149,6 +162,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         : null,
     since: item.since,
     inline: INLINE_KINDS.has(item.kind),
+    settle: false,
   };
   switch (item.kind) {
     case "human_task":
@@ -285,6 +299,17 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         title: titleText(item.title),
         text: "fold turned this notice target off after its sends failed; a test that gets through turns it on again",
         href: projectPath(slug, "settings"),
+      };
+    case "agent_change":
+      return {
+        ...base,
+        person: null,
+        chip: null,
+        task: null,
+        title: filesText(item.paths),
+        text: `The project folder changed while ${codeData(agentsText(item.agents))} worked`,
+        href: null,
+        settle: true,
       };
     case "human_review":
       return {

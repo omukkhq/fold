@@ -49,6 +49,8 @@ pub enum NeedsYouKind {
     ClaudeNotFound,
     /// fold turned a notice target off: its receiver answered 410 Gone, a send failed every try of its retry schedule, or [`fold_core::projects::notify::OFF_AFTER_FAILURES`] tries failed in a row. `title` holds the target's name, `target` its id and `reason` what the human does. A successful test send turns it on again and ends the item.
     NotifyTargetOff,
+    /// Paths of the project folder changed during the tool calls of supervised workers, so fold does not offer them as the human's change: `agents` names the workers' agents, `agent` the first of them, `paths` the files and `reason` the choices, record, restore or ignore. The item ends when every path is settled.
+    AgentChange,
 }
 
 /// The screen on which a human answers an item.
@@ -82,6 +84,7 @@ impl NeedsYouKind {
             NeedsYouKind::WorkerModelUnreachable => "worker_model_unreachable",
             NeedsYouKind::ClaudeNotFound => "claude_not_found",
             NeedsYouKind::NotifyTargetOff => "notify_target_off",
+            NeedsYouKind::AgentChange => "agent_change",
         }
     }
 
@@ -96,7 +99,8 @@ impl NeedsYouKind {
             | NeedsYouKind::HeadMoved
             | NeedsYouKind::FolderHeld
             | NeedsYouKind::UnstashConflicted
-            | NeedsYouKind::ChecksFileInvalidOnMain => Screen::Repository,
+            | NeedsYouKind::ChecksFileInvalidOnMain
+            | NeedsYouKind::AgentChange => Screen::Repository,
             NeedsYouKind::WorkerUnreachable
             | NeedsYouKind::WorkerModelUnreachable
             | NeedsYouKind::ClaudeNotFound => Screen::Worker,
@@ -141,6 +145,8 @@ pub struct NeedsYouItem {
     pub about: Option<String>,
     /// The notice target of a `NotifyTargetOff`.
     pub target: Option<fold_core::NotifyTargetId>,
+    /// The agents of an `AgentChange`, in name order.
+    pub agents: Vec<AgentName>,
 }
 
 impl NeedsYouItem {
@@ -182,6 +188,7 @@ impl NeedsYouItem {
             paths: Vec::new(),
             about: None,
             target: None,
+            agents: Vec::new(),
         }
     }
 
@@ -245,7 +252,20 @@ pub fn with_folder_attention(
             NeedsYouKind::HumanChange | NeedsYouKind::UnstashConflicted
         )
     });
-    if let Some((since, paths)) = held.filter(|_| !conflicted) {
+    // A worker's change has its own item, so the waiting folder names only the human's paths.
+    let from_agents: BTreeSet<String> = items
+        .iter()
+        .filter(|item| item.kind == NeedsYouKind::AgentChange)
+        .flat_map(|item| item.paths.iter().cloned())
+        .collect();
+    let held = held.map(|(since, paths)| {
+        let paths: Vec<String> = paths
+            .into_iter()
+            .filter(|path| !from_agents.contains(path))
+            .collect();
+        (since, paths)
+    });
+    if let Some((since, paths)) = held.filter(|(_, paths)| !conflicted && !paths.is_empty()) {
         items.push(NeedsYouItem::folder_held(since, paths));
     }
     items.sort_by_key(|item| item.since);
@@ -345,6 +365,26 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
             .collect();
         items.push(item);
     }
+    let changes = fold_store::workspaces::open_agent_changes(&mut *conn).await?;
+    if let Some(since) = changes.iter().map(|row| row.seen_at).min() {
+        let mut item = NeedsYouItem::new(NeedsYouKind::AgentChange, since);
+        item.about = Some(since.as_millis().to_string());
+        item.agents = changes
+            .iter()
+            .map(|row| row.agent.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        item.agent = item.agents.first().cloned();
+        item.paths = changes
+            .iter()
+            .map(|row| String::from_utf8_lossy(&row.path).into_owned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        item.reason = Some(fold_core::agent_changes::AGENT_CHANGE_NEXT.to_owned());
+        items.push(item);
+    }
     if let Some((since, problem)) = reviews::checks::held_by_main(&mut *conn).await? {
         let mut item = NeedsYouItem::new(NeedsYouKind::ChecksFileInvalidOnMain, since);
         item.about = Some(since.as_millis().to_string());
@@ -424,6 +464,26 @@ mod tests {
             [NeedsYouKind::UnstashConflicted]
         );
         assert_eq!(NeedsYouKind::UnstashConflicted.screen(), Screen::Repository);
+    }
+
+    #[test]
+    fn a_workers_change_leaves_only_the_humans_paths_to_the_held_folder() {
+        let mut change = NeedsYouItem::new(NeedsYouKind::AgentChange, at(4));
+        change.paths = vec!["plan.md".to_owned()];
+        let both = Some((at(5), vec!["README.md".to_owned(), "plan.md".to_owned()]));
+        let items = with_folder_attention(vec![change.clone()], None, both);
+        assert_eq!(
+            kinds(&items),
+            [NeedsYouKind::AgentChange, NeedsYouKind::FolderHeld]
+        );
+        assert_eq!(items[1].paths, ["README.md"]);
+        let only = Some((at(5), vec!["plan.md".to_owned()]));
+        assert_eq!(
+            kinds(&with_folder_attention(vec![change], None, only)),
+            [NeedsYouKind::AgentChange]
+        );
+        assert_eq!(NeedsYouKind::AgentChange.screen(), Screen::Repository);
+        assert_eq!(NeedsYouKind::AgentChange.as_str(), "agent_change");
     }
 
     #[test]
