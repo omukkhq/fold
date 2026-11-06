@@ -6,6 +6,7 @@ import {
   itemsFor,
   needsYouGroups,
   reviewsWaitingFor,
+  filesText,
   pathsText,
   questionText,
   titleText,
@@ -131,7 +132,7 @@ describe("needsYouGroups", () => {
     expect(new Set(Object.values(GROUP_OF))).toEqual(
       new Set(["ask", "wait", "project"]),
     );
-    expect(Object.keys(GROUP_OF)).toHaveLength(15);
+    expect(Object.keys(GROUP_OF)).toHaveLength(16);
   });
 
   it("drops an empty group and words a missing tool", () => {
@@ -303,6 +304,30 @@ describe("needsYouGroups", () => {
       text: "Changes were made in your project. Undo the changes or save them using `fld record`",
       href: "/p/demo/repository",
     });
+  });
+
+  it("shows a worker's change of the project folder with its agents and the counted files, to settle in place", () => {
+    const [group] = needsYouGroups("demo", [
+      needsItem({
+        kind: "agent_change",
+        screen: "repository",
+        agent: "reviewer-35",
+        agents: ["reviewer-35"],
+        paths: ["README.md", "junk1.txt", "junk2.txt"],
+      }),
+    ]);
+    expect(group?.title).toBe("Project");
+    expect(group?.lines[0]).toMatchObject({
+      person: null,
+      chip: null,
+      title: "3 files: README.md and 2 more",
+      text: "The project folder changed while reviewer-35 worked",
+      href: null,
+      settle: true,
+    });
+    expect(group?.lines[0]?.key).toBe("agent_change:0");
+    expect(filesText(["a.txt"])).toBe("1 file: a.txt");
+    expect(filesText([])).toBeNull();
   });
 
   it("shows an unstash whose conflict markers wait with the conflicted files, opening nothing", () => {

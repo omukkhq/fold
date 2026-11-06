@@ -103,8 +103,8 @@ async fn record_status_and_needs_you_agree_on_a_tracked_file_the_rules_match() {
     assert_eq!(
         status(&h).await["changes"],
         json!([
-            {"path": "app.env", "kind": "modified", "entry": "file", "held": false},
-            {"path": "build/version.txt", "kind": "modified", "entry": "file", "held": false},
+            {"path": "app.env", "kind": "modified", "entry": "file", "held": false, "agents": []},
+            {"path": "build/version.txt", "kind": "modified", "entry": "file", "held": false, "agents": []},
         ])
     );
     let RecordOutcome::Recorded {
@@ -127,7 +127,7 @@ async fn record_status_and_needs_you_agree_on_a_tracked_file_the_rules_match() {
     assert!(sync(&h).await.followed.unrecorded);
     assert_eq!(
         status(&h).await["changes"],
-        json!([{"path": "app.env", "kind": "deleted", "entry": "file", "held": false}])
+        json!([{"path": "app.env", "kind": "deleted", "entry": "file", "held": false, "agents": []}])
     );
     let RecordOutcome::Recorded { revision, .. } = record_as_ana(&h).await.unwrap() else {
         panic!("a record");
@@ -232,7 +232,7 @@ async fn fld_untrack_removes_tracked_files_from_main_and_leaves_them_and_other_c
     assert_eq!(body["at_main"], true);
     assert_eq!(
         body["changes"],
-        json!([{"path": "README.md", "kind": "modified", "entry": "file", "held": false}])
+        json!([{"path": "README.md", "kind": "modified", "entry": "file", "held": false, "agents": []}])
     );
     assert_eq!(body["ignored_tracked"], json!([]));
     let filter = EventFilter {
@@ -292,7 +292,7 @@ async fn fld_untrack_refuses_a_path_main_does_not_track_and_names_a_file_no_rule
     assert_eq!(read(&dir, "notes.md").as_deref(), Some("notes\n"));
     assert_eq!(
         status(&h).await["changes"],
-        json!([{"path": "notes.md", "kind": "added", "entry": "file", "held": false}])
+        json!([{"path": "notes.md", "kind": "added", "entry": "file", "held": false, "agents": []}])
     );
 }
 
@@ -351,7 +351,7 @@ async fn fld_untrack_with_git_sync_deletes_the_file_from_the_branch_and_the_inde
     let body = status(&h).await;
     assert_eq!(
         body["changes"],
-        json!([{"path": ".foldignore", "kind": "added", "entry": "file", "held": false}])
+        json!([{"path": ".foldignore", "kind": "added", "entry": "file", "held": false, "agents": []}])
     );
     assert_eq!(body["ignored_tracked"], json!([]));
 }

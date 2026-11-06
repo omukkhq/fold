@@ -112,6 +112,18 @@ pub fn can_add_exclude_patterns(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
+/// A change a worker made in the project folder is the human's to judge: a named human restores it or treats it as their own, and so does the main agent, which talks with the human, when the human asks. No other agent settles it, so the worker that made a change never clears its own trace.
+pub fn can_settle_agent_changes(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::Human | Starter::MainAgent => Ok(()),
+        _ => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "only a human or the main agent settles a change a worker made in the project folder",
+            hint: "ask the main agent, which asks the user",
+        }),
+    }
+}
+
 /// `.fold/shared` lists the ignored files and folders every workspace links to, read-only. Only the human and the main agent, which talks with the human, change it: many ignored files are secrets such as `.env`, so no worker shares a file the human did not choose.
 pub fn can_share_paths(starter: &Starter) -> Result<(), PolicyDenied> {
     match starter {
@@ -255,6 +267,23 @@ mod tests {
                 .hint()
                 .contains(".fold/exclude")
         );
+    }
+
+    #[test]
+    fn a_human_or_the_main_agent_settles_a_change_a_worker_made() {
+        use crate::agents::AreaName;
+        assert!(can_settle_agent_changes(&Starter::Human).is_ok());
+        assert!(can_settle_agent_changes(&Starter::MainAgent).is_ok());
+        for starter in [
+            Starter::Unsupervised,
+            Starter::AreaLead(AreaName::parse("web").unwrap()),
+            Starter::ReviewLead,
+            Starter::ShortLived,
+            Starter::System,
+        ] {
+            let denied = can_settle_agent_changes(&starter).unwrap_err();
+            assert_eq!(denied.code(), codes::MAIN_AGENT_REQUIRED, "{starter:?}");
+        }
     }
 
     #[test]

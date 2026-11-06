@@ -82,9 +82,9 @@ async fn the_changes_are_what_a_record_takes_and_a_path_main_changed_holds_the_f
     assert_eq!(
         body["changes"],
         json!([
-            {"path": "docs.md", "kind": "modified", "entry": "file", "held": true},
-            {"path": "notes/new.md", "kind": "added", "entry": "file", "held": false},
-            {"path": "old.md", "kind": "deleted", "entry": "file", "held": false},
+            {"path": "docs.md", "kind": "modified", "entry": "file", "held": true, "agents": []},
+            {"path": "notes/new.md", "kind": "added", "entry": "file", "held": false, "agents": []},
+            {"path": "old.md", "kind": "deleted", "entry": "file", "held": false, "agents": []},
         ])
     );
     assert_eq!(
@@ -147,7 +147,7 @@ async fn the_stash_is_listed_newest_first_and_a_conflicted_unstash_holds_the_fol
     assert_eq!(body["stash"][0]["next"], false);
     assert_eq!(
         body["changes"],
-        json!([{"path": "README.md", "kind": "modified", "entry": "file", "held": false}])
+        json!([{"path": "README.md", "kind": "modified", "entry": "file", "held": false, "agents": []}])
     );
     // While the markers wait, main's next change does not reach the folder.
     integrate(&h, "frontend", &[("src/new.rs", "fn new() {}\n")]).await;

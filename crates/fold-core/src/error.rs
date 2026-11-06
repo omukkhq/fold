@@ -205,6 +205,8 @@ define_codes! {
     NOTIFY_SEND_NOT_FOUND = "notify_send_not_found",
     NOTIFY_TARGET_INACTIVE = "notify_target_inactive",
     INVALID_INTENT = "invalid_intent",
+    RECORD_NEEDS_CONFIRMATION = "record_needs_confirmation",
+    AGENT_CHANGE_NOT_FOUND = "agent_change_not_found",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

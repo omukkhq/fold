@@ -113,7 +113,7 @@ pub async fn record_as_ana(h: &Harness) -> Result<RecordOutcome, ProjectError> {
 pub async fn record_finishing_as_ana(
     h: &Harness,
 ) -> Result<AfterUnstash<RecordOutcome>, ProjectError> {
-    record(&h.handle, &ana(), &Git::default()).await
+    record(&h.handle, &ana(), &Git::default(), None).await
 }
 
 /// The file `path` of `revision` as main holds it.
@@ -193,7 +193,7 @@ async fn nothing_is_recorded_without_fld_record() {
     assert!(!root(&h).join(".git").exists());
 
     // Only a human runs it.
-    let refused = record(&h.handle, &Actor::System, &Git::default())
+    let refused = record(&h.handle, &Actor::System, &Git::default(), None)
         .await
         .unwrap_err();
     assert_eq!(refused.code(), Some(codes::HUMAN_REQUIRED));

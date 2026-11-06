@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use fold_daemon::services::agents::Launcher;
 use tempfile::TempDir;
 
-/// A stand-in for `claude -p` in stream-json mode, so no test needs Claude Code. It records its arguments, environment, working directory and every stdin line under `FOLD_FAKE_CLAUDE_DIR`, answers `initialize` and `interrupt` as Claude Code does, replays the fixture `FOLD_FAKE_CLAUDE_TURN` for each user turn, waits after a `can_use_tool` request until fold answers it, and exits when stdin closes. With `FOLD_FAKE_CLAUDE_STUBBORN` set it ignores SIGINT and a closed stdin, so only SIGTERM or SIGKILL ends it. With `FOLD_FAKE_CLAUDE_RESUME_TURN` naming a fixture, a run with `--resume` replays that one for each user turn instead, so a resumed session can go on with the running total of the session. With `FOLD_FAKE_CLAUDE_HOLD` naming a folder, user turn n of a run with `--resume` waits until the file `n` is in that folder and replays the fixture that the file names, or the run's own when the file is empty, so a test can write a line to stdin while a turn is under way. With `FOLD_FAKE_CLAUDE_LOST` naming a fixture, a run with `--resume` answers its first user turn with that fixture and exits with code 1, as Claude Code does for a session it cannot find. With `FOLD_FAKE_CLAUDE_STDERR` set it answers its first user turn by writing a line and that text in red to stderr and exits with code 1, as a process that cannot run does. With `FOLD_FAKE_CLAUDE_WARN` set it writes that text to stderr when it starts and runs on. With `FOLD_FAKE_CLAUDE_TOUCH` naming a relative path it creates that empty file in its working directory when it starts, as a tool's shell command with a relative redirect target does. With `FOLD_FAKE_CLAUDE_CHILD` set it starts a background `sleep` first, as a tool's command would, and records its pid; with `FOLD_FAKE_CLAUDE_NOISE` set it writes a line that is not UTF-8 and a line over the supervisor's length cap before each turn. Once its stdin closes it records that.
+/// A stand-in for `claude -p` in stream-json mode, so no test needs Claude Code. It records its arguments, environment, working directory and every stdin line under `FOLD_FAKE_CLAUDE_DIR`, answers `initialize` and `interrupt` as Claude Code does, replays the fixture `FOLD_FAKE_CLAUDE_TURN` for each user turn, waits after a `can_use_tool` request until fold answers it, and exits when stdin closes. With `FOLD_FAKE_CLAUDE_STUBBORN` set it ignores SIGINT and a closed stdin, so only SIGTERM or SIGKILL ends it. With `FOLD_FAKE_CLAUDE_RESUME_TURN` naming a fixture, a run with `--resume` replays that one for each user turn instead, so a resumed session can go on with the running total of the session. With `FOLD_FAKE_CLAUDE_HOLD` naming a folder, user turn n of a run with `--resume` waits until the file `n` is in that folder and replays the fixture that the file names, or the run's own when the file is empty, so a test can write a line to stdin while a turn is under way. With `FOLD_FAKE_CLAUDE_LOST` naming a fixture, a run with `--resume` answers its first user turn with that fixture and exits with code 1, as Claude Code does for a session it cannot find. With `FOLD_FAKE_CLAUDE_STDERR` set it answers its first user turn by writing a line and that text in red to stderr and exits with code 1, as a process that cannot run does. With `FOLD_FAKE_CLAUDE_WARN` set it writes that text to stderr when it starts and runs on. With `FOLD_FAKE_CLAUDE_TOUCH` naming a relative path it creates that empty file in its working directory when it starts, as a tool's shell command with a relative redirect target does. With `FOLD_FAKE_CLAUDE_TOOL_RUN` naming a script that exists, it runs the script after each `tool_use` line it writes and before the next line, as the tool itself would. With `FOLD_FAKE_CLAUDE_CHILD` set it starts a background `sleep` first, as a tool's command would, and records its pid; with `FOLD_FAKE_CLAUDE_NOISE` set it writes a line that is not UTF-8 and a line over the supervisor's length cap before each turn. Once its stdin closes it records that.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 dir="$FOLD_FAKE_CLAUDE_DIR"
 for arg in "$@"; do printf '%s\n' "$arg"; done > "$dir/$$.args"
@@ -57,6 +57,10 @@ while IFS= read -r line; do
       fi
       while IFS= read -r out <&3; do
         printf '%s\n' "$out"
+        case "$out" in
+          *'"type":"tool_use"'*)
+            if [ -n "$FOLD_FAKE_CLAUDE_TOOL_RUN" ] && [ -f "$FOLD_FAKE_CLAUDE_TOOL_RUN" ]; then sh "$FOLD_FAKE_CLAUDE_TOOL_RUN"; fi ;;
+        esac
         case "$out" in
           *'"subtype":"can_use_tool"'*)
             while :; do
@@ -239,6 +243,25 @@ impl FakeClaude {
             dir.to_string_lossy().into_owned(),
         ));
         self
+    }
+
+    /// Each tool call a turn replays runs the shell script that [`FakeClaude::set_tool_script`] writes, while the call runs.
+    #[must_use]
+    pub fn running_tool_scripts(mut self) -> Self {
+        let script = self.dir.path().join("tool.sh");
+        self.launcher.env.push((
+            "FOLD_FAKE_CLAUDE_TOOL_RUN".to_owned(),
+            script.to_string_lossy().into_owned(),
+        ));
+        self
+    }
+
+    /// The shell script each tool call runs from now on.
+    pub fn set_tool_script(&self, script: &str) {
+        let path = self.dir.path().join("tool.sh");
+        let partial = self.dir.path().join(".tool.sh");
+        std::fs::write(&partial, script).unwrap();
+        std::fs::rename(partial, path).unwrap();
     }
 
     /// Each run starts a background child of its own.

@@ -18,7 +18,8 @@ pub fn item_key(item: &NeedsYouItem) -> String {
         NeedsYouKind::HumanChange
         | NeedsYouKind::HeadMoved
         | NeedsYouKind::UnstashConflicted
-        | NeedsYouKind::ChecksFileInvalidOnMain => item.about.clone(),
+        | NeedsYouKind::ChecksFileInvalidOnMain
+        | NeedsYouKind::AgentChange => item.about.clone(),
         NeedsYouKind::FolderHeld => None,
     };
     match about {
@@ -34,7 +35,8 @@ fn public_id(item: &NeedsYouItem) -> Option<String> {
         | NeedsYouKind::HeadMoved
         | NeedsYouKind::FolderHeld
         | NeedsYouKind::UnstashConflicted
-        | NeedsYouKind::ChecksFileInvalidOnMain => None,
+        | NeedsYouKind::ChecksFileInvalidOnMain
+        | NeedsYouKind::AgentChange => None,
         _ => item_key(item).split_once(':').map(|(_, id)| id.to_owned()),
     }
 }
@@ -84,6 +86,9 @@ fn title(item: &NeedsYouItem) -> String {
             "fold turned the notice target {} off",
             own(&item.title, "a target")
         ),
+        NeedsYouKind::AgentChange => {
+            format!("The project folder changed while {agent} worked")
+        }
     }
 }
 
@@ -112,7 +117,8 @@ fn path(item: &NeedsYouItem) -> String {
         | NeedsYouKind::HeadMoved
         | NeedsYouKind::FolderHeld
         | NeedsYouKind::UnstashConflicted
-        | NeedsYouKind::ChecksFileInvalidOnMain => "repository".to_owned(),
+        | NeedsYouKind::ChecksFileInvalidOnMain
+        | NeedsYouKind::AgentChange => "repository".to_owned(),
         NeedsYouKind::WorkerUnreachable
         | NeedsYouKind::WorkerModelUnreachable
         | NeedsYouKind::ClaudeNotFound => "agents".to_owned(),

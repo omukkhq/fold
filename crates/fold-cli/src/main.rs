@@ -102,6 +102,9 @@ enum Command {
     #[cfg(feature = "dev-seed")]
     #[command(hide = true)]
     Dev(seed::DevArgs),
+    /// List the files of the project folder that changed while a supervised worker worked, which fold does not offer as your change; restore puts them aside in the stash, ignore lets them count as your own
+    #[command(name = "agent-changes")]
+    AgentChanges(commands::agent_changes::AgentChangesArgs),
 }
 
 /// clap prints a parse outcome, including `--help` and `--version`, and exits with its own code; a failed write is a runtime error with exit code 1.
@@ -208,6 +211,9 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::Cost(args)) => commands::cost::run_cost(&args, out).map_err(Failure::Remote),
         Some(Command::Transcript(args)) => {
             commands::transcript::run_transcript(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::AgentChanges(args)) => {
+            commands::agent_changes::run(&args, out).map_err(Failure::Remote)
         }
         #[cfg(feature = "dev-seed")]
         Some(Command::Dev(args)) => {

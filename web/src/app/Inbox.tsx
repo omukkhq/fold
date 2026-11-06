@@ -3,6 +3,7 @@ import * as RadixTabs from "@radix-ui/react-tabs";
 import { useQuery } from "@tanstack/react-query";
 import {
   BellOff,
+  Bot,
   ChevronRight,
   CloudOff,
   FileWarning,
@@ -21,7 +22,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { needsYouQuery, sessionQuery } from "@/api/queries";
 import type { NeedsYouKind } from "@/api/workers";
 import { Count } from "@/components/badge/Chip";
@@ -48,6 +49,11 @@ import { useLiveStatus } from "@/live/status";
 import { useNow } from "@/live/useNow";
 import { idHref } from "@/routes/paths";
 import { PersonName } from "@/people/PersonName";
+import {
+  AgentChangeChoices,
+  RecordConfirmDialog,
+  useAgentChangeChoices,
+} from "./AgentChangeChoices";
 import { HrefLink } from "./HrefLink";
 import { listNote, listState } from "./listNote";
 import { PanelNote } from "./PanelNote";
@@ -75,6 +81,7 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   worker_model_unreachable: CloudOff,
   claude_not_found: SearchX,
   notify_target_off: BellOff,
+  agent_change: Bot,
 };
 
 const MINUTE_MS = 60_000;
@@ -87,10 +94,13 @@ function NeedLine({
   line,
   now,
   onOpen,
+  choices,
 }: {
   line: NeedsYouLine;
   now: number;
   onOpen: () => void;
+  /** The controls a line that takes the human's choice in place shows under its words. */
+  choices?: ReactNode;
 }) {
   const Icon = ICONS[line.kind];
   const full = fullTitle(line);
@@ -151,6 +161,7 @@ function NeedLine({
             <CodeText text={line.title} caption />
           </span>
         ) : null}
+        {choices ? <span className="basis-full pt-4">{choices}</span> : null}
       </span>
     </>
   );
@@ -282,6 +293,7 @@ export function Inbox({ slug }: { slug: string }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<InboxTab>("needs");
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
+  const agentChange = useAgentChangeChoices(slug);
   const items = itemsFor(needs.data ?? [], session.data?.human ?? null);
   const groups = needsYouGroups(slug, items);
   const note = listNote(listState(needs), groups.length, {
@@ -399,6 +411,11 @@ export function Inbox({ slug }: { slug: string }) {
                           line={line}
                           now={now}
                           onOpen={close}
+                          choices={
+                            line.settle ? (
+                              <AgentChangeChoices settle={agentChange.settle} />
+                            ) : undefined
+                          }
                         />
                       ))}
                     </ul>
@@ -446,6 +463,11 @@ export function Inbox({ slug }: { slug: string }) {
           </RadixTabs.Root>
         </RadixPopover.Content>
       </RadixPopover.Portal>
+      <RecordConfirmDialog
+        confirmation={agentChange.confirmation}
+        settle={agentChange.settle}
+        onClose={agentChange.dismiss}
+      />
     </RadixPopover.Root>
   );
 }

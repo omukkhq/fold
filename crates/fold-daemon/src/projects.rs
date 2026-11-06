@@ -19,7 +19,8 @@ use crate::services::agents::{AgentService, Launcher, SeenPresence, Supervisor, 
 use crate::services::events::EventBus;
 use crate::services::messages::MessageService;
 use crate::services::projects::{
-    FoldSkills, GitAttention, ProjectError, RemoteContext, keep_fold_skills_out, load_config,
+    FoldSkills, GitAttention, ProjectError, RemoteContext, ToolWindows, keep_fold_skills_out,
+    load_config,
 };
 use crate::services::reviews::ReviewService;
 use crate::services::reviews::checks::{CheckPermits, CheckRunner, recover_check_runs};
@@ -56,6 +57,8 @@ pub struct ProjectHandle {
     pub(crate) shared: Arc<std::sync::OnceLock<std::sync::Weak<ProjectHandle>>>,
     /// What the folder's last follow and the commit writer last found that needs a person: changes in the project folder that no revision records, or a branch or `HEAD` that shows a change fold did not make.
     pub git_attention: Arc<GitAttention>,
+    /// The tool calls of the project's supervised workers that can write files, which place a change of the project folder in a worker's call.
+    pub tool_windows: Arc<ToolWindows>,
     /// One restore, sync or record per workspace at a time, across every session of the project.
     pub workspace_locks: Arc<WorkspaceLocks>,
     /// What the file system under `.fold/` supports, probed by the first workspace command of any session or the first live attach.
@@ -187,6 +190,7 @@ impl ProjectHandle {
         let folder_lock = Arc::new(tokio::sync::Mutex::new(()));
         let shared: Arc<std::sync::OnceLock<std::sync::Weak<ProjectHandle>>> = Arc::default();
         let git_attention = Arc::new(GitAttention::default());
+        let tool_windows = workers.tool_windows();
         let auto_commit = jobs::auto_commit(
             RemoteContext {
                 slug: row.slug.clone(),
@@ -199,6 +203,7 @@ impl ProjectHandle {
                 objects: objects.clone(),
                 git_attention: git_attention.clone(),
                 handle: shared.clone(),
+                tool_windows: tool_windows.clone(),
             },
             Git::default(),
         );
@@ -237,6 +242,7 @@ impl ProjectHandle {
             folder_lock,
             shared,
             git_attention,
+            tool_windows,
             workspace_locks,
             capabilities,
             live,

@@ -825,7 +825,7 @@ pub type AutoCommit = ProjectTask;
 /// How often the Git job looks at the files of the project's Git branch and `HEAD` while Git sync is on.
 pub const GIT_WATCH_TICK: Duration = Duration::from_secs(1);
 
-/// Starts `auto_commit` for one project. It brings the project folder to main through fold's own checkout and, while Git sync is on, writes the commit of every revision that has none into the project's repository and moves the branch and the index to the revision the folder holds: once at the start, which catches up an integration a stopped daemon never followed, again after every committed integration of any kind, which the bus carries only after its commit, and whenever the files of the `[git]` branch, `HEAD` or the stash change, or one of the paths that hold the project folder back, with or without Git sync, which it reads every [`GIT_WATCH_TICK`] from their metadata without running `git`. After an integration it then runs the push of `fld push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A run covers every revision so far, so the integrations that arrive while one runs need one more run at most. Each commit recorded in `revision_commits` gets its `git.committed` event in the same transaction, published once the run returns, so the web interface shows the commit without a reload. A failed commit appends `git.commit_failed`, and a failed push appends `remote.push_failed` with the remote's failure in `remote_states`, each in its own transaction, and logs the project and the code only; the integration stands either way.
+/// Starts `auto_commit` for one project. It brings the project folder to main through fold's own checkout and, while Git sync is on, writes the commit of every revision that has none into the project's repository and moves the branch and the index to the revision the folder holds: once at the start, which catches up an integration a stopped daemon never followed, again after every committed integration of any kind, which the bus carries only after its commit, and whenever the files of the `[git]` branch, `HEAD` or the stash change, or one of the paths that hold the project folder back, with or without Git sync, which it reads every [`GIT_WATCH_TICK`] from their metadata without running `git`, and at the tick after a supervised worker's tool call that can write files ended, so a change the call made in the project folder is placed in it. After an integration it then runs the push of `fld push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A run covers every revision so far, so the integrations that arrive while one runs need one more run at most. Each commit recorded in `revision_commits` gets its `git.committed` event in the same transaction, published once the run returns, so the web interface shows the commit without a reload. A failed commit appends `git.commit_failed`, and a failed push appends `remote.push_failed` with the remote's failure in `remote_states`, each in its own transaction, and logs the project and the code only; the integration stands either way.
 pub fn auto_commit(context: RemoteContext, git: Git) -> AutoCommit {
     let receiver = context.bus.subscribe();
     ProjectTask::spawn(run_auto_commit(context, git, receiver))
@@ -856,7 +856,9 @@ async fn run_auto_commit(
         let Some(received) = received else {
             let shared_since = without_handle && context.handle.get().is_some();
             without_handle &= !shared_since;
-            if shared_since || watch.changed(&context).await {
+            // A worker's tool call that ended may have changed the project folder, which only a follow reads.
+            let call_ended = context.tool_windows.take_ended();
+            if shared_since || watch.changed(&context).await || call_ended {
                 commit_after_integration(&context, &git).await;
             }
             continue;

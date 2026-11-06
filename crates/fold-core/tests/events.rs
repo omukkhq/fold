@@ -139,6 +139,8 @@ fn all_equals_the_plans_event_types() {
         "review.batch_wait_ended",
         "review.batch_ready",
         "notify.target_changed",
+        "folder.agent_changed",
+        "folder.agent_change_cleared",
     ]);
     assert_eq!(declared, expected);
 }

@@ -57,6 +57,8 @@ pub struct FolderChange {
     pub entry: EntryKind,
     /// Main changed the path too since the folder's revision, so the change holds the folder where it is.
     pub held: bool,
+    /// The agents whose tool calls ran when the path changed, in name order; empty for a change of the human's.
+    pub agents: Vec<fold_core::AgentName>,
 }
 
 /// A file the read of the folder leaves out.
@@ -103,6 +105,14 @@ pub async fn folder_status(
     let read = read_folder(&handle.store, &handle.paths, git)
         .await?
         .ok_or(StoreError::Corrupt("refs.main"))?;
+    let mut from_agents: std::collections::BTreeMap<String, Vec<fold_core::AgentName>> =
+        std::collections::BTreeMap::new();
+    for row in fold_store::workspaces::open_agent_changes(handle.store.read()).await? {
+        from_agents
+            .entry(String::from_utf8_lossy(&row.path).into_owned())
+            .or_default()
+            .push(row.agent);
+    }
     let (waiting, stack, journal) = {
         let mut conn = handle
             .store
@@ -270,6 +280,7 @@ pub async fn folder_status(
                 let path = String::from_utf8_lossy(&change.path).into_owned();
                 FolderChange {
                     held: held.contains(&path),
+                    agents: from_agents.remove(&path).unwrap_or_default(),
                     path,
                     kind: change.kind,
                     entry: change.entry,

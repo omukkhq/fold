@@ -117,7 +117,7 @@ where
         Ok(Err(error)) => Err(error),
         Err(_) => Err(invalid("no handshake line arrived within 5 seconds")),
     };
-    let ((agents, events, workspaces, tasks, messages, reviews, session, project), rest) =
+    let ((agents, events, workspaces, tasks, messages, reviews, session, project, handle), rest) =
         match opened {
             Ok(opened) => opened,
             Err(error) => {
@@ -144,7 +144,8 @@ where
             messages,
             session.clone(),
         )
-        .with_reviews(reviews);
+        .with_reviews(reviews)
+        .with_project(handle);
         // Bytes the client sent after its line belong to MCP.
         let read = Cursor::new(rest).chain(read);
         match server.serve((read, write)).await {
@@ -252,6 +253,7 @@ async fn open(
         ReviewService,
         SessionContext,
         String,
+        std::sync::Weak<crate::projects::ProjectHandle>,
     ),
     FoldError,
 > {
@@ -302,6 +304,7 @@ async fn open(
         handle.reviews(&state.registry),
         session,
         handle.slug.clone(),
+        Arc::downgrade(&handle),
     ))
 }
 

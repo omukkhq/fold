@@ -16,6 +16,7 @@ use crate::services::projects::{
 use fold_core::{Presence, TaskStatus, Timestamp};
 use fold_vcs::git::Git;
 
+mod agent_changes;
 mod notify;
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -35,6 +36,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(unstash))
         .routes(routes!(untrack))
         .merge(notify::routes())
+        .merge(agent_changes::routes())
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1007,13 +1009,13 @@ impl From<RecordOutcome> for RecordResult {
     post,
     path = "/api/v1/projects/{slug}/record",
     operation_id = "record_project",
-    params(("slug" = String, Path, description = "The project slug")),
+    params(("slug" = String, Path, description = "The project slug"), RecordQuery),
     responses(
         (status = 200, description = "Main holds the human change, or it waits for the main agent", body = RecordResult),
         (status = 400, description = "The human name is not valid, the branch or HEAD shows a change fold did not make (`reason` `head_moved`), or files still hold the conflict of `fld unstash` (`reason` `stash_markers`, the files in `paths`)", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
-        (status = 409, description = "Main moved during every attempt, or the config or sync map is invalid", body = ErrorEnvelope),
+        (status = 409, description = "`record_needs_confirmation`: the change empties a tracked file, adds many empty files or holds files that changed while a worker worked, and `confirm` does not name its tree; the details name the files of each reason with their counts, the agents, and the `tree` to confirm. Otherwise main moved during every attempt, or the config or sync map is invalid", body = ErrorEnvelope),
         (status = 502, description = "A Git command failed", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open, git is not on PATH, or the objects of the change could not be stored", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -1023,8 +1025,39 @@ pub async fn record(
     _socket: SocketOnly,
     human: Human,
     Project(handle): Project,
+    ApiQuery(query): ApiQuery<RecordQuery>,
 ) -> Result<Json<RecordResult>, ApiError> {
-    let done = projects::record(&handle, &human.actor(), &Git::default()).await?;
+    record_as(&handle, &human, &query).await
+}
+
+/// The confirmation of a record that asked for one.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct RecordQuery {
+    /// The `tree` of a `record_needs_confirmation` refusal: the record goes on while the folder still holds that tree.
+    pub confirm: Option<String>,
+}
+
+/// Records the project folder for `human`, as `fld record` and the web's record of a worker's change ask.
+pub(crate) async fn record_as(
+    handle: &std::sync::Arc<crate::projects::ProjectHandle>,
+    human: &Human,
+    query: &RecordQuery,
+) -> Result<Json<RecordResult>, ApiError> {
+    let confirm = query
+        .confirm
+        .as_deref()
+        .map(|tree| {
+            tree.parse::<fold_core::object::ObjectHash>().map_err(|_| {
+                fold_core::FoldError::new(
+                    fold_core::codes::INVALID_REQUEST,
+                    "confirm is not a tree hash",
+                )
+                .with_details([("field", serde_json::json!("confirm"))])
+            })
+        })
+        .transpose()?;
+    let done = projects::record(handle, &human.actor(), &Git::default(), confirm).await?;
     let mut result = RecordResult::from(done.outcome);
     result.unstash = done.unstash.map(UnstashResult::from);
     Ok(Json(result))
@@ -1374,6 +1407,9 @@ pub struct FolderChangeView {
     pub entry: FolderEntryKind,
     /// Main changed the path too since the folder's revision, so the change holds the folder where it is until it is recorded or taken back.
     pub held: bool,
+    /// The agents whose supervised workers' tool calls ran when the path changed, in name order: fold does not offer the change as the human's until it is recorded, restored or ignored. Empty for a change of the human's.
+    #[schema(example = json!(["reviewer-35"]))]
+    pub agents: Vec<String>,
 }
 
 /// What keeps the project folder from following main, or the human's changes off main. `head_moved`: the Git branch or HEAD shows a change fold did not make. `commits_waiting`: the Git branch holds commits of the human's that fold has not recorded yet. `unstash_open`: an unstash stopped part-way and waits to be finished. `unstash_conflicted`: the conflict markers of `fld unstash` wait in the files. `human_change`: a change of the human's conflicts with main and waits for the main agent. `folder_held`: paths main changed hold changes of the human's that no revision records.
@@ -1516,6 +1552,7 @@ impl From<projects::FolderStatus> for FolderStatusView {
                         EntryKind::File | EntryKind::Directory => FolderEntryKind::File,
                     },
                     held: change.held,
+                    agents: change.agents.iter().map(ToString::to_string).collect(),
                 })
                 .collect(),
             skipped: status
