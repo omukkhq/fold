@@ -121,7 +121,7 @@ pub struct LiveWorkspace {
     pub checkpoints: Vec<CheckpointSummary>,
     #[schema(value_type = Option<String>, required = true, example = "P-3")]
     pub proposal: Option<ProposalId>,
-    /// The worker holds the task's implementation claim and nothing in the workspace changed for `stall_minutes`. Calls do not count, so a stalled worker can hold a fresh lease.
+    /// The worker holds the task's implementation claim, and for `stall_minutes` since it was last given the turn nothing in the workspace changed, no check run went and it waited for no person and no lead check. Calls do not count, so a stalled worker can hold a fresh lease.
     pub stalled: bool,
     /// Whether the working files differ from the tree of the open proposal's newest version: false while every file is the same, true from the first file that differs. Null without an open proposal.
     #[schema(required = true)]
