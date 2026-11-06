@@ -78,6 +78,7 @@ pub async fn stash_stack(conn: &mut SqliteConnection) -> Result<Vec<StashRow>, S
                   s.actor, s.state, s.created_at AS "created_at!: i64", s.conflicted_at AS "conflicted_at?: i64"
            FROM folder_stashes s JOIN revisions r ON r.id = s.revision_id
            WHERE s.state IN ('stashed', 'conflicted')
+             AND NOT EXISTS (SELECT 1 FROM folder_stash_drops d WHERE d.stash_id = s.id)
            ORDER BY s.number DESC"#
     )
     .fetch_all(&mut *conn)
@@ -192,6 +193,25 @@ pub async fn drop_stash(tx: &mut WriteTx, id: i64, now: Timestamp) -> Result<boo
     .await?
     .rows_affected();
     Ok(dropped == 1)
+}
+
+/// Records the human's drop of the stashed entry `id` in the caller's write transaction, which hides it from the stack for good; its trees stay in the object store until `fld gc`. The database refuses an entry that is not `stashed`, or one dropped already.
+pub async fn insert_stash_drop(
+    tx: &mut WriteTx,
+    id: i64,
+    actor: &str,
+    now: Timestamp,
+) -> Result<(), StoreError> {
+    let created_at = now.as_millis();
+    sqlx::query!(
+        "INSERT INTO folder_stash_drops (stash_id, actor, created_at) VALUES (?, ?, ?)",
+        id,
+        actor,
+        created_at
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
 }
 
 /// How an unstash's journal row closes.

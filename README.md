@@ -176,6 +176,8 @@ Run these commands inside your project:
 | `fld record` | Record your own changes in the project folder on main. |
 | `fld untrack <path>...` | Stop tracking files that main records and keep them in the project folder. A directory stands for every tracked file in it. Older revisions keep the files. |
 | `fld stash` | Put your unrecorded changes aside, so the project folder follows main. `fld stash list` shows the stash. |
+| `fld stash drop [stash@{n}]` | Drop one stash entry, the newest when you name none. Its changes are gone for good, and no file in the project folder changes. fld shows the entry and asks first; `--yes` skips the question in a script. |
+| `fld stash clear` | Drop every stash entry, after the same question. |
 | `fld unstash` | Bring the newest stashed changes back into the project folder. If they conflict, fix the conflict markers, then run `fld record`. When an unstash stops part-way, the next `fld stash`, `fld unstash`, or `fld record` finishes it first. |
 | `fld status` | See your project folder against main, like `git status`: the files `fld record` would record, the ones main changed too, what keeps the folder from following main with the next step for each, how many tracked files an ignore line matches (listed when one of them changed), and the stash with the entry `fld unstash` takes next. It changes nothing; `--json` prints the daemon's answer. |
 | `fld setup` | Start the daemon at login. |

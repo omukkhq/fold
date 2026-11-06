@@ -591,6 +591,22 @@ describe("eventLine", () => {
     expect(
       eventLine(event("stash.dropped", { data: { task: "T-9" } })).text,
     ).toBe("recorded the conflict of the unstash on main; T-9 fixes it");
+    expect(
+      eventLine(
+        event("stash.discarded", {
+          data: { stash: "stash@{1}", file_count: 2, dropped: 1 },
+        }),
+      ).text,
+    ).toBe("dropped stash@{1} with 2 files from the stash");
+    expect(
+      eventLine(event("stash.discarded", { data: { dropped: 3 } })).text,
+    ).toBe("dropped 3 entries of the stash");
+    expect(
+      eventLine(event("stash.discarded", { data: { dropped: 1 } })).text,
+    ).toBe("dropped 1 entry of the stash");
+    expect(eventLine(event("stash.discarded")).text).toBe(
+      "dropped entries of the stash",
+    );
   });
 
   it("keeps a backtick in a path from pairing with the marks of a command", () => {

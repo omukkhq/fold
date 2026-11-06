@@ -11,7 +11,8 @@ use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use super::{Project, SocketOnly};
 use crate::daemon::{AppState, StartedBy};
 use crate::services::projects::{
-    self, PullOutcome, PushOutcome, RecordOutcome, StashOutcome, UnstashOutcome,
+    self, PullOutcome, PushOutcome, RecordOutcome, StashDrop, StashEntry, StashOutcome,
+    UnstashOutcome,
 };
 use fold_core::{Presence, TaskStatus, Timestamp};
 use fold_vcs::git::Git;
@@ -30,7 +31,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(push))
         .routes(routes!(pull))
         .routes(routes!(record))
-        .routes(routes!(list_stash, stash))
+        .routes(routes!(list_stash, stash, clear_stash))
+        .routes(routes!(drop_stash_entry))
         .routes(routes!(show_folder))
         .routes(routes!(unstash))
         .routes(routes!(untrack))
@@ -1314,7 +1316,7 @@ pub struct StashList {
     pub entries: Vec<StashEntryView>,
 }
 
-/// The stash of the project folder, newest entry first, as `fld stash list` shows it. Socket only.
+/// The stash of the project folder, newest entry first, as `fld stash list` and the web app show it: names and counts, never content.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/stash",
@@ -1322,28 +1324,116 @@ pub struct StashList {
     params(("slug" = String, Path, description = "The project slug")),
     responses(
         (status = 200, description = "The entries", body = StashList),
-        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
-pub async fn list_stash(
-    _socket: SocketOnly,
-    Project(handle): Project,
-) -> Result<Json<StashList>, ApiError> {
+pub async fn list_stash(Project(handle): Project) -> Result<Json<StashList>, ApiError> {
     let entries = projects::stash_list(&handle).await?;
     Ok(Json(StashList {
-        entries: entries
-            .into_iter()
-            .map(|entry| StashEntryView {
-                stash: format!("stash@{{{}}}", entry.position),
-                created_at: entry.created_at,
-                base: entry.base.to_string(),
-                actor: entry.actor,
-                files: entry.files,
-                conflicted: entry.conflicted,
-            })
-            .collect(),
+        entries: entries.into_iter().map(StashEntryView::from).collect(),
+    }))
+}
+
+impl From<StashEntry> for StashEntryView {
+    fn from(entry: StashEntry) -> Self {
+        Self {
+            stash: format!("stash@{{{}}}", entry.position),
+            created_at: entry.created_at,
+            base: entry.base.to_string(),
+            actor: entry.actor,
+            files: entry.files,
+            conflicted: entry.conflicted,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct StashDropResult {
+    /// The dropped entries, newest first, each named by its place on the stack before the drop; empty when `fld stash clear` found the stash empty.
+    pub dropped: Vec<StashEntryView>,
+    /// The entries left on the stack.
+    pub entries: usize,
+}
+
+const DROP_REFUSALS: &str = "The human name is not valid; the place is not a number (`reason` `invalid_entry`); the stash is empty (`reason` `stash_empty`); no entry has that place (`reason` `stash_entry_missing`, the stack's length in `entries`); the entry's unstash conflict waits in the folder (`reason` `stash_conflicted`, the files in `paths`); or, while an unstash that stopped part-way is finished first, the branch or HEAD shows a change fold did not make (`reason` `head_moved`) or the human's Git commits wait (`reason` `git_commits_wait`)";
+
+/// Drops one entry of the stash, as `fld stash drop` asks: its changes leave the stack for good, its objects stay until `fld gc`, and no file of the project folder changes. Only a named human drops, over the socket or signed in to the web app. An entry whose unstash conflict waits in the folder is refused.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/projects/{slug}/stash/{entry}",
+    operation_id = "drop_project_stash_entry",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("entry" = String, Path, description = "The entry's place on the stack: `0` is `stash@{0}`, the newest"),
+    ),
+    responses(
+        (status = 200, description = "The entry is dropped", body = StashDropResult),
+        (status = 400, description = DROP_REFUSALS, body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 403, description = "`human_required`: only a human drops entries of the stash", body = ErrorEnvelope),
+        (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
+        (status = 409, description = "The config is invalid", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn drop_stash_entry(
+    human: Human,
+    Project(handle): Project,
+    Path((_slug, entry)): Path<(String, String)>,
+) -> Result<Json<StashDropResult>, ApiError> {
+    let position = entry
+        .strip_prefix("stash@{")
+        .and_then(|rest| rest.strip_suffix('}'))
+        .unwrap_or(&entry)
+        .parse::<usize>()
+        .map_err(|_| {
+            fold_core::FoldError::new(
+                fold_core::codes::INVALID_REQUEST,
+                "the entry must be its place on the stack, such as 0 for stash@{0}",
+            )
+            .with_hint("`fld stash list` names each entry")
+            .with_details([("reason", serde_json::json!("invalid_entry"))])
+        })?;
+    drop_entries(&handle, &human, StashDrop::One(position)).await
+}
+
+/// Drops every entry of the stash, as `fld stash clear` asks: their changes leave the stack for good, their objects stay until `fld gc`, and no file of the project folder changes. Only a named human clears, over the socket or signed in to the web app. A stash whose newest entry's unstash conflict waits in the folder is refused as a whole.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/projects/{slug}/stash",
+    operation_id = "clear_project_stash",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "Every entry is dropped, or the stash was empty", body = StashDropResult),
+        (status = 400, description = DROP_REFUSALS, body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 403, description = "`human_required`: only a human drops entries of the stash", body = ErrorEnvelope),
+        (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
+        (status = 409, description = "The config is invalid", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn clear_stash(
+    human: Human,
+    Project(handle): Project,
+) -> Result<Json<StashDropResult>, ApiError> {
+    drop_entries(&handle, &human, StashDrop::All).await
+}
+
+async fn drop_entries(
+    handle: &std::sync::Arc<crate::projects::ProjectHandle>,
+    human: &Human,
+    target: StashDrop,
+) -> Result<Json<StashDropResult>, ApiError> {
+    let done =
+        projects::drop_stash_entries(handle, &human.actor(), &Git::default(), target).await?;
+    Ok(Json(StashDropResult {
+        dropped: done.dropped.into_iter().map(StashEntryView::from).collect(),
+        entries: done.entries,
     }))
 }
 

@@ -8,8 +8,8 @@ use fold_core::{TaskDescription, TaskKind, TaskTitle};
 use fold_store::StoreError;
 use fold_store::workspaces::{
     self, ConflictRow, NewStash, NewUnstash, StashRow, StashState, UnstashEnd, apply_stash,
-    close_unstash, conflict_stash, drop_stash, insert_stash, insert_unstash, open_unstash,
-    stash_stack,
+    close_unstash, conflict_stash, drop_stash, insert_stash, insert_stash_drop, insert_unstash,
+    open_unstash, stash_stack,
 };
 use fold_vcs::checkout::{folder_changes, follow};
 use fold_vcs::compare::load_flat;
@@ -160,6 +160,153 @@ pub async fn stash_list(handle: &ProjectHandle) -> Result<Vec<StashEntry>, Proje
         });
     }
     Ok(entries)
+}
+
+/// Which entries `fld stash drop` or `fld stash clear` drops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StashDrop {
+    /// The entry at this place on the stack: 0 is `stash@{0}`, the newest.
+    One(usize),
+    /// Every entry.
+    All,
+}
+
+/// What `fld stash drop` or `fld stash clear` dropped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StashDropped {
+    /// The dropped entries, newest first, each with its place on the stack before the drop.
+    pub dropped: Vec<StashEntry>,
+    /// The entries left on the stack.
+    pub entries: usize,
+}
+
+/// Drops entries of the stash for the named human who runs `fld stash drop` or `fld stash clear`: the changes they hold are gone from the stack for good, while their objects stay in the store until `fld gc`. No file of the project folder changes. Under the remote lock and folder lock, an unstash that a stop left part-way is finished first, so no journal row names a dropped entry; then one transaction records each drop and appends `stash.discarded`. An entry whose unstash conflict waits in the folder is refused, since its markers are still there: the human fixes them and runs `fld record`, which drops the entry. A place past the stack is refused; `fld stash clear` of an empty stash drops nothing.
+pub async fn drop_stash_entries(
+    handle: &Arc<ProjectHandle>,
+    actor: &Actor,
+    git: &Git,
+    target: StashDrop,
+) -> Result<StashDropped, ProjectError> {
+    policy::can_drop_stash(actor).map_err(FoldError::from)?;
+    let (handle, actor, git) = (Arc::clone(handle), actor.clone(), git.clone());
+    spawned(async move { run_drop(&handle, &actor, &git, target).await }).await
+}
+
+async fn run_drop(
+    handle: &Arc<ProjectHandle>,
+    actor: &Actor,
+    git: &Git,
+    target: StashDrop,
+) -> Result<StashDropped, ProjectError> {
+    let config = load_config(&handle.paths).await?;
+    let _remote = handle.remote_lock.clone().lock_owned().await;
+    let _folder = handle.folder_lock.clone().lock_owned().await;
+    let open = {
+        let mut conn = handle
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        open_unstash(&mut conn).await?
+    };
+    if open.is_some() {
+        loop {
+            let (followed, _) = sync(handle, git, false).await?;
+            refuse_branch(&config.git.branch, &followed)?;
+            if matches!(
+                finish_open_unstash(handle, config.max_file_bytes).await?,
+                Finish::Nothing
+            ) {
+                break;
+            }
+        }
+    }
+    let stack = stack(handle).await?;
+    let chosen: Vec<(usize, &StashRow)> = match target {
+        StashDrop::All => stack.iter().enumerate().collect(),
+        StashDrop::One(position) => match stack.get(position) {
+            Some(entry) => vec![(position, entry)],
+            None if stack.is_empty() => {
+                return Err(FoldError::new(codes::INVALID_REQUEST, "the stash is empty")
+                    .with_hint("`fld stash list` shows the stash")
+                    .with_details([("reason", json!("stash_empty"))])
+                    .into());
+            }
+            None => {
+                return Err(FoldError::new(
+                    codes::INVALID_REQUEST,
+                    format!(
+                        "stash@{{{position}}} does not exist: the stash has {}",
+                        entries_text(stack.len())
+                    ),
+                )
+                .with_hint("`fld stash list` names each entry")
+                .with_details([
+                    ("reason", json!("stash_entry_missing")),
+                    ("entries", json!(stack.len())),
+                ])
+                .into());
+            }
+        },
+    };
+    if let Some((_, entry)) = chosen
+        .iter()
+        .find(|(_, entry)| entry.state == StashState::Conflicted)
+    {
+        return Err(markers_wait(&entry.conflicts).into());
+    }
+    let mut dropped = Vec::with_capacity(chosen.len());
+    for (position, entry) in &chosen {
+        dropped.push(StashEntry {
+            position: *position,
+            created_at: entry.created_at,
+            base: entry.revision,
+            files: entry_files(handle, entry).await?,
+            conflicted: Vec::new(),
+            actor: entry.actor.clone(),
+        });
+    }
+    let entries = stack.len() - chosen.len();
+    if dropped.is_empty() {
+        return Ok(StashDropped { dropped, entries });
+    }
+    let event = match (target, dropped.as_slice()) {
+        (StashDrop::One(position), [entry]) => stash_event(
+            types::STASH_DISCARDED,
+            actor,
+            entry.base,
+            &entry.files,
+            json!({"stash": format!("stash@{{{position}}}"), "dropped": 1, "entries": entries}),
+        )?,
+        _ => NewEvent::new(types::STASH_DISCARDED, actor.event_actor())
+            .and_then(|event| event.data(json!({"dropped": dropped.len(), "entries": entries})))
+            .map_err(|error| FoldError::new(codes::INTERNAL_ERROR, error.to_string()))?,
+    };
+    let ids: Vec<i64> = chosen.iter().map(|(_, entry)| entry.id).collect();
+    let (label, now) = (actor.event_actor().to_string(), handle.clock.now());
+    let buffer = handle
+        .store
+        .write(async |tx| -> Result<EventBuffer, ProjectError> {
+            let mut buffer = EventBuffer::new();
+            for id in &ids {
+                insert_stash_drop(tx, *id, &label, now).await?;
+            }
+            buffer.append(tx, &event, now).await?;
+            Ok(buffer)
+        })
+        .await?;
+    handle.bus.publish(buffer);
+    tracing::info!(dropped = ids.len(), "stash entries are dropped");
+    Ok(StashDropped { dropped, entries })
+}
+
+fn entries_text(count: usize) -> String {
+    if count == 1 {
+        "1 entry".to_owned()
+    } else {
+        format!("{count} entries")
+    }
 }
 
 /// Runs a command to its end on its own task, so a client that goes away does not stop it between the files and the row.

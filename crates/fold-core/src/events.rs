@@ -168,6 +168,7 @@ define_event_types! {
     REVIEW_BATCH_WAIT_ENDED = "review.batch_wait_ended",
     REVIEW_BATCH_READY = "review.batch_ready",
     NOTIFY_TARGET_CHANGED = "notify.target_changed",
+    STASH_DISCARDED = "stash.discarded",
 }
 
 impl EventType {

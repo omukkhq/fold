@@ -81,8 +81,8 @@ pub use record::{RecordOutcome, TouchedTask, record};
 pub(crate) use remote::push_with;
 pub use remote::{PushOutcome, RemoteContext, push};
 pub use stash::{
-    AfterUnstash, StashEntry, StashOutcome, UnstashConflict, UnstashOutcome, stash, stash_list,
-    unstash,
+    AfterUnstash, StashDrop, StashDropped, StashEntry, StashOutcome, UnstashConflict,
+    UnstashOutcome, drop_stash_entries, stash, stash_list, unstash,
 };
 pub use untrack::{FOLD_SKILLS_TITLE, FoldSkills, UntrackOutcome, keep_fold_skills_out, untrack};
 pub use web_auth::{

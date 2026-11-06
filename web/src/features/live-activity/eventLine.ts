@@ -24,6 +24,7 @@ import {
   Play,
   RotateCcw,
   Tag,
+  Trash2,
   TriangleAlert,
   Undo2,
   Upload,
@@ -891,6 +892,21 @@ const SPECS: Record<EventType, Spec> = {
       return task === null
         ? "fixed the conflict of the unstash; the stash entry is dropped"
         : `recorded the conflict of the unstash on main; ${task} fixes it`;
+    },
+  },
+  "stash.discarded": {
+    icon: Trash2,
+    text: (e) => {
+      const stash = text(e.data.stash);
+      if (stash !== null) {
+        return `dropped ${stash} with ${filesText(e)} from the stash`;
+      }
+      const dropped = count(e.data.dropped);
+      return dropped === null
+        ? "dropped entries of the stash"
+        : dropped === 1
+          ? "dropped 1 entry of the stash"
+          : `dropped ${String(dropped)} entries of the stash`;
     },
   },
   "checks.started": {
