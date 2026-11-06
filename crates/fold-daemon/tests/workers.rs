@@ -228,8 +228,13 @@ async fn an_area_lead_starts_task_workers_only_for_tasks_of_its_own_area() {
             &std::fs::read_to_string(run.flag("--settings").unwrap()).unwrap(),
         )
         .unwrap();
-        assert_eq!(own, fold_core::layout::worker_settings());
-        assert_eq!(own["permissions"]["allow"], json!(["mcp__fold"]));
+        assert_eq!(own["hooks"], fold_core::layout::worker_settings()["hooks"]);
+        let root = std::path::Path::new(harness.root()).canonicalize().unwrap();
+        // The worker reads the project folder, where the shared paths lead, as it could when it ran there.
+        assert_eq!(
+            own["permissions"]["allow"],
+            json!(["mcp__fold", format!("Read(/{}/**)", root.display())])
+        );
         assert_eq!(
             own["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
             "fld hook pre-tool-use"

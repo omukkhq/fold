@@ -14,6 +14,8 @@ A worker reads project files only inside its own workspace under `.fold/ws/`. A 
 
 A worker that fold supervises, other than the supervised main agent, starts in its own start folder `.fold/workers/<name>/start`, and its shell goes back there after each command. It runs each command on project files as `cd '<absolute path of the workspace>' && <command>`, and fold refuses a shell command of it that would start in the project folder outside `.fold/ws/`. The shell is the user's own, often zsh: an unquoted `$var` is not split into words, and every word of an unquoted redirect target becomes a file. Quote every path, and write loops and word splitting as `bash -c '...'` or with arrays.
 
+A path that `get_task` lists in `shared` is an ignored reference file or folder of the project folder, such as a design file, that the workspace holds as a symbolic link. Read it there, never change, move or delete it: a write through the link would change the project folder, and an ignored file has no history to undo it. fold refuses an edit through the link. To change it, ask the main agent with `send_message`.
+
 ## Messaging
 
 Use fold's `send_message`, `get_inbox`, `get_thread`, `acknowledge_message`, `mark_answered` and, as the main agent, `list_open_asks` for communication between fold agents and with humans. Native messages between your Claude Code subagents do not replace fold messages, claims or task state. Terminal output is not a message to a lead.

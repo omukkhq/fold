@@ -949,4 +949,28 @@ mod tests {
             no_daemon
         )));
     }
+
+    #[test]
+    fn an_edit_through_a_shared_link_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("app");
+        std::fs::create_dir_all(root.join(".fold/ws/t-1")).unwrap();
+        std::fs::create_dir_all(root.join("design")).unwrap();
+        std::fs::write(root.join("design/home.pen"), "pen").unwrap();
+        std::fs::write(root.join(".fold/fold.db"), "").unwrap();
+        // The link fold makes for a shared folder: its absolute target in the project folder.
+        symlink(root.join("design"), root.join(".fold/ws/t-1/design")).unwrap();
+        let workspace = root.join(".fold/ws/t-1");
+        for file in ["design/home.pen", "design/new.pen"] {
+            assert!(
+                edit_refusal(&workspace, Path::new(file)).is_some(),
+                "{file}"
+            );
+        }
+        // A shell command started inside the linked folder runs in the project folder.
+        let start = root.join(".fold/workers/web-worker/start");
+        std::fs::create_dir_all(&start).unwrap();
+        assert!(shell_guard(&workspace.join("design"), "touch x", &start).is_some());
+        assert!(shell_guard(&workspace, "cat design/home.pen", &start).is_none());
+    }
 }

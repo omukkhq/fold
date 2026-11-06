@@ -1290,6 +1290,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/share": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Shares ignored files or folders of the project folder with every workspace, read-only, as `fld share` asks: each workspace links to them at its next create or sync. Socket only; the human comes from `x-fold-human`. */
+        post: operations["share_project_paths"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/shared": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The shared reference paths and the ignored paths workers cannot see. */
+        get: operations["list_shared_paths"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/stash": {
         parameters: {
             query?: never;
@@ -1546,6 +1580,23 @@ export interface paths {
         put?: never;
         /** The signed-in human marks a thread read: their recipient rows of its messages that have no acknowledgement take the current time, and `message.acknowledged` names those messages. Rows of other recipients never change, and a repeat changes nothing and appends no event. */
         post: operations["mark_thread_read"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/unshare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Takes paths off the shared list, as `fld unshare` asks: each workspace drops its link at its next sync. Socket only; the human comes from `x-fold-human`. */
+        post: operations["unshare_project_paths"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3033,10 +3084,16 @@ export interface components {
             head: string;
             /** @description The files main tracks that an ignore rule matches, in path order. They stay tracked, so `fld record` records their changes, until `fld untrack` removes them from main. */
             ignored_tracked: string[];
+            /** @description The ignored paths every workspace links to, read-only, in path order. */
+            shared: string[];
             /** @description The files fold leaves out, as `fld record` leaves them out. */
             skipped: components["schemas"]["FolderSkippedView"][];
             /** @description Newest first. */
             stash: components["schemas"]["FolderStashView"][];
+            /** @description The first ignored files and folders of the folder that no workspace holds or links to, in path order; a folder ends with `/`. */
+            unseen: string[];
+            /** @description How many ignored paths no worker sees, `unseen` and the rest. */
+            unseen_count: number;
         };
         /**
          * @description The gates in the order the integration procedure checks them.
@@ -4963,6 +5020,40 @@ export interface components {
              * @description The most task workers that run at once, a whole number with no upper bound; 0 lets none start.
              */
             task_worker?: number | null;
+        };
+        SharedAdded: {
+            /** @description The paths added to `.fold/shared`, in the order given; a path shared already is left out. */
+            added: string[];
+        };
+        /** @description The paths a share or an unshare names. */
+        SharedPathsRequest: {
+            /** @description Paths relative to the project folder, such as `design/` or `docs/spec.pdf`; 1 to 50. */
+            paths: string[];
+        };
+        SharedRemoved: {
+            /** @description The paths taken off `.fold/shared`; a path that was not shared is left out. */
+            removed: string[];
+        };
+        /** @description The ignored files and folders that every workspace links to, read-only, and those no worker sees. Names and counts only. */
+        SharedView: {
+            /**
+             * @description The shared paths, relative to the project folder, in path order.
+             * @example [
+             *       "design/",
+             *       "docs/spec.pdf"
+             *     ]
+             */
+            shared: string[];
+            /**
+             * @description The first ignored files and folders of the project folder that no workspace holds or links to, in path order; a folder ends with `/`. fold's own data, Git's folder, fold's skills and the local Claude Code settings are left out.
+             * @example [
+             *       ".env",
+             *       "notes/"
+             *     ]
+             */
+            unseen: string[];
+            /** @description How many ignored paths no worker sees, `unseen` and the rest. */
+            unseen_count: number;
         };
         /**
          * @description Why the daemon did not take the login shell's environment.
@@ -12902,6 +12993,155 @@ export interface operations {
             };
         };
     };
+    share_project_paths: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SharedPathsRequest"];
+            };
+        };
+        responses: {
+            /** @description The paths are shared */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedAdded"];
+                };
+            };
+            /** @description No path or more than 50 are named, a path is not a relative, normalised path inside the project folder (`invalid_path`), or a path cannot be shared (`reason` `missing`, `link`, `not_ignored` or `overlaps`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_shared_paths: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The shared paths */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedView"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     list_project_stash: {
         parameters: {
             query?: never;
@@ -14756,6 +14996,87 @@ export interface operations {
                 };
             };
             /** @description `message_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    unshare_project_paths: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SharedPathsRequest"];
+            };
+        };
+        responses: {
+            /** @description The paths are no longer shared */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedRemoved"];
+                };
+            };
+            /** @description No path or more than 50 are named, or a path is not a relative, normalised path inside the project folder (`invalid_path`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or the slug is not registered */
             404: {
                 headers: {
                     [name: string]: unknown;

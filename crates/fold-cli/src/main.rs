@@ -76,6 +76,10 @@ enum Command {
     Record(commands::record::RecordArgs),
     /// Stop tracking files of the project folder, as git rm --cached does: one revision of yours removes them from main from now on and leaves them on disk. Older revisions keep them, so a leaked secret still needs to be changed. Add them to .foldignore, or fld record records them again. fold's own lines in .fold/exclude leave out its skills and .claude/settings.local.json; a ! line in .foldignore, such as !/.claude/skills/fold/, keeps one of them tracked
     Untrack(commands::untrack::UntrackArgs),
+    /// Share ignored files or folders, such as design files, with every workspace through read-only links; fld share --list lists them with the ignored paths workers cannot see. Many ignored files are secrets, so fold shares only the paths you name
+    Share(commands::share::ShareArgs),
+    /// Stop sharing paths with the workspaces; each workspace drops its link at its next sync
+    Unshare(commands::share::UnshareArgs),
     /// Put your changes in the project folder aside, so the folder follows main; fld stash list shows the stash, newest first
     Stash(commands::stash::StashArgs),
     /// Merge the newest stash entry into the project folder as it is now; a conflict writes conflict markers and keeps the entry until fld record
@@ -179,6 +183,12 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::Untrack(args)) => {
             commands::untrack::run_untrack(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Share(args)) => {
+            commands::share::run_share(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Unshare(args)) => {
+            commands::share::run_unshare(&args, out).map_err(Failure::Remote)
         }
         Some(Command::Stash(args)) => {
             commands::stash::run_stash(&args, out).map_err(Failure::Remote)

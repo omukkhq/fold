@@ -385,7 +385,7 @@ impl WorkspaceService {
         })
     }
 
-    /// Step 2 of a create: materialises `tree` into a staging directory under `.fold/ws/` and renames it to the task's next directory name. A name that `taken` lists for an earlier workspace of the task, or that some directory already holds, such as one left by a create that stopped before its row, is skipped, so a name is never shared.
+    /// Step 2 of a create: materialises `tree`, with the links of the project's shared paths, into a staging directory under `.fold/ws/` and renames it to the task's next directory name. A name that `taken` lists for an earlier workspace of the task, or that some directory already holds, such as one left by a create that stopped before its row, is skipped, so a name is never shared.
     async fn place(
         &self,
         task: TaskId,
@@ -444,6 +444,7 @@ impl WorkspaceService {
                     return Err(error.into());
                 }
             };
+            super::shared::link_shared_in(&root, &staging);
             match rename_into_place(&staging, &root, &name, &taken) {
                 Ok((path, dir)) => match sync_dir(&ws_dir) {
                     Ok(()) => Ok(Placed { path, dir, index }),

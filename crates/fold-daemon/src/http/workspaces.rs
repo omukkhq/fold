@@ -12,10 +12,11 @@ use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use super::Project;
-use super::error::{ApiError, ApiQuery, ErrorEnvelope};
+use super::actor::Human;
+use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use super::events::LiveWorkspace;
 use super::tasks::{AttentionItem, attention};
+use super::{Project, SocketOnly};
 use crate::daemon::AppState;
 use crate::live::WatchMode;
 use crate::services::workspaces::{
@@ -34,6 +35,9 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(get_workspace))
         .routes(routes!(get_workspace_changes))
         .routes(routes!(read_workspace_tree))
+        .routes(routes!(list_shared))
+        .routes(routes!(share))
+        .routes(routes!(unshare))
 }
 
 pub(super) fn service(project: &Project) -> WorkspaceService {
@@ -863,4 +867,114 @@ mod tests {
         let body = serde_json::to_value(&view).unwrap();
         assert!(body.get("text").is_none());
     }
+}
+
+/// The ignored files and folders that every workspace links to, read-only, and those no worker sees. Names and counts only.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SharedView {
+    /// The shared paths, relative to the project folder, in path order.
+    #[schema(example = json!(["design/", "docs/spec.pdf"]))]
+    pub shared: Vec<String>,
+    /// The first ignored files and folders of the project folder that no workspace holds or links to, in path order; a folder ends with `/`. fold's own data, Git's folder, fold's skills and the local Claude Code settings are left out.
+    #[schema(example = json!([".env", "notes/"]))]
+    pub unseen: Vec<String>,
+    /// How many ignored paths no worker sees, `unseen` and the rest.
+    pub unseen_count: usize,
+}
+
+/// The shared reference paths and the ignored paths workers cannot see.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/shared",
+    operation_id = "list_shared_paths",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The shared paths", body = SharedView),
+        (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn list_shared(project: Project) -> Result<Json<SharedView>, ApiError> {
+    let state = service(&project).shared_state().await?;
+    Ok(Json(SharedView {
+        shared: state.shared,
+        unseen: state.unseen,
+        unseen_count: state.unseen_count,
+    }))
+}
+
+/// The paths a share or an unshare names.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SharedPathsRequest {
+    /// Paths relative to the project folder, such as `design/` or `docs/spec.pdf`; 1 to 50.
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SharedAdded {
+    /// The paths added to `.fold/shared`, in the order given; a path shared already is left out.
+    pub added: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SharedRemoved {
+    /// The paths taken off `.fold/shared`; a path that was not shared is left out.
+    pub removed: Vec<String>,
+}
+
+/// Shares ignored files or folders of the project folder with every workspace, read-only, as `fld share` asks: each workspace links to them at its next create or sync. Socket only; the human comes from `x-fold-human`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/share",
+    operation_id = "share_project_paths",
+    params(("slug" = String, Path, description = "The project slug")),
+    request_body = SharedPathsRequest,
+    responses(
+        (status = 200, description = "The paths are shared", body = SharedAdded),
+        (status = 400, description = "No path or more than 50 are named, a path is not a relative, normalised path inside the project folder (`invalid_path`), or a path cannot be shared (`reason` `missing`, `link`, `not_ignored` or `overlaps`)", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn share(
+    _socket: SocketOnly,
+    human: Human,
+    project: Project,
+    ApiJson(body): ApiJson<SharedPathsRequest>,
+) -> Result<Json<SharedAdded>, ApiError> {
+    let added = service(&project)
+        .share_paths(&human.actor(), body.paths)
+        .await?;
+    Ok(Json(SharedAdded { added }))
+}
+
+/// Takes paths off the shared list, as `fld unshare` asks: each workspace drops its link at its next sync. Socket only; the human comes from `x-fold-human`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/unshare",
+    operation_id = "unshare_project_paths",
+    params(("slug" = String, Path, description = "The project slug")),
+    request_body = SharedPathsRequest,
+    responses(
+        (status = 200, description = "The paths are no longer shared", body = SharedRemoved),
+        (status = 400, description = "No path or more than 50 are named, or a path is not a relative, normalised path inside the project folder (`invalid_path`)", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn unshare(
+    _socket: SocketOnly,
+    human: Human,
+    project: Project,
+    ApiJson(body): ApiJson<SharedPathsRequest>,
+) -> Result<Json<SharedRemoved>, ApiError> {
+    let removed = service(&project)
+        .unshare_paths(&human.actor(), body.paths)
+        .await?;
+    Ok(Json(SharedRemoved { removed }))
 }

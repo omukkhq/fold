@@ -112,6 +112,18 @@ pub fn can_add_exclude_patterns(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
+/// `.fold/shared` lists the ignored files and folders every workspace links to, read-only. Only the human and the main agent, which talks with the human, change it: many ignored files are secrets such as `.env`, so no worker shares a file the human did not choose.
+pub fn can_share_paths(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::MainAgent | Starter::Human => Ok(()),
+        _ => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "only the main agent and a human change the shared paths",
+            hint: "ask the main agent, which asks the user",
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,5 +255,22 @@ mod tests {
                 .hint()
                 .contains(".fold/exclude")
         );
+    }
+
+    #[test]
+    fn only_the_main_agent_and_a_human_share_paths() {
+        use crate::agents::AreaName;
+        assert!(can_share_paths(&Starter::MainAgent).is_ok());
+        assert!(can_share_paths(&Starter::Human).is_ok());
+        for starter in [
+            Starter::Unsupervised,
+            Starter::AreaLead(AreaName::parse("web").unwrap()),
+            Starter::ReviewLead,
+            Starter::ShortLived,
+            Starter::System,
+        ] {
+            let denied = can_share_paths(&starter).unwrap_err();
+            assert_eq!(denied.code(), codes::MAIN_AGENT_REQUIRED, "{starter:?}");
+        }
     }
 }

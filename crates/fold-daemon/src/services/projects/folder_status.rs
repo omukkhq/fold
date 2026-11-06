@@ -15,12 +15,14 @@ use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::RepoPath;
 use fold_vcs::platform::Capabilities;
 use fold_vcs::scan::{ScanOptions, Skipped, scan};
+use fold_vcs::shared::{read_shared, unshared_ignored};
 use fold_vcs::stash::changed_paths;
 
 use super::ProjectError;
 use super::folder::{compare_folder, read_folder};
 use super::remote::blocking;
 use crate::projects::ProjectHandle;
+use crate::services::workspaces::LISTED_UNSEEN;
 
 /// What `fld status` shows of the project folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +43,11 @@ pub struct FolderStatus {
     pub blockers: Vec<Blocker>,
     /// Newest first.
     pub stash: Vec<FolderStashEntry>,
+    /// The paths every workspace links to, read-only, in path order.
+    pub shared: Vec<String>,
+    /// The first ignored files and folders that no workspace holds or links to (see [`fold_vcs::shared::unshared_ignored`]).
+    pub unseen: Vec<String>,
+    pub unseen_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,6 +201,9 @@ pub async fn folder_status(
             None => None,
         };
         let held: Vec<String> = settled.held.iter().map(ToString::to_string).collect();
+        let shared = read_shared(&fold_dir).map_err(shared_io)?;
+        let unseen = unshared_ignored(root, &rules, &shared, LISTED_UNSEEN).map_err(shared_io)?;
+        let shared: Vec<String> = shared.iter().map(ToString::to_string).collect();
         Ok((
             changes,
             skipped,
@@ -201,10 +211,11 @@ pub async fn folder_status(
             held,
             files,
             unstash_paths,
+            (shared, unseen),
         ))
     })
     .await?;
-    let (changes, skipped, ignored_tracked, held, files, unstash_paths) = scanned;
+    let (changes, skipped, ignored_tracked, held, files, unstash_paths, (shared, unseen)) = scanned;
     let facts = FolderFacts {
         held: held.clone(),
         human_change: waiting.map(|change| {
@@ -269,5 +280,15 @@ pub async fn folder_status(
         ignored_tracked,
         blockers,
         stash,
+        shared,
+        unseen: unseen.0,
+        unseen_count: unseen.1,
     })
+}
+
+fn shared_io(error: std::io::Error) -> FoldError {
+    FoldError::new(
+        fold_core::codes::WORKSPACE_IO,
+        format!("cannot read the shared paths: {}", error.kind()),
+    )
 }

@@ -496,6 +496,16 @@ fn fill_start_dir(root: &Path, start: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The permission rule that lets a worker in its start folder read the project folder without a question, as it could when it ran there: the shared paths it reads through the links in its workspace lead there. `None` for a folder whose path holds a character of Claude Code's path patterns.
+fn read_rule(root: &Path) -> Option<String> {
+    let root = root.canonicalize().ok()?;
+    let text = root.to_str()?;
+    if text.contains(['*', '?', '[', ']', '{', '}', '\\', '(', ')']) {
+        return None;
+    }
+    Some(format!("Read(/{text}/**)"))
+}
+
 /// Copies the file `from` to `to`, or removes `to` when `from` is no file.
 fn copy_or_remove(from: &Path, to: &Path) -> std::io::Result<()> {
     if from.is_file() {
@@ -547,7 +557,13 @@ async fn write_files(
                 fold_vcs::platform::create_dir_below(&fold_dir, start)?;
                 fold_vcs::platform::create_dir_below(&fold_dir, &workspaces)?;
                 fill_start_dir(&root, start)?;
-                worker_settings()
+                let mut settings = worker_settings();
+                if let Some(rule) = read_rule(&root)
+                    && let Some(allow) = settings["permissions"]["allow"].as_array_mut()
+                {
+                    allow.push(Value::String(rule));
+                }
+                settings
             }
             None => session_settings(),
         };

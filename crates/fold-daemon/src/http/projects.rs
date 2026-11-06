@@ -1477,6 +1477,12 @@ pub struct FolderStatusView {
     pub blockers: Vec<FolderBlockerView>,
     /// Newest first.
     pub stash: Vec<FolderStashView>,
+    /// The ignored paths every workspace links to, read-only, in path order.
+    pub shared: Vec<String>,
+    /// The first ignored files and folders of the folder that no workspace holds or links to, in path order; a folder ends with `/`.
+    pub unseen: Vec<String>,
+    /// How many ignored paths no worker sees, `unseen` and the rest.
+    pub unseen_count: usize,
 }
 
 impl From<projects::FolderStatus> for FolderStatusView {
@@ -1548,6 +1554,9 @@ impl From<projects::FolderStatus> for FolderStatusView {
                     next: entry.next,
                 })
                 .collect(),
+            shared: status.shared,
+            unseen: status.unseen,
+            unseen_count: status.unseen_count,
         }
     }
 }

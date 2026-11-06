@@ -30,6 +30,7 @@ pub const SYNC_WORKSPACE: &str = "sync_workspace";
 pub const ABANDON_WORKSPACE: &str = "abandon_workspace";
 pub const OPEN_MAIN_WORKSPACE: &str = "open_main_workspace";
 pub const ADD_EXCLUDE_PATTERNS: &str = "add_exclude_patterns";
+pub const SHARE_PATHS: &str = "share_paths";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -139,6 +140,13 @@ pub struct AddExcludePatternsInput {
     pub patterns: Vec<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct SharePathsInput {
+    /// Ignored files or folders to share, each relative to the project folder, such as design/ or docs/spec.pdf. A path that is shared already is left out.
+    pub paths: Vec<String>,
+}
+
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
@@ -210,6 +218,11 @@ pub fn tools() -> Vec<Tool> {
             ADD_EXCLUDE_PATTERNS,
             "Main agent only, when the user asks. Add patterns to .fold/exclude, the project's local ignore rules: paths that are never recorded, imported or proposed and that Git leaves out too, without a change to .gitignore or .foldignore. A ! line in .gitignore or .foldignore brings a path back.",
             schema_for_type::<AddExcludePatternsInput>(),
+        ),
+        Tool::new(
+            SHARE_PATHS,
+            "Main agent only, when the user asks. Share ignored files or folders of the project folder, such as design files, with every workspace through read-only links: each workspace gets a link to the project folder's copy at its next create or sync, and workers read it but never change it. A shared path must be in the project folder and left out by .gitignore, .foldignore or .fold/exclude; fold never shares one the user did not choose, because many ignored files are secrets.",
+            schema_for_type::<SharePathsInput>(),
         ),
     ]
 }
@@ -611,6 +624,16 @@ pub async fn call(
                 .await
                 .map_err(from_workspace)?;
             json!({"file": ".fold/exclude", "added": added})
+        }
+        SHARE_PATHS => {
+            let input: SharePathsInput = parse(arguments)?;
+            let actor = server.actor().await?;
+            let added = server
+                .workspaces
+                .share_paths(&actor, input.paths)
+                .await
+                .map_err(from_workspace)?;
+            json!({"file": ".fold/shared", "added": added})
         }
         _ => return Ok(None),
     };
