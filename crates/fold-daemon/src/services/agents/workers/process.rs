@@ -306,7 +306,7 @@ impl Supervisor {
                     if !launch::starts_apart(*role) {
                         return at(&root, id);
                     }
-                    let start = canonical(paths.worker_start_dir(agent));
+                    let start = ProjectPaths::new(&root).worker_start_dir(agent);
                     let own = at(&start, id);
                     match &own {
                         Some(path) if path.is_file() => own,
