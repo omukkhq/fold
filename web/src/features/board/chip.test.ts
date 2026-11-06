@@ -70,7 +70,7 @@ describe("cardChip", () => {
     ).toBe("Stale claim · needs you");
   });
 
-  it("shows a check run that goes in the neutral tone, before a stall and after a blocker and a stale claim", () => {
+  it("shows a check run that goes in the neutral tone, before a stall and a stale claim and after a blocker", () => {
     const run = {
       run: "cr-4",
       purpose: "check" as const,
@@ -94,7 +94,7 @@ describe("cardChip", () => {
     ).toBe("Blocker");
   });
 
-  it("shows a stale claim before a check run that goes", () => {
+  it("never shows a stale claim over a check run that goes", () => {
     const run = {
       run: "cr-4",
       purpose: "check" as const,
@@ -105,7 +105,8 @@ describe("cardChip", () => {
       status: "in_progress",
       attention: [{ kind: "stale_claim", closable: false }],
     });
-    expect(cardChip(card, run)?.text).toBe("Stale claim · needs you");
+    expect(cardChip(card, run)?.text).toBe("Running checks");
+    expect(cardChip(card)?.text).toBe("Stale claim · needs you");
   });
 
   it("names a proposal back with its author", () => {

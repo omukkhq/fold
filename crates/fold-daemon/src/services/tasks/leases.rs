@@ -1,6 +1,7 @@
-use fold_core::claims::{is_stale, near_stale_cutoff};
+use fold_core::claims::{HolderRuns, is_lapsed, near_stale_cutoff};
 use fold_core::events::types;
 use fold_core::{EventActor, NewEvent, Timestamp};
+use fold_store::reviews::checks;
 use fold_store::tasks::claims::{self, ClaimTarget, StaleClaim};
 use serde_json::json;
 
@@ -20,7 +21,7 @@ impl TaskService {
     }
 }
 
-/// Marks each unreleased claim of `project` whose lease ran out at `now` and that is not marked yet, with one `claim.stale` per claim, in one write transaction; the events reach the bus after the commit. The lease is the project's `lease_minutes`. A marked claim keeps its holder, its workspace and its task's status: only `takeover_claim` moves it, and a renewal clears the mark. Returns the claims it marked.
+/// Marks each unreleased claim of `project` whose lease ran out at `now` and that is not marked yet, with one `claim.stale` per claim, in one write transaction; the events reach the bus after the commit. The lease is the project's `lease_minutes`, counted by [`is_lapsed`]: in the same transaction the claims of each holder whose own check run goes are renewed at `now`, because the holder waits for the run and makes no calls, so no claim runs out during the run and every reader of `renewed_at` agrees. A marked claim keeps its holder, its workspace and its task's status: only `takeover_claim` moves it, and a renewal clears the mark. Returns the claims it marked.
 pub async fn sweep_leases(
     project: &ProjectHandle,
     now: Timestamp,
@@ -31,8 +32,16 @@ pub async fn sweep_leases(
     let marked = tasks
         .store
         .write(async |tx| {
-            let marked = claims::mark_stale(tx, now, |renewed_at| {
-                is_stale(renewed_at, now, lease_minutes)
+            let runs = checks::holder_runs(tx.conn()).await?;
+            let running: Vec<i64> = runs
+                .iter()
+                .filter(|(_, runs)| **runs == HolderRuns::Running)
+                .map(|(worker, _)| *worker)
+                .collect();
+            claims::renew(tx, &running, now).await?;
+            let marked = claims::mark_stale(tx, now, |renewed_at, worker| {
+                let runs = runs.get(&worker).copied().unwrap_or_default();
+                is_lapsed(renewed_at, runs, now, lease_minutes)
             })
             .await?;
             for claim in &marked {

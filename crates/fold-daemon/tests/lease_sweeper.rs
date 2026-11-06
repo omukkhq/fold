@@ -1124,3 +1124,101 @@ async fn a_persons_message_to_a_stalled_worker_clears_its_flag_without_waiting_f
     .await;
     assert!(fx.attention("T-1").await.is_empty());
 }
+
+#[tokio::test]
+async fn a_claim_stays_alive_while_its_holders_check_run_goes_and_lapses_a_full_lease_after_it() {
+    let fx = Fixture::new().await;
+    let (id, dir) = fx.create(&fx.frontend, 1).await;
+    let gate = tempfile::tempdir().unwrap();
+    let gate = gate.path().join("go");
+    let checks = format!(
+        "[[check]]\nname = \"slow\"\nrun = \"until [ -e '{}' ]; do sleep 0.05; done\"\n",
+        gate.display()
+    );
+    fs::write(dir.join("fold-checks.toml"), checks).unwrap();
+    fx.handle.live.rescan(id).await.unwrap();
+    // The main agent takes over any task; `backend` leads no area.
+    let mut ctx = fx.agents.start_session(1).await.unwrap();
+    fx.agents
+        .register_agent(
+            &mut ctx,
+            &AgentName::parse("main").unwrap(),
+            &[fold_core::Tag::parse("main").unwrap()],
+        )
+        .await
+        .unwrap();
+    let main = fx.agents.resolve_worker(&ctx).await.unwrap();
+    let reviews = fx.handle.reviews(fx.project.registry());
+    let run = match reviews
+        .run_checks(&by(&fx.frontend.worker), t(1))
+        .await
+        .unwrap()
+    {
+        Started::Running { run, .. } => run,
+        Started::NoChecks => panic!("expected a run"),
+    };
+
+    for _ in 0..3 {
+        let now = fx.advance(LEASE);
+        assert_eq!(fx.sweep().await, 0, "the holder waits for its own run");
+        let claim = claims::unreleased_for_task(fx.project.store().read(), t(1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(claim.renewed_at, now, "the sweep renews the waiting holder");
+        assert_eq!(claim.stale_at, None);
+    }
+    fx.advance(LEASE);
+    let refused = fx
+        .handle
+        .tasks
+        .takeover_claim(&by(&main), t(1))
+        .await
+        .unwrap_err();
+    let fold_daemon::services::tasks::TaskError::Fold(refused) = refused else {
+        panic!("expected a refusal, got {refused:?}");
+    };
+    assert_eq!(refused.code(), fold_core::codes::CLAIM_NOT_STALE);
+    assert!(
+        !fx.attention("T-1")
+            .await
+            .contains(&"stale_claim".to_owned())
+    );
+    assert_eq!(
+        card_check_run(&fx, "T-1").await["run"],
+        json!(run.to_string())
+    );
+
+    let end = fx.project.now();
+    fs::write(&gate, "").unwrap();
+    eventually(WAIT, async || {
+        let view = reviews.get_check_run(run, false).await.unwrap();
+        view.run.finished_at.ok_or(view.run.state)
+    })
+    .await;
+    let claim = claims::unreleased_for_task(fx.project.store().read(), t(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.renewed_at, end, "the run's end renews the claim");
+
+    fx.advance(LEASE - Duration::from_millis(1));
+    assert_eq!(fx.sweep().await, 0, "a full lease after the run");
+    fx.advance(Duration::from_millis(1));
+    assert_eq!(fx.sweep().await, 1, "silence for a lease after the run");
+    let stored = fx.stale_events().await;
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].data["renewed_at"], json!(end.as_millis()));
+    assert!(
+        fx.attention("T-1")
+            .await
+            .contains(&"stale_claim".to_owned())
+    );
+    let claimed = fx
+        .handle
+        .tasks
+        .takeover_claim(&by(&main), t(1))
+        .await
+        .unwrap();
+    assert_eq!(claimed.claim.holder, main.name);
+}
