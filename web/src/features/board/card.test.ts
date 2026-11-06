@@ -72,6 +72,18 @@ describe("needsText", () => {
     ).toBe("needs T-3, T-9");
   });
 
+  it("names at most three prerequisites and counts the rest, so the line stays short", () => {
+    const ids = (count: number) =>
+      Array.from({ length: count }, (_, index) => `T-${String(148 + index)}`);
+    const needs = (count: number) =>
+      needsText({ status: "backlog", blocked: false, blocked_by: ids(count) });
+    expect(needs(0)).toBeNull();
+    expect(needs(1)).toBe("needs T-148");
+    expect(needs(3)).toBe("needs T-148, T-149, T-150");
+    expect(needs(4)).toBe("needs T-148, T-149, T-150 +1 more");
+    expect(needs(43)).toBe("needs T-148, T-149, T-150 +40 more");
+  });
+
   it("is null outside Backlog, for a blocked task, or with no prerequisite", () => {
     expect(
       needsText({ status: "todo", blocked: false, blocked_by: ["T-3"] }),
@@ -91,6 +103,12 @@ describe("blockedText", () => {
       "Blocked by T-3, T-9",
     );
     expect(blockedText({ blocked: true, blocked_by: [] })).toBe("Blocked");
+    expect(
+      blockedText({
+        blocked: true,
+        blocked_by: ["T-1", "T-2", "T-3", "T-4", "T-5"],
+      }),
+    ).toBe("Blocked by T-1, T-2, T-3 +2 more");
     expect(blockedText({ blocked: false, blocked_by: ["T-3"] })).toBeNull();
   });
 });

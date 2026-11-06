@@ -27,6 +27,16 @@ export function checklistText(
   return `${String(c.steps_done + c.linked_done)}/${String(total)}`;
 }
 
+/** How many prerequisites a card's one line names before it counts the rest. */
+export const NAMED_PREREQUISITES = 3;
+
+/** `T-3, T-9`, or the first few ids and `+N more`, so the card's line stays one line; the detail panel and the task dialog list them all. */
+export function prerequisiteList(ids: readonly string[]): string {
+  const named = ids.slice(0, NAMED_PREREQUISITES).join(", ");
+  const rest = ids.length - NAMED_PREREQUISITES;
+  return rest > 0 ? `${named} +${String(rest)} more` : named;
+}
+
 /** `needs T-3, T-9` while the task waits in Backlog, naming the prerequisites that are not Done; a blocked task names them in its Blocked badge. */
 export function needsText(
   card: Pick<BoardCard, "status" | "blocked" | "blocked_by">,
@@ -38,10 +48,10 @@ export function needsText(
   ) {
     return null;
   }
-  return `needs ${card.blocked_by.join(", ")}`;
+  return `needs ${prerequisiteList(card.blocked_by)}`;
 }
 
-/** The blocked indicator, listing the unfinished prerequisites. */
+/** The blocked indicator, naming the unfinished prerequisites as the needs line does. */
 export function blockedText(
   card: Pick<BoardCard, "blocked" | "blocked_by">,
 ): string | null {
@@ -49,7 +59,7 @@ export function blockedText(
     return null;
   }
   return card.blocked_by.length > 0
-    ? `Blocked by ${card.blocked_by.join(", ")}`
+    ? `Blocked by ${prerequisiteList(card.blocked_by)}`
     : "Blocked";
 }
 

@@ -295,6 +295,30 @@ describe("BoardScreen", () => {
     expect(screen.queryByText(/^P-\d+ /)).toBeNull();
   });
 
+  it("keeps the fact line of a task that waits for many others to one line and lists them all in the panel", async () => {
+    const ids = Array.from(
+      { length: 43 },
+      (_, index) => `T-${String(148 + index)}`,
+    );
+    setup(
+      boardView([
+        boardCard("T-151", {
+          title: "Run the controlled web pilot",
+          status: "backlog",
+          needs: ids,
+          blocked_by: ids,
+        }),
+      ]),
+    );
+    await screen.findByRole("region", { name: "Backlog" });
+    const line = cardOf("T-151").querySelector("p");
+    expect(line?.textContent).toBe("T-151·needs T-148, T-149, T-150 +40 more");
+    expect(line?.className).toContain("whitespace-nowrap");
+    expect(line?.className).not.toContain("flex-wrap");
+    const panel = await openPanel("Run the controlled web pilot");
+    expect(rowText(panel, "Needs")).toBe(ids.join(", "));
+  });
+
   it("gives a card its title, one line of facts and the rest in the detail panel", async () => {
     setup();
     await screen.findByRole("region", { name: "Backlog" });

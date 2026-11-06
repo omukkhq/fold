@@ -145,13 +145,23 @@ function MetaLine({ card }: { card: BoardCardData }) {
   if (card.worker !== null) {
     parts.push(<PersonName key="worker" name={card.worker} />);
   } else if (fact !== null) {
-    parts.push(<span key="fact">{fact}</span>);
+    parts.push(
+      <span key="fact" className="truncate">
+        {fact}
+      </span>,
+    );
   }
-  // Each separator travels with the part after it, so a wrapped line never ends in a dot.
+  // One line: the last part gives way and is cut short, so no part wraps below the others with its separator.
   return (
-    <p className="flex flex-wrap items-center gap-x-6 text-13 leading-normal text-text-2">
+    <p className="flex min-w-0 items-center gap-x-6 overflow-hidden text-13 leading-normal whitespace-nowrap text-text-2">
       {parts.map((part, index) => (
-        <span key={index} className="inline-flex items-center gap-6">
+        <span
+          key={index}
+          className={cn(
+            "inline-flex items-center gap-6",
+            index === parts.length - 1 ? "min-w-0" : "shrink-0",
+          )}
+        >
           {index > 0 ? <span aria-hidden="true">·</span> : null}
           {part}
         </span>
