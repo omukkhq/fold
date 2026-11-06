@@ -44,9 +44,9 @@ fn write(root: &Path, path: &str, text: &str) {
     std::fs::write(root.join(path), text).unwrap();
 }
 
-/// Acceptance 35, recovering the project folder without the main agent: a command that went wrong truncated `plan.md` and left empty files in the project folder, the human recorded them by mistake, and the record conflicts with main, so fold holds the folder for the main agent, which opens its main workspace for the merge. From the web app the human resets the folder: fold stashes the junk as `stash@{0}`, the folder matches main again, the waiting change is dropped with its merge workspace abandoned, and the main agent hears that fold did it. The human then drops the junk entry with `fld stash drop`, and nothing waits in Needs you.
+/// Acceptance 38, recovering the project folder without the main agent: a command that went wrong truncated `plan.md` and left empty files in the project folder, the human recorded them by mistake, and the record conflicts with main, so fold holds the folder for the main agent, which opens its main workspace for the merge. From the web app the human resets the folder: fold stashes the junk as `stash@{0}`, the folder matches main again, the waiting change is dropped with its merge workspace abandoned, and the main agent hears that fold did it. The human then drops the junk entry with `fld stash drop`, and nothing waits in Needs you.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acceptance_35_the_human_resets_the_folder_and_drops_the_held_change() {
+async fn acceptance_38_the_human_resets_the_folder_and_drops_the_held_change() {
     let mut h = Harness::start().await;
     branch_born(&h).await;
     h.connect_tagged("main", &["main"]).await;

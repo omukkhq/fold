@@ -56,9 +56,9 @@ fn stash_names(body: &Value) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
-/// Acceptance 34, dropping stash entries: a command that went wrong left empty files and a truncated plan in the project folder, and the human stashed them to get the folder back to main; later the human stashes real work on top. The human drops the junk entry from the web app, the real work comes back with `fld unstash`, and `fld stash clear` empties the stash. No file of the folder changes on a drop, the stash list hides dropped entries, and each drop is a `stash.discarded` event.
+/// Acceptance 37, dropping stash entries: a command that went wrong left empty files and a truncated plan in the project folder, and the human stashed them to get the folder back to main; later the human stashes real work on top. The human drops the junk entry from the web app, the real work comes back with `fld unstash`, and `fld stash clear` empties the stash. No file of the folder changes on a drop, the stash list hides dropped entries, and each drop is a `stash.discarded` event.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acceptance_34_the_human_drops_a_junk_stash_entry_and_clears_the_stash() {
+async fn acceptance_37_the_human_drops_a_junk_stash_entry_and_clears_the_stash() {
     let h = Harness::start().await;
     branch_born(&h).await;
     let root = PathBuf::from(h.root());
