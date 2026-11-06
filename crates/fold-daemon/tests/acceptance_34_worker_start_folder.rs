@@ -85,16 +85,36 @@ async fn acceptance_34_a_workers_relative_write_never_lands_in_the_project_folde
     );
 }
 
-/// The start folder holds copies of the project's Claude Code settings, servers and fold's skills, so a worker there reads the same ones as in the project folder; a write to a copy never reaches the project folder.
+/// The start folder holds copies of the project's Claude Code settings and fold's skills, so a worker there reads the same ones as in the project folder; a write to a copy never reaches the project folder. A project hook keeps naming the project folder, a trusted project folder's allow rules still apply, and the worker gets only the `.mcp.json` servers the user approved for the project folder.
 #[tokio::test]
 async fn acceptance_34_a_workers_start_folder_holds_copies_of_the_projects_claude_files() {
-    let fake = FakeClaude::new("result");
+    let config = tempfile::TempDir::new().unwrap();
+    let fake = FakeClaude::new("result").with_config_dir(config.path());
     let mut harness =
         crate::common::acceptance::Harness::start_with_launcher(fake.launcher.clone()).await;
     let root = PathBuf::from(harness.root());
+    let key = root.canonicalize().unwrap().to_string_lossy().into_owned();
+    std::fs::write(
+        config.path().join(".claude.json"),
+        json!({"projects": {(key.as_str()): {"enabledMcpjsonServers": ["pencil"], "hasTrustDialogAccepted": true}}}).to_string(),
+    )
+    .unwrap();
     std::fs::create_dir_all(root.join(".claude/skills/fold-area-lead")).unwrap();
-    std::fs::write(root.join(".claude/settings.json"), "{\"env\":{}}\n").unwrap();
-    std::fs::write(root.join(".mcp.json"), "{\"mcpServers\":{}}\n").unwrap();
+    std::fs::write(
+        root.join(".claude/settings.json"),
+        json!({
+            "permissions": {"allow": ["Bash(make lint)"]},
+            "hooks": {"PostToolUse": [{"hooks": [{"type": "command", "command": "$CLAUDE_PROJECT_DIR/hooks/fmt.sh"}]}]},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".mcp.json"),
+        json!({"mcpServers": {"pencil": {"command": "pencil"}, "db": {"command": "db"}}})
+            .to_string(),
+    )
+    .unwrap();
     std::fs::write(
         root.join(".claude/skills/fold-area-lead/SKILL.md"),
         "---\nname: fold-area-lead\n---\n",
@@ -126,17 +146,34 @@ async fn acceptance_34_a_workers_start_folder_holds_copies_of_the_projects_claud
     harness.connect("web-lead").await;
 
     let start = start_of(harness.root(), "web-lead");
-    for path in [
-        ".claude/settings.json",
-        ".mcp.json",
-        ".claude/skills/fold-area-lead/SKILL.md",
-    ] {
-        assert_eq!(
-            std::fs::read(start.join(path)).unwrap(),
-            std::fs::read(root.join(path)).unwrap(),
-            "{path}"
-        );
-        assert!(!start.join(path).is_symlink(), "{path}");
-    }
+    let skill = ".claude/skills/fold-area-lead/SKILL.md";
+    assert_eq!(
+        std::fs::read(start.join(skill)).unwrap(),
+        std::fs::read(root.join(skill)).unwrap()
+    );
+    assert!(!start.join(skill).is_symlink());
+    let copied: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(start.join(".claude/settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        copied["hooks"]["PostToolUse"][0]["hooks"][0]["command"],
+        format!("'{}'/hooks/fmt.sh", root.display())
+    );
     assert!(!start.join(".claude/settings.local.json").exists());
+    // A `-p` session connects every server of its folder's `.mcp.json`, so the start folder holds none.
+    assert!(!start.join(".mcp.json").exists());
+    let run = until_runs(&fake, "web-lead", 1).await.remove(0);
+    let read = |flag: &str| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(run.flag(flag).unwrap()).unwrap()).unwrap()
+    };
+    let servers = read("--mcp-config")["mcpServers"].clone();
+    let names: Vec<&String> = servers.as_object().unwrap().keys().collect();
+    assert_eq!(names, ["fold", "pencil"]);
+    assert!(
+        read("--settings")["permissions"]["allow"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("Bash(make lint)"))
+    );
 }

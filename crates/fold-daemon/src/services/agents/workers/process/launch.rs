@@ -25,6 +25,7 @@ use tokio::process::{ChildStdin, Command};
 use tokio::sync::{mpsc, watch};
 
 use super::super::output::real_model;
+use super::project_claude;
 use super::stderr::StderrTail;
 use super::{Input, Launcher, Process, Running, StartWatch, Supervisor, lock, own_binary};
 use crate::push::StdinSink;
@@ -468,13 +469,24 @@ pub(in crate::services::agents::workers) fn starts_apart(role: Role) -> bool {
     role != Role::Main
 }
 
-/// The project's Claude Code files that a session reads from its working directory, which a worker's start folder holds copies of: the shared and local settings and the project's MCP servers.
-const START_COPIES: [&str; 3] = [".claude/settings.json", LOCAL_SETTINGS_FILE, ".mcp.json"];
+/// The project's Claude Code settings that a session reads from its working directory, which a worker's start folder holds copies of. The project's `.mcp.json` is never copied: Claude Code connects every server of the folder's `.mcp.json` in a `-p` session, approved or not, so a worker gets the servers the user approved through its MCP configuration instead.
+const START_COPIES: [&str; 2] = [".claude/settings.json", LOCAL_SETTINGS_FILE];
 
-/// Fills the start folder `start` with copies of the project's Claude Code files of [`START_COPIES`] and of fold's skills, so a worker there reads the same settings, servers and skills as in the project folder. Copies, never links, because a shell command's write to a link would change the project folder. A file the project folder lacks loses its copy too. Blocking.
+/// Fills the start folder `start` with copies of the project's Claude Code settings of [`START_COPIES`] and of fold's skills, so a worker there reads the same settings and skills as in the project folder. The hook commands of the settings name the project folder where they name `$CLAUDE_PROJECT_DIR`. Copies, never links, because a shell command's write to a link would change the project folder. A file the project folder lacks loses its copy too. Blocking.
 fn fill_start_dir(root: &Path, start: &Path) -> std::io::Result<()> {
     for name in START_COPIES {
         copy_or_remove(&root.join(name), &start.join(name))?;
+        let copy = start.join(name);
+        if let Ok(text) = std::fs::read_to_string(&copy) {
+            let replaced = project_claude::with_project_dir(&text, root);
+            if replaced != text {
+                std::fs::write(&copy, replaced)?;
+            }
+        }
+    }
+    match std::fs::remove_file(start.join(".mcp.json")) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+        _ => {}
     }
     for skill in fold_skills() {
         let from = root.join(SKILLS_DIR).join(skill);
@@ -542,13 +554,26 @@ async fn write_files(
     let root = paths.root().to_owned();
     let start = starts_apart(role).then(|| paths.worker_start_dir(&row.agent));
     let workspaces = paths.root().join(WS_DIR);
+    let user = project_claude::UserClaude::of(&launcher.env);
     tokio::task::spawn_blocking(move || {
         let Some(fold) = fold.or_else(own_binary).filter(|fold| fold.is_file()) else {
             return Err(FilesError::FldMissing);
         };
         let (program, program_args) = worker_program(&fold_dir, claude, &fold);
         fold_vcs::platform::create_dir_below(&fold_dir, &dir)?;
-        let config = mcp_config(&fold, &agent, limit.as_deref(), &project_mcp);
+        // A worker in its start folder reads no `.mcp.json`, so it gets the project's servers the user approved here; the supervised main reads them in the project folder.
+        let approval = start.as_ref().map(|_| {
+            user.as_ref()
+                .map(|user| user.approval(&root))
+                .unwrap_or_default()
+        });
+        let config = mcp_config(
+            &fold,
+            &agent,
+            limit.as_deref(),
+            &project_mcp,
+            approval.as_ref(),
+        );
         let mcp = dir.join("mcp.json");
         std::fs::write(&mcp, config.to_string())?;
         let own_settings = dir.join("settings.json");
@@ -558,10 +583,11 @@ async fn write_files(
                 fold_vcs::platform::create_dir_below(&fold_dir, &workspaces)?;
                 fill_start_dir(&root, start)?;
                 let mut settings = worker_settings();
-                if let Some(rule) = read_rule(&root)
-                    && let Some(allow) = settings["permissions"]["allow"].as_array_mut()
-                {
-                    allow.push(Value::String(rule));
+                if let Some(allow) = settings["permissions"]["allow"].as_array_mut() {
+                    allow.extend(read_rule(&root).map(Value::String));
+                    if user.as_ref().is_some_and(|user| user.trusts(&root)) {
+                        allow.extend(project_claude::trusted_allow_rules(&root));
+                    }
                 }
                 settings
             }
@@ -622,12 +648,13 @@ fn worker_program(
     (claude, &[])
 }
 
-/// The `fold` server with the worker's agent name, plus, when the role limits its servers, each named server of the project's `.mcp.json`. Servers of the user's own configuration are never copied, because their entries can hold credentials; without a limit Claude Code loads them itself.
+/// The `fold` server with the worker's agent name, plus servers of the project's `.mcp.json`: when the role limits its servers, each one it names, which the user chose in fold's configuration; else, for a worker with the user's `approval`, each one the user approved for the project folder in Claude Code, so a worker never connects a server the user did not approve. Servers of the user's own configuration are never copied, because their entries can hold credentials; without a limit Claude Code loads them itself.
 fn mcp_config(
     fold: &Path,
     agent: &AgentName,
     limit: Option<&[String]>,
     project_mcp: &Path,
+    approval: Option<&project_claude::Approval>,
 ) -> Value {
     let mut servers = Map::new();
     servers.insert(
@@ -638,21 +665,33 @@ fn mcp_config(
             "env": {(AGENT_ENV): agent.as_str()},
         }),
     );
-    if let Some(names) = limit {
-        let project: Value = std::fs::read_to_string(project_mcp)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or(Value::Null);
-        for name in names {
-            if servers.contains_key(name) {
-                continue;
-            }
-            if let Some(entry) = project
-                .get(MCP_SERVERS_KEY)
-                .and_then(|servers| servers.get(name))
-            {
-                servers.insert(name.clone(), entry.clone());
-            }
+    if limit.is_none() && approval.is_none() {
+        return json!({ MCP_SERVERS_KEY: servers });
+    }
+    let project: Value = std::fs::read_to_string(project_mcp)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(Value::Null);
+    let listed = project
+        .get(MCP_SERVERS_KEY)
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let names: Vec<String> = match (limit, approval) {
+        (Some(names), _) => names.to_vec(),
+        (None, Some(approval)) => listed
+            .keys()
+            .filter(|name| approval.allows(name))
+            .cloned()
+            .collect(),
+        (None, None) => Vec::new(),
+    };
+    for name in names {
+        if servers.contains_key(&name) {
+            continue;
+        }
+        if let Some(entry) = listed.get(&name) {
+            servers.insert(name, entry.clone());
         }
     }
     json!({ MCP_SERVERS_KEY: servers })
@@ -750,17 +789,45 @@ mod tests {
         .unwrap();
         let agent = AgentName::parse("web-lead").unwrap();
         let fold = Path::new("/bin/fld");
-        let open = mcp_config(fold, &agent, None, &project);
+        let open = mcp_config(fold, &agent, None, &project, None);
         assert_eq!(
             open,
             json!({"mcpServers": {"fold": {"command": "/bin/fld", "args": ["mcp"], "env": {"FOLD_AGENT": "web-lead"}}}})
         );
         let names = ["fold".to_owned(), "pencil".to_owned(), "missing".to_owned()];
-        let limited = mcp_config(fold, &agent, Some(&names), &project);
+        let limited = mcp_config(fold, &agent, Some(&names), &project, None);
         let servers = limited["mcpServers"].as_object().unwrap();
         assert_eq!(servers.keys().collect::<Vec<_>>(), ["fold", "pencil"]);
         assert_eq!(servers["fold"]["command"], "/bin/fld");
-        let none = mcp_config(fold, &agent, Some(&names), &dir.join("absent.json"));
+        let none = mcp_config(fold, &agent, Some(&names), &dir.join("absent.json"), None);
         assert_eq!(none["mcpServers"].as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_worker_without_a_limit_gets_only_the_project_servers_the_user_approved() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let project = temp.path().join(".mcp.json");
+        std::fs::write(
+            &project,
+            r#"{"mcpServers":{"pencil":{"command":"pencil"},"db":{"command":"db"},"fold":{"command":"old"}}}"#,
+        )
+        .unwrap();
+        let agent = AgentName::parse("web-worker").unwrap();
+        let fold = Path::new("/bin/fld");
+        let settings = temp.path().join("settings.json");
+        std::fs::write(&settings, r#"{"enabledMcpjsonServers":["pencil","fold"]}"#).unwrap();
+        let env = vec![(
+            "CLAUDE_CONFIG_DIR".to_owned(),
+            temp.path().to_string_lossy().into_owned(),
+        )];
+        let approval = project_claude::UserClaude::of(&env)
+            .unwrap()
+            .approval(&temp.path().join("app"));
+        let config = mcp_config(fold, &agent, None, &project, Some(&approval));
+        let servers = config["mcpServers"].as_object().unwrap();
+        assert_eq!(servers.keys().collect::<Vec<_>>(), ["fold", "pencil"]);
+        assert_eq!(servers["fold"]["command"], "/bin/fld");
+        let nothing = mcp_config(fold, &agent, None, &project, Some(&Default::default()));
+        assert_eq!(nothing["mcpServers"].as_object().unwrap().len(), 1);
     }
 }

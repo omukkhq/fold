@@ -24,6 +24,7 @@ mod launch;
 mod lines;
 mod main;
 mod message;
+mod project_claude;
 mod questions;
 mod refresh;
 mod restart;
