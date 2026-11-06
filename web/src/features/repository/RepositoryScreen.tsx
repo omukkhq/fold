@@ -14,6 +14,7 @@ import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import { CompareBar } from "./CompareBar";
 import { FileView } from "./FileView";
+import { FolderActions } from "./FolderActions";
 import { folderWaits, mainCopyText } from "./describe";
 import { isMissingRevision, pickRevision } from "./revision";
 import { folderAt, parentDirs, parentOf } from "./search";
@@ -229,7 +230,10 @@ export function RepositoryScreen({
                 className="mt-3 shrink-0 text-text-2"
               />
             )}
-            <p className="max-w-measure">{mainCopy}</p>
+            <div className="flex flex-col gap-8">
+              <p className="max-w-measure">{mainCopy}</p>
+              <FolderActions slug={slug} />
+            </div>
           </div>
         )}
         <GitStatus slug={slug} variant="panel" />

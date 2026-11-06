@@ -83,4 +83,4 @@ export function clearDescription(count: number): string {
 
 /** Why a row has no drop action. */
 export const CONFLICTED_NOTE =
-  "Its unstash conflict waits in the project folder. Fix the files and run `fld record`.";
+  "Its unstash conflict waits in the project folder. Fix the files and run `fld record`, or reset the folder.";
