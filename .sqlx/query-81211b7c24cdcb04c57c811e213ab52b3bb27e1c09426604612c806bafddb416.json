@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"task!: i64\", MAX(x.at) AS \"at!: i64\"\n           FROM (\n               SELECT m.task_id, m.created_at AS at FROM messages m\n               WHERE m.sender_kind = 'human' AND m.task_id IS NOT NULL\n               UNION ALL\n               SELECT ask.task_id, reply.created_at FROM message_answers a\n               JOIN messages ask ON ask.id = a.ask_id\n               JOIN messages reply ON reply.id = a.reply_id\n               WHERE ask.task_id IS NOT NULL\n               UNION ALL\n               SELECT ask.task_id, x.created_at FROM message_ask_closures x\n               JOIN messages ask ON ask.id = x.message_id\n               WHERE ask.task_id IS NOT NULL\n           ) x\n           JOIN tasks t ON t.id = x.task_id\n           WHERE x.task_id IN (SELECT c.task_id FROM claims c\n                               WHERE c.kind = 'implementation' AND c.released_at IS NULL)\n           GROUP BY t.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "task!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "at!: i64",
+        "ordinal": 1,
+        "type_info": "Null",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      null
+    ]
+  },
+  "hash": "81211b7c24cdcb04c57c811e213ab52b3bb27e1c09426604612c806bafddb416"
+}

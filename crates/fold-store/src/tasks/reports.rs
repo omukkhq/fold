@@ -201,6 +201,45 @@ pub async fn latest_for_task(
     Ok(for_task(executor, task, 1).await?.pop())
 }
 
+/// The reports of a task as the stall rule sees them: whether one waits for its lead check, and when a lead check last sent the task back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReportTurn {
+    pub task: TaskId,
+    pub open: bool,
+    pub sent_back_at: Option<Timestamp>,
+}
+
+/// The [`ReportTurn`] of each task that an unreleased implementation claim holds and that has a report, in task order.
+pub async fn report_turns(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<ReportTurn>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT t.number AS "task!: i64",
+                  MAX(r.resolution IS NULL) AS "open!: bool",
+                  MAX(CASE WHEN r.resolution = 'sent_back' THEN r.resolved_at END) AS "sent_back_at?: i64"
+           FROM task_reports r
+           JOIN tasks t ON t.id = r.task_id
+           WHERE r.task_id IN (SELECT c.task_id FROM claims c
+                               WHERE c.kind = 'implementation' AND c.released_at IS NULL)
+           GROUP BY t.number
+           ORDER BY t.number"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(ReportTurn {
+                task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
+                open: row.open,
+                sent_back_at: row
+                    .sent_back_at
+                    .map(|at| time(at, "task_reports.resolved_at"))
+                    .transpose()?,
+            })
+        })
+        .collect()
+}
+
 /// A send-back that waits for the task worker who wrote the report: the task worker's process is in one of the asked states, such as stopped or failed, and has not started since the task was sent back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwedSendBack {

@@ -13,8 +13,8 @@ use fold_core::object::ObjectKind;
 use fold_core::roles::Role;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{
-    Actor, AgentActor, AgentName, Event, EventActor, EventFilter, ProposalId, TaskDescription,
-    TaskId, TaskStatus, TaskTitle, Timestamp, WorkspaceId,
+    Actor, Address, AgentActor, AgentName, Event, EventActor, EventFilter, HumanName, MessageBody,
+    MessageId, ProposalId, TaskDescription, TaskId, TaskStatus, TaskTitle, Timestamp, WorkspaceId,
 };
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
@@ -23,6 +23,7 @@ use fold_daemon::jobs::{JobProgress, spawn_lease_sweeper, spawn_stalls};
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::BusMessage;
+use fold_daemon::services::messages::SendMessage;
 use fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME;
 use fold_daemon::services::reviews::ReviewService;
 use fold_daemon::services::reviews::checks::Started;
@@ -1008,4 +1009,118 @@ async fn a_worker_that_waits_for_its_checks_stalls_only_a_window_after_the_run()
         fx.agent_attention().await["frontend"],
         json!([{"kind": "stalled", "task": "T-1"}])
     );
+}
+
+/// Registers human `tanim`, who answers the workers in the tests below.
+#[cfg(test)]
+async fn tanim(fx: &Fixture) -> Actor {
+    let name = HumanName::parse("tanim").unwrap();
+    let now = fx.project.now();
+    fx.project
+        .registry()
+        .write(async |tx| fold_store::projects::insert_human(tx, &name, now).await)
+        .await
+        .unwrap();
+    Actor::human(name)
+}
+
+/// Sends a message about `T-1` from `actor` to `to`, marked as an ask when `asks_human` is true.
+#[cfg(test)]
+async fn say(
+    fx: &Fixture,
+    actor: &Actor,
+    to: &[&str],
+    reply_to: Option<MessageId>,
+    asks_human: bool,
+) -> MessageId {
+    fx.handle
+        .messages(fx.project.registry())
+        .send_marked(
+            actor,
+            SendMessage {
+                to: Address::parse_all(to).unwrap(),
+                body: MessageBody::parse("which one?").unwrap(),
+                task: Some(t(1)),
+                proposal: None,
+                reply_to,
+            },
+            None,
+            None,
+            asks_human,
+        )
+        .await
+        .unwrap()
+        .id
+}
+
+#[tokio::test]
+async fn a_worker_that_waits_for_an_answer_never_stalls_and_the_answer_starts_a_new_window() {
+    let fx = Fixture::new().await;
+    let human = tanim(&fx).await;
+    let (id, _) = fx.create(&fx.frontend, 1).await;
+    fx.advance(STALL);
+    assert_eq!(fx.check().await, 1);
+    assert_eq!(fx.attention("T-1").await, ["stalled"]);
+
+    let ask = say(&fx, &by(&fx.frontend.worker), &["humans"], None, true).await;
+    fx.check().await;
+    assert!(!fx.stalled(id), "the open ask clears the flag");
+    assert_eq!(fx.attention("T-1").await, ["question"]);
+    fx.advance(3 * STALL);
+    assert_eq!(fx.check().await, 0, "a worker that waits for a person");
+    assert!(!fx.stalled(id));
+
+    say(&fx, &human, &["frontend"], Some(ask), false).await;
+    fx.check().await;
+    assert!(!fx.stalled(id));
+    assert!(
+        fx.attention("T-1").await.is_empty(),
+        "no needs-you once the person answered"
+    );
+    fx.advance(STALL - Duration::from_millis(1));
+    assert_eq!(fx.check().await, 0, "the window counts from the answer");
+    assert!(!fx.stalled(id));
+    fx.advance(Duration::from_millis(1));
+    assert_eq!(fx.check().await, 1, "a new full window of silence");
+    assert_eq!(fx.attention("T-1").await, ["stalled"]);
+}
+
+#[tokio::test]
+async fn a_reviewers_ask_about_the_task_holds_the_stall_of_its_worker_until_the_answer() {
+    let fx = Fixture::new().await;
+    let human = tanim(&fx).await;
+    let (id, _) = fx.create(&fx.frontend, 1).await;
+    let ask = say(&fx, &by(&fx.backend.worker), &["humans"], None, true).await;
+    fx.advance(2 * STALL);
+    assert_eq!(fx.check().await, 0);
+    assert!(!fx.stalled(id));
+    say(&fx, &human, &["backend"], Some(ask), false).await;
+    fx.check().await;
+    assert!(!fx.stalled(id), "the answer starts the window");
+    fx.advance(STALL - Duration::from_millis(1));
+    assert_eq!(fx.check().await, 0);
+    fx.advance(Duration::from_millis(1));
+    assert_eq!(fx.check().await, 1, "a full window after the answer");
+    assert!(fx.stalled(id));
+}
+
+#[tokio::test]
+async fn a_persons_message_to_a_stalled_worker_clears_its_flag_without_waiting_for_a_tick() {
+    let fx = Fixture::new().await;
+    let human = tanim(&fx).await;
+    let (id, _) = fx.create(&fx.frontend, 1).await;
+    fx.advance(STALL);
+    assert_eq!(fx.check().await, 1);
+    assert!(fx.stalled(id));
+
+    say(&fx, &human, &["frontend"], None, false).await;
+    eventually(WAIT, async || {
+        if fx.stalled(id) {
+            Err("stalled")
+        } else {
+            Ok(())
+        }
+    })
+    .await;
+    assert!(fx.attention("T-1").await.is_empty());
 }
