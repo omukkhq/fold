@@ -5,7 +5,7 @@ import { DiffViewer, type DiffViewerProps } from "@/features/diff/DiffViewer";
 import type { ChangedFilesState } from "./changedFilesState";
 import { FileTree } from "./FileTree";
 import { changeTree, folderPaths, toggleFolder, treeFiles } from "./folderTree";
-import { MentionText } from "@/mentions/MentionText";
+import { Markdown } from "@/components/text/Markdown";
 import {
   BACK_TO_BASE,
   OUTSIDE_INTENT,
@@ -60,7 +60,9 @@ function PartNote({
   return (
     <div className="mx-14 mb-10 flex flex-col gap-2 rounded-m bg-accent-soft px-12 py-10 text-14 text-text">
       <b className="font-title">{note.part.name}:</b>
-      <MentionText text={note.part.does} slug={slug} className="text-14" />
+      <Markdown mentions={{ slug }} size={14}>
+        {note.part.does}
+      </Markdown>
     </div>
   );
 }

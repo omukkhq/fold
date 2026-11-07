@@ -11,6 +11,7 @@ describe("clampClass", () => {
   it("cuts a collapsed text to its lines", () => {
     expect(clampClass(2, false)).toBe("line-clamp-2");
     expect(clampClass(3, false)).toBe("line-clamp-3");
+    expect(clampClass(4, false)).toBe("line-clamp-4");
   });
 
   it("shows every line of an open text", () => {

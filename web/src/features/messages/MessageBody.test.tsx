@@ -66,4 +66,21 @@ describe("MessageBody", () => {
     expect(paragraph.querySelector("img, b, script")).toBeNull();
     expect(screen.getAllByRole("link")).toHaveLength(1);
   });
+
+  it("renders Markdown and links bare ids outside code only", async () => {
+    await show(
+      "**Done** for T-5:\n- ran `T-6 check`\n- see [the board](/p/demo/board)",
+    );
+    expect(screen.getByText("Done").tagName).toBe("STRONG");
+    expect(screen.getByText("T-6 check").tagName).toBe("CODE");
+    expect(
+      screen
+        .getAllByRole("link")
+        .map((a) => [a.textContent, a.getAttribute("href")]),
+    ).toEqual([
+      ["T-5", "/p/demo/t/T-5"],
+      ["the board", "/p/demo/board"],
+    ]);
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  });
 });

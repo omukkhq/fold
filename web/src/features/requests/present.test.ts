@@ -82,6 +82,14 @@ describe("state and kind", () => {
     });
   });
 
+  it("shows the start of an untitled request's message as plain text", () => {
+    expect(
+      headingOf(
+        requestSummary("RQ-8", { excerpt: "## Fix `the **export**` _now_" }),
+      ),
+    ).toEqual({ text: "Fix the **export** now", excerpt: true });
+  });
+
   it("names an untitled request by its id on its page", () => {
     expect(pageTitle(requestSummary("RQ-7"))).toBe("Request RQ-7");
     expect(pageTitle(requestSummary("RQ-4", { title: "Report export" }))).toBe(

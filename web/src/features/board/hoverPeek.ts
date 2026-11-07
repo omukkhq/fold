@@ -121,3 +121,13 @@ export function hoverPeek(
     stop: cancel,
   };
 }
+
+/**
+ * The panel stays inside the scrolling board area, never over the top bar: its bounds are the page's `main`, whose
+ * height also gives the panel its most height. A card outside a `main`, as in a test, takes the window.
+ */
+export function panelBoundary<T>(card: {
+  closest: (selector: string) => T | null;
+}): T | null {
+  return card.closest("main");
+}

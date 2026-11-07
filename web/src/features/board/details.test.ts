@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { boardCard } from "@/test/payloads";
-import { cardDetails } from "./details";
+import { PREVIEW_CHARS, PREVIEW_LINES, cardDetails, proseRow } from "./details";
 
 describe("cardDetails", () => {
   it("heads the panel with the id and the column", () => {
@@ -154,5 +154,61 @@ describe("cardDetails", () => {
       0,
     );
     expect(details.rows).toEqual([]);
+  });
+
+  it("shows a short report and blocker whole", () => {
+    const details = cardDetails(
+      boardCard("T-3", {
+        kind: "no_proposal",
+        report: "Drew the `icons`.",
+        blocker: { reason: "Wait for the logo", set_by: "tanim", set_at: 0 },
+      }),
+      null,
+      0,
+    );
+    expect(details.rows.filter((row) => row.kind === "prose")).toEqual([
+      {
+        kind: "prose",
+        name: "Blocker",
+        text: "Wait for the logo",
+        clamp: null,
+        more: null,
+      },
+      {
+        kind: "prose",
+        name: "Report",
+        text: "Drew the `icons`.",
+        clamp: null,
+        more: null,
+      },
+    ]);
+  });
+});
+
+describe("proseRow", () => {
+  it("clamps a text of more lines than the panel shows and sends the person to the task", () => {
+    const text = Array.from({ length: PREVIEW_LINES + 1 }, (_, i) =>
+      String(i),
+    ).join("\n");
+    expect(proseRow("Report", text, "report")).toEqual({
+      kind: "prose",
+      name: "Report",
+      text,
+      clamp: PREVIEW_LINES,
+      more: "Open the task to read the full report",
+    });
+  });
+
+  it("clamps one long paragraph, and counts neither blank lines nor the spaces around the text", () => {
+    expect(
+      proseRow("Blocker", "x".repeat(PREVIEW_CHARS + 1), "reason").more,
+    ).toBe("Open the task to read the full reason");
+    const four = Array.from({ length: PREVIEW_LINES }, (_, i) =>
+      String(i),
+    ).join("\n\n");
+    expect(proseRow("Report", `  ${four}\n\n  `, "report").clamp).toBeNull();
+    expect(
+      proseRow("Report", "y".repeat(PREVIEW_CHARS), "report").clamp,
+    ).toBeNull();
   });
 });

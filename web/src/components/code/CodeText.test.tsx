@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { CodeText } from "./CodeText";
+import { CodeText, InlineCode } from "./CodeText";
 
 afterEach(() => {
   cleanup();
@@ -46,5 +46,12 @@ describe("CodeText", () => {
     const code = screen.getByText("fld doctor");
     expect(code.className).toContain("bg-sunken");
     expect(code.className).toContain("whitespace-nowrap");
+  });
+  it("lets a wrapping chip break inside a long path and keeps its padding on each piece", () => {
+    render(<InlineCode wrap>web/src/features/board/details.ts</InlineCode>);
+    const code = screen.getByText("web/src/features/board/details.ts");
+    expect(code.className).toContain("wrap-anywhere");
+    expect(code.className).toContain("box-decoration-clone");
+    expect(code.className).not.toContain("whitespace-nowrap");
   });
 });
