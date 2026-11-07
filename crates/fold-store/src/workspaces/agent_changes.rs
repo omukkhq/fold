@@ -32,6 +32,8 @@ impl AgentChangeEnd {
 /// A path of the project folder that changed during a tool call of `agent`'s worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentChangeRow {
+    /// The order the row was placed in, which a follow of the project folder compares with [`last_agent_change`] as it was when the follow read the folder. It never leaves the daemon.
+    pub id: i64,
     pub path: Vec<u8>,
     pub agent: AgentName,
     /// The file's time that placed the change in the call.
@@ -44,7 +46,7 @@ pub async fn open_agent_changes(
     executor: impl SqliteExecutor<'_>,
 ) -> Result<Vec<AgentChangeRow>, StoreError> {
     let rows = sqlx::query!(
-        r#"SELECT c.path AS "path!: Vec<u8>", a.name AS "agent!: String",
+        r#"SELECT c.id AS "id!: i64", c.path AS "path!: Vec<u8>", a.name AS "agent!: String",
                   c.changed_at AS "changed_at!: i64", c.seen_at AS "seen_at!: i64"
            FROM agent_changes c JOIN agents a ON a.id = c.agent_id
            WHERE c.cleared_at IS NULL
@@ -55,6 +57,7 @@ pub async fn open_agent_changes(
     rows.into_iter()
         .map(|row| {
             Ok(AgentChangeRow {
+                id: row.id,
                 path: row.path,
                 agent: AgentName::parse(&row.agent)
                     .map_err(|_| StoreError::Corrupt("agents.name"))?,
@@ -63,6 +66,15 @@ pub async fn open_agent_changes(
             })
         })
         .collect()
+}
+
+/// The row id of the newest change placed so far, open or ended; 0 when none was. Rows are never removed, so a later change always has a larger id.
+pub async fn last_agent_change(executor: impl SqliteExecutor<'_>) -> Result<i64, StoreError> {
+    Ok(
+        sqlx::query_scalar!(r#"SELECT COALESCE(MAX(id), 0) AS "last!: i64" FROM agent_changes"#)
+            .fetch_one(executor)
+            .await?,
+    )
 }
 
 /// Opens the change of `path` for `agent`, unless one is open already, one with the same file time ended already, which is the same change a human settled, or the agent is not registered. True when a row was added.
@@ -93,6 +105,27 @@ pub async fn insert_agent_change(
     .await?
     .rows_affected();
     Ok(added > 0)
+}
+
+/// Ends as `settled` the open changes of `path`, for every agent, placed up to the row id `placed_up_to`, so a change placed after the read that settles it stays open. Returns how many rows ended.
+pub async fn settle_agent_change(
+    tx: &mut WriteTx,
+    path: &[u8],
+    placed_up_to: i64,
+    now: Timestamp,
+) -> Result<u64, StoreError> {
+    let (how, cleared_at) = (AgentChangeEnd::Settled.as_str(), now.as_millis());
+    Ok(sqlx::query!(
+        "UPDATE agent_changes SET cleared_at = ?, cleared_how = ?
+         WHERE path = ? AND cleared_at IS NULL AND id <= ?",
+        cleared_at,
+        how,
+        path,
+        placed_up_to
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected())
 }
 
 /// Ends the open changes of `path`, for every agent, as `how`. Returns how many rows ended.

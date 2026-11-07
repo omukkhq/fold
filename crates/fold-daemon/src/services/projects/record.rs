@@ -446,7 +446,7 @@ pub(super) async fn sync(
         &handle.store,
         &handle.bus,
         &handle.tool_windows,
-        &followed.seen,
+        &followed,
         handle.clock.now(),
     )
     .await;

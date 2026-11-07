@@ -70,6 +70,18 @@ pub fn agents_at(windows: &[ToolWindow], at: Timestamp) -> Vec<AgentName> {
         .collect()
 }
 
+/// The paths of the open marks of workers' changes that a follow of the project folder settles: those its read no longer shows changed, among the marks placed before that read began. Each mark of `open` comes with its number, which grows in the order the marks were placed, and `placed_before_read` is the newest number when the follow began to read the folder; a mark placed while the follow read, for a file its read may not show, stays open, so a worker's change never passes as the human's for a stale read.
+pub fn settled_by_follow<'a>(
+    open: impl IntoIterator<Item = (i64, &'a [u8])>,
+    still_changed: &BTreeSet<&[u8]>,
+    placed_before_read: i64,
+) -> BTreeSet<Vec<u8>> {
+    open.into_iter()
+        .filter(|(number, path)| *number <= placed_before_read && !still_changed.contains(path))
+        .map(|(_, path)| path.to_vec())
+        .collect()
+}
+
 /// The parts of a change of the project folder that make a record ask first, each in path order: tracked files it empties and empty files it adds.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RecordRisk {
@@ -216,6 +228,20 @@ mod tests {
         assert_eq!(agents_at(&windows, at(99_000)), [agent("backend")]);
         assert!(agents_at(&windows[..1], at(21_001)).is_empty());
         assert!(agents_at(&[], at(1)).is_empty());
+    }
+
+    #[test]
+    fn a_follow_settles_only_the_marks_placed_before_its_read() {
+        let changed: BTreeSet<&[u8]> = [b"kept.md".as_slice()].into();
+        let open = [
+            (1, b"kept.md".as_slice()),
+            (2, b"back.md".as_slice()),
+            (3, b"new.md".as_slice()),
+        ];
+        let settled = settled_by_follow(open, &changed, 2);
+        assert_eq!(settled, [b"back.md".to_vec()].into());
+        assert!(settled_by_follow(open, &changed, 0).is_empty());
+        assert_eq!(settled_by_follow(open, &BTreeSet::new(), 3).len(), 3);
     }
 
     #[test]

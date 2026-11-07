@@ -49,6 +49,8 @@ pub struct FolderFollowed {
     pub branch: Option<BranchState>,
     /// Each path where the folder differs from its checkout record after the follow, with the time that places the change, in path order.
     pub seen: Vec<SeenChange>,
+    /// The newest mark of a worker's change that was placed when the follow began to read the folder (see [`fold_store::workspaces::last_agent_change`]): only marks up to it may be settled by what this follow read.
+    pub marks_before_read: i64,
 }
 
 /// What one run of [`sync_folder`] did.
@@ -255,7 +257,7 @@ pub async fn sync_folder(context: &RemoteContext, git: &Git) -> Result<FolderSyn
         &context.store,
         &context.bus,
         &context.tool_windows,
-        &followed.seen,
+        &followed,
         context.clock.now(),
     )
     .await;
@@ -463,6 +465,8 @@ pub(crate) async fn follow_folder(
         unstash,
         ..
     } = read;
+    // Read before the folder, so a mark placed while the folder is read is newer than this number.
+    let marks_before_read = fold_store::workspaces::last_agent_change(store.read()).await?;
     let objects_guard = objects.clone().read_owned().await;
     let paths_owned = paths.clone();
     let head_tree = head.tree_hash;
@@ -536,6 +540,7 @@ pub(crate) async fn follow_folder(
         unrecorded,
         branch,
         seen,
+        marks_before_read,
     })
 }
 
