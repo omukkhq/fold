@@ -7,12 +7,17 @@ import {
   waitText,
 } from "@/features/board/sentVersion";
 import { formatQuiet, formatSince } from "@/format/time";
+import {
+  activityVerb,
+  workerActivity,
+  type WorkerActivity,
+} from "@/live/workerActivity";
 
 type ChangeKind = LiveWorkspace["files"][number]["change"];
 
 export interface LiveStrip {
   worker: string;
-  /** `is running checks for v2` while a check run goes in the workspace; `is editing`; `sent P-1 v1` while the workspace files are the open proposal's newest version; or `no edits for 7 min` while the daemon reports the worker stalled and no sent version waits on others. */
+  /** `is running checks for v2` while a check run goes in the workspace; what fold saw of the worker, such as `running a command for 8 min`, `no activity for 12 min` or `stopped`; `is editing`; `sent P-1 v1` while the workspace files are the open proposal's newest version; or `no edits for 7 min` while the daemon reports the worker stalled and no sent version waits on others. */
   verb: string;
   /** The file being edited; null while checks run, after a sent version, while stalled or unless exactly one file changed. */
   file: string | null;
@@ -20,7 +25,10 @@ export interface LiveStrip {
   wait: string | null;
   /** The strip's details behind its info button: `4 files · ck-31 3 min ago · base r7`; null when the stream and the task read name none. */
   details: string | null;
+  /** The worker's stall waits for a person, which the strip marks in gold. */
   stalled: boolean;
+  /** What fold saw of the worker, from the live frame; null while there is nothing to say or checks run. */
+  activity: WorkerActivity | null;
 }
 
 function files(count: number): string {
@@ -93,7 +101,13 @@ export function liveStrip(
     task.attention,
   );
   const run = currentCheckRun(task.check_run, live);
-  const stalled = run === null && showsStall(sent, task.attention);
+  const seen = run === null ? workerActivity(live, now) : null;
+  const stalled =
+    seen === null
+      ? run === null &&
+        live?.activity == null &&
+        showsStall(sent, task.attention)
+      : seen.needsYou;
   const activity = task.activity ?? null;
   const lastEdit = Math.max(
     activity?.at ?? Number.NEGATIVE_INFINITY,
@@ -117,12 +131,14 @@ export function liveStrip(
   if (run !== null) {
     const text = checkRunText(run, task.proposal);
     verb = `is ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+  } else if (seen !== null && live?.activity) {
+    verb = activityVerb(live.activity, now);
   } else if (stalled && Number.isFinite(lastEdit)) {
     verb = formatQuiet(now, lastEdit);
   } else if (sent !== null) {
     verb = sentText(sent);
   }
-  const quiet = run !== null || sent !== null || stalled;
+  const quiet = run !== null || sent !== null || stalled || seen !== null;
   return {
     worker,
     verb,
@@ -130,6 +146,7 @@ export function liveStrip(
     wait: run === null && sent !== null ? waitText(sent.waits) : null,
     details: parts.length > 0 ? parts.join(" · ") : null,
     stalled,
+    activity: seen,
   };
 }
 

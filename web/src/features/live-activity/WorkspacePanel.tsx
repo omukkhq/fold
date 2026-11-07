@@ -54,6 +54,8 @@ export function WorkspacePanel({ slug, panel, now }: WorkspacePanelProps) {
               <MissingBadge />
             ) : attention.checks !== null ? (
               <EditingPill text={attention.checks} />
+            ) : attention.activity !== null ? (
+              <EditingPill text={attention.activity} />
             ) : attention.stalled === null ? (
               <EditingPill text="active" />
             ) : (

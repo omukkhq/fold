@@ -51,10 +51,54 @@ function live(at: number, files: number): LiveWorkspace {
     stalled: false,
     edits_after_version: null,
     check_run: null,
+    activity: null,
   };
 }
 
 describe("activityLine", () => {
+  it("says what fold saw of the worker from the live frame, gold only while the stall waits for a person", () => {
+    const frame = {
+      ...live(NOW - 30 * MINUTE, 2),
+      activity: {
+        state: "working" as const,
+        call: "command" as const,
+        since: NOW - 8 * MINUTE,
+        supervised: true,
+        told: [],
+      },
+    };
+    expect(activityLine(card(null), frame, NOW)).toMatchObject({
+      text: "Running a command for 8 min",
+      since: "8 min ago",
+      stalled: false,
+    });
+    const silent = {
+      ...frame,
+      worker: "web-worker",
+      activity: {
+        ...frame.activity,
+        state: "silent" as const,
+        call: null,
+        told: ["web-lead"],
+      },
+    };
+    expect(activityLine(card(null, [], true), silent, NOW)).toMatchObject({
+      text: "No activity from @web-worker for 8 min · blocked",
+      stalled: false,
+    });
+    const flagged = { ...silent, stalled: true };
+    const line = activityLine(card(null), flagged, NOW);
+    expect(line?.stalled).toBe(true);
+    expect(liveFilesText(line)).toBeNull();
+    expect(
+      activityLine(
+        card(null, [{ kind: "stalled", closable: false }]),
+        frame,
+        NOW,
+      )?.stalled,
+    ).toBe(false);
+  });
+
   it("is null with no activity and no live workspace", () => {
     expect(activityLine(card(null), undefined, NOW)).toBeNull();
   });

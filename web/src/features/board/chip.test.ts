@@ -244,4 +244,40 @@ describe("metaFact", () => {
     ).toBe("checklist 1/2");
     expect(fact({})).toBeNull();
   });
+
+  it("shows what fold saw of the worker: work in the neutral tone, a stall in gold only once it waits for a person", () => {
+    const card = boardCard("T-1", { status: "in_progress" });
+    const working = {
+      text: "Running a command for 8 min",
+      stall: false,
+      needsYou: false,
+      restart: null,
+      told: [],
+      since: 0,
+    };
+    expect(cardChip(card, null, working)).toMatchObject({
+      tone: "neutral",
+      text: "Running a command for 8 min",
+    });
+    const silent = {
+      ...working,
+      text: "No activity from @web-worker for 12 min",
+      stall: true,
+      restart: "web-worker",
+      told: ["web-lead"],
+    };
+    expect(cardChip(card, null, silent)?.tone).toBe("neutral");
+    expect(cardChip(card, null, { ...silent, needsYou: true })).toMatchObject({
+      tone: "warn",
+      text: "No activity from @web-worker for 12 min",
+    });
+    const stalled = boardCard("T-1", {
+      status: "in_progress",
+      attention: [{ kind: "stalled", closable: false }],
+    });
+    expect(cardChip(stalled, null, working)?.text).toBe(
+      "Running a command for 8 min",
+    );
+    expect(cardChip(stalled)?.text).toBe("Stalled · needs you");
+  });
 });

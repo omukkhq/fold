@@ -14,6 +14,12 @@ import { Label } from "@/components/label/Label";
 import { cn } from "@/lib/cn";
 import { PersonName } from "@/people/PersonName";
 import type { LiveWorkspace } from "@/live/envelope";
+import {
+  toldText,
+  workerActivity,
+  type WorkerActivity,
+} from "@/live/workerActivity";
+import { RestartStalled } from "@/features/workers/RestartStalled";
 import { MarkAnswered } from "@/features/messages/MarkAnswered";
 import { taskCanMarkAnswered } from "@/features/messages/answered";
 import { activityLine, type ActivityLine } from "./activityLine";
@@ -84,16 +90,40 @@ function RowValue({ row, card }: { row: DetailRow; card: BoardCardData }) {
   }
 }
 
-/** The facts a card leaves out, shown on hover or keyboard focus. Mark answered is its one button. */
+/** Who fold told of the worker's stall, and Restart worker for a worker whose process fold runs. */
+function StallNote({
+  slug,
+  activity,
+}: {
+  slug: string;
+  activity: WorkerActivity;
+}) {
+  const told = toldText(activity);
+  if (told === null) {
+    return null;
+  }
+  return (
+    <div className="flex flex-col gap-8">
+      <p className="text-13 wrap-anywhere text-text-2">{told}</p>
+      {activity.restart === null ? null : (
+        <RestartStalled slug={slug} name={activity.restart} />
+      )}
+    </div>
+  );
+}
+
+/** The facts a card leaves out, shown on hover or keyboard focus. Mark answered and, for a stalled worker, Restart worker are its buttons. */
 function CardPanel({
   slug,
   card,
   line,
+  activity,
   now,
 }: {
   slug: string;
   card: BoardCardData;
   line: ActivityLine | null;
+  activity: WorkerActivity | null;
   now: number;
 }) {
   const details = cardDetails(card, line, now);
@@ -101,6 +131,7 @@ function CardPanel({
     <div className="flex flex-col gap-10">
       <p className="text-13 text-text-2">{details.head}</p>
       {line ? <Activity line={line} /> : null}
+      {activity ? <StallNote slug={slug} activity={activity} /> : null}
       {details.rows.length > 0 ? (
         <dl className="grid grid-cols-[var(--width-fact-label)_minmax(0,1fr)] gap-x-10 gap-y-5">
           {details.rows.map((row) => (
@@ -214,7 +245,12 @@ export function BoardCard({
   const filters = useRouterState({ select: (s) => s.location.searchStr });
   const streamed = card.workspace ? live : undefined;
   const line = activityLine(card, streamed, now);
-  const chip = cardChip(card, currentCheckRun(card.check_run, streamed));
+  const run = currentCheckRun(card.check_run, streamed);
+  const activity =
+    run === null && card.status !== "done"
+      ? workerActivity(streamed, now)
+      : null;
+  const chip = cardChip(card, run, activity);
   const [open, peek] = usePeek();
   const box = useRef<HTMLDivElement>(null);
   const inside = (target: EventTarget | null) =>
@@ -302,7 +338,13 @@ export function BoardCard({
               }}
               className="z-pop w-side-panel rounded-m bg-surface px-16 py-14 text-14 text-text shadow-pop outline-none"
             >
-              <CardPanel slug={slug} card={card} line={line} now={now} />
+              <CardPanel
+                slug={slug}
+                card={card}
+                line={line}
+                activity={activity}
+                now={now}
+              />
             </RadixPopover.Content>
           ) : null}
         </Card>

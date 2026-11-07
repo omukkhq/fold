@@ -278,7 +278,16 @@ function applyWorkspaceChanged(
   if (endedWorkspaces(queryClient, slug).includes(live.workspace)) {
     return;
   }
+  const before = queryClient.getQueryData<LiveWorkspace>(
+    keys.workspaceLive(slug, live.workspace),
+  );
   queryClient.setQueryData(keys.workspaceLive(slug, live.workspace), live);
+  // A stall that starts or stops waiting for a person changes Needs you, the board's attention and the agents' counts without a stored event.
+  if (before !== undefined && before.stalled !== live.stalled) {
+    void queryClient.invalidateQueries({ queryKey: keys.needsYou(slug) });
+    void queryClient.invalidateQueries({ queryKey: keys.board(slug) });
+    void queryClient.invalidateQueries({ queryKey: keys.agents(slug) });
+  }
   invalidateWorkspaceDiffs(queryClient, slug, live.workspace);
   void queryClient.invalidateQueries({
     queryKey: keys.workspaceTrees(slug, live.workspace),

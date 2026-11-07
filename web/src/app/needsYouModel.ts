@@ -29,6 +29,8 @@ export interface NeedsYouLine {
   files: FilesSummary | null;
   /** How many items of changed shared files the line's Dismiss ends, which is every one of them; null for every other line. */
   dismiss: number | null;
+  /** The stalled worker that the line's Restart worker starts again in a new session; null for every other line, and for a worker whose session fold does not run. */
+  restart: string | null;
 }
 
 /** The files of an item as the second line names them: how many, the first path and the count of the rest. */
@@ -65,6 +67,7 @@ const KIND_ORDER: readonly NeedsYouKind[] = [
   "notify_target_off",
   "agent_change",
   "shared_changed",
+  "worker_stalled",
 ];
 
 /** Agents that ask, things that wait for the human's decision, and the project's own state, which includes workers fold cannot run. */
@@ -86,6 +89,7 @@ export const GROUP_OF: Readonly<Record<NeedsYouKind, NeedsYouGroupId>> = {
   notify_target_off: "project",
   agent_change: "project",
   shared_changed: "project",
+  worker_stalled: "wait",
 };
 
 /** The kinds whose title is the item's own name, which the sentence ends with. */
@@ -178,6 +182,20 @@ export function questionText(
   return item.choices.length > 0 ? "asks you to choose" : "asks a question";
 }
 
+/** What fold saw of a stalled worker, after its name; the line names its task. */
+function stalledText(item: NeedsYouItem): string {
+  switch (item.activity?.state) {
+    case "long_call":
+      return item.activity.call === "command"
+        ? "has a command that ran long and did not start again"
+        : "has a call that ran long and did not start again";
+    case "stopped":
+      return "stopped without a report and did not start again";
+    default:
+      return "shows no activity and did not start again";
+  }
+}
+
 function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
   const base = {
     key: `${item.kind}:${item.message ?? item.question ?? item.proposal ?? item.request ?? item.task ?? item.commit ?? String(index)}`,
@@ -192,6 +210,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
     settle: null,
     files: null,
     dismiss: null,
+    restart: null,
   };
   switch (item.kind) {
     case "human_task":
@@ -355,6 +374,17 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
             ? "changed a shared file while it worked. Check the file, then dismiss this"
             : "changed shared files while it worked. Check the files, then dismiss this",
         href: null,
+      };
+    case "worker_stalled":
+      return {
+        ...base,
+        person: item.agent,
+        chip: null,
+        title: markedText(item.reason),
+        text: stalledText(item),
+        href: taskPath(slug, item.task ?? ""),
+        restart:
+          item.activity?.supervised === true ? (item.agent ?? null) : null,
       };
     case "human_review":
       return {

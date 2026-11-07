@@ -7,11 +7,12 @@ use std::time::Duration;
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
 use fold_core::reviews::checks::Purpose;
-use fold_core::stall::{self, ProposalTurn, WorkspaceFact};
+use fold_core::stall::{self, Activity, CallKind, ProposalTurn, WorkspaceFact};
 use fold_core::tree::{ChangeKind as FileChangeKind, ChangeTally, FlatTree};
 use fold_core::{
-    CheckRunId, CheckpointId, Clock, EventActor, FoldError, LiveEvent, NewEvent, ProjectConfig,
-    ProjectPaths, ProposalId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId, codes,
+    AgentName, CheckRunId, CheckpointId, Clock, EventActor, FoldError, LiveEvent, NewEvent,
+    ProjectConfig, ProjectPaths, ProposalId, RevisionId, TaskId, Timestamp, WorkerName,
+    WorkspaceId, codes,
 };
 use fold_store::workspaces::{self, Checkpoint, CheckpointKind, WorkspaceKind, WorkspaceState};
 use fold_store::{Store, reviews};
@@ -33,6 +34,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use utoipa::ToSchema;
 
+use crate::services::agents::WorkerStreams;
 use crate::services::events::{EventBuffer, EventBus};
 use crate::services::workspaces::{WorkspaceError, capabilities};
 use crate::support::{blocking, lock, unpoisoned};
@@ -121,7 +123,7 @@ pub struct LiveWorkspace {
     pub checkpoints: Vec<CheckpointSummary>,
     #[schema(value_type = Option<String>, required = true, example = "P-3")]
     pub proposal: Option<ProposalId>,
-    /// The worker holds the task's implementation claim, and for `stall_minutes` since it was last given the turn nothing in the workspace changed, no check run went and it waited for no person. Calls do not count, so a stalled worker can hold a fresh lease.
+    /// The worker's stall needs a person: fold told the worker's lead, or else the main agent, and one more `stall_minutes` passed without a fix, or no agent can act on it. `activity` says what fold saw.
     pub stalled: bool,
     /// Whether the working files differ from the tree of the open proposal's newest version: false while every file is the same, true from the first file that differs. Null without an open proposal.
     #[schema(required = true)]
@@ -129,6 +131,93 @@ pub struct LiveWorkspace {
     /// The check run that goes in the workspace: the worker's `run_checks` or the gate of its `create_proposal` or `update_proposal` in a task workspace, or a reviewer's `review_fix` in a review checkout. The worker waits for its result, so it is not stalled while the run goes, and the stall time counts from the run's end at the earliest. Null while no run goes.
     #[schema(required = true)]
     pub check_run: Option<LiveCheckRun>,
+    /// What fold saw of the worker that holds the implementation claim, from the output of the process fold supervises, or from the workspace alone for a session fold does not supervise. Null while it works in short steps, waits for others or for a person, or holds no claim.
+    #[schema(required = true)]
+    pub activity: Option<LiveActivity>,
+}
+
+/// What fold saw of a workspace's worker, as the stall rule decides it. fold keeps the times of the worker's output in memory, so after a daemon start it counts from that start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LiveActivity {
+    pub state: ActivityState,
+    /// The kind of the open call of `working` and `long_call`; null for `silent` and `stopped`.
+    #[schema(required = true)]
+    pub call: Option<LiveCall>,
+    /// UTC milliseconds: the start of the open call, the last activity of a silent worker, or the end of a stopped worker's process.
+    #[schema(value_type = i64)]
+    pub since: Timestamp,
+    /// fold runs the worker's process, so `restart_worker` can start it again in a new session.
+    pub supervised: bool,
+    /// The agents fold told of the stall: the worker's lead, or else the main agents. Empty while the worker works, and for a stall no agent can act on, which needs a person at once.
+    pub told: Vec<String>,
+}
+
+/// What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), and `stopped` once its process ended without a report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityState {
+    Working,
+    Silent,
+    LongCall,
+    Stopped,
+}
+
+/// The kind of an open call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveCall {
+    Command,
+    Fold,
+    Subagent,
+    Question,
+    Tool,
+}
+
+impl From<CallKind> for LiveCall {
+    fn from(kind: CallKind) -> Self {
+        match kind {
+            CallKind::Command => Self::Command,
+            CallKind::Fold => Self::Fold,
+            CallKind::Subagent => Self::Subagent,
+            CallKind::Question => Self::Question,
+            CallKind::Tool => Self::Tool,
+        }
+    }
+}
+
+impl LiveActivity {
+    /// The view of `activity`; `None` for [`Activity::Quiet`].
+    pub fn of(activity: Activity, supervised: bool, told: &[AgentName]) -> Option<Self> {
+        let (state, call, since) = match activity {
+            Activity::Quiet => return None,
+            Activity::Working { call, since } => (ActivityState::Working, Some(call), since),
+            Activity::Silent { since } => (ActivityState::Silent, None, since),
+            Activity::LongCall { call, since } => (ActivityState::LongCall, Some(call), since),
+            Activity::Stopped { since } => (ActivityState::Stopped, None, since),
+        };
+        Some(Self {
+            state,
+            call: call.map(LiveCall::from),
+            since,
+            supervised,
+            told: told.iter().map(ToString::to_string).collect(),
+        })
+    }
+
+    /// A stall rather than work.
+    pub fn is_stall(&self) -> bool {
+        self.state != ActivityState::Working
+    }
+}
+
+/// The agents fold told of a workspace's stall, and when; see [`LiveState::told`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Told {
+    /// The stall's reason and start, so a new stall of the same workspace is told again.
+    pub reason: &'static str,
+    pub since: Timestamp,
+    pub at: Timestamp,
+    pub agents: Vec<AgentName>,
 }
 
 /// What asked for a run.
@@ -326,6 +415,12 @@ struct Shared {
     lifecycle: tokio::sync::Mutex<()>,
     /// Stall decisions run one at a time, so a decision from older store facts never lands after a newer one.
     stalls: tokio::sync::Mutex<()>,
+    /// The output of the project's supervised worker processes, which the supervisor sets once it runs.
+    streams: OnceLock<Arc<WorkerStreams>>,
+    /// When the live state was made, which is when the daemon opened the project: fold counts the silence of a process that wrote nothing since from here at the earliest.
+    opened_at: Timestamp,
+    /// Who was told of each workspace's stall, and when.
+    told: Mutex<HashMap<WorkspaceId, Told>>,
 }
 
 impl Drop for Shared {
@@ -433,6 +528,7 @@ impl LiveState {
         caps: Arc<OnceLock<Capabilities>>,
         backend: Option<Box<dyn WatchBackend>>,
     ) -> Self {
+        let opened_at = clock.now();
         Self {
             shared: Arc::new(Shared {
                 store,
@@ -448,6 +544,9 @@ impl LiveState {
                 caps,
                 lifecycle: tokio::sync::Mutex::new(()),
                 stalls: tokio::sync::Mutex::new(()),
+                streams: OnceLock::new(),
+                opened_at,
+                told: Mutex::default(),
             }),
         }
     }
@@ -581,6 +680,7 @@ impl LiveState {
                 stalled: false,
                 edits_after_version: None,
                 check_run: None,
+                activity: None,
             },
             last_activity,
             last_full: shared.clock.now(),
@@ -723,6 +823,68 @@ impl LiveState {
         true
     }
 
+    /// Sets what fold saw of the workspace's worker and whether its stall needs a person, as the stall check decided them for the state whose last activity was `last_activity_at`; a scan that moved it since keeps its own. Returns whether either changed.
+    pub fn set_activity(
+        &self,
+        workspace: WorkspaceId,
+        last_activity_at: Timestamp,
+        activity: Option<LiveActivity>,
+        stalled: bool,
+    ) -> bool {
+        let shared = &self.shared;
+        let map = shared.states.write();
+        let Some(current) = map.get(&workspace) else {
+            return false;
+        };
+        let stalled = stalled && !current.missing;
+        if current.view.last_activity_at != last_activity_at
+            || (current.view.activity == activity && current.view.stalled == stalled)
+        {
+            return false;
+        }
+        let mut next = WorkspaceLive::clone(current);
+        next.view.activity = activity;
+        next.view.stalled = stalled;
+        next.updated_at = shared.clock.now();
+        shared
+            .states
+            .store(map, &shared.bus, workspace, Arc::new(next), true);
+        true
+    }
+
+    /// Lets the stall check read the output of the supervisor's worker processes.
+    pub fn read_streams(&self, streams: Arc<WorkerStreams>) {
+        let _ = self.shared.streams.set(streams);
+    }
+
+    /// The output of the supervised worker processes; `None` without a supervisor.
+    pub fn streams(&self) -> Option<&WorkerStreams> {
+        self.shared.streams.get().map(Arc::as_ref)
+    }
+
+    pub(crate) fn bus(&self) -> &EventBus {
+        &self.shared.bus
+    }
+
+    /// When the daemon opened the project.
+    pub fn opened_at(&self) -> Timestamp {
+        self.shared.opened_at
+    }
+
+    /// Who was told of the stall of `workspace`, and when.
+    pub fn told(&self, workspace: WorkspaceId) -> Option<Told> {
+        lock(&self.shared.told).get(&workspace).cloned()
+    }
+
+    /// Records who was told of the stall of `workspace`, or forgets it with `None` once the stall ended.
+    pub fn set_told(&self, workspace: WorkspaceId, told: Option<Told>) {
+        let mut all = lock(&self.shared.told);
+        match told {
+            Some(told) => all.insert(workspace, told),
+            None => all.remove(&workspace),
+        };
+    }
+
     /// Holds the project's turn for a stall decision until the guard drops.
     pub async fn stall_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.shared.stalls.lock().await
@@ -743,6 +905,7 @@ impl LiveState {
         next.view.check_run = run;
         if run.is_some() {
             next.view.stalled = false;
+            next.view.activity = next.view.activity.filter(|activity| !activity.is_stall());
         }
         next.updated_at = shared.clock.now();
         shared
@@ -1127,6 +1290,7 @@ impl Pipeline {
             || stall::present_workspace(view.edits_after_version, turn) == WorkspaceFact::Sent
         {
             view.stalled = false;
+            view.activity = view.activity.filter(|activity| !activity.is_stall());
         }
         let warned = current
             .as_ref()
@@ -1158,6 +1322,7 @@ impl Pipeline {
         let mut next = WorkspaceLive::clone(current);
         next.missing = true;
         next.view.stalled = false;
+        next.view.activity = None;
         let changed = next.view != current.view;
         if changed {
             next.updated_at = now;

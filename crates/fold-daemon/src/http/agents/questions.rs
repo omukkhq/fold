@@ -13,6 +13,7 @@ use super::super::actor::Human;
 use super::super::error::{ApiError, ApiJson, ErrorEnvelope};
 use super::super::messages::MessageChoice;
 use crate::daemon::AppState;
+use crate::live::LiveActivity;
 use crate::services::agents::{NeedsYouItem, NeedsYouKind, Screen, with_folder_attention};
 use crate::services::projects::notify;
 
@@ -155,6 +156,8 @@ pub enum NeedsYouItemKind {
     AgentChange,
     /// Shared reference files changed during a tool call of the supervised worker `agent`: `paths` names the files and `reason` what the human does, check the files and run `fld share --dismiss`, which ends the item. Workers read shared files through links into the project folder, where a write has no history to undo it.
     SharedChanged,
+    /// The worker `agent` on `task` stalled, fold told its lead, or else the main agent, and one more stall window passed without a fix, or no agent can act on it: `activity` says what fold saw and `reason` what the human does. The web's Restart worker calls `restart_worker`. The item ends when the worker works again. fold keeps it in memory, so after a daemon start it counts from that start.
+    WorkerStalled,
 }
 
 /// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task, `repository` the history of main and `settings` the project's notice targets.
@@ -229,6 +232,9 @@ pub struct NeedsYouEntry {
     /// The agents of an `agent_change`, in name order; empty for every other kind.
     #[schema(example = json!(["reviewer-35"]))]
     pub agents: Vec<String>,
+    /// What fold saw of the worker of a `worker_stalled`; null for every other kind.
+    #[schema(required = true)]
+    pub activity: Option<LiveActivity>,
 }
 
 impl From<NeedsYouItem> for NeedsYouEntry {
@@ -251,6 +257,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::NotifyTargetOff => NeedsYouItemKind::NotifyTargetOff,
             NeedsYouKind::AgentChange => NeedsYouItemKind::AgentChange,
             NeedsYouKind::SharedChanged => NeedsYouItemKind::SharedChanged,
+            NeedsYouKind::WorkerStalled => NeedsYouItemKind::WorkerStalled,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,
@@ -284,6 +291,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             paths: item.paths,
             target: item.target.map(|target| target.to_string()),
             agents: item.agents.iter().map(ToString::to_string).collect(),
+            activity: item.activity,
         }
     }
 }

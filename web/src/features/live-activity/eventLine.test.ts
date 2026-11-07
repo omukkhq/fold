@@ -349,6 +349,41 @@ describe("eventLine", () => {
     expect(line("worker.model_unreachable", { agent: "web-lead" })).toBe(
       "web-lead cannot reach the model",
     );
+    expect(
+      line("worker.stalled", {
+        agent: "web-worker",
+        reason: "silent",
+        minutes: 12,
+        told: ["web-lead"],
+      }),
+    ).toBe("saw no activity from web-worker for 12 min and told web-lead");
+    expect(
+      line("worker.stalled", {
+        agent: "web-worker",
+        reason: "long_call",
+        call: "command",
+        minutes: 20,
+        told: [],
+      }),
+    ).toBe(
+      "saw a command of web-worker that has run for 20 min; no agent can act, so it waits for a person",
+    );
+    expect(
+      line("worker.stalled", {
+        agent: "web-worker",
+        reason: "long_call",
+        call: "tool",
+        minutes: 20,
+        told: ["main"],
+      }),
+    ).toBe("saw a call of web-worker that has run for 20 min and told main");
+    expect(
+      line("worker.stalled", {
+        agent: "web-worker",
+        reason: "stopped",
+        told: ["web-lead"],
+      }),
+    ).toBe("saw web-worker stopped without a report and told web-lead");
     expect(line("worker.refreshed", { agent: "web-lead", handoff: true })).toBe(
       "gave web-lead a fresh context with its hand-off note",
     );
