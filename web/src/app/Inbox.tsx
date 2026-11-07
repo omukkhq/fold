@@ -57,13 +57,14 @@ import {
   useAgentChangeChoices,
 } from "./AgentChangeChoices";
 import { HrefLink } from "./HrefLink";
-import { SharedChangeDismiss } from "./SharedChangeDismiss";
+import { SharedChangeDismiss, SharedFilesDialog } from "./SharedChangeDismiss";
 import { listNote, listState } from "./listNote";
 import { PanelNote } from "./PanelNote";
 import {
   fullTitle,
   itemsFor,
   needsYouGroups,
+  type FilesSummary,
   type NeedsYouLine,
 } from "./needsYouModel";
 import { inboxLabel, inboxTab, type InboxTab } from "./inboxModel";
@@ -94,17 +95,30 @@ const MINUTE_MS = 60_000;
 const ROW = "flex items-start gap-10 rounded-s px-10 py-8";
 const ID = `${ID_CLASSES} font-semibold`;
 
+/** `5 files: README.md and 4 more`, with the path in the path face. */
+function FilesWords({ files }: { files: FilesSummary }) {
+  return (
+    <>
+      {files.count}: <Mono className="text-text">{files.first}</Mono>
+      {files.more > 0 ? ` and ${String(files.more)} more` : null}
+    </>
+  );
+}
+
 function NeedLine({
   line,
   now,
   onOpen,
   choices,
+  onFiles,
 }: {
   line: NeedsYouLine;
   now: number;
   onOpen: () => void;
   /** The controls a line that takes the human's choice in place shows under its words. */
   choices?: ReactNode;
+  /** Opens the line's files, for a line whose files can be shown. */
+  onFiles?: () => void;
 }) {
   const Icon = ICONS[line.kind];
   const full = fullTitle(line);
@@ -167,11 +181,21 @@ function NeedLine({
         ) : null}
         {line.files ? (
           <span className="min-w-0 basis-full text-13 wrap-anywhere text-text-2">
-            {line.files.count}:{" "}
-            <Mono className="text-text">{line.files.first}</Mono>
-            {line.files.more > 0
-              ? ` and ${String(line.files.more)} more`
-              : null}
+            {onFiles ? (
+              <button
+                type="button"
+                onClick={onFiles}
+                className={cn(
+                  "rounded-s text-left underline-offset-2 hover:underline",
+                  focusRing,
+                )}
+              >
+                <FilesWords files={line.files} />
+                <span className="sr-only">, show the changes</span>
+              </button>
+            ) : (
+              <FilesWords files={line.files} />
+            )}
           </span>
         ) : null}
         {choices ? <span className="basis-full pt-4">{choices}</span> : null}
@@ -316,8 +340,26 @@ export function Inbox({ slug }: { slug: string }) {
   });
   const rows = movesByTask(feed);
   const unread = unreadCount(feed);
-  // The popover layer sits above the dialog layer, so the Inbox steps aside while a choice's dialog is open and comes back when it closes.
-  const shown = open && agentChange.asking === null;
+  // The popover layer sits above the dialog layer, so the Inbox steps aside while one of its dialogs is open and comes back when it closes.
+  const [sharedShown, setSharedShown] = useState(false);
+  const shown = open && agentChange.asking === null && !sharedShown;
+  const sharedCount = items.filter(
+    (item) => item.kind === "shared_changed",
+  ).length;
+  const filesOpener = (line: NeedsYouLine): (() => void) | undefined => {
+    const change = line.settle;
+    if (change !== null) {
+      return () => {
+        agentChange.ask("review", change);
+      };
+    }
+    if (line.dismiss !== null) {
+      return () => {
+        setSharedShown(true);
+      };
+    }
+    return undefined;
+  };
   const close = () => {
     setOpen(false);
   };
@@ -426,6 +468,7 @@ export function Inbox({ slug }: { slug: string }) {
                           line={line}
                           now={now}
                           onOpen={close}
+                          onFiles={filesOpener(line)}
                           choices={
                             line.settle ? (
                               <AgentChangeChoices
@@ -487,6 +530,15 @@ export function Inbox({ slug }: { slug: string }) {
         </RadixPopover.Content>
       </RadixPopover.Portal>
       <AgentChangeDialog choices={agentChange} />
+      <SharedFilesDialog
+        slug={slug}
+        count={sharedCount}
+        now={now}
+        open={sharedShown}
+        onClose={() => {
+          setSharedShown(false);
+        }}
+      />
     </RadixPopover.Root>
   );
 }

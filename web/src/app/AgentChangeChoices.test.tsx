@@ -11,6 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { type StubReply, stubFetch } from "@/test/stubFetch";
 import type { NeedsYouItem } from "@/api/workers";
+import { comparedFile, comparison, del, fileDiff, hunk } from "@/test/diff";
 import { needsItem } from "@/test/workers";
 import { Inbox } from "./Inbox";
 
@@ -25,6 +26,16 @@ afterEach(() => {
 
 const BASE = "/api/v1/projects/demo/agent-changes";
 const paths = ["plan.md", "junk1.txt", "a/very/long/path/that/wraps.txt"];
+
+/** The project folder against its revision: the emptied plan and the new junk. */
+const FOLDER = [
+  comparedFile("plan.md", "modified", { added_lines: 0, removed_lines: 1 }),
+  comparedFile("junk1.txt", "added", { added_lines: 1, removed_lines: 0 }),
+  comparedFile("a/very/long/path/that/wraps.txt", "added", {
+    added_lines: 1,
+    removed_lines: 0,
+  }),
+];
 
 const change = needsItem({
   kind: "agent_change",
@@ -82,6 +93,30 @@ async function renderInbox(
     "GET /api/v1/projects/demo/needs-you": () => ({
       body: { items: settled ? [] : items },
     }),
+    "GET /api/v1/projects/demo/folder/diff": (request) => {
+      const path = request.search.get("path");
+      const file = FOLDER.find((one) => one.path === path);
+      if (path === null) {
+        return { body: { view: "files", ...comparison(FOLDER) } };
+      }
+      return file === undefined
+        ? {
+            status: 404,
+            body: {
+              error: {
+                code: "path_not_in_comparison",
+                message: "not changed",
+                details: {},
+              },
+            },
+          }
+        : {
+            body: {
+              view: "file",
+              ...fileDiff(file, [hunk(1, 0, [del("the plan")])]),
+            },
+          };
+    },
     ...Object.fromEntries(
       Object.entries(routes).map(([route, reply]) => [
         route,
@@ -212,7 +247,7 @@ describe("the choices of a worker's change in the Inbox", () => {
     expect(dialog.textContent).toContain("stash@{0}");
     expect(dialog.textContent).toContain("fld unstash brings them back.");
     for (const path of paths) {
-      expect(within(dialog).getByText(path).closest("li")?.className).toContain(
+      expect((await within(dialog).findByText(path)).className).toContain(
         "wrap-anywhere",
       );
     }
@@ -315,10 +350,11 @@ describe("the choices of a worker's change in the Inbox", () => {
     );
     const first = within(project).getByText("plan.md");
     expect(first.className).toContain("font-mono");
-    expect(first.parentElement?.textContent).toBe(
-      "3 files: plan.md and 2 more",
+    const words = first.closest("button");
+    expect(words?.textContent).toBe(
+      "3 files: plan.md and 2 more, show the changes",
     );
-    expect(first.parentElement?.className).toContain("wrap-anywhere");
+    expect(first.closest(".wrap-anywhere")).not.toBeNull();
   });
 
   it("dismisses every changed shared file from its line, pending until Needs you is read again", async () => {
@@ -342,6 +378,123 @@ describe("the choices of a worker's change in the Inbox", () => {
       await within(inbox).findByRole("button", { name: /Dismissing/ }),
     ).toBeTruthy();
     finish({ body: { dismissed: 2 } });
+    expect(await screen.findByText("Nothing waits for you.")).toBeTruthy();
+    expect(posts(calls)).toEqual(["/api/v1/projects/demo/shared/dismiss"]);
+  });
+
+  it("opens the worker's change from its files, with each file's diff and the three choices in the dialog", async () => {
+    const { calls, inbox } = await renderInbox({
+      [`POST ${BASE}/restore`]: () => ({
+        body: { revision: "r3", files: paths, entries: 1 },
+      }),
+    });
+    await userEvent.click(
+      within(inbox).getByRole("button", { name: /show the changes/ }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "3 files changed while @reviewer-35 worked",
+    });
+    const plan = await within(dialog).findByRole("button", {
+      name: /plan\.md/,
+    });
+    expect(plan.getAttribute("aria-expanded")).toBe("false");
+    expect(plan.textContent).toContain("−1");
+    expect(
+      within(dialog).getByRole("button", { name: /junk1\.txt/ }).textContent,
+    ).toContain("new file");
+    await userEvent.click(plan);
+    expect(plan.getAttribute("aria-expanded")).toBe("true");
+    expect(await within(dialog).findByText("the plan")).toBeTruthy();
+    expect(calls.some((call) => call.search.get("path") === "plan.md")).toBe(
+      true,
+    );
+    for (const name of ["Record", "Keep as mine"]) {
+      expect(within(dialog).getByRole("button", { name })).toBeTruthy();
+    }
+    expect(
+      within(dialog).getAllByRole("button", { name: "Close" }),
+    ).toHaveLength(2);
+    await userEvent.click(
+      within(dialog).getByRole("button", {
+        name: "Put the agent's files aside",
+      }),
+    );
+    const confirm = await screen.findByRole("dialog", {
+      name: "Put 3 files aside?",
+    });
+    await userEvent.click(
+      within(confirm).getByRole("button", { name: "Put files aside" }),
+    );
+    expect(await screen.findByText("Nothing waits for you.")).toBeTruthy();
+    expect(posts(calls)).toEqual([`${BASE}/restore`]);
+  });
+
+  it("opens each file of the record dialog to its diff", async () => {
+    await renderInbox({
+      [`POST ${BASE}/record`]: () => heldBack("abc", ["plan.md"]),
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Record" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Record these files?",
+    });
+    const emptied = within(dialog).getByRole("region", { name: "Emptied" });
+    await userEvent.click(
+      await within(emptied).findByRole("button", { name: /plan\.md/ }),
+    );
+    expect(await within(emptied).findByText("the plan")).toBeTruthy();
+  });
+
+  it("shows the changed shared files with their size and change time, and dismisses them from the dialog", async () => {
+    const at = new Date(2026, 10, 7, 14, 12).getTime();
+    const { calls, inbox } = await renderInbox(
+      {
+        "GET /api/v1/projects/demo/shared/changes": () => ({
+          body: {
+            files: [
+              {
+                path: "design/home.pen",
+                kind: "file",
+                size: 2048,
+                modified: at,
+              },
+              {
+                path: "design/gone.pen",
+                kind: "missing",
+                size: null,
+                modified: null,
+              },
+            ],
+          },
+        }),
+        "POST /api/v1/projects/demo/shared/dismiss": () => ({
+          body: { dismissed: 1 },
+        }),
+      },
+      [
+        needsItem({
+          kind: "shared_changed",
+          screen: "repository",
+          agent: "ops-lead",
+          paths: ["design/home.pen", "design/gone.pen"],
+        }),
+      ],
+    );
+    await userEvent.click(
+      within(inbox).getByRole("button", { name: /show the changes/ }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Shared files that changed while an agent worked",
+    });
+    const home = await within(dialog).findByText("design/home.pen");
+    expect(home.parentElement?.textContent).toMatch(
+      /2\.0 KB · changed .*14:12/,
+    );
+    expect(
+      within(dialog).getByText("gone from the project folder"),
+    ).toBeTruthy();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Dismiss" }),
+    );
     expect(await screen.findByText("Nothing waits for you.")).toBeTruthy();
     expect(posts(calls)).toEqual(["/api/v1/projects/demo/shared/dismiss"]);
   });

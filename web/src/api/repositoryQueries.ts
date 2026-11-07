@@ -2,6 +2,11 @@ import { queryOptions } from "@tanstack/react-query";
 import { keys } from "./keys";
 import { getWorkspaceTree } from "./workspaces";
 import {
+  getChangedSharedFiles,
+  getFolderComparison,
+  getFolderFileDiff,
+} from "./folderDiff";
+import {
   getFile,
   getRepository,
   getRevision,
@@ -20,6 +25,24 @@ export const sharedQuery = (slug: string) =>
   queryOptions({
     queryKey: keys.shared(slug),
     queryFn: () => getShared(slug),
+  });
+
+export const folderDiffQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.folderDiff(slug),
+    queryFn: () => getFolderComparison(slug),
+  });
+
+export const folderFileDiffQuery = (slug: string, path: string) =>
+  queryOptions({
+    queryKey: keys.folderFileDiff(slug, path),
+    queryFn: () => getFolderFileDiff(slug, path),
+  });
+
+export const sharedChangesQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.sharedChanges(slug),
+    queryFn: () => getChangedSharedFiles(slug),
   });
 
 export const revisionsQuery = (slug: string) =>

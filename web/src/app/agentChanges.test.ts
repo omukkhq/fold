@@ -3,6 +3,7 @@ import { ApiError } from "@/api/errors";
 import {
   LISTED_PATHS,
   agentsText,
+  confirmChoice,
   confirmationOf,
   dialogAlert,
   dialogText,
@@ -163,6 +164,33 @@ describe("the choices of a worker's change", () => {
       "A Git command failed",
     );
     expect(dialogAlert(null, refusal("git_failed"))).toBeNull();
+  });
+
+  it("shows a worker's change before any choice, and sends no write from that dialog", () => {
+    const review = nextAsking(null, { type: "ask", action: "review", change });
+    expect(review).toEqual({ action: "review", change });
+    if (review === null) throw new Error("no dialog");
+    expect(dialogText(review).title).toBe(
+      "2 files changed while @reviewer-35 worked",
+    );
+    expect(confirmChoice(review)).toBeNull();
+    expect(confirmChoice(null)).toBeNull();
+    expect(confirmChoice({ action: "restore", change })).toEqual({
+      action: "restore",
+    });
+    expect(
+      confirmChoice({
+        action: "record",
+        confirmation: { tree: "abc", groups: [] },
+        changed: false,
+      }),
+    ).toEqual({ action: "record", confirm: "abc" });
+    expect(
+      nextAsking(review, {
+        type: "failed",
+        error: heldBack({ tree: "abc", emptied: ["a"] }),
+      }),
+    ).toMatchObject({ action: "record", changed: false });
   });
 
   it("keeps the open dialog on any other refusal and closes on success or close", () => {

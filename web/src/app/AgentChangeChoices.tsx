@@ -14,8 +14,8 @@ import {
 import { keys } from "@/api/keys";
 import { Button } from "@/components/button/Button";
 import { Dialog } from "@/components/overlay/Dialog";
-import { Mono } from "@/components/mono/Mono";
 import { WriteError } from "@/features/task/parts";
+import { FolderFiles } from "./FolderFiles";
 import {
   RECORD_PENDING,
   dialogAlert,
@@ -24,25 +24,22 @@ import {
   folderWriteKey,
   nextAsking,
   putAsideLabel,
+  confirmChoice,
   type AgentChange,
   type Asking,
-  type SettleAction,
+  type Choice,
 } from "./agentChanges";
-
-interface Choice {
-  action: SettleAction;
-  confirm?: string;
-}
 
 type Settle = UseMutationResult<unknown, Error, Choice>;
 
 export interface AgentChangeChoicesState {
+  slug: string;
   settle: Settle;
   /** The open dialog; the Inbox's popover stays closed while one is open. */
   asking: Asking | null;
   /** A write of the project folder from this page is in flight. */
   writing: boolean;
-  ask: (action: "restore" | "ignore", change: AgentChange) => void;
+  ask: (action: "review" | "restore" | "ignore", change: AgentChange) => void;
   close: () => void;
 }
 
@@ -75,6 +72,7 @@ export function useAgentChangeChoices(slug: string): AgentChangeChoicesState {
   });
   const writing = useIsMutating({ mutationKey: folderWriteKey(slug) }) > 0;
   return {
+    slug,
     settle,
     asking,
     writing,
@@ -155,36 +153,29 @@ export function AgentChangeChoices({
   );
 }
 
-function PathList({
-  paths,
-  more = 0,
-}: {
-  paths: readonly string[];
-  more?: number;
-}) {
-  return (
-    <ul className="flex min-w-0 flex-col gap-2">
-      {paths.map((path) => (
-        <li key={path} className="min-w-0 wrap-anywhere">
-          <Mono className="text-text">{path}</Mono>
-        </li>
-      ))}
-      {more > 0 ? (
-        <li className="text-13 text-text-2">and {String(more)} more</li>
-      ) : null}
-    </ul>
-  );
-}
-
 /** The dialog a choice waits on: the files that Put aside or Keep as mine changes, or the files a record empties, adds empty or took from a worker, which the human checks before the write goes on. */
 export function AgentChangeDialog({
   choices,
 }: {
   choices: AgentChangeChoicesState;
 }) {
-  const { settle, asking } = choices;
+  const { slug, settle, asking } = choices;
   const text = asking === null ? null : dialogText(asking);
   const failed = dialogAlert(asking, settle.error);
+  const choice = confirmChoice(asking);
+  const confirm =
+    choice === null ? null : (
+      <Button
+        variant={text?.danger ? "danger" : "primary"}
+        pending={settle.isPending}
+        pendingLabel={text?.pending ?? ""}
+        onClick={() => {
+          settle.mutate(choice);
+        }}
+      >
+        {text?.confirm ?? ""}
+      </Button>
+    );
   return (
     <Dialog
       open={asking !== null}
@@ -201,23 +192,13 @@ export function AgentChangeDialog({
             onClick={choices.close}
             disabled={settle.isPending}
           >
-            Cancel
+            {asking?.action === "review" ? "Close" : "Cancel"}
           </Button>
-          <Button
-            variant={text?.danger ? "danger" : "primary"}
-            pending={settle.isPending}
-            pendingLabel={text?.pending ?? ""}
-            onClick={() => {
-              if (asking === null) return;
-              settle.mutate(
-                asking.action === "record"
-                  ? { action: "record", confirm: asking.confirmation.tree }
-                  : { action: asking.action },
-              );
-            }}
-          >
-            {text?.confirm ?? ""}
-          </Button>
+          {asking?.action === "review" ? (
+            <ReviewChoices choices={choices} change={asking.change} />
+          ) : (
+            confirm
+          )}
         </div>
       }
     >
@@ -233,12 +214,57 @@ export function AgentChangeDialog({
             className="flex min-w-0 flex-col gap-4"
           >
             <h3 className="text-14 font-semibold text-text">{group.title}</h3>
-            <PathList paths={group.paths} more={group.more} />
+            <FolderFiles slug={slug} paths={group.paths} more={group.more} />
           </section>
         ))
       ) : (
-        <PathList paths={asking.change.paths} />
+        <FolderFiles slug={slug} paths={asking.change.paths} />
       )}
     </Dialog>
+  );
+}
+
+/** The three choices in the footer of the dialog that shows a worker's change: Put aside and Keep as mine ask first, Record asks once the daemon names what it holds back. */
+function ReviewChoices({
+  choices,
+  change,
+}: {
+  choices: AgentChangeChoicesState;
+  change: AgentChange;
+}) {
+  const { settle, writing } = choices;
+  return (
+    <>
+      <Button
+        variant="ghost"
+        disabled={writing}
+        pending={settle.isPending && settle.variables.action === "record"}
+        pendingLabel={RECORD_PENDING}
+        onClick={() => {
+          settle.mutate({ action: "record" });
+        }}
+      >
+        Record
+      </Button>
+      <Button
+        variant="ghost"
+        disabled={writing}
+        onClick={() => {
+          choices.ask("ignore", change);
+        }}
+      >
+        Keep as mine
+      </Button>
+      <Button
+        variant="primary"
+        icon={<Archive aria-hidden="true" size={14} />}
+        disabled={writing}
+        onClick={() => {
+          choices.ask("restore", change);
+        }}
+      >
+        {putAsideLabel(change.agents)}
+      </Button>
+    </>
   );
 }

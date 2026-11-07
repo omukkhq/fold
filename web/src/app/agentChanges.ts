@@ -4,6 +4,12 @@ import { failureText } from "@/format/failure";
 /** The choices of a Needs you item about a worker's change of the project folder. */
 export type SettleAction = "record" | "restore" | "ignore";
 
+/** A write of a choice: a record names the tree the person confirmed. */
+export interface Choice {
+  action: SettleAction;
+  confirm?: string;
+}
+
 /** The files and agents of the Needs you item that the choices settle. */
 export interface AgentChange {
   paths: readonly string[];
@@ -84,14 +90,18 @@ function filesCount(count: number): string {
 }
 
 /**
- * The dialog of a choice. Put aside and Keep as mine ask before they write and keep the files the person saw when they chose. A record asks once the daemon names what it holds back; `changed` says the folder changed since the list the person saw.
+ * The dialog of a choice. Review shows the files with their diffs and the three choices. Put aside and Keep as mine ask before they write and keep the files the person saw when they chose. A record asks once the daemon names what it holds back; `changed` says the folder changed since the list the person saw.
  */
 export type Asking =
-  | { action: "restore" | "ignore"; change: AgentChange }
+  | { action: "review" | "restore" | "ignore"; change: AgentChange }
   | { action: "record"; confirmation: RecordConfirmation; changed: boolean };
 
 export type ChoiceEvent =
-  | { type: "ask"; action: "restore" | "ignore"; change: AgentChange }
+  | {
+      type: "ask";
+      action: "review" | "restore" | "ignore";
+      change: AgentChange;
+    }
   | { type: "failed"; error: unknown }
   | { type: "done" }
   | { type: "close" };
@@ -132,6 +142,18 @@ export interface DialogText {
 /** The words of the open dialog. */
 export function dialogText(asking: Asking): DialogText {
   switch (asking.action) {
+    case "review": {
+      const files = filesCount(asking.change.paths.length);
+      return {
+        title: `${files} changed while ${agentsText(asking.change.agents)} worked`,
+        description:
+          "Open a file to see its change against the revision the project folder holds, then choose what happens to these files.",
+        confirm: "",
+        pending: "",
+        danger: false,
+        notice: null,
+      };
+    }
     case "restore": {
       const files = filesCount(asking.change.paths.length);
       return {
@@ -246,4 +268,12 @@ export function dialogAlert(
   const failed = failureAt(asking, error, "dialog");
   if (failed !== null || asking === null || !error) return failed;
   return dialogText(asking).notice;
+}
+
+/** The write the confirm button of the open dialog sends; null for the dialog that shows a worker's change, whose footer holds the three choices. */
+export function confirmChoice(asking: Asking | null): Choice | null {
+  if (asking === null || asking.action === "review") return null;
+  return asking.action === "record"
+    ? { action: "record", confirm: asking.confirmation.tree }
+    : { action: asking.action };
 }
