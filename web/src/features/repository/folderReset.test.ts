@@ -3,7 +3,7 @@ import type { NeedsYouItem } from "@/api/workers";
 import { needsItem } from "@/test/workers";
 import {
   folderActions,
-  resetPaths,
+  dialogPaths,
   resetText,
   restoreText,
 } from "./folderReset";
@@ -32,10 +32,13 @@ describe("the folder actions", () => {
     expect(text.description).toBe(
       "fold first stashes your unrecorded changes as stash@{0}, so fld unstash brings them back. Then the project folder matches main again. Your change that waits for the main agent is withdrawn: its files, with the conflict in 1 file, go into stash@{0} too. If the main agent opened a workspace to merge it, fold closes that workspace.",
     );
-    expect(resetPaths(actions)).toEqual(["plan.md"]);
+    expect(dialogPaths("reset", actions)).toEqual({
+      listed: ["plan.md"],
+      rest: "and your other unrecorded changes",
+    });
   });
 
-  it("reset a held folder, drop the conflicted stash entry and keep its files with markers, and restore the held files without closing a workspace", () => {
+  it("reset a held folder, drop the conflicted stash entry and keep its files with markers, and restore the held files", () => {
     const actions = folderActions([
       item("folder_held", ["a", "b"]),
       item("unstash_conflicted", ["c"]),
@@ -49,11 +52,34 @@ describe("the folder actions", () => {
       "The unstash conflict in 1 file ends: fold drops the stash entry that conflicted, and stash@{0} keeps its files as they are now, with the conflict markers.",
     );
     expect(text.description).not.toContain("workspace");
-    expect(resetPaths(actions)).toEqual(["a", "b"]);
+    expect(dialogPaths("reset", actions)).toEqual({
+      listed: ["a", "b"],
+      rest: "and your other unrecorded changes",
+    });
+    expect(dialogPaths("restore", actions)).toEqual({
+      listed: ["a", "b"],
+      rest: null,
+    });
     expect(restoreText(["a", "b"])).toEqual({
       title: "Restore 2 files?",
       description:
-        "fold first stashes the changes of these files as stash@{0}, so fld unstash brings them back. Then these files match main again; your other changes stay. A restore never closes a workspace of the main agent; only a reset does.",
+        "fold first stashes the changes of these files as stash@{0}, so fld unstash brings them back. Then these files match main again; your other changes stay.",
+    });
+  });
+
+  it("name the first held files of a restore and count the others", () => {
+    const paths = (count: number) =>
+      Array.from({ length: count }, (_, index) => `f${String(index)}`);
+    const restore = (count: number) => {
+      const actions = folderActions([item("folder_held", paths(count))]);
+      if (!actions) throw new Error("actions");
+      return dialogPaths("restore", actions);
+    };
+    expect(restore(9)).toEqual({ listed: paths(9), rest: null });
+    expect(restore(10).rest).toBe("and 1 other file");
+    expect(restore(12)).toEqual({
+      listed: paths(9),
+      rest: "and 3 other files",
     });
   });
 });

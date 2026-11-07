@@ -67,9 +67,33 @@ export function resetText(actions: FolderActions): {
       };
 }
 
-/** The files a reset dialog names: those of the waiting change, else the held files. */
-export function resetPaths(actions: FolderActions): readonly string[] {
-  return actions.heldChange ?? actions.heldPaths;
+/** The most paths a reset or restore dialog names before it sums up the rest. */
+export const LISTED_DIALOG_PATHS = 9;
+
+/** The line after the named paths of a reset, which stashes every unrecorded change of the folder while the web knows only the paths Needs you names. */
+export const OTHER_CHANGES = "and your other unrecorded changes";
+
+/** The paths a dialog lists and the line after them: a reset names the files of the waiting change, else the held files, then the other unrecorded changes it stashes too; a restore names the held files it stashes, then how many more. */
+export function dialogPaths(
+  action: "reset" | "restore",
+  actions: FolderActions,
+): { listed: string[]; rest: string | null } {
+  const paths =
+    action === "reset"
+      ? (actions.heldChange ?? actions.heldPaths)
+      : actions.heldPaths;
+  const listed = paths.slice(0, LISTED_DIALOG_PATHS);
+  if (action === "reset") {
+    return { listed, rest: OTHER_CHANGES };
+  }
+  const more = paths.length - listed.length;
+  return {
+    listed,
+    rest:
+      more > 0
+        ? `and ${String(more)} other ${more === 1 ? "file" : "files"}`
+        : null,
+  };
 }
 
 /** The restore dialog's title and words for the held paths. */
@@ -79,6 +103,6 @@ export function restoreText(paths: readonly string[]): {
 } {
   return {
     title: `Restore ${filesText(paths.length)}?`,
-    description: `${RESTORE_SAFETY} Then these files match main again; your other changes stay. A restore never closes a workspace of the main agent; only a reset does.`,
+    description: `${RESTORE_SAFETY} Then these files match main again; your other changes stay.`,
   };
 }

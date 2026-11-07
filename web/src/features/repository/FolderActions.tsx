@@ -9,29 +9,30 @@ import { Dialog } from "@/components/overlay/Dialog";
 import { FolderError } from "./FolderError";
 import { focusAfterFolderWrite } from "./focus";
 import {
+  dialogPaths,
   folderActions,
-  resetPaths,
   resetText,
   restoreText,
 } from "./folderReset";
-import { LISTED_PATHS } from "./stash";
 import { useFolderWrite } from "./useFolderWrite";
 
 type Asking = "reset" | "restore";
 
-function PathList({ paths }: { paths: readonly string[] }) {
-  const listed = paths.slice(0, LISTED_PATHS * 3);
-  const more = paths.length - listed.length;
+function PathList({
+  lines,
+}: {
+  lines: { listed: readonly string[]; rest: string | null };
+}) {
   return (
     <ul className="flex flex-col gap-2">
-      {listed.map((path) => (
+      {lines.listed.map((path) => (
         <li key={path} className="min-w-0">
           <Mono className="text-13 wrap-anywhere text-text">{path}</Mono>
         </li>
       ))}
-      {more > 0 ? (
-        <li className="text-13 text-text-2">and {String(more)} more</li>
-      ) : null}
+      {lines.rest === null ? null : (
+        <li className="text-13 text-text-2">{lines.rest}</li>
+      )}
     </ul>
   );
 }
@@ -130,10 +131,9 @@ export function FolderActions({ slug }: { slug: string }) {
           </div>
         }
       >
-        {asking === "restore" ? <PathList paths={actions.heldPaths} /> : null}
-        {asking === "reset" && resetPaths(actions).length > 0 ? (
-          <PathList paths={resetPaths(actions)} />
-        ) : null}
+        {asking === null ? null : (
+          <PathList lines={dialogPaths(asking, actions)} />
+        )}
         <FolderError error={write.error} />
       </Dialog>
     </div>

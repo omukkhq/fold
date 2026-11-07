@@ -75,6 +75,7 @@ describe("FolderActions", () => {
       screen.getByText(/stashes your unrecorded changes as stash@\{0\}/),
     ).toBeTruthy();
     expect(screen.getByText("plan.md")).toBeTruthy();
+    expect(screen.getByText("and your other unrecorded changes")).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "Restore held files" }),
     ).toBeNull();
@@ -118,6 +119,9 @@ describe("FolderActions", () => {
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Restore held files" }));
     expect(screen.getByText("Restore 2 files?")).toBeTruthy();
+    expect(screen.getByText("b.md")).toBeTruthy();
+    expect(screen.queryByText("and your other unrecorded changes")).toBeNull();
+    expect(screen.queryByText(/workspace/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Restore files" }));
     expect(
       await screen.findByText(
