@@ -68,7 +68,7 @@ pub async fn list_agent_changes(
     }))
 }
 
-/// Records the project folder on main for the signed-in human, as `fld record` does, from the Needs you item of a worker's change: the human keeps the change as their own. Without `confirm` a change that empties a tracked file, adds many empty files or holds a worker's change is refused with `record_needs_confirmation`, whose details name the files and the `tree` to confirm. Over the socket and over HTTP with the session cookie.
+/// Records the project folder on main for the signed-in human, as `fld record` does, from the Needs you item of a worker's change: the human keeps the change as their own. It records every unrecorded change of the project folder, the human's own included, not only the worker's files. Without `confirm` a change that empties a tracked file, adds many empty files or holds a worker's change is refused with `record_needs_confirmation`, whose details name the files and the `tree` to confirm. Over the socket and over HTTP with the session cookie.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/agent-changes/record",

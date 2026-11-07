@@ -417,7 +417,7 @@ fn edit_guard(cwd: &Path, file: &Path) -> EditGuard {
     EditGuard::Allow
 }
 
-/// The reason to refuse a shell command that would run in `cwd`, for a worker whose start folder is `start`; `None` lets it run. In its own project a worker's shell runs only in its start folder or in a directory below `.fold/ws/<workspace>/`, so a relative path of the command never lands in the project folder or in fold's data. A command that starts with `cd` into such a directory followed by `&&` runs there, which lets a shell that ended up elsewhere move back. Both paths are followed to their real paths first, so a symbolic link into the project folder counts as the project folder. A `cwd` outside the project is left to Claude Code's own rules. Where a command may run, it is refused still when it names a shared path as a write target in a common form (see [`shared_write`]); every other path it names is left to the worker, so only Claude Code's sandbox can refuse every write.
+/// The reason to refuse a shell command that would run in `cwd`, for a worker whose start folder is `start`; `None` lets it run. In its own project a worker's shell runs only in its start folder or in a directory below `.fold/ws/<workspace>/`, so a relative path of the command without `..` never lands in the project folder or in fold's data; the start folder lies inside the project folder, so a path with `..`, or a command that changes into the project folder from the start folder, still reaches it. A command that starts with `cd` into such a directory followed by `&&` runs there, which lets a shell that ended up elsewhere move back. Both paths are followed to their real paths first, so a symbolic link into the project folder counts as the project folder. A `cwd` outside the project is left to Claude Code's own rules. Where a command may run, it is refused still when it names a shared path as a write target in a common form (see [`shared_write`]); every other path it names is left to the worker, so only Claude Code's sandbox can refuse every write.
 fn shell_guard(cwd: &Path, command: &str, start: &Path) -> Option<String> {
     let start = std::fs::canonicalize(start).ok()?;
     let root = project_root_at_or_above(&start)?;
@@ -1011,6 +1011,7 @@ mod tests {
             "echo x > design/home.pen".to_owned(),
             "rm -rf design".to_owned(),
             "sed -i s/a/b/ design/notes.md".to_owned(),
+            "mv design/home.pen src/home.pen".to_owned(),
             format!("echo x >> {}/design/a.md", root.display()),
             format!("cd '{ws}' && touch design/new.pen"),
         ] {
