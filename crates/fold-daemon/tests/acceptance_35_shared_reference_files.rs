@@ -132,8 +132,23 @@ async fn acceptance_35_a_worker_reads_a_shared_design_file_through_its_workspace
         .collect();
     assert!(!lines.iter().any(|line| line == "/design"), "{lines:?}");
     assert!(lines.iter().any(|line| line == "design/"), "{lines:?}");
-    // A link stays until the workspace's next sync, the point at which fold writes into it.
+    // A link stays until the workspace's next sync, the point at which fold writes into it, and no record takes it meanwhile.
     assert!(fs::symlink_metadata(dir.join("design")).is_ok());
+    assert_eq!(changed(&harness, &ws).await, ["src/home.html"]);
+    let changes: Vec<Value> = harness
+        .events()
+        .await
+        .into_iter()
+        .filter(|event| event.kind == "shared.paths_changed")
+        .map(|event| event.data)
+        .collect();
+    assert_eq!(
+        changes,
+        [
+            json!({"added": ["design"], "removed": []}),
+            json!({"added": [], "removed": ["design"]}),
+        ]
+    );
     harness
         .call(WORKER, "sync_workspace", json!({"ws": ws}))
         .await;

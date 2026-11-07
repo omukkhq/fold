@@ -34,7 +34,7 @@ pub struct SharedState {
 }
 
 impl WorkspaceService {
-    /// Shares `paths` of the project folder with every workspace, read-only, for a human or the main agent (`policy::can_share_paths`). Each path is relative to the project folder and must be a file or folder there, reached without a symbolic link, that an ignore rule leaves out, so main never tracks it; a path within or around another shared one is refused, so no link lies inside another. A folder that only a folder pattern leaves out gets an anchored line in `.fold/exclude`, so its link, which is no folder, is never recorded either. The list goes to `.fold/shared`; each workspace gets its links at its next create or sync. Returns the paths added, in the order given; one the list holds already is left out.
+    /// Shares `paths` of the project folder with every workspace, read-only, for a human or the main agent (`policy::can_share_paths`). Each path is relative to the project folder and must be a file or folder there, reached without a symbolic link, that an ignore rule leaves out, so main never tracks it; a path within or around another shared one is refused, so no link lies inside another. A folder that only a folder pattern leaves out gets an anchored line in `.fold/exclude`, so its link, which is no folder, is never recorded either. The list goes to `.fold/shared`, then `shared.paths_changed` names the paths added; each workspace gets its links at its next create or sync. Returns the paths added, in the order given; one the list holds already is left out.
     pub async fn share_paths(
         &self,
         actor: &Actor,
@@ -80,11 +80,12 @@ impl WorkspaceService {
             Ok(added)
         })
         .await?;
+        self.paths_changed(actor, &added, &[]).await?;
         tracing::info!(added = added.len(), "paths shared with the workspaces");
         Ok(added)
     }
 
-    /// Takes `paths` off the shared list, for a human or the main agent (`policy::can_share_paths`), with the `.fold/exclude` line that sharing a path added; a line of the user's stays. A workspace drops its link at its next sync; its files never change otherwise. Returns the paths removed; one the list does not hold is left out.
+    /// Takes `paths` off the shared list, for a human or the main agent (`policy::can_share_paths`), with the `.fold/exclude` line that sharing a path added; a line of the user's stays. `shared.paths_changed` names the paths removed. A workspace drops its link at its next sync; its files never change otherwise. Returns the paths removed; one the list does not hold is left out.
     pub async fn unshare_paths(
         &self,
         actor: &Actor,
@@ -121,6 +122,7 @@ impl WorkspaceService {
             Ok(removed)
         })
         .await?;
+        self.paths_changed(actor, &[], &removed).await?;
         tracing::info!(removed = removed.len(), "paths no longer shared");
         Ok(removed)
     }
@@ -183,6 +185,33 @@ impl WorkspaceService {
             .await?;
         self.bus.publish(buffer);
         Ok(dismissed)
+    }
+
+    /// Appends `shared.paths_changed` with the paths `added` to and `removed` from `.fold/shared`, after the file changed, and publishes it once committed, so a screen that shows the shared paths reads them again. Nothing changed appends nothing.
+    async fn paths_changed(
+        &self,
+        actor: &Actor,
+        added: &[String],
+        removed: &[String],
+    ) -> Result<(), WorkspaceError> {
+        if added.is_empty() && removed.is_empty() {
+            return Ok(());
+        }
+        let internal =
+            |error: fold_core::EventError| FoldError::new(codes::INTERNAL_ERROR, error.to_string());
+        let event = NewEvent::new(types::SHARED_PATHS_CHANGED, actor.event_actor())
+            .and_then(|event| event.data(json!({"added": added, "removed": removed})))
+            .map_err(internal)?;
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        self.store
+            .write(async |tx| -> Result<(), WorkspaceError> {
+                buffer.append(tx, &event, now).await?;
+                Ok(())
+            })
+            .await?;
+        self.bus.publish(buffer);
+        Ok(())
     }
 
     async fn may_share(&self, actor: &Actor) -> Result<(), WorkspaceError> {

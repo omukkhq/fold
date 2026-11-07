@@ -109,7 +109,7 @@ impl ProjectPaths {
         self.fold_dir().join("workers").join(agent.as_str())
     }
 
-    /// The folder a supervised worker other than the main agent starts in and its shell returns to after each command, so a relative path of its commands never lands in the project folder. It holds copies of the project's Claude Code files that a session reads from its folder; Claude Code names the worker's transcripts after it.
+    /// The folder a supervised worker other than the main agent starts in and its shell returns to after each command, so a relative path of its commands without `..` never lands in the project folder; it lies inside the project folder, so a path with `..` can. It holds copies of the project's Claude Code files that a session reads from its folder; Claude Code names the worker's transcripts after it.
     pub fn worker_start_dir(&self, agent: &AgentName) -> PathBuf {
         self.worker_dir(agent).join(WORKER_START_DIR)
     }
