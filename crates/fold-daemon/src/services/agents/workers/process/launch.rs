@@ -704,6 +704,8 @@ fn mcp_config(
             servers.insert(name, entry.clone());
         }
     }
+    // In name order whether or not serde_json keeps the order of insertion, so the file is the same at each start.
+    let servers: std::collections::BTreeMap<String, Value> = servers.into_iter().collect();
     json!({ MCP_SERVERS_KEY: servers })
 }
 

@@ -132,6 +132,11 @@ async fn a_record_that_fails_keeps_a_workers_change_marked() {
     branch_born(&h).await;
     let root = std::path::PathBuf::from(h.root());
     std::fs::write(root.join("notes.txt"), "from the worker\n").unwrap();
+    // A follow of the Git job that read the folder before the file was there would settle the mark below; one more follow under the folder lock waits for it.
+    let context = fold_daemon::services::projects::RemoteContext::of(&h.handle);
+    fold_daemon::services::projects::sync_folder(&context, &Git::default())
+        .await
+        .unwrap();
     let lead = AgentName::parse("web-lead").unwrap();
     let at = Timestamp::from_millis(1).unwrap();
     h.handle
