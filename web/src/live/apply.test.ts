@@ -559,11 +559,13 @@ describe("invalidation rules", () => {
       "stash.applied",
       "stash.conflicted",
       "stash.dropped",
+      "stash.discarded",
     ]) {
       invalidated = [];
       applyEvent(client, slug, ev(type));
       expect(hit(keys.needsYou(slug))).toBe(true);
       expect(hit(keys.project(slug))).toBe(true);
+      expect(hit(keys.stash(slug))).toBe(true);
       expect(hit(keys.board(slug))).toBe(false);
     }
   });
@@ -734,6 +736,31 @@ describe("invalidation rules", () => {
     expect(hit(keys.workspaces(slug))).toBe(true);
     expect(hit(keys.workspace(slug, "ws-6"))).toBe(true);
     expect(hit(keys.agents(slug))).toBe(true);
+  });
+
+  it("refreshes the proposals list and the proposal page when a reviewer takes, releases or loses a review claim", () => {
+    for (const type of [
+      "claim.acquired",
+      "claim.released",
+      "claim.taken_over",
+    ]) {
+      invalidated = [];
+      applyEvent(
+        client,
+        slug,
+        ev(type, {
+          task: "T-2",
+          proposal: "P-3",
+          data: { kind: "review", proposal: "P-3" },
+        }),
+      );
+      expect(hit(keys.proposals(slug)), type).toBe(true);
+      expect(hit(keys.proposal(slug, "P-3")), type).toBe(true);
+      expect(hit(keys.board(slug)), type).toBe(true);
+    }
+    invalidated = [];
+    applyEvent(client, slug, ev("claim.acquired", { task: "T-2" }));
+    expect(hit(keys.proposals(slug))).toBe(false);
   });
 
   it("refreshes the agents and the workers, whose workspaces name the run that goes, when a check run starts or ends", () => {

@@ -24,6 +24,8 @@ interface DialogProps {
   wide?: boolean;
   /** The action row, which stays in view under the scrolling body; a form in the body reaches its buttons through their `form` attribute. */
   footer?: ReactNode;
+  /** Runs as the dialog closes, before Radix returns focus to the opener; it calls `preventDefault` when it moved focus itself, such as when its action removed the opener. */
+  onCloseAutoFocus?: (event: Event) => void;
 }
 
 export function Dialog({
@@ -35,7 +37,10 @@ export function Dialog({
   children,
   wide = false,
   footer,
+  onCloseAutoFocus,
 }: DialogProps) {
+  const body =
+    children !== undefined && children !== null && children !== false;
   return (
     <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
       {trigger ? (
@@ -46,18 +51,24 @@ export function Dialog({
           className={cn(dialogOverlay, wide && dialogFillOverlay)}
         >
           <RadixDialog.Content
+            onCloseAutoFocus={onCloseAutoFocus}
             className={cn(
               dialogContent,
               wide ? cn("w-dialog", dialogFill) : "w-max",
             )}
           >
-            <div className="flex shrink-0 items-start justify-between gap-12 px-20 pt-20 pb-8">
+            <div
+              className={cn(
+                "flex shrink-0 items-start justify-between gap-12 px-20 pt-20",
+                body || footer ? "pb-8" : "pb-20",
+              )}
+            >
               <div className="flex min-w-0 flex-col gap-4">
                 <RadixDialog.Title className="text-16 font-semibold text-text">
                   {title}
                 </RadixDialog.Title>
                 {description ? (
-                  <RadixDialog.Description className="text-15 text-text-2">
+                  <RadixDialog.Description className="max-w-measure text-15 text-text-2">
                     {description}
                   </RadixDialog.Description>
                 ) : null}
@@ -68,16 +79,19 @@ export function Dialog({
                 </IconButton>
               </RadixDialog.Close>
             </div>
-            <div className={cn(dialogBody, wide && dialogFillBody)}>
-              <div
-                className={cn(
-                  "flex flex-col gap-12 px-20 pt-4",
-                  footer ? "pb-8" : "pb-20",
-                )}
-              >
-                {children}
+            {/* A body whose parts all render nothing, such as an error that has not happened, takes no space. */}
+            {body ? (
+              <div className={cn(dialogBody, wide && dialogFillBody)}>
+                <div
+                  className={cn(
+                    "flex flex-col gap-12 px-20 pt-4 empty:hidden",
+                    footer ? "pb-8" : "pb-20",
+                  )}
+                >
+                  {children}
+                </div>
               </div>
-            </div>
+            ) : null}
             {footer ? (
               <div className="shrink-0 px-20 pt-8 pb-20">{footer}</div>
             ) : null}

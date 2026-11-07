@@ -325,6 +325,9 @@ pub struct BoardProposal {
     /// The review plan the open proposal waits in, to be reviewed with related proposals as one batch; null when it waits in none.
     #[schema(required = true)]
     pub review_plan: Option<ReviewPlanWait>,
+    /// The worker that holds the proposal's review claim, so the proposal is being reviewed; null while no reviewer holds it.
+    #[schema(required = true, example = "review-2")]
+    pub review_claim: Option<String>,
 }
 
 impl From<service::CardProposal> for BoardProposal {
@@ -336,6 +339,7 @@ impl From<service::CardProposal> for BoardProposal {
             checks_failed: proposal.checks_failed,
             revision: proposal.revision.map(|revision| revision.to_string()),
             review_plan: proposal.review_plan.map(ReviewPlanWait::from),
+            review_claim: proposal.review_claim,
         }
     }
 }

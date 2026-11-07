@@ -1,20 +1,26 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use fold_core::reviews::checks::Stage;
 use fold_core::stall::{
-    ProposalTurn, WorkspaceChecks, WorkspaceFact, is_stalled, present_workspace, stall_start,
+    ProposalTurn, WorkerTurn, WorkspaceChecks, WorkspaceFact, is_stalled, present_workspace,
+    stall_start,
 };
-use fold_core::{ProjectPaths, ProposalId, TaskId, Timestamp, WorkerName, WorkspaceId};
+use fold_core::{AgentName, ProjectPaths, ProposalId, TaskId, Timestamp, WorkerName, WorkspaceId};
 use fold_store::agents::{self, ClaimKind};
 use fold_store::reviews::checks;
-use fold_store::{Store, StoreError, reviews};
+use fold_store::{Store, StoreError, messages, reviews};
 
-use super::WorkspaceError;
+use fold_core::events::types;
+use fold_core::{Event, EventActor};
+use tokio::sync::broadcast::{self, error::RecvError, error::TryRecvError};
+
+use super::{WorkspaceError, WorkspaceService};
 use crate::live::{LiveCheckRun, LiveState};
 use crate::projects::ProjectHandle;
+use crate::services::events::{BusMessage, EventBus};
 use crate::services::projects::load_config;
 
-/// Decides the stalled flag of every live workspace of `project` at `now`, with the project's `stall_minutes`, and sets it in the live state, together with the check run that goes in each workspace. A workspace whose files are its open proposal's newest version never stalls while the proposal waits on others; once it comes back to its author, the stall time counts from that moment at the earliest. A workspace whose checks run never stalls, and the stall time counts from the end of its newest run at the earliest, so the worker gets the whole window to act on the result. A flag or run that changes publishes `workspace.changed`; nothing is stored and nothing else follows. Returns how many flags changed, the ones a starting run cleared included. While the project's agents are paused no flag changes except the clear at a run's start, and after a resume the stall time counts from the resume at the earliest, so the paused time never stalls a worker.
+/// Decides the stalled flag of every live workspace of `project` at `now`, with the project's `stall_minutes`, and sets it in the live state, together with the check run that goes in each workspace. A workspace whose files are its open proposal's newest version never stalls while the proposal waits on others; once it comes back to its author, the stall time counts from that moment at the earliest. A workspace whose checks run never stalls, and the stall time counts from the end of its newest run at the earliest, so the worker gets the whole window to act on the result. A worker never stalls while an ask about its task or one of its permission questions waits for a person, and the stall time counts from a person's newest answer and the start of its current process at the earliest, so an answer clears the flag and only a new full window of silence sets it again. A flag or run that changes publishes `workspace.changed`; nothing is stored and nothing else follows. Returns how many flags changed, the ones a starting run cleared included. While the project's agents are paused no flag changes except the clear at a run's start, and after a resume the stall time counts from the resume at the earliest, so the paused time never stalls a worker.
 pub async fn check_stalls(
     project: &ProjectHandle,
     now: Timestamp,
@@ -65,12 +71,18 @@ pub(super) async fn decide_stalls(
             (None, Some(at)) => WorkspaceChecks::Ended { at: *at },
             (None, None) => WorkspaceChecks::None,
         };
-        let start = stall_start(view.last_activity_at, turn, checks);
+        let worker = view
+            .task
+            .zip(WorkerName::parse(&view.worker).ok())
+            .map(|(task, worker)| inputs.worker_turn(task, &worker))
+            .unwrap_or_default();
+        let start = stall_start(view.last_activity_at, turn, checks, worker);
         let stalled = is_stalled(
             now,
             has_impl_claim,
             workspace,
             checks,
+            worker,
             start.max(inputs.resumed_at.unwrap_or(start)),
             stall_minutes,
         );
@@ -87,6 +99,64 @@ pub(super) async fn decide_stalls(
     Ok(changed)
 }
 
+/// Decides the stalled flags of the project's live workspaces again after each commit that can make a worker wait for someone or give it the turn, so a flag goes at once instead of on the stall job's next tick. It ends when the project closes.
+pub async fn follow_stall_turns(
+    service: WorkspaceService,
+    bus: EventBus,
+    mut events: broadcast::Receiver<BusMessage>,
+) {
+    let Some(live) = service.live.clone() else {
+        return;
+    };
+    let mut closing = bus.closing();
+    loop {
+        let due = tokio::select! {
+            biased;
+            _ = closing.wait_for(|closed| *closed) => return,
+            received = events.recv() => match received {
+                Ok(BusMessage::Durable(event)) => gives_a_turn(&event),
+                Ok(BusMessage::Live(_)) => false,
+                Err(RecvError::Lagged(_)) => true,
+                Err(RecvError::Closed) => return,
+            },
+        };
+        if !due {
+            continue;
+        }
+        // Everything queued so far was committed before it was sent, so the decision below covers it.
+        while !matches!(
+            events.try_recv(),
+            Err(TryRecvError::Empty | TryRecvError::Closed)
+        ) {}
+        if let Err(error) =
+            decide_stalls(&service.store, &service.paths, &live, service.clock.now()).await
+        {
+            tracing::warn!(
+                code = error.log_code(),
+                "the stalled flags were not decided; the stall job's next tick decides them"
+            );
+        }
+    }
+}
+
+/// A message of a person or an agent, which can be an answer or an ask, the closure of an ask, a permission question or its answer, a verdict, and a start of a worker process. fold's own messages, such as check results, give no turn.
+fn gives_a_turn(event: &Event) -> bool {
+    if event.event_type == types::MESSAGE_SENT {
+        return event.actor != EventActor::fold();
+    }
+    [
+        types::MESSAGE_ASK_CLOSED,
+        types::WORKER_PERMISSION_ASKED,
+        types::WORKER_PERMISSION_ANSWERED,
+        types::REVIEW_SUBMITTED,
+        types::REVIEW_BATCH_SUBMITTED,
+        types::WORKER_STARTED,
+        types::WORKER_RESUMED,
+        types::WORKER_REFRESHED,
+    ]
+    .contains(&event.event_type)
+}
+
 /// What the stall rule reads from the store for one decision.
 struct StallInputs {
     paused: bool,
@@ -97,9 +167,42 @@ struct StallInputs {
     running: HashMap<WorkspaceId, LiveCheckRun>,
     /// The end of the newest ended proposal-stage run of each workspace.
     ended: HashMap<WorkspaceId, Timestamp>,
+    /// The tasks with an ask that waits for a person.
+    asked: BTreeSet<TaskId>,
+    /// The agents with a permission question that waits for a person.
+    questioned: HashSet<AgentName>,
+    /// A person's newest answer about each task.
+    task_answers: BTreeMap<TaskId, Timestamp>,
+    /// A human's newest message to each worker.
+    worker_messages: HashMap<WorkerName, Timestamp>,
+    /// The newest permission answer to each agent.
+    permission_answers: HashMap<AgentName, Timestamp>,
+    /// The last start of each supervised agent's process.
+    starts: HashMap<AgentName, Timestamp>,
 }
 
-/// The pause, the holder of each unreleased implementation claim by task, the turn of each open proposal by task, and the proposal-stage check runs by workspace, read in one read transaction.
+impl StallInputs {
+    /// What `worker`, which works on `task`, waits for and when it was last given the turn.
+    fn worker_turn(&self, task: TaskId, worker: &WorkerName) -> WorkerTurn {
+        let agent = worker.agent();
+        let answered_at = [
+            self.task_answers.get(&task),
+            self.worker_messages.get(worker),
+            self.permission_answers.get(&agent),
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+        .copied();
+        WorkerTurn {
+            waits_for_person: self.asked.contains(&task) || self.questioned.contains(&agent),
+            answered_at,
+            started_at: self.starts.get(&agent).copied(),
+        }
+    }
+}
+
+/// The pause, the holder of each unreleased implementation claim by task, the turn of each open proposal by task, the proposal-stage check runs by workspace, and what each worker waits for and when it was last given the turn, read in one read transaction.
 async fn stall_inputs(store: &Store) -> Result<StallInputs, StoreError> {
     let mut tx = store.read().begin().await?;
     let pause = agents::pause_state(&mut *tx).await?;
@@ -140,6 +243,25 @@ async fn stall_inputs(store: &Store) -> Result<StallInputs, StoreError> {
         .await?
         .into_iter()
         .collect();
+    let asked = messages::tasks_awaiting_human(&mut *tx)
+        .await?
+        .into_keys()
+        .collect();
+    let questioned = agents::open_questions(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|question| question.agent)
+        .collect();
+    let task_answers = messages::last_answers_by_task(&mut *tx).await?;
+    let worker_messages = messages::last_human_messages_by_worker(&mut *tx).await?;
+    let permission_answers = agents::last_answers_by_agent(&mut *tx)
+        .await?
+        .into_iter()
+        .collect();
+    let starts = agents::process_starts(&mut *tx)
+        .await?
+        .into_iter()
+        .collect();
     tx.commit().await?;
     Ok(StallInputs {
         paused: pause.is_paused(),
@@ -148,5 +270,11 @@ async fn stall_inputs(store: &Store) -> Result<StallInputs, StoreError> {
         turns,
         running,
         ended,
+        asked,
+        questioned,
+        task_answers,
+        worker_messages,
+        permission_answers,
+        starts,
     })
 }

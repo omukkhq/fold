@@ -25,6 +25,7 @@ import {
   Play,
   RotateCcw,
   Tag,
+  Trash2,
   TriangleAlert,
   Undo2,
   Upload,
@@ -870,9 +871,22 @@ const SPECS: Record<EventType, Spec> = {
   },
   "human_change.withdrawn": {
     icon: Undo2,
-    text: fixed(
-      "took back the change of the project folder that waited for the main agent",
-    ),
+    text: (e) => {
+      const line =
+        "took back the change of the project folder that waited for the main agent";
+      const command =
+        e.data.reset === true
+          ? " with fld reset"
+          : e.data.restore === true
+            ? " with fld restore"
+            : "";
+      // Only a reset closes the main agent's merge workspace, and only when the main agent had opened one.
+      const closed =
+        e.data.workspace_abandoned === true
+          ? ", and closed its merge workspace"
+          : "";
+      return `${line}${command}${closed}`;
+    },
   },
   "stash.pushed": {
     icon: Archive,
@@ -899,6 +913,21 @@ const SPECS: Record<EventType, Spec> = {
       return task === null
         ? "fixed the conflict of the unstash; the stash entry is dropped"
         : `recorded the conflict of the unstash on main; ${task} fixes it`;
+    },
+  },
+  "stash.discarded": {
+    icon: Trash2,
+    text: (e) => {
+      const stash = text(e.data.stash);
+      if (stash !== null) {
+        return `dropped ${stash} with ${filesText(e)} from the stash`;
+      }
+      const dropped = count(e.data.dropped);
+      return dropped === null
+        ? "dropped entries of the stash"
+        : dropped === 1
+          ? "dropped 1 entry of the stash"
+          : `dropped ${String(dropped)} entries of the stash`;
     },
   },
   "checks.started": {

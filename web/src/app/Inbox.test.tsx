@@ -220,7 +220,7 @@ describe("Inbox, Needs you", () => {
     expect((await screen.findByRole("tooltip")).textContent).toBe(title);
   });
 
-  it("shows an unstash conflict as a line that opens nothing and counts it", async () => {
+  it("shows an unstash conflict as a line that opens the repository screen and counts it", async () => {
     await renderInbox(
       [
         permission,
@@ -241,8 +241,10 @@ describe("Inbox, Needs you", () => {
     expect(
       within(project).getByText("src/forms/index.ts and 2 more"),
     ).toBeTruthy();
-    expect(within(project).queryByRole("link")).toBeNull();
-    expect(within(inbox).getAllByRole("link")).toHaveLength(1);
+    expect(within(project).getByRole("link").getAttribute("href")).toBe(
+      "/p/demo/repository",
+    );
+    expect(within(inbox).getAllByRole("link")).toHaveLength(2);
   });
 
   it("shows the command that brings the Git branch back as caption code, and the paths of an item as plain words", async () => {

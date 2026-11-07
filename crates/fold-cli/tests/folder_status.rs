@@ -431,3 +431,65 @@ fn fld_untrack_stops_tracking_a_file_the_rules_match_and_leaves_it_on_disk() {
     let text = String::from_utf8_lossy(&refused.stderr);
     assert!(text.contains("path_not_tracked"), "{text}");
 }
+
+#[test]
+fn fld_reset_restore_and_stash_drop_ask_first_and_go_on_with_yes() {
+    let sandbox = Sandbox::new();
+    let project = sandbox.project("app", false, &[("README.md", "# app\n")]);
+    let _daemon = sandbox.serve();
+    write(&project, "README.md", "");
+    write(&project, "junk", "");
+    write(&project, "notes.md", "mine\n");
+
+    // No terminal answers, so the command refuses without --yes and changes nothing.
+    let refused = sandbox.output(&project, &["reset"]);
+    assert!(!refused.status.success());
+    let stderr = String::from_utf8(refused.stderr).unwrap();
+    assert!(stderr.contains("fld reset --yes"), "{stderr}");
+    assert_eq!(fs::read_to_string(project.join("README.md")).unwrap(), "");
+
+    let notes = project.join("notes.md");
+    let restored = sandbox.run(&project, &["restore", "--yes", notes.to_str().unwrap()]);
+    assert!(
+        restored.contains("these changes go back to main's files: 1 file"),
+        "{restored}"
+    );
+    assert!(
+        restored.contains("put back 1 file and stashed their changes as stash@{0}"),
+        "{restored}"
+    );
+    assert!(!notes.exists());
+
+    let reset = sandbox.run(&project, &["reset", "--yes"]);
+    assert!(reset.contains("  junk"), "{reset}");
+    assert!(
+        reset.contains("put back 2 files and stashed their changes as stash@{0}; the project folder holds main r1"),
+        "{reset}"
+    );
+    assert_eq!(
+        fs::read_to_string(project.join("README.md")).unwrap(),
+        "# app\n"
+    );
+    assert!(!project.join("junk").exists());
+    assert_eq!(
+        sandbox.run(&project, &["reset"]),
+        "nothing to reset: the project folder has no change that is not recorded\n"
+    );
+
+    let refused = sandbox.output(&project, &["stash", "drop"]);
+    assert!(!refused.status.success());
+    let dropped = sandbox.run(&project, &["stash", "drop", "--yes"]);
+    assert!(
+        dropped.contains("dropped stash@{0}: 2 files; 1 entry is left"),
+        "{dropped}"
+    );
+    let cleared = sandbox.run(&project, &["stash", "clear", "-y"]);
+    assert!(
+        cleared.contains("dropped stash@{0}: 1 file; the stash is empty"),
+        "{cleared}"
+    );
+    assert_eq!(
+        sandbox.run(&project, &["stash", "clear"]),
+        "the stash is empty\n"
+    );
+}

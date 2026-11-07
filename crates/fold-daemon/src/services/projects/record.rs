@@ -306,7 +306,7 @@ fn needs_confirmation(
         codes::RECORD_NEEDS_CONFIRMATION,
         format!("the change {}; nothing was recorded", found.join(", and ")),
     )
-    .with_hint("check the files, then run `fld record --yes` to record them as your change, or `fld agent-changes restore` to put a worker's change aside")
+    .with_hint("check the files, then run `fld record --yes` to record them as your change, or `fld restore <paths>` with a worker's files to put them aside")
     .with_details([
         ("tree", json!(tree.to_string())),
         ("emptied", json!(listed(&risk.emptied))),

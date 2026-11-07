@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+
+use fold_core::claims::HolderRuns;
 use fold_core::object::ObjectHash;
 use fold_core::reviews::ProposalIntent;
 use fold_core::reviews::checks::{Outcome, Purpose, RunReason, RunState, Stage};
@@ -486,6 +489,55 @@ pub async fn running_runs(
         .fetch_all(executor)
         .await?;
     rows(raw)
+}
+
+/// The [`HolderRuns`] of each worker that holds an unreleased claim and started a proposal-stage run, by the worker's row id.
+pub async fn holder_runs(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<HashMap<i64, HolderRuns>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT c.worker_id AS "worker!: i64",
+                  MAX(c.state = 'running') AS "running!: bool",
+                  MAX(c.finished_at) AS "ended_at?: i64"
+           FROM check_runs c
+           WHERE c.stage = 'proposal' AND c.worker_id IS NOT NULL
+             AND c.worker_id IN (SELECT k.worker_id FROM claims k WHERE k.released_at IS NULL)
+           GROUP BY c.worker_id"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| Ok((row.worker, holder_runs_of(row.running, row.ended_at)?)))
+        .collect()
+}
+
+/// The [`HolderRuns`] of the worker with row id `worker_id`.
+pub async fn runs_of_holder(
+    executor: impl SqliteExecutor<'_>,
+    worker_id: i64,
+) -> Result<HolderRuns, StoreError> {
+    let row = sqlx::query!(
+        r#"SELECT COALESCE(MAX(c.state = 'running'), 0) AS "running!: bool",
+                  MAX(c.finished_at) AS "ended_at?: i64"
+           FROM check_runs c
+           WHERE c.stage = 'proposal' AND c.worker_id = ?"#,
+        worker_id
+    )
+    .fetch_one(executor)
+    .await?;
+    holder_runs_of(row.running, row.ended_at)
+}
+
+fn holder_runs_of(running: bool, ended_at: Option<i64>) -> Result<HolderRuns, StoreError> {
+    if running {
+        return Ok(HolderRuns::Running);
+    }
+    Ok(match ended_at {
+        Some(at) => HolderRuns::Ended {
+            at: time(at, "check_runs.finished_at")?,
+        },
+        None => HolderRuns::None,
+    })
 }
 
 /// The end time of the newest ended proposal-stage run of each active or missing workspace that has one, in workspace order: the start of the stall window after a worker's checks. A closed workspace never stalls, so its runs are left out.

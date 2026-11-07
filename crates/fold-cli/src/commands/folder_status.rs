@@ -211,7 +211,7 @@ fn status_lines(
         record.detail("Next: `fld record` records them on main; `fld stash` puts them aside");
         if from_agents > 0 {
             record.detail(format!(
-                "A worker changed {} during its tool calls, so fold asks before `fld record` records them: `fld agent-changes restore` puts them aside in the stash, `fld agent-changes ignore` makes them yours",
+                "A worker changed {} during its tool calls, so fold asks before `fld record` records them: `fld restore <paths>` puts them aside in the stash, `fld record --yes` keeps them as yours",
                 output::count(from_agents, "file", "files")
             ));
         }
@@ -503,7 +503,8 @@ mod tests {
             "  ↳ modified: plan.md, changed while reviewer-35 worked"
         );
         assert!(shown[6].contains("A worker changed 1 file during its tool calls"));
-        assert!(shown[6].contains("`fld agent-changes restore`"));
+        assert!(shown[6].contains("`fld restore <paths>` puts them aside in the stash"));
+        assert!(shown[6].contains("`fld record --yes` keeps them as yours"));
     }
 
     #[test]

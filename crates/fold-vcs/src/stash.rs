@@ -2,13 +2,14 @@ use std::path::Path;
 
 use fold_core::FoldError;
 use fold_core::merge::{ConflictKind, TreeMerge, contains_stash_marker_line};
-use fold_core::object::ObjectKind;
+use fold_core::object::{ObjectHash, ObjectKind};
 use fold_core::tree::{EntryKind, FlatTree};
 
 use crate::checkout::{FolderEntry, read_folder_entry};
 use crate::objects::ObjectStore;
 use crate::paths::RepoPath;
 use crate::platform::Capabilities;
+use crate::snapshot::{keep_base, store_changed_trees};
 use crate::sync::{STASH_SIDECAR_SUFFIX, sidecar_with};
 
 /// The paths a change from `base` to `tree` makes, changed, added or removed, in path byte order.
@@ -102,4 +103,27 @@ pub fn occupied_paths(
     occupied.sort();
     occupied.dedup();
     Ok(occupied)
+}
+
+/// The tree of the checkout record `record` with what the folder's tree `folder` holds at and below each of `paths`, stored, and the paths of `paths` where the two trees do not differ, in the order given. `fld restore` stashes this tree, so only those paths go back. Blocking.
+pub fn restore_tree(
+    objects: &ObjectStore,
+    record: &ObjectHash,
+    folder: &ObjectHash,
+    paths: &[RepoPath],
+) -> Result<(ObjectHash, Vec<RepoPath>), FoldError> {
+    let recorded = crate::compare::load_flat(objects, record)?;
+    let read = crate::compare::load_flat(objects, folder)?;
+    let mut chosen = recorded.clone();
+    let mut unchanged = Vec::new();
+    for path in paths {
+        let before: Vec<_> = path.at_or_below(&recorded).collect();
+        let after: Vec<_> = path.at_or_below(&read).collect();
+        if before == after {
+            unchanged.push(path.clone());
+        }
+        keep_base(&mut chosen, &read, path);
+    }
+    let tree = store_changed_trees(objects, Some(*record), &recorded, &chosen)?;
+    Ok((tree, unchanged))
 }

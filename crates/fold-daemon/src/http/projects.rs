@@ -11,7 +11,8 @@ use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use super::{Project, SocketOnly};
 use crate::daemon::{AppState, StartedBy};
 use crate::services::projects::{
-    self, PullOutcome, PushOutcome, RecordOutcome, StashOutcome, UnstashOutcome,
+    self, PullOutcome, PushOutcome, RecordOutcome, ResetOutcome, ResetScope, StashDrop, StashEntry,
+    StashOutcome, UnstashOutcome,
 };
 use fold_core::{Presence, TaskStatus, Timestamp};
 use fold_vcs::git::Git;
@@ -31,8 +32,11 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(push))
         .routes(routes!(pull))
         .routes(routes!(record))
-        .routes(routes!(list_stash, stash))
+        .routes(routes!(list_stash, stash, clear_stash))
+        .routes(routes!(drop_stash_entry))
         .routes(routes!(show_folder))
+        .routes(routes!(reset_folder))
+        .routes(routes!(restore_folder_paths))
         .routes(routes!(unstash))
         .routes(routes!(untrack))
         .merge(notify::routes())
@@ -1327,6 +1331,9 @@ pub struct StashEntryView {
     /// Its name on the stack: `stash@{0}` is the newest.
     #[schema(example = "stash@{0}")]
     pub stash: String,
+    /// The entry's number, which stays the same while its place on the stack moves and is never reused; a drop names it.
+    #[schema(example = 7)]
+    pub number: i64,
     /// UTC milliseconds of the stash.
     #[schema(value_type = i64)]
     pub created_at: Timestamp,
@@ -1347,7 +1354,7 @@ pub struct StashList {
     pub entries: Vec<StashEntryView>,
 }
 
-/// The stash of the project folder, newest entry first, as `fld stash list` shows it. Socket only.
+/// The stash of the project folder, newest entry first, as `fld stash list` and the web app show it: names and counts, never content.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/stash",
@@ -1355,29 +1362,295 @@ pub struct StashList {
     params(("slug" = String, Path, description = "The project slug")),
     responses(
         (status = 200, description = "The entries", body = StashList),
-        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
-pub async fn list_stash(
-    _socket: SocketOnly,
-    Project(handle): Project,
-) -> Result<Json<StashList>, ApiError> {
+pub async fn list_stash(Project(handle): Project) -> Result<Json<StashList>, ApiError> {
     let entries = projects::stash_list(&handle).await?;
     Ok(Json(StashList {
-        entries: entries
-            .into_iter()
-            .map(|entry| StashEntryView {
-                stash: format!("stash@{{{}}}", entry.position),
-                created_at: entry.created_at,
-                base: entry.base.to_string(),
-                actor: entry.actor,
-                files: entry.files,
-                conflicted: entry.conflicted,
-            })
-            .collect(),
+        entries: entries.into_iter().map(StashEntryView::from).collect(),
     }))
+}
+
+impl From<StashEntry> for StashEntryView {
+    fn from(entry: StashEntry) -> Self {
+        Self {
+            stash: format!("stash@{{{}}}", entry.position),
+            number: entry.number,
+            created_at: entry.created_at,
+            base: entry.base.to_string(),
+            actor: entry.actor,
+            files: entry.files,
+            conflicted: entry.conflicted,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct StashDropResult {
+    /// The dropped entries, newest first, each named by its place on the stack before the drop; empty when `fld stash clear` found the stash empty.
+    pub dropped: Vec<StashEntryView>,
+    /// The entries left on the stack.
+    pub entries: usize,
+}
+
+/// What the human saw of the entry that `fld stash drop` drops.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct DropStashQuery {
+    /// The `number` of the entry the human saw at this place; another entry there now refuses the drop with `stash_changed`.
+    pub number: i64,
+}
+
+/// What the human saw of the stack that `fld stash clear` drops.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ClearStashQuery {
+    /// How many entries the human saw.
+    pub entries: usize,
+    /// The `number` of the newest entry the human saw, `stash@{0}`; left out for an empty stash.
+    pub newest: Option<i64>,
+}
+
+const DROP_REFUSALS: &str = "The human name is not valid; the query is missing or not valid; the place is not a number (`reason` `invalid_entry`); the stack is no longer the one the human saw, so nothing is dropped (`reason` `stash_changed`, the stack's length in `entries`); the stash is empty (`reason` `stash_empty`); no entry has that place (`reason` `stash_entry_missing`, the stack's length in `entries`); the entry's unstash conflict waits in the folder (`reason` `stash_conflicted`, the files in `paths`); or, while an unstash that stopped part-way is finished first, the branch or HEAD shows a change fold did not make (`reason` `head_moved`) or the human's Git commits wait (`reason` `git_commits_wait`)";
+
+/// Drops one entry of the stash, as `fld stash drop` asks: its changes leave the stack for good, its objects stay until `fld gc`, and no file of the project folder changes. Only a named human drops, over the socket or signed in to the web app. The query names the entry the human saw at that place, so a stack that changed meanwhile drops nothing. An entry whose unstash conflict waits in the folder is refused.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/projects/{slug}/stash/{entry}",
+    operation_id = "drop_project_stash_entry",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("entry" = String, Path, description = "The entry's place on the stack: `0` is `stash@{0}`, the newest"),
+        DropStashQuery,
+    ),
+    responses(
+        (status = 200, description = "The entry is dropped", body = StashDropResult),
+        (status = 400, description = DROP_REFUSALS, body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 403, description = "`human_required`: only a human drops entries of the stash", body = ErrorEnvelope),
+        (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
+        (status = 409, description = "The config is invalid", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn drop_stash_entry(
+    human: Human,
+    Project(handle): Project,
+    Path((_slug, entry)): Path<(String, String)>,
+    ApiQuery(query): ApiQuery<DropStashQuery>,
+) -> Result<Json<StashDropResult>, ApiError> {
+    let position = entry
+        .strip_prefix("stash@{")
+        .and_then(|rest| rest.strip_suffix('}'))
+        .unwrap_or(&entry)
+        .parse::<usize>()
+        .map_err(|_| {
+            fold_core::FoldError::new(
+                fold_core::codes::INVALID_REQUEST,
+                "the entry must be its place on the stack, such as 0 for stash@{0}",
+            )
+            .with_hint("`fld stash list` names each entry")
+            .with_details([("reason", serde_json::json!("invalid_entry"))])
+        })?;
+    drop_entries(
+        &handle,
+        &human,
+        StashDrop::One {
+            position,
+            number: query.number,
+        },
+    )
+    .await
+}
+
+/// Drops every entry of the stash, as `fld stash clear` asks: their changes leave the stack for good, their objects stay until `fld gc`, and no file of the project folder changes. Only a named human clears, over the socket or signed in to the web app. The query names the stack the human saw, its length and its newest entry, so a stack that changed meanwhile drops nothing. A stash whose newest entry's unstash conflict waits in the folder is refused as a whole.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/projects/{slug}/stash",
+    operation_id = "clear_project_stash",
+    params(("slug" = String, Path, description = "The project slug"), ClearStashQuery),
+    responses(
+        (status = 200, description = "Every entry is dropped, or the stash was empty", body = StashDropResult),
+        (status = 400, description = DROP_REFUSALS, body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 403, description = "`human_required`: only a human drops entries of the stash", body = ErrorEnvelope),
+        (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
+        (status = 409, description = "The config is invalid", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn clear_stash(
+    human: Human,
+    Project(handle): Project,
+    ApiQuery(query): ApiQuery<ClearStashQuery>,
+) -> Result<Json<StashDropResult>, ApiError> {
+    drop_entries(
+        &handle,
+        &human,
+        StashDrop::All {
+            entries: query.entries,
+            newest: query.newest,
+        },
+    )
+    .await
+}
+
+async fn drop_entries(
+    handle: &std::sync::Arc<crate::projects::ProjectHandle>,
+    human: &Human,
+    target: StashDrop,
+) -> Result<Json<StashDropResult>, ApiError> {
+    let done =
+        projects::drop_stash_entries(handle, &human.actor(), &Git::default(), target).await?;
+    Ok(Json(StashDropResult {
+        dropped: done.dropped.into_iter().map(StashEntryView::from).collect(),
+        entries: done.entries,
+    }))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DroppedChangeView {
+    /// The human's Git commit; null for a change `fld record` read from the project folder.
+    #[schema(required = true)]
+    pub commit: Option<String>,
+    /// The paths that conflicted with main, in path order.
+    pub conflicted: Vec<String>,
+    /// The main workspace that holds its merge; null when the main agent had opened none.
+    #[schema(required = true, example = "ws-9")]
+    pub workspace: Option<String>,
+    /// Whether fold abandoned that workspace, as a reset does; after a restore the main agent abandons it.
+    pub workspace_abandoned: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ResetResult {
+    /// The main revision the project folder holds now, apart from the changes that no revision records.
+    #[schema(example = "r8")]
+    pub revision: String,
+    /// False while something still keeps the folder on an older revision than main's head, such as unrecorded changes that a restore left on a path main changed.
+    pub at_head: bool,
+    /// The paths that went back to fold's entries, in path order.
+    pub files: Vec<String>,
+    /// Whether the discarded changes are the newest stash entry, `stash@{0}`, which `fld unstash` brings back.
+    pub stashed: bool,
+    /// The entries on the stack now.
+    pub entries: usize,
+    /// The named paths of a restore where the folder held no change.
+    pub unchanged: Vec<String>,
+    /// The conflicted paths of the stash entry whose unstash conflict waited in the folder, which the reset dropped; the safety entry holds those files with their markers.
+    pub dropped_unstash: Vec<String>,
+    /// The conflicted human change that waited for the main agent, which the command withdrew; null when none waited or a restore left changes of it.
+    #[schema(required = true)]
+    pub dropped_change: Option<DroppedChangeView>,
+    /// New files the read left out, which stay in the folder.
+    pub skipped: Vec<RecordSkipped>,
+    /// The unstash that a stop had left part-way, which this command finished first; null when none was finished.
+    #[schema(required = true)]
+    pub unstash: Option<UnstashResult>,
+}
+
+impl From<ResetOutcome> for ResetResult {
+    fn from(outcome: ResetOutcome) -> Self {
+        Self {
+            revision: outcome.revision.to_string(),
+            at_head: outcome.at_head,
+            files: outcome.files,
+            stashed: outcome.stashed,
+            entries: outcome.entries,
+            unchanged: outcome.unchanged,
+            dropped_unstash: outcome.dropped_unstash,
+            dropped_change: outcome.dropped_change.map(|change| DroppedChangeView {
+                commit: change.commit,
+                conflicted: change.conflicted,
+                workspace: change.workspace.map(|workspace| workspace.to_string()),
+                workspace_abandoned: change.workspace_abandoned,
+            }),
+            skipped: outcome
+                .skipped
+                .into_iter()
+                .map(|skipped| RecordSkipped {
+                    path: skipped.path.to_string(),
+                    reason: skipped.reason.as_str().to_owned(),
+                })
+                .collect(),
+            unstash: outcome.unstash.map(UnstashResult::from),
+        }
+    }
+}
+
+const RESET_REFUSALS: &str = "The human name is not valid; the branch or HEAD shows a change fold did not make (`reason` `head_moved`); the human's Git commits wait for the main agent (`reason` `git_commits_wait`); a file fold tracks is too large or unreadable to stash (`reason` `skipped_tracked`, the files in `paths`); or files changed while fold put them back (`reason` `changed_during_stash`)";
+
+/// Puts the whole project folder back to the files fold last wrote there, as `fld reset` asks, so it follows main: the changes that no revision records are first stashed as `stash@{0}`, which `fld unstash` brings back, then their paths go back. The conflicted human change that waits for the main agent is dropped with `human_change.withdrawn`, and the main workspace its merge made is abandoned in the same transaction. A stash entry whose unstash conflict waits in the folder is dropped with `stash.discarded`; the safety entry holds the files with their markers. A reset never moves Git. Only a named human resets, over the socket or signed in to the web app.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/folder/reset",
+    operation_id = "reset_project_folder",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The folder is back on fold's files, or held nothing to put back", body = ResetResult),
+        (status = 400, description = RESET_REFUSALS, body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 403, description = "`human_required`: only a human resets the project folder", body = ErrorEnvelope),
+        (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
+        (status = 409, description = "The config or sync map is invalid", body = ErrorEnvelope),
+        (status = 502, description = "A Git command failed", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open, git is not on PATH, or the objects of the safety entry could not be stored", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn reset_folder(
+    human: Human,
+    Project(handle): Project,
+) -> Result<Json<ResetResult>, ApiError> {
+    let outcome =
+        projects::reset(&handle, &human.actor(), &Git::default(), ResetScope::Folder).await?;
+    Ok(Json(outcome.into()))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreRequest {
+    /// The files or directories to put back, relative to the project folder, such as `src/app.rs`.
+    pub paths: Vec<String>,
+}
+
+/// Puts the named files and directories of the project folder back to the files fold last wrote there, as `fld restore` asks: their changes that no revision records are first stashed as `stash@{0}`, which `fld unstash` brings back. The conflicted human change that waits for the main agent is withdrawn with `human_change.withdrawn` only when the named paths held every unrecorded change; the main workspace that holds its merge stays open, and the main agent's notice asks it to abandon the workspace. Only a named human restores, over the socket or signed in to the web app.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/folder/restore",
+    operation_id = "restore_project_folder_paths",
+    params(("slug" = String, Path, description = "The project slug")),
+    request_body = RestoreRequest,
+    responses(
+        (status = 200, description = "The paths are back on fold's files, or held nothing to put back", body = ResetResult),
+        (status = 400, description = "No path is named (`reason` `no_paths`); a path is not inside the project folder (`reason` `invalid_path`); an unstash conflict waits in the folder (`reason` `stash_conflicted`, the files in `paths`); or a refusal of `fld reset`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 403, description = "`human_required`: only a human resets the project folder", body = ErrorEnvelope),
+        (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
+        (status = 409, description = "The config or sync map is invalid", body = ErrorEnvelope),
+        (status = 502, description = "A Git command failed", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open, git is not on PATH, or the objects of the safety entry could not be stored", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn restore_folder_paths(
+    human: Human,
+    Project(handle): Project,
+    ApiJson(body): ApiJson<RestoreRequest>,
+) -> Result<Json<ResetResult>, ApiError> {
+    let outcome = projects::reset(
+        &handle,
+        &human.actor(),
+        &Git::default(),
+        ResetScope::Paths(body.paths),
+    )
+    .await?;
+    Ok(Json(outcome.into()))
 }
 
 /// How a path of the project folder differs from what fold knows it holds. `modified` covers other content and a changed executable bit; `type_changed` is a symlink where a file was, or a file where a symlink was.

@@ -65,6 +65,7 @@ pub mod notify;
 mod pull;
 mod record;
 mod remote;
+mod reset;
 mod shared_watch;
 mod stash;
 mod untrack;
@@ -88,10 +89,12 @@ pub use pull::{PullOutcome, PulledConflict, pull};
 pub use record::{RecordOutcome, TouchedTask, folder_sides, record};
 pub(crate) use remote::push_with;
 pub use remote::{PushOutcome, RemoteContext, push};
+pub use reset::{DroppedChange, ResetOutcome, ResetScope, reset};
 pub(crate) use shared_watch::SharedWatch;
 pub use stash::{
-    AfterUnstash, RestoreOutcome, StashEntry, StashOutcome, UnstashConflict, UnstashOutcome,
-    restore_agent_changes, stash, stash_list, unstash,
+    AfterUnstash, RestoreOutcome, StashDrop, StashDropped, StashEntry, StashOutcome,
+    UnstashConflict, UnstashOutcome, drop_stash_entries, restore_agent_changes, stash, stash_list,
+    unstash,
 };
 pub use untrack::{FOLD_SKILLS_TITLE, FoldSkills, UntrackOutcome, keep_fold_skills_out, untrack};
 pub use web_auth::{

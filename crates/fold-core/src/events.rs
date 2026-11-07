@@ -173,6 +173,7 @@ define_event_types! {
     SHARED_CHANGED = "shared.changed",
     SHARED_CHANGES_DISMISSED = "shared.changes_dismissed",
     SHARED_PATHS_CHANGED = "shared.paths_changed",
+    STASH_DISCARDED = "stash.discarded",
 }
 
 impl EventType {

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO folder_stash_drops (stash_id, actor, created_at) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "1d51e21b38eb42da65b4706c129bd986af0b7e5671b790e800602f78e77a4ac0"
+}

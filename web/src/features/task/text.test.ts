@@ -181,7 +181,10 @@ describe("proposal texts", () => {
     expect(proposalStateText("open", 3)).toBe("waiting for review · v3");
     expect(proposalStateText("conflict", 1)).toBe("conflict · v1");
     expect(proposalStateText("open", 2, "review-lead")).toBe(
-      "waiting for review · v2 · with @review-lead",
+      "being reviewed · v2 · by @review-lead",
+    );
+    expect(proposalStateText("approved", 2, "review-lead")).toBe(
+      "approved · v2 · with @review-lead",
     );
     expect(
       integrationText({

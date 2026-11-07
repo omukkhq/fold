@@ -49,6 +49,8 @@ pub struct FolderFollowed {
     pub branch: Option<BranchState>,
     /// Each path where the folder differs from its checkout record after the follow, with the time that places the change, in path order.
     pub seen: Vec<SeenChange>,
+    /// The paths the follow's read of the folder left out, such as a file over the size limit, an unreadable one or one that kept changing, in path order: the read kept their recorded entries without seeing them, so they settle no mark of a worker's change.
+    pub unread: Vec<Vec<u8>>,
     /// The newest mark of a worker's change that was placed when the follow began to read the folder (see [`fold_store::workspaces::last_agent_change`]): only marks up to it may be settled by what this follow read.
     pub marks_before_read: i64,
 }
@@ -470,7 +472,7 @@ pub(crate) async fn follow_folder(
     let objects_guard = objects.clone().read_owned().await;
     let paths_owned = paths.clone();
     let head_tree = head.tree_hash;
-    let (tree, held, unrecorded, wrote, seen) = blocking(move || {
+    let (tree, held, unrecorded, wrote, seen, unread) = blocking(move || {
         let _objects = objects_guard;
         let paths = paths_owned;
         let fold_dir = paths.fold_dir();
@@ -503,7 +505,7 @@ pub(crate) async fn follow_folder(
         #[cfg(feature = "failpoints")]
         fail::fail_point!("folder_after_write", |_| Err(fired("folder_after_write")));
         let tree = write_initial_tree(&objects, followed.record.clone())?;
-        let folder = read_settled(&paths, &followed.record, max_file_bytes, caps)?;
+        let (folder, unread) = read_settled(&paths, &followed.record, max_file_bytes, caps)?;
         let unrecorded = !followed.held.is_empty() || folder != followed.record;
         let seen = seen_changes(root, &followed.record, &folder);
         let held: Vec<String> = match (stash_held, unstash) {
@@ -517,7 +519,7 @@ pub(crate) async fn follow_folder(
             (None, None) => followed.held.iter().map(ToString::to_string).collect(),
         };
         let unrecorded = unrecorded || !held.is_empty();
-        Ok((tree, held, unrecorded, wrote, seen))
+        Ok((tree, held, unrecorded, wrote, seen, unread))
     })
     .await?;
     let at = wrote.then_some(head.number);
@@ -540,17 +542,18 @@ pub(crate) async fn follow_folder(
         unrecorded,
         branch,
         seen,
+        unread,
         marks_before_read,
     })
 }
 
-/// The folder as `fld record` reads it, through the folder's stat index so an unchanged file is not hashed again: the record's paths count although an ignore rule matches them, and a file the scan cannot read, such as one over the size limit, keeps its recorded entry. Blocking.
+/// The folder as `fld record` reads it, through the folder's stat index so an unchanged file is not hashed again: the record's paths count although an ignore rule matches them, and a file the scan cannot read, such as one over the size limit, keeps its recorded entry. Returns it with the paths the scan left out, skipped or unstable, in path order. Blocking.
 fn read_settled(
     paths: &ProjectPaths,
     record: &FlatTree,
     max_file_bytes: u64,
     caps: Capabilities,
-) -> Result<FlatTree, ProjectError> {
+) -> Result<(FlatTree, Vec<Vec<u8>>), ProjectError> {
     let root = paths.root();
     let rules = IgnoreRules::new(root);
     let index_path = paths.folder_index();
@@ -568,7 +571,16 @@ fn read_settled(
     .map_err(FoldError::from)?;
     // The index only spares work; a failed save makes the next scan read the files again.
     let _ = index.save(&index_path);
-    Ok(scanned.settled(record))
+    let mut unread: Vec<Vec<u8>> = scanned
+        .skipped
+        .iter()
+        .map(|skipped| &skipped.path)
+        .chain(&scanned.unstable)
+        .map(|path| path.as_bytes().to_vec())
+        .collect();
+    unread.sort();
+    unread.dedup();
+    Ok((scanned.settled(record), unread))
 }
 
 fn io_error(error: &std::io::Error) -> ProjectError {

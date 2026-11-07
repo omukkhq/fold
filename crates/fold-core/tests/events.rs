@@ -144,6 +144,7 @@ fn all_equals_the_plans_event_types() {
         "shared.changed",
         "shared.changes_dismissed",
         "shared.paths_changed",
+        "stash.discarded",
     ]);
     assert_eq!(declared, expected);
 }

@@ -261,6 +261,29 @@ pub async fn open_questions(
     rows.into_iter().map(RawQuestion::into_row).collect()
 }
 
+/// The time of the newest answer to a permission question of each agent's worker process. Agents without one are left out.
+pub async fn last_answers_by_agent(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<(AgentName, Timestamp)>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT g.name AS "agent!", MAX(a.created_at) AS "at!: i64"
+           FROM worker_permission_answers a
+           JOIN worker_permission_questions q ON q.id = a.question_id
+           JOIN worker_processes w ON w.id = q.worker_process_id
+           JOIN agents g ON g.id = w.agent_id
+           GROUP BY g.id"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let agent =
+                AgentName::parse(&row.agent).map_err(|_| StoreError::Corrupt("agents.name"))?;
+            Ok((agent, time(row.at, "worker_permission_answers.created_at")?))
+        })
+        .collect()
+}
+
 /// The question with public id `number`.
 pub async fn find_question(
     executor: impl SqliteExecutor<'_>,

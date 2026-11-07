@@ -49,9 +49,11 @@ INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_
 INSERT INTO proposal_intent_parts (id, version_id, position, name, does) VALUES (1, 2, 1, 'n', 'd');
 INSERT INTO proposal_intent_files (part_id, version_id, position, path) VALUES (1, 2, 1, 'a.rs');
 INSERT INTO proposal_intent_entries (version_id, section, position, text) VALUES (2, 'decisions', 1, 'e');
+INSERT INTO folder_stashes (id, number, base_tree_hash, tree_hash, revision_id, actor, state, created_at) VALUES (1, 1, 'b1', 't1', 1, 'human:ana', 'stashed', 0);
+INSERT INTO folder_stash_drops (stash_id, actor, created_at) VALUES (1, 'human:ana', 0);
 ";
 
-const APPEND_ONLY: [&str; 28] = [
+const APPEND_ONLY: [&str; 29] = [
     "completions",
     "revisions",
     "changesets",
@@ -80,6 +82,7 @@ const APPEND_ONLY: [&str; 28] = [
     "message_questions",
     "message_question_choices",
     "message_answers",
+    "folder_stash_drops",
 ];
 
 /// The append-only tables whose rows are derived in the transaction of a row that carries the time, so they have no `created_at` of their own.
@@ -140,6 +143,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "dependencies",
         "events",
         "folder_stash_conflicts",
+        "folder_stash_drops",
         "folder_stashes",
         "folder_unstash_conflicts",
         "folder_unstashes",

@@ -81,10 +81,14 @@ enum Command {
     Share(commands::share::ShareArgs),
     /// Stop sharing paths with the workspaces; each workspace drops its link at its next sync
     Unshare(commands::share::UnshareArgs),
-    /// Put your changes in the project folder aside, so the folder follows main; fld stash list shows the stash, newest first
+    /// Put your changes in the project folder aside, so the folder follows main; fld stash list shows the stash, newest first, and fld stash drop and fld stash clear drop entries for good
     Stash(commands::stash::StashArgs),
     /// Merge the newest stash entry into the project folder as it is now; a conflict writes conflict markers and keeps the entry until fld record
     Unstash(commands::stash::UnstashArgs),
+    /// Put the project folder back to main: fold stashes your unrecorded changes as stash@{0} first and drops your change that waits for the main agent, with its merge workspace. Asks first
+    Reset(commands::reset::ResetArgs),
+    /// Put the named files or folders back to main's files, after the same safety stash. Asks first
+    Restore(commands::reset::RestoreArgs),
     /// Show the project folder against main: the files fld record would record, what keeps the folder from following main with the next step, and the stash; it changes nothing
     Status(commands::folder_status::StatusArgs),
     /// Print this process's environment for the daemon, which runs it through the user's login shell at its start
@@ -102,9 +106,6 @@ enum Command {
     #[cfg(feature = "dev-seed")]
     #[command(hide = true)]
     Dev(seed::DevArgs),
-    /// List the files of the project folder that changed while a supervised worker worked, which fold does not offer as your change; restore puts them aside in the stash, ignore lets them count as your own
-    #[command(name = "agent-changes")]
-    AgentChanges(commands::agent_changes::AgentChangesArgs),
 }
 
 /// clap prints a parse outcome, including `--help` and `--version`, and exits with its own code; a failed write is a runtime error with exit code 1.
@@ -195,10 +196,19 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
             commands::share::run_unshare(&args, out).map_err(Failure::Remote)
         }
         Some(Command::Stash(args)) => {
-            commands::stash::run_stash(&args, out).map_err(Failure::Remote)
+            commands::stash::run_stash(&args, &mut std::io::BufReader::new(std::io::stdin()), out)
+                .map_err(Failure::Remote)
         }
         Some(Command::Unstash(args)) => {
             commands::stash::run_unstash(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Reset(args)) => {
+            commands::reset::run_reset(&args, &mut std::io::BufReader::new(std::io::stdin()), out)
+                .map_err(Failure::Remote)
+        }
+        Some(Command::Restore(args)) => {
+            commands::reset::run_restore(&args, &mut std::io::BufReader::new(std::io::stdin()), out)
+                .map_err(Failure::Remote)
         }
         Some(Command::Status(args)) => {
             commands::folder_status::run_status(&args, out).map_err(Failure::Remote)
@@ -211,9 +221,6 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::Cost(args)) => commands::cost::run_cost(&args, out).map_err(Failure::Remote),
         Some(Command::Transcript(args)) => {
             commands::transcript::run_transcript(&args, out).map_err(Failure::Remote)
-        }
-        Some(Command::AgentChanges(args)) => {
-            commands::agent_changes::run(&args, out).map_err(Failure::Remote)
         }
         #[cfg(feature = "dev-seed")]
         Some(Command::Dev(args)) => {

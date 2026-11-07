@@ -389,12 +389,14 @@ function invalidationKeys(
     case "checklist":
       return [board, ...taskKey];
     case "claim":
+      // A review claim names its proposal, whose list row and page say whether a reviewer holds it.
       return [
         board,
         keys.workspaces(slug),
         keys.agents(slug),
         ...taskKey,
         ...workspaceKey,
+        ...(proposal === null ? [] : [keys.proposals(slug), ...proposalKey]),
       ];
     case "workspace":
       // A card names its task's live workspace, which opens, closes and moves with these events.
@@ -503,6 +505,7 @@ function invalidationKeys(
         keys.git(slug),
         keys.project(slug),
         keys.needsYou(slug),
+        keys.stash(slug),
       ];
     case "folder":
       // Needs you lists the files a worker changed in the project folder until each is settled.
