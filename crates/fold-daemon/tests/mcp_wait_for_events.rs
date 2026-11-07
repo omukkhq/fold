@@ -1389,3 +1389,113 @@ async fn a_message_that_a_push_notice_delivered_in_the_waits_first_millisecond_e
         "the notice carried the message, so the wait does not carry it again: {woke}"
     );
 }
+
+#[cfg(test)]
+fn rq(number: u32) -> fold_core::RequestId {
+    fold_core::RequestId::from_number(number).unwrap()
+}
+
+#[cfg(test)]
+fn ana() -> Actor {
+    Actor::human(HumanName::parse("ana").unwrap())
+}
+
+#[tokio::test]
+async fn a_lead_that_waits_for_another_type_wakes_for_a_new_request_and_is_told_to_claim_it() {
+    let fx = Fixture::new().await;
+    let lead = fx.connect("frontend").await;
+    let other = fx.connect("backend").await;
+    crate::common::roles::give_role(fx.store(), "frontend", fold_core::Role::AreaLead, None).await;
+    let woken = wait_in_background(
+        &lead,
+        json!({"types": ["task.status_changed"], "timeout_s": 600}),
+    );
+    let unwoken = wait_in_background(
+        &other,
+        json!({"types": ["task.status_changed"], "timeout_s": 2}),
+    );
+    subscribed(&fx.bus, 2).await;
+    fx.tasks
+        .create_request(&ana(), "The board needs a search.", Vec::new())
+        .await
+        .unwrap();
+
+    let woken = body(&tokio::time::timeout(WAIT, woken).await.unwrap().unwrap());
+    assert_eq!(woken["events"].as_array().unwrap().len(), 1, "{woken}");
+    assert_eq!(woken["events"][0]["type"], "request.created");
+    assert_eq!(woken["requests"], json!(["RQ-1"]));
+    assert_eq!(
+        woken["hint"],
+        json!(fold_daemon::mcp::events::REQUESTS_HINT),
+        "{woken}"
+    );
+    assert!(
+        !woken.to_string().contains("needs a search"),
+        "ids, never the request's text: {woken}"
+    );
+    assert_eq!(fx.cursor(&lead).await, woken["next"].as_u64().unwrap());
+    let unwoken = body(&tokio::time::timeout(WAIT, unwoken).await.unwrap().unwrap());
+    assert_eq!(
+        unwoken,
+        json!({"timed_out": true}),
+        "an agent that claims no request waits on"
+    );
+}
+
+#[tokio::test]
+async fn a_request_that_nobody_drafts_wakes_a_lead_and_a_claimed_or_own_one_never_does() {
+    let fx = Fixture::new().await;
+    let lead = fx.connect("frontend").await;
+    let other = fx.connect("backend").await;
+    let store = fx.store();
+    crate::common::roles::give_role(store, "frontend", fold_core::Role::AreaLead, None).await;
+    crate::common::roles::give_role(store, "backend", fold_core::Role::AreaLead, Some("api")).await;
+    fx.tasks
+        .create_request(&ana(), "one", Vec::new())
+        .await
+        .unwrap();
+    fx.tasks
+        .claim_request(
+            &by(other.main()),
+            rq(1),
+            fold_core::requests::RequestKind::Bug,
+            "First",
+        )
+        .await
+        .unwrap();
+    fx.tasks
+        .create_request(&by(lead.main()), "two", Vec::new())
+        .await
+        .unwrap();
+    let head = events::head_seq(store.read()).await.unwrap();
+
+    let waited = call(
+        &lead,
+        "wait_for_events",
+        json!({"types": ["task.status_changed"], "timeout_s": 1}),
+    )
+    .await;
+    assert_eq!(
+        waited,
+        json!({"timed_out": true}),
+        "a claimed request and the lead's own request do not wake it"
+    );
+    assert_eq!(
+        fx.cursor(&lead).await,
+        head,
+        "the cursor moved past the requests the wait passed over"
+    );
+
+    let woken = wait_in_background(
+        &lead,
+        json!({"types": ["task.status_changed"], "timeout_s": 600}),
+    );
+    subscribed(&fx.bus, 1).await;
+    fx.tasks
+        .release_request(&by(other.main()), rq(1))
+        .await
+        .unwrap();
+    let woken = body(&tokio::time::timeout(WAIT, woken).await.unwrap().unwrap());
+    assert_eq!(woken["events"][0]["type"], "request.released", "{woken}");
+    assert_eq!(woken["requests"], json!(["RQ-1"]));
+}

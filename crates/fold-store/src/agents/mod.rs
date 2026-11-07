@@ -417,7 +417,7 @@ pub async fn standing_of(
 }
 
 /// Whether `agent` has the `main` tag and the role of its worker process. An unknown agent stands as one that fold does not supervise.
-async fn standing(
+pub async fn standing(
     executor: impl SqliteExecutor<'_>,
     agent: &AgentName,
 ) -> Result<AgentStanding, StoreError> {

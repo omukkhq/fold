@@ -47,6 +47,7 @@ mod acceptance_35_shared_reference_files;
 mod acceptance_36_agent_folder_changes;
 mod acceptance_37_stash_drop;
 mod acceptance_38_folder_reset;
+mod acceptance_39_request_wakeup;
 mod acceptance_3_parallel_workspaces;
 mod acceptance_4_live_diff;
 mod acceptance_5_review_and_integrate;

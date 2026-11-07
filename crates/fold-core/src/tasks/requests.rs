@@ -7,7 +7,7 @@ use crate::actor::Actor;
 use crate::agents::roles::Role;
 use crate::agents::{AgentName, HumanName};
 use crate::error::{FoldError, codes};
-use crate::events::EventActor;
+use crate::events::{EventActor, EventType, types};
 use crate::ids::{ProposalId, RequestId, RevisionId, TaskId};
 use crate::reviews::Side;
 use crate::tasks::claims::is_stale;
@@ -48,9 +48,17 @@ define_names!(
     }
 );
 
+/// The events after which a request can be left without a drafter: its creation and a release. Each one wakes the waiting orchestrators, whatever their wait's filter says.
+pub const DRAFTER_WANTED: [EventType; 2] = [types::REQUEST_CREATED, types::REQUEST_RELEASED];
+
 impl RequestState {
     pub fn is_final(self) -> bool {
         matches!(self, RequestState::Approved | RequestState::Closed)
+    }
+
+    /// An orchestrator can claim the request without taking it over from anyone: it is not approved or closed, and nobody drafts it.
+    pub fn waits_for_drafter(self, has_drafter: bool) -> bool {
+        !self.is_final() && !has_drafter
     }
 
     /// `request_not_open` for an approved or closed request, which only reads.
@@ -618,6 +626,27 @@ mod tests {
 
     fn refusal(cards: Vec<DraftCard>, edges: Vec<DraftEdge>) -> DraftRefusal {
         validate_draft(cards, edges).unwrap_err()
+    }
+
+    #[test]
+    fn only_an_unfinished_request_with_no_drafter_waits_for_one() {
+        use RequestState::{Approved, ChangesRequested, Closed, DraftReady, Drafting, Open};
+        for state in [Open, DraftReady, ChangesRequested] {
+            assert!(state.waits_for_drafter(false), "{state:?}");
+        }
+        for state in [
+            Open,
+            Drafting,
+            DraftReady,
+            ChangesRequested,
+            Approved,
+            Closed,
+        ] {
+            assert!(!state.waits_for_drafter(true), "{state:?}");
+        }
+        for state in [Approved, Closed] {
+            assert!(!state.waits_for_drafter(false), "{state:?}");
+        }
     }
 
     fn agent(worker: &str) -> Actor {

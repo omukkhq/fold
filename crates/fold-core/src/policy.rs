@@ -74,6 +74,11 @@ impl AgentStanding {
     pub fn acts_on_reviews(self) -> bool {
         self.decides_reviews() || self.role == Some(Role::ReviewLead)
     }
+
+    /// Turning a request into cards is an orchestrator's job: the agent with the `main` tag, or an area lead that judges the request relevant to its area. fold does not check the request against the area, so every area lead hears of every request it could claim.
+    pub fn claims_requests(self) -> bool {
+        self.holds_main || self.role == Some(Role::AreaLead)
+    }
 }
 
 /// The facts of a proposal's task that decide who reviews it. A task in the built-in area Main is the main agent's own preparation work, so no review agent reviews it: a human approves its proposal, and the main agent approves only while the task has no human review mark. fold puts the mark on every task that comes into Main and only a human takes it off, so its absence is the user's word for that task; a plan the user agreed to can leave it off with `main_approves`.
@@ -618,6 +623,22 @@ mod tests {
 
     fn outcome<T>(result: Result<T, PolicyDenied>) -> Option<&'static str> {
         result.err().map(|denied| denied.code())
+    }
+
+    #[test]
+    fn the_main_agent_and_an_area_lead_claim_requests_and_no_other_agent_does() {
+        let standing = |holds_main, role| AgentStanding { holds_main, role };
+        assert!(standing(true, None).claims_requests());
+        assert!(standing(false, Some(Role::AreaLead)).claims_requests());
+        for role in [
+            None,
+            Some(Role::ReviewLead),
+            Some(Role::TaskWorker),
+            Some(Role::Reviewer),
+        ] {
+            assert!(!standing(false, role).claims_requests(), "{role:?}");
+        }
+        assert!(!AgentStanding::NO_RIGHTS.claims_requests());
     }
 
     #[test]
