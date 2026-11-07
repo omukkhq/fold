@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { sharedNote } from "./sharedPaths";
+import { ApiError } from "@/api/errors";
+import { pathForm, sharedFailure, sharedNote } from "./sharedPaths";
 
 describe("sharedNote", () => {
   it("says nothing until the read arrives or when nothing is shared or hidden", () => {
@@ -15,7 +16,7 @@ describe("sharedNote", () => {
         unseen_count: 0,
       }),
     ).toEqual({
-      shared: "Shared read-only with workers: design/, docs/spec.pdf.",
+      shared: ["design/", "docs/spec.pdf"],
       unseen: null,
       hint: null,
     });
@@ -25,17 +26,54 @@ describe("sharedNote", () => {
     expect(
       sharedNote({
         shared: [],
-        unseen: [".env", "notes.md"],
+        unseen: [".env", "notes/"],
         unseen_count: 3,
       }),
     ).toEqual({
       shared: null,
-      unseen: "Workers cannot see 3 ignored paths: .env, notes.md and 1 more.",
+      unseen: {
+        lead: "Workers cannot see 3 ignored paths:",
+        paths: [".env", "notes/"],
+        more: 1,
+      },
       hint: "fld share <path>",
     });
     expect(
       sharedNote({ shared: ["design/"], unseen: [".env"], unseen_count: 1 })
         ?.unseen,
-    ).toBe("Workers cannot see 1 ignored path: .env.");
+    ).toEqual({
+      lead: "Workers cannot see 1 ignored path:",
+      paths: [".env"],
+      more: 0,
+    });
+  });
+
+  it("shows a folder with one trailing slash and a file without one", () => {
+    expect(pathForm("notes/")).toBe("notes/");
+    expect(pathForm("notes//")).toBe("notes/");
+    expect(pathForm(".env")).toBe(".env");
+    expect(
+      sharedNote({ shared: ["design//"], unseen: ["a//"], unseen_count: 1 }),
+    ).toMatchObject({ shared: ["design/"], unseen: { paths: ["a/"] } });
+  });
+});
+
+describe("sharedFailure", () => {
+  it("words the failed read by its code", () => {
+    expect(sharedFailure(new ApiError("workspace_io", "x"))).toBe(
+      "fold could not read .fold/shared or the ignored files of the project folder.",
+    );
+    expect(sharedFailure(new ApiError("internal_error", "x"))).toBe(
+      "The daemon failed. Try again.",
+    );
+    expect(sharedFailure(new ApiError("project_unavailable", "x"))).toBe(
+      "The project is not available now.",
+    );
+    expect(sharedFailure(new ApiError("other", "x"))).toBe(
+      "The daemon refused the request.",
+    );
+    expect(sharedFailure(new Error("offline"))).toBe(
+      "The daemon did not answer.",
+    );
   });
 });

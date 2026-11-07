@@ -18,6 +18,7 @@ import { Mono } from "@/components/mono/Mono";
 import { WriteError } from "@/features/task/parts";
 import {
   RECORD_PENDING,
+  dialogAlert,
   dialogText,
   failureAt,
   folderWriteKey,
@@ -183,7 +184,7 @@ export function AgentChangeDialog({
 }) {
   const { settle, asking } = choices;
   const text = asking === null ? null : dialogText(asking);
-  const failed = failureAt(asking, settle.error, "dialog");
+  const failed = dialogAlert(asking, settle.error);
   return (
     <Dialog
       open={asking !== null}
@@ -220,11 +221,10 @@ export function AgentChangeDialog({
         </div>
       }
     >
-      {text?.notice ? (
-        <p role="status" className="text-14 font-medium text-text">
-          {text.notice}
-        </p>
-      ) : null}
+      <WriteError
+        error={failed === null ? null : settle.error}
+        describe={failureView(failed)}
+      />
       {asking === null ? null : asking.action === "record" ? (
         asking.confirmation.groups.map((group) => (
           <section
@@ -239,10 +239,6 @@ export function AgentChangeDialog({
       ) : (
         <PathList paths={asking.change.paths} />
       )}
-      <WriteError
-        error={failed === null ? null : settle.error}
-        describe={failureView(failed)}
-      />
     </Dialog>
   );
 }

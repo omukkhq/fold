@@ -29,6 +29,17 @@ export async function getShared(slug: string): Promise<SharedState> {
     }),
   );
 }
+
+/** A named human ends every Needs you item of shared files that changed during a worker's tool call, once they checked the files. */
+export async function dismissSharedChanges(
+  slug: string,
+): Promise<Schemas["SharedChangesDismissed"]> {
+  return unwrap(
+    api.POST("/api/v1/projects/{slug}/shared/dismiss", {
+      params: { path: { slug } },
+    }),
+  );
+}
 const MAX_PAGES = 5;
 
 /** The main revisions, newest first, in at most `MAX_PAGES` pages of `PAGE_SIZE`; `more` says that older revisions were left out. */

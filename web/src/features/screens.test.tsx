@@ -986,38 +986,48 @@ describe("Repository screen", () => {
     expect(router.state.location.pathname).toBe("/");
   });
 
-  it("names the shared paths and the ignored paths workers cannot see, wrapping long ones", async () => {
+  it("names the shared paths and the ignored paths workers cannot see in the path face, wrapping long ones", async () => {
     sharedReply = {
       body: {
         shared: ["design/a-very-long-folder-name-without-any-break/"],
-        unseen: [".env"],
-        unseen_count: 1,
+        unseen: [".env", "notes/"],
+        unseen_count: 3,
       },
     };
     renderRepository();
-    const shared = await screen.findByText(
+    const path = await screen.findByText(
+      "design/a-very-long-folder-name-without-any-break/",
+    );
+    expect(path.className).toContain("font-mono");
+    const shared = path.closest("p");
+    expect(shared?.textContent).toBe(
       "Shared read-only with workers: design/a-very-long-folder-name-without-any-break/.",
     );
-    expect(shared.parentElement?.className).toContain("wrap-anywhere");
-    expect(shared.parentElement?.className).toContain("min-w-0");
-    expect(
-      screen.getByText(/Workers cannot see 1 ignored path: \.env\./),
-    ).toBeTruthy();
+    expect(shared?.parentElement?.className).toContain("wrap-anywhere");
+    expect(shared?.parentElement?.className).toContain("min-w-0");
+    const unseen = screen.getByText("notes/");
+    expect(unseen.className).toContain("font-mono");
+    expect(unseen.closest("p")?.textContent).toContain(
+      "Workers cannot see 3 ignored paths: .env, notes/ and 1 more. Run fld share <path>",
+    );
   });
 
-  it("says when the shared paths could not load and reads them again on Retry", async () => {
-    sharedReply = errorReply(500, "internal_error");
+  it("says by its code why the shared paths could not load and reads them again on Retry", async () => {
+    sharedReply = errorReply(500, "workspace_io");
     renderRepository();
     const banner = await screen.findByText("The shared paths could not load.");
+    const alert = banner.closest<HTMLElement>("[role=alert]");
+    if (alert === null) throw new Error("the banner is no alert");
+    expect(alert.textContent).toContain(
+      "fold could not read .fold/shared or the ignored files of the project folder.",
+    );
     sharedReply = {
       body: { shared: ["design/"], unseen: [], unseen_count: 0 },
     };
-    const alert = banner.closest<HTMLElement>("[role=alert]");
-    if (alert === null) throw new Error("the banner is no alert");
     await userEvent.click(within(alert).getByRole("button", { name: "Retry" }));
-    expect(
-      await screen.findByText("Shared read-only with workers: design/."),
-    ).toBeTruthy();
+    expect((await screen.findByText("design/")).closest("p")?.textContent).toBe(
+      "Shared read-only with workers: design/.",
+    );
     expect(screen.queryByText("The shared paths could not load.")).toBeNull();
   });
 

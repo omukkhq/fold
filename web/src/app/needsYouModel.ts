@@ -25,6 +25,17 @@ export interface NeedsYouLine {
   href: string | null;
   /** The worker's change of the project folder that the line settles in place, by putting it aside, keeping it or recording it; null for every other line. */
   settle: AgentChange | null;
+  /** The files of a line about a worker's tool call, shown in the path face on the second line in place of `title`; null for every other line. */
+  files: FilesSummary | null;
+  /** How many items of changed shared files the line's Dismiss ends, which is every one of them; null for every other line. */
+  dismiss: number | null;
+}
+
+/** The files of an item as the second line names them: how many, the first path and the count of the rest. */
+export interface FilesSummary {
+  count: string;
+  first: string;
+  more: number;
 }
 
 export type NeedsYouGroupId = "ask" | "wait" | "project";
@@ -136,12 +147,26 @@ export function pathsText(paths: readonly string[]): string | null {
     : `${codeData(first)} and ${String(paths.length - 1)} more`;
 }
 
-/** The files of a worker's change with their count, as `27 files: README.md and 26 more`; null when none is named. */
-export function filesText(paths: readonly string[]): string | null {
-  const named = pathsText(paths);
-  if (named === null) return null;
-  const count = paths.length === 1 ? "1 file" : `${String(paths.length)} files`;
-  return `${count}: ${named}`;
+/** The files of a worker's tool call with their count, as `27 files`, `README.md` and 26 more; null when none is named. */
+export function filesSummary(paths: readonly string[]): FilesSummary | null {
+  const [first] = paths;
+  if (first === undefined) return null;
+  return {
+    count: paths.length === 1 ? "1 file" : `${String(paths.length)} files`,
+    first,
+    more: paths.length - 1,
+  };
+}
+
+/** The agents of a worker's change as the subject of its line: the one agent as the line's person, else the agents named in the words. */
+function changedBy(agents: readonly string[]): {
+  person: string | null;
+  subject: string;
+} {
+  const [only] = agents;
+  return agents.length === 1 && only !== undefined
+    ? { person: only, subject: "" }
+    : { person: null, subject: `${codeData(agentsText(agents))} ` };
 }
 
 /** `asks 3 questions` for a set of several, else `asks about Chart library` with the question's header, else what kind of answer it wants. */
@@ -165,6 +190,8 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
     since: item.since,
     inline: INLINE_KINDS.has(item.kind),
     settle: null,
+    files: null,
+    dismiss: null,
   };
   switch (item.kind) {
     case "human_task":
@@ -302,25 +329,31 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         text: "fold turned this notice target off after its sends failed; a test that gets through turns it on again",
         href: projectPath(slug, "settings"),
       };
-    case "agent_change":
+    case "agent_change": {
+      const by = changedBy(item.agents);
+      const they = by.person === null ? "they" : "it";
       return {
         ...base,
-        person: null,
+        person: by.person,
         chip: null,
         task: null,
-        title: filesText(item.paths),
-        text: `The project folder changed while ${codeData(agentsText(item.agents))} worked`,
+        files: filesSummary(item.paths),
+        text: `${by.subject}changed files in the project folder while ${they} worked`,
         href: null,
         settle: { paths: item.paths, agents: item.agents },
       };
+    }
     case "shared_changed":
       return {
         ...base,
         person: item.agent,
         chip: null,
         task: null,
-        title: filesText(item.paths),
-        text: `changed ${item.paths.length === 1 ? "a shared file" : "shared files"} while it worked. Check the files, then run \`fld share --dismiss\``,
+        files: filesSummary(item.paths),
+        text:
+          item.paths.length === 1
+            ? "changed a shared file while it worked. Check the file, then dismiss this"
+            : "changed shared files while it worked. Check the files, then dismiss this",
         href: null,
       };
     case "human_review":
@@ -347,8 +380,12 @@ export function needsYouGroups(
   slug: string,
   items: readonly NeedsYouItem[],
 ): NeedsYouGroup[] {
+  const shared = items.filter((item) => item.kind === "shared_changed").length;
   const lines = items
     .map((item, index) => lineOf(slug, item, index))
+    .map((line) =>
+      line.kind === "shared_changed" ? { ...line, dismiss: shared } : line,
+    )
     .sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
   return GROUPS.map((group) => ({
     ...group,

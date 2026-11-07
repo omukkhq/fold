@@ -4,7 +4,9 @@ import {
   LISTED_PATHS,
   agentsText,
   confirmationOf,
+  dialogAlert,
   dialogText,
+  dismissLabel,
   failureAt,
   folderWriteKey,
   nextAsking,
@@ -80,9 +82,11 @@ function refusal(code: string, reason?: string): ApiError {
 describe("the choices of a worker's change", () => {
   it("names one, two or many agents", () => {
     expect(agentsText([])).toBe("an agent");
-    expect(agentsText(["reviewer-35"])).toBe("reviewer-35");
-    expect(agentsText(["backend", "web-lead"])).toBe("backend and web-lead");
+    expect(agentsText(["reviewer-35"])).toBe("@reviewer-35");
+    expect(agentsText(["backend", "web-lead"])).toBe("@backend and @web-lead");
     expect(agentsText(["a", "b", "c"])).toBe("3 agents");
+    expect(dismissLabel(1)).toBe("Dismiss");
+    expect(dismissLabel(3)).toBe("Dismiss all 3");
     expect(putAsideLabel(["reviewer-35"])).toBe("Put the agent's files aside");
     expect(putAsideLabel(["a", "b"])).toBe("Put the agents' files aside");
   });
@@ -113,7 +117,7 @@ describe("the choices of a worker's change", () => {
       confirm: "Keep as mine",
       danger: false,
     });
-    expect(keep.description).toContain("a change of reviewer-35");
+    expect(keep.description).toContain("a change of @reviewer-35");
   });
 
   it("opens the record dialog on a confirmation and says when the folder changed since", () => {
@@ -140,6 +144,25 @@ describe("the choices of a worker's change", () => {
     expect(moved === null ? null : dialogText(moved).notice).toBe(
       "The folder changed; check the files again.",
     );
+  });
+
+  it("alerts in the record dialog that the folder changed, and gives way to a refusal", () => {
+    const changed: Asking = {
+      action: "record",
+      confirmation: { tree: "def", groups: [] },
+      changed: true,
+    };
+    expect(dialogAlert(changed, heldBack({ tree: "def" }))).toBe(
+      "The folder changed; check the files again.",
+    );
+    expect(dialogAlert(changed, null)).toBeNull();
+    expect(
+      dialogAlert({ ...changed, changed: false }, heldBack({ tree: "def" })),
+    ).toBeNull();
+    expect(dialogAlert(changed, refusal("git_failed"))).toContain(
+      "A Git command failed",
+    );
+    expect(dialogAlert(null, refusal("git_failed"))).toBeNull();
   });
 
   it("keeps the open dialog on any other refusal and closes on success or close", () => {

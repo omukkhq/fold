@@ -10,6 +10,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { type StubReply, stubFetch } from "@/test/stubFetch";
+import type { NeedsYouItem } from "@/api/workers";
 import { needsItem } from "@/test/workers";
 import { Inbox } from "./Inbox";
 
@@ -73,12 +74,13 @@ async function renderInbox(
     string,
     (search: URLSearchParams) => StubReply | Promise<StubReply>
   >,
+  items: NeedsYouItem[] = [change],
 ) {
   let settled = false;
   const calls = stubFetch({
     "GET /api/v1/session": { body: { human: "ana", authenticated: true } },
     "GET /api/v1/projects/demo/needs-you": () => ({
-      body: { items: settled ? [] : [change] },
+      body: { items: settled ? [] : items },
     }),
     ...Object.fromEntries(
       Object.entries(routes).map(([route, reply]) => [
@@ -105,7 +107,7 @@ async function renderInbox(
     </QueryClientProvider>,
   );
   await userEvent.click(
-    await screen.findByRole("button", { name: /^Inbox, 1 waits/ }),
+    await screen.findByRole("button", { name: /^Inbox, \d+ waits? for you/ }),
   );
   const inbox = screen.getByRole("dialog", { name: "Inbox" });
   return { calls, inbox };
@@ -178,11 +180,9 @@ describe("the choices of a worker's change in the Inbox", () => {
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Record anyway" }),
     );
-    expect(
-      await within(dialog).findByText(
-        "The folder changed; check the files again.",
-      ),
-    ).toBeTruthy();
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
+      "The folder changed; check the files again.",
+    );
     expect(dialog.textContent).toContain("notes.md");
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Record anyway" }),
@@ -260,7 +260,7 @@ describe("the choices of a worker's change in the Inbox", () => {
     const dialog = await screen.findByRole("dialog", {
       name: "Keep 3 files as yours?",
     });
-    expect(dialog.textContent).toContain("a change of reviewer-35");
+    expect(dialog.textContent).toContain("a change of @reviewer-35");
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Keep as mine" }),
     );
@@ -304,5 +304,45 @@ describe("the choices of a worker's change in the Inbox", () => {
     ).toBe(true);
     finish({ body: { revision: "r3", files: paths, entries: 1 } });
     expect(await screen.findByText("Nothing waits for you.")).toBeTruthy();
+  });
+
+  it("names the agent by @name and the files in the path face", async () => {
+    const { inbox } = await renderInbox({});
+    const project = within(inbox).getByRole("region", { name: "Project" });
+    expect(within(project).getByText("@reviewer-35")).toBeTruthy();
+    expect(project.textContent).toContain(
+      "changed files in the project folder while it worked",
+    );
+    const first = within(project).getByText("plan.md");
+    expect(first.className).toContain("font-mono");
+    expect(first.parentElement?.textContent).toBe(
+      "3 files: plan.md and 2 more",
+    );
+    expect(first.parentElement?.className).toContain("wrap-anywhere");
+  });
+
+  it("dismisses every changed shared file from its line, pending until Needs you is read again", async () => {
+    let finish: (reply: StubReply) => void = () => {};
+    const waiting = new Promise<StubReply>((resolve) => {
+      finish = resolve;
+    });
+    const shared = (agent: string, paths: string[]) =>
+      needsItem({ kind: "shared_changed", screen: "repository", agent, paths });
+    const { calls } = await renderInbox(
+      { "POST /api/v1/projects/demo/shared/dismiss": () => waiting },
+      [shared("ops-lead", ["design/home.pen"]), shared("backend", ["a.pen"])],
+    );
+    const inbox = screen.getByRole("dialog", { name: "Inbox" });
+    const [dismiss] = within(inbox).getAllByRole("button", {
+      name: "Dismiss all 2",
+    });
+    if (dismiss === undefined) throw new Error("no Dismiss");
+    await userEvent.click(dismiss);
+    expect(
+      await within(inbox).findByRole("button", { name: /Dismissing/ }),
+    ).toBeTruthy();
+    finish({ body: { dismissed: 2 } });
+    expect(await screen.findByText("Nothing waits for you.")).toBeTruthy();
+    expect(posts(calls)).toEqual(["/api/v1/projects/demo/shared/dismiss"]);
   });
 });

@@ -27,6 +27,7 @@ import { useState, type ReactNode } from "react";
 import { needsYouQuery, sessionQuery } from "@/api/queries";
 import type { NeedsYouKind } from "@/api/workers";
 import { Count } from "@/components/badge/Chip";
+import { Mono } from "@/components/mono/Mono";
 import { buttonClasses } from "@/components/button/buttonStyles";
 import { CodeText } from "@/components/code/CodeText";
 import { ID_CLASSES } from "@/components/id/idStyles";
@@ -56,6 +57,7 @@ import {
   useAgentChangeChoices,
 } from "./AgentChangeChoices";
 import { HrefLink } from "./HrefLink";
+import { SharedChangeDismiss } from "./SharedChangeDismiss";
 import { listNote, listState } from "./listNote";
 import { PanelNote } from "./PanelNote";
 import {
@@ -161,6 +163,15 @@ function NeedLine({
             )}
           >
             <CodeText text={line.title} caption />
+          </span>
+        ) : null}
+        {line.files ? (
+          <span className="min-w-0 basis-full text-13 wrap-anywhere text-text-2">
+            {line.files.count}:{" "}
+            <Mono className="text-text">{line.files.first}</Mono>
+            {line.files.more > 0
+              ? ` and ${String(line.files.more)} more`
+              : null}
           </span>
         ) : null}
         {choices ? <span className="basis-full pt-4">{choices}</span> : null}
@@ -421,7 +432,12 @@ export function Inbox({ slug }: { slug: string }) {
                                 choices={agentChange}
                                 change={line.settle}
                               />
-                            ) : undefined
+                            ) : line.dismiss === null ? undefined : (
+                              <SharedChangeDismiss
+                                slug={slug}
+                                count={line.dismiss}
+                              />
+                            )
                           }
                         />
                       ))}

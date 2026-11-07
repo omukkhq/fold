@@ -65,12 +65,18 @@ export function confirmationOf(error: unknown): RecordConfirmation | null {
   return { tree, groups };
 }
 
-/** The agents of the item as words: `reviewer-35`, `web-lead and backend`, or `3 agents`. */
+/** The agents of the item as words, each by its `@name` as every agent reads: `@reviewer-35`, `@web-lead and @backend`, or `3 agents`. */
 export function agentsText(agents: readonly string[]): string {
-  if (agents.length === 0) return "an agent";
-  if (agents.length === 1) return agents[0] ?? "an agent";
-  if (agents.length === 2) return `${agents[0] ?? ""} and ${agents[1] ?? ""}`;
+  const [first, second] = agents;
+  if (first === undefined) return "an agent";
+  if (second === undefined) return `@${first}`;
+  if (agents.length === 2) return `@${first} and @${second}`;
   return `${String(agents.length)} agents`;
+}
+
+/** The label of the Dismiss button of a changed shared file, which ends every such item. */
+export function dismissLabel(count: number): string {
+  return count > 1 ? `Dismiss all ${String(count)}` : "Dismiss";
 }
 
 function filesCount(count: number): string {
@@ -230,4 +236,14 @@ export function failureAt(
   if (error === null || error === undefined) return null;
   if ((asking === null) !== (place === "line")) return null;
   return settleFailure(error);
+}
+
+/** The alert of the open dialog: the refusal of its write, or the note that the folder changed since the list the person saw, which a new `record_needs_confirmation` brings. */
+export function dialogAlert(
+  asking: Asking | null,
+  error: unknown,
+): string | null {
+  const failed = failureAt(asking, error, "dialog");
+  if (failed !== null || asking === null || !error) return failed;
+  return dialogText(asking).notice;
 }

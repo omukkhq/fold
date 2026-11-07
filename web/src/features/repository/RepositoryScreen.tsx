@@ -20,10 +20,31 @@ import { isMissingRevision, pickRevision } from "./revision";
 import { folderAt, parentDirs, parentOf } from "./search";
 import { CommitId } from "@/components/mono/CommitId";
 import { Mono } from "@/components/mono/Mono";
-import { sharedNote } from "./sharedPaths";
+import { sharedFailure, sharedNote } from "./sharedPaths";
 import { GitStatus } from "../git/GitStatus";
 import { RevisionList } from "./RevisionList";
 import { TreeView } from "./TreeView";
+
+/** Paths in the path face, comma-separated, with the count of those left out. */
+function PathWords({
+  paths,
+  more = 0,
+}: {
+  paths: readonly string[];
+  more?: number;
+}) {
+  return (
+    <>
+      {paths.map((path, index) => (
+        <span key={path}>
+          {index > 0 ? ", " : null}
+          <Mono>{path}</Mono>
+        </span>
+      ))}
+      {more > 0 ? ` and ${String(more)} more` : null}
+    </>
+  );
+}
 
 interface RepositoryScreenProps {
   slug: string;
@@ -240,7 +261,7 @@ export function RepositoryScreen({
           <ErrorBanner
             className="rounded-m px-14"
             title="The shared paths could not load."
-            message="The daemon did not answer."
+            message={sharedFailure(shared.error)}
             onRetry={() => void shared.refetch()}
           />
         ) : null}
@@ -252,11 +273,21 @@ export function RepositoryScreen({
               className="mt-3 shrink-0 text-text-2"
             />
             <div className="flex min-w-0 max-w-measure flex-col gap-4 wrap-anywhere">
-              {sharing.shared === null ? null : <p>{sharing.shared}</p>}
+              {sharing.shared === null ? null : (
+                <p>
+                  Shared read-only with workers:{" "}
+                  <PathWords paths={sharing.shared} />.
+                </p>
+              )}
               {sharing.unseen === null ? null : (
                 <p>
-                  {sharing.unseen} Run <Mono>{sharing.hint}</Mono> in the
-                  project folder to share one with them, read-only.
+                  {sharing.unseen.lead}{" "}
+                  <PathWords
+                    paths={sharing.unseen.paths}
+                    more={sharing.unseen.more}
+                  />
+                  . Run <Mono>{sharing.hint}</Mono> in the project folder to
+                  share one with them, read-only.
                 </p>
               )}
             </div>

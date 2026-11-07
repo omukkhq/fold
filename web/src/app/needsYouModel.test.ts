@@ -6,7 +6,7 @@ import {
   itemsFor,
   needsYouGroups,
   reviewsWaitingFor,
-  filesText,
+  filesSummary,
   pathsText,
   questionText,
   titleText,
@@ -306,7 +306,7 @@ describe("needsYouGroups", () => {
     });
   });
 
-  it("shows a worker's change of the project folder with its agents and the counted files, to settle in place", () => {
+  it("shows a worker's change of the project folder by its agent, with the counted files, to settle in place", () => {
     const [group] = needsYouGroups("demo", [
       needsItem({
         kind: "agent_change",
@@ -318,22 +318,42 @@ describe("needsYouGroups", () => {
     ]);
     expect(group?.title).toBe("Project");
     expect(group?.lines[0]).toMatchObject({
-      person: null,
+      person: "reviewer-35",
       chip: null,
-      title: "3 files: README.md and 2 more",
-      text: "The project folder changed while reviewer-35 worked",
+      title: null,
+      files: { count: "3 files", first: "README.md", more: 2 },
+      text: "changed files in the project folder while it worked",
       href: null,
+      dismiss: null,
       settle: {
         paths: ["README.md", "junk1.txt", "junk2.txt"],
         agents: ["reviewer-35"],
       },
     });
     expect(group?.lines[0]?.key).toBe("agent_change:0");
-    expect(filesText(["a.txt"])).toBe("1 file: a.txt");
-    expect(filesText([])).toBeNull();
+    expect(filesSummary(["a.txt"])).toEqual({
+      count: "1 file",
+      first: "a.txt",
+      more: 0,
+    });
+    expect(filesSummary([])).toBeNull();
   });
 
-  it("shows shared files that changed while a worker worked, with the agent and the step that ends it, opening nothing", () => {
+  it("names several agents of a worker's change by @name in the words", () => {
+    const line = (agents: string[]) =>
+      needsYouGroups("demo", [
+        needsItem({ kind: "agent_change", screen: "repository", agents }),
+      ])[0]?.lines[0];
+    expect(line(["backend", "web-lead"])).toMatchObject({
+      person: null,
+      text: "@backend and @web-lead changed files in the project folder while they worked",
+    });
+    expect(line(["a", "b", "c"])?.text).toBe(
+      "3 agents changed files in the project folder while they worked",
+    );
+  });
+
+  it("shows shared files that changed while a worker worked by the agent, with a Dismiss that ends every such item", () => {
     const [group] = needsYouGroups("demo", [
       needsItem({
         kind: "shared_changed",
@@ -351,14 +371,18 @@ describe("needsYouGroups", () => {
     expect(group?.title).toBe("Project");
     expect(group?.lines[0]).toMatchObject({
       person: "web-worker",
-      title: "1 file: design/home.pen",
-      text: "changed a shared file while it worked. Check the files, then run `fld share --dismiss`",
+      title: null,
+      files: { count: "1 file", first: "design/home.pen", more: 0 },
+      text: "changed a shared file while it worked. Check the file, then dismiss this",
       href: null,
       settle: null,
+      dismiss: 2,
     });
-    expect(group?.lines[1]?.text).toBe(
-      "changed shared files while it worked. Check the files, then run `fld share --dismiss`",
-    );
+    expect(group?.lines[1]).toMatchObject({
+      text: "changed shared files while it worked. Check the files, then dismiss this",
+      files: { count: "2 files", first: "design/a.pen", more: 1 },
+      dismiss: 2,
+    });
   });
 
   it("shows an unstash whose conflict markers wait with the conflicted files, opening nothing", () => {
