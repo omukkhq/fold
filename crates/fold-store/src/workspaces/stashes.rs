@@ -21,6 +21,8 @@ pub enum StashState {
 pub struct StashRow {
     /// The row id, which the daemon keeps to itself.
     pub id: i64,
+    /// The entry's number, unique in the project and never reused, so a client names the entry it saw while places on the stack move.
+    pub number: i64,
     /// The checkout record's tree when the entry was made.
     pub base_tree: ObjectHash,
     /// The folder's tree when the entry was made.
@@ -74,7 +76,7 @@ pub async fn insert_stash(tx: &mut WriteTx, stash: &NewStash<'_>) -> Result<i64,
 /// The stack, newest entry first: `stash@{0}` is the first.
 pub async fn stash_stack(conn: &mut SqliteConnection) -> Result<Vec<StashRow>, StoreError> {
     let rows = sqlx::query!(
-        r#"SELECT s.id AS "id!: i64", s.base_tree_hash, s.tree_hash, r.number AS "revision!: i64",
+        r#"SELECT s.id AS "id!: i64", s.number AS "number!: i64", s.base_tree_hash, s.tree_hash, r.number AS "revision!: i64",
                   s.actor, s.state, s.created_at AS "created_at!: i64", s.conflicted_at AS "conflicted_at?: i64"
            FROM folder_stashes s JOIN revisions r ON r.id = s.revision_id
            WHERE s.state IN ('stashed', 'conflicted')
@@ -93,6 +95,7 @@ pub async fn stash_stack(conn: &mut SqliteConnection) -> Result<Vec<StashRow>, S
         let conflicts = conflicts_of(conn, row.id).await?;
         stack.push(StashRow {
             id: row.id,
+            number: row.number,
             base_tree: tree_hash(&row.base_tree_hash, "folder_stashes.base_tree_hash")?,
             tree: tree_hash(&row.tree_hash, "folder_stashes.tree_hash")?,
             revision: number(

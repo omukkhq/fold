@@ -1298,6 +1298,9 @@ pub struct StashEntryView {
     /// Its name on the stack: `stash@{0}` is the newest.
     #[schema(example = "stash@{0}")]
     pub stash: String,
+    /// The entry's number, which stays the same while its place on the stack moves and is never reused; a drop names it.
+    #[schema(example = 7)]
+    pub number: i64,
     /// UTC milliseconds of the stash.
     #[schema(value_type = i64)]
     pub created_at: Timestamp,
@@ -1342,6 +1345,7 @@ impl From<StashEntry> for StashEntryView {
     fn from(entry: StashEntry) -> Self {
         Self {
             stash: format!("stash@{{{}}}", entry.position),
+            number: entry.number,
             created_at: entry.created_at,
             base: entry.base.to_string(),
             actor: entry.actor,
@@ -1359,9 +1363,27 @@ pub struct StashDropResult {
     pub entries: usize,
 }
 
-const DROP_REFUSALS: &str = "The human name is not valid; the place is not a number (`reason` `invalid_entry`); the stash is empty (`reason` `stash_empty`); no entry has that place (`reason` `stash_entry_missing`, the stack's length in `entries`); the entry's unstash conflict waits in the folder (`reason` `stash_conflicted`, the files in `paths`); or, while an unstash that stopped part-way is finished first, the branch or HEAD shows a change fold did not make (`reason` `head_moved`) or the human's Git commits wait (`reason` `git_commits_wait`)";
+/// What the human saw of the entry that `fld stash drop` drops.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct DropStashQuery {
+    /// The `number` of the entry the human saw at this place; another entry there now refuses the drop with `stash_changed`.
+    pub number: i64,
+}
 
-/// Drops one entry of the stash, as `fld stash drop` asks: its changes leave the stack for good, its objects stay until `fld gc`, and no file of the project folder changes. Only a named human drops, over the socket or signed in to the web app. An entry whose unstash conflict waits in the folder is refused.
+/// What the human saw of the stack that `fld stash clear` drops.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ClearStashQuery {
+    /// How many entries the human saw.
+    pub entries: usize,
+    /// The `number` of the newest entry the human saw, `stash@{0}`; left out for an empty stash.
+    pub newest: Option<i64>,
+}
+
+const DROP_REFUSALS: &str = "The human name is not valid; the query is missing or not valid; the place is not a number (`reason` `invalid_entry`); the stack is no longer the one the human saw, so nothing is dropped (`reason` `stash_changed`, the stack's length in `entries`); the stash is empty (`reason` `stash_empty`); no entry has that place (`reason` `stash_entry_missing`, the stack's length in `entries`); the entry's unstash conflict waits in the folder (`reason` `stash_conflicted`, the files in `paths`); or, while an unstash that stopped part-way is finished first, the branch or HEAD shows a change fold did not make (`reason` `head_moved`) or the human's Git commits wait (`reason` `git_commits_wait`)";
+
+/// Drops one entry of the stash, as `fld stash drop` asks: its changes leave the stack for good, its objects stay until `fld gc`, and no file of the project folder changes. Only a named human drops, over the socket or signed in to the web app. The query names the entry the human saw at that place, so a stack that changed meanwhile drops nothing. An entry whose unstash conflict waits in the folder is refused.
 #[utoipa::path(
     delete,
     path = "/api/v1/projects/{slug}/stash/{entry}",
@@ -1369,6 +1391,7 @@ const DROP_REFUSALS: &str = "The human name is not valid; the place is not a num
     params(
         ("slug" = String, Path, description = "The project slug"),
         ("entry" = String, Path, description = "The entry's place on the stack: `0` is `stash@{0}`, the newest"),
+        DropStashQuery,
     ),
     responses(
         (status = 200, description = "The entry is dropped", body = StashDropResult),
@@ -1385,6 +1408,7 @@ pub async fn drop_stash_entry(
     human: Human,
     Project(handle): Project,
     Path((_slug, entry)): Path<(String, String)>,
+    ApiQuery(query): ApiQuery<DropStashQuery>,
 ) -> Result<Json<StashDropResult>, ApiError> {
     let position = entry
         .strip_prefix("stash@{")
@@ -1399,15 +1423,23 @@ pub async fn drop_stash_entry(
             .with_hint("`fld stash list` names each entry")
             .with_details([("reason", serde_json::json!("invalid_entry"))])
         })?;
-    drop_entries(&handle, &human, StashDrop::One(position)).await
+    drop_entries(
+        &handle,
+        &human,
+        StashDrop::One {
+            position,
+            number: query.number,
+        },
+    )
+    .await
 }
 
-/// Drops every entry of the stash, as `fld stash clear` asks: their changes leave the stack for good, their objects stay until `fld gc`, and no file of the project folder changes. Only a named human clears, over the socket or signed in to the web app. A stash whose newest entry's unstash conflict waits in the folder is refused as a whole.
+/// Drops every entry of the stash, as `fld stash clear` asks: their changes leave the stack for good, their objects stay until `fld gc`, and no file of the project folder changes. Only a named human clears, over the socket or signed in to the web app. The query names the stack the human saw, its length and its newest entry, so a stack that changed meanwhile drops nothing. A stash whose newest entry's unstash conflict waits in the folder is refused as a whole.
 #[utoipa::path(
     delete,
     path = "/api/v1/projects/{slug}/stash",
     operation_id = "clear_project_stash",
-    params(("slug" = String, Path, description = "The project slug")),
+    params(("slug" = String, Path, description = "The project slug"), ClearStashQuery),
     responses(
         (status = 200, description = "Every entry is dropped, or the stash was empty", body = StashDropResult),
         (status = 400, description = DROP_REFUSALS, body = ErrorEnvelope),
@@ -1422,8 +1454,17 @@ pub async fn drop_stash_entry(
 pub async fn clear_stash(
     human: Human,
     Project(handle): Project,
+    ApiQuery(query): ApiQuery<ClearStashQuery>,
 ) -> Result<Json<StashDropResult>, ApiError> {
-    drop_entries(&handle, &human, StashDrop::All).await
+    drop_entries(
+        &handle,
+        &human,
+        StashDrop::All {
+            entries: query.entries,
+            newest: query.newest,
+        },
+    )
+    .await
 }
 
 async fn drop_entries(

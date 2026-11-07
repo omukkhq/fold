@@ -608,3 +608,36 @@ async fn the_folder_status_names_an_unstash_that_stopped_part_way_and_finishes_n
     assert!(journal_open(&h).await);
     scenario.teardown();
 }
+
+/// `fld stash drop` first finishes an unstash that a stop left part-way, which takes `stash@{0}` off the stack and moves every other entry up one place. The drop of the `stash@{1}` the human saw before then names another entry at that place, so it is refused with `stash_changed` and drops nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_drop_after_a_stopped_unstash_refuses_the_entry_whose_place_moved() {
+    let scenario = fail::FailScenario::setup();
+    let mut h = Harness::start_plain().await;
+    let dir = PathBuf::from(h.root());
+    std::fs::write(dir.join("c.md"), "oldest\n").unwrap();
+    stash_as_ana(&h).await.unwrap();
+    std::fs::write(dir.join("b.md"), "middle\n").unwrap();
+    stash_as_ana(&h).await.unwrap();
+    clean_stash(&h).await;
+    let seen = crate::folder_stash_drop::seen_one(&h, 1).await;
+    assert_eq!(entries(&h).await[1].files, ["b.md"]);
+    stop_unstash_at(&h, "unstash_after_write").await;
+    assert!(journal_open(&h).await);
+
+    h.restart().await;
+    let error = crate::folder_stash_drop::drop_as(&h, &crate::folder_stash_drop::ana(), seen)
+        .await
+        .unwrap_err();
+    assert_eq!(refusal(error).0, "stash_changed");
+    assert!(!journal_open(&h).await);
+    let left: Vec<Vec<String>> = entries(&h)
+        .await
+        .into_iter()
+        .map(|entry| entry.files)
+        .collect();
+    assert_eq!(left, [vec!["b.md"], vec!["c.md"]]);
+    assert_eq!(read(&dir, "plan.md"), "the plan\n");
+    assert_eq!(stored(&h, types::STASH_DISCARDED).await, 0);
+    scenario.teardown();
+}
