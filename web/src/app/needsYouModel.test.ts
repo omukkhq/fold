@@ -305,7 +305,7 @@ describe("needsYouGroups", () => {
     });
   });
 
-  it("shows an unstash whose conflict markers wait with the conflicted files, opening nothing", () => {
+  it("shows an unstash whose conflict markers wait with the conflicted files, opening the repository screen that resets the folder", () => {
     const [group] = needsYouGroups("demo", [
       needsItem({
         kind: "unstash_conflicted",
@@ -322,7 +322,7 @@ describe("needsYouGroups", () => {
       task: null,
       title: "src/forms/index.ts and 2 more",
       text: "Unstash conflicts. Fix the files and run `fld record`",
-      href: null,
+      href: "/p/demo/repository",
     });
   });
 
