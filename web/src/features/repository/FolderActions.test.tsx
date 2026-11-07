@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { needsItem } from "@/test/workers";
@@ -131,5 +132,29 @@ describe("FolderActions", () => {
     expect(calls.find((call) => call.method === "POST")?.body).toEqual({
       paths: ["a.md", "b.md"],
     });
+  });
+
+  it("names a waiting unstash conflict with its next steps, and puts the dialog's main action last for the shared action row", async () => {
+    stubFetch({
+      "GET /api/v1/projects/demo/needs-you": {
+        body: {
+          items: [needsItem({ kind: "unstash_conflicted", paths: ["a.md"] })],
+        },
+      },
+    });
+    show();
+    const note = await screen.findByText(/An unstash conflict waits in 1 file/);
+    expect(note.textContent).toBe(
+      "An unstash conflict waits in 1 file of the project folder. Fix the conflict markers and run fld record, or reset the folder.",
+    );
+    expect(within(note).getByText("fld record").tagName).toBe("CODE");
+    expect(
+      screen.queryByRole("button", { name: "Restore held files" }),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Reset folder" }));
+    const buttons = within(screen.getByRole("dialog"))
+      .getAllByRole("button")
+      .map((button) => button.textContent);
+    expect(buttons.slice(-2)).toEqual(["Cancel", "Reset folder"]);
   });
 });

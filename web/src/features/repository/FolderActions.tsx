@@ -4,14 +4,17 @@ import { useRef, useState } from "react";
 import { resetFolder, restorePaths } from "@/api/folder";
 import { needsYouQuery } from "@/api/queries";
 import { Button } from "@/components/button/Button";
+import { CodeText } from "@/components/code/CodeText";
 import { Mono } from "@/components/mono/Mono";
 import { Dialog } from "@/components/overlay/Dialog";
+import { dialogActions } from "@/components/overlay/dialogStyles";
 import { FolderError } from "./FolderError";
 import { focusAfterFolderWrite } from "./focus";
 import {
   dialogPaths,
   folderActions,
   resetText,
+  waitText,
   restoreText,
 } from "./folderReset";
 import { useFolderWrite } from "./useFolderWrite";
@@ -67,31 +70,39 @@ export function FolderActions({ slug }: { slug: string }) {
       write.reset();
     }
   };
+  const waiting = waitText(actions);
   return (
-    <div className="flex flex-wrap gap-8">
-      <Button
-        size="sm"
-        icon={<RotateCcw aria-hidden size={14} />}
-        disabled={writing}
-        onClick={() => {
-          setAsking("reset");
-        }}
-      >
-        {reset.label}
-      </Button>
-      {canRestore ? (
+    <div className="flex flex-col gap-8">
+      {waiting === null ? null : (
+        <p className="max-w-measure">
+          <CodeText text={waiting} />
+        </p>
+      )}
+      <div className="flex flex-wrap gap-8">
         <Button
           size="sm"
-          variant="ghost"
-          icon={<Undo2 aria-hidden size={14} />}
+          icon={<RotateCcw aria-hidden size={14} />}
           disabled={writing}
           onClick={() => {
-            setAsking("restore");
+            setAsking("reset");
           }}
         >
-          Restore held files
+          {reset.label}
         </Button>
-      ) : null}
+        {canRestore ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<Undo2 aria-hidden size={14} />}
+            disabled={writing}
+            onClick={() => {
+              setAsking("restore");
+            }}
+          >
+            Restore held files
+          </Button>
+        ) : null}
+      </div>
       <Dialog
         open={asking !== null}
         onOpenChange={(open) => {
@@ -108,7 +119,10 @@ export function FolderActions({ slug }: { slug: string }) {
           asking === "restore" ? restore.description : reset.description
         }
         footer={
-          <div className="flex gap-8">
+          <div className={dialogActions}>
+            <Button variant="ghost" disabled={write.isPending} onClick={close}>
+              Cancel
+            </Button>
             <Button
               variant="danger"
               pending={write.isPending}
@@ -124,9 +138,6 @@ export function FolderActions({ slug }: { slug: string }) {
               }}
             >
               {asking === "restore" ? "Restore files" : reset.label}
-            </Button>
-            <Button variant="ghost" disabled={write.isPending} onClick={close}>
-              Cancel
             </Button>
           </div>
         }

@@ -6,6 +6,7 @@ import {
   dialogPaths,
   resetText,
   restoreText,
+  waitText,
 } from "./folderReset";
 
 function item(kind: NeedsYouItem["kind"], paths: string[]): NeedsYouItem {
@@ -81,5 +82,16 @@ describe("the folder actions", () => {
       listed: paths(9),
       rest: "and 3 other files",
     });
+  });
+
+  it("name a waiting unstash conflict in the folder note with the two ways to end it, and nothing else", () => {
+    const conflicted = folderActions([item("unstash_conflicted", ["a", "b"])]);
+    if (!conflicted) throw new Error("actions");
+    expect(waitText(conflicted)).toBe(
+      "An unstash conflict waits in 2 files of the project folder. Fix the conflict markers and run `fld record`, or reset the folder.",
+    );
+    const held = folderActions([item("folder_held", ["a"])]);
+    if (!held) throw new Error("actions");
+    expect(waitText(held)).toBeNull();
   });
 });

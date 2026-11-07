@@ -37,6 +37,13 @@ const SAFETY =
 const RESTORE_SAFETY =
   "fold first stashes the changes of these files as stash@{0}, so fld unstash brings them back.";
 
+/** The note's sentence about an unstash conflict, which keeps the folder on its revision whatever main does, with the two ways the daemon offers to end it; null while none waits. */
+export function waitText(actions: FolderActions): string | null {
+  return actions.markers.length === 0
+    ? null
+    : `An unstash conflict waits in ${filesText(actions.markers.length)} of the project folder. Fix the conflict markers and run \`fld record\`, or reset the folder.`;
+}
+
 /** The reset button's label, and its dialog's title and words. */
 export function resetText(actions: FolderActions): {
   label: string;
