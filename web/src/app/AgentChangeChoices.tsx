@@ -14,6 +14,7 @@ import {
 import { keys } from "@/api/keys";
 import { Button } from "@/components/button/Button";
 import { Dialog } from "@/components/overlay/Dialog";
+import { dialogActions } from "@/components/overlay/dialogStyles";
 import { WriteError } from "@/features/task/parts";
 import { FolderFiles } from "./FolderFiles";
 import {
@@ -186,7 +187,7 @@ export function AgentChangeDialog({
       description={text?.description}
       wide
       footer={
-        <div className="flex flex-wrap justify-end gap-8">
+        <div className={dialogActions}>
           <Button
             variant="ghost"
             onClick={choices.close}

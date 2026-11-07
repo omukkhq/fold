@@ -1021,6 +1021,9 @@ describe("Repository screen", () => {
     expect(alert.textContent).toContain(
       "fold could not read .fold/shared or the ignored files of the project folder.",
     );
+    expect(within(alert).getByText(".fold/shared").className).toContain(
+      "font-mono",
+    );
     sharedReply = {
       body: { shared: ["design/"], unseen: [], unseen_count: 0 },
     };

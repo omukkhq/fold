@@ -61,7 +61,7 @@ describe("sharedNote", () => {
 describe("sharedFailure", () => {
   it("words the failed read by its code", () => {
     expect(sharedFailure(new ApiError("workspace_io", "x"))).toBe(
-      "fold could not read .fold/shared or the ignored files of the project folder.",
+      "fold could not read `.fold/shared` or the ignored files of the project folder.",
     );
     expect(sharedFailure(new ApiError("internal_error", "x"))).toBe(
       "The daemon failed. Try again.",

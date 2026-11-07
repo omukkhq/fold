@@ -18,3 +18,7 @@ export const dialogFill = "max-md:h-full max-md:w-full max-md:rounded-none";
 
 /** On a phone the filled box is taller than its content, so the body takes the free height and the action row stays at the bottom of the screen. */
 export const dialogFillBody = "max-md:flex-1";
+
+/** The action row of a dialog footer, with the main action last in the markup: on a phone the actions stack at full width with the main action on top, from `md` they sit in one row at the end. */
+export const dialogActions =
+  "flex flex-col-reverse gap-8 max-md:*:w-full md:flex-row md:flex-wrap md:justify-end";

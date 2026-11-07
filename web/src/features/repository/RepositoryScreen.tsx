@@ -20,6 +20,7 @@ import { isMissingRevision, pickRevision } from "./revision";
 import { folderAt, parentDirs, parentOf } from "./search";
 import { CommitId } from "@/components/mono/CommitId";
 import { Mono } from "@/components/mono/Mono";
+import { codeParts } from "@/format/codeText";
 import { sharedFailure, sharedNote } from "./sharedPaths";
 import { GitStatus } from "../git/GitStatus";
 import { RevisionList } from "./RevisionList";
@@ -42,6 +43,21 @@ function PathWords({
         </span>
       ))}
       {more > 0 ? ` and ${String(more)} more` : null}
+    </>
+  );
+}
+
+/** A sentence whose paths, marked between backticks, show in the path face. */
+function PathMarked({ text }: { text: string }) {
+  return (
+    <>
+      {codeParts(text).map((part, index) =>
+        typeof part === "string" ? (
+          part
+        ) : (
+          <Mono key={String(index)}>{part.code}</Mono>
+        ),
+      )}
     </>
   );
 }
@@ -261,7 +277,7 @@ export function RepositoryScreen({
           <ErrorBanner
             className="rounded-m px-14"
             title="The shared paths could not load."
-            message={sharedFailure(shared.error)}
+            message={<PathMarked text={sharedFailure(shared.error)} />}
             onRetry={() => void shared.refetch()}
           />
         ) : null}

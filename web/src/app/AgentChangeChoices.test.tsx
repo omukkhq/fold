@@ -373,6 +373,7 @@ describe("the choices of a worker's change in the Inbox", () => {
       name: "Dismiss all 2",
     });
     if (dismiss === undefined) throw new Error("no Dismiss");
+    expect(dismiss.className).toContain("-ml-10");
     await userEvent.click(dismiss);
     expect(
       await within(inbox).findByRole("button", { name: /Dismissing/ }),
@@ -414,6 +415,14 @@ describe("the choices of a worker's change in the Inbox", () => {
     expect(
       within(dialog).getAllByRole("button", { name: "Close" }),
     ).toHaveLength(2);
+    // On a phone the actions stack full width with the main action on top: it comes last in the markup of a reversed column.
+    const put = within(dialog).getByRole("button", {
+      name: "Put the agent's files aside",
+    });
+    const actions = put.parentElement;
+    expect(actions?.className).toContain("flex-col-reverse");
+    expect(actions?.className).toContain("max-md:*:w-full");
+    expect(actions?.lastElementChild).toBe(put);
     await userEvent.click(
       within(dialog).getByRole("button", {
         name: "Put the agent's files aside",
@@ -438,9 +447,13 @@ describe("the choices of a worker's change in the Inbox", () => {
       name: "Record these files?",
     });
     const emptied = within(dialog).getByRole("region", { name: "Emptied" });
-    await userEvent.click(
-      await within(emptied).findByRole("button", { name: /plan\.md/ }),
-    );
+    const row = await within(emptied).findByRole("button", {
+      name: /plan\.md/,
+    });
+    // A row shows a background on no state, so the row the pointer rests on never reads as selected; the keyboard gets the focus ring.
+    expect(row.className).not.toMatch(/(^|\s)(hover:)?bg-/);
+    expect(row.className).toContain("focus-visible:outline-2");
+    await userEvent.click(row);
     expect(await within(emptied).findByText("the plan")).toBeTruthy();
   });
 
@@ -492,9 +505,10 @@ describe("the choices of a worker's change in the Inbox", () => {
     expect(
       within(dialog).getByText("gone from the project folder"),
     ).toBeTruthy();
-    await userEvent.click(
-      within(dialog).getByRole("button", { name: "Dismiss" }),
-    );
+    const dismiss = within(dialog).getByRole("button", { name: "Dismiss" });
+    expect(dismiss.className).toContain("bg-ink");
+    expect(dismiss.parentElement?.lastElementChild).toBe(dismiss);
+    await userEvent.click(dismiss);
     expect(await screen.findByText("Nothing waits for you.")).toBeTruthy();
     expect(posts(calls)).toEqual(["/api/v1/projects/demo/shared/dismiss"]);
   });

@@ -41,13 +41,13 @@ export function sharedNote(state: SharedState | undefined): SharedNote | null {
   };
 }
 
-/** Why the shared paths could not load, by the refusal's code. */
+/** Why the shared paths could not load, by the refusal's code; a path is marked between backticks for the path face. */
 export function sharedFailure(error: unknown): string {
   const code = apiErrorCode(error);
   if (code === null) return "The daemon did not answer.";
   switch (code) {
     case "workspace_io":
-      return "fold could not read .fold/shared or the ignored files of the project folder.";
+      return "fold could not read `.fold/shared` or the ignored files of the project folder.";
     case "internal_error":
       return "The daemon failed. Try again.";
     default:

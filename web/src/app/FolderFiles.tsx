@@ -57,7 +57,7 @@ function FileRow({ slug, flagged }: { slug: string; flagged: FlaggedFile }) {
           setOpen((old) => !old);
         }}
         className={cn(
-          "flex min-w-0 items-start gap-6 rounded-s px-4 py-2 text-left hover:bg-sunken",
+          "group flex min-w-0 items-start gap-6 rounded-s px-4 py-2 text-left",
           focusRing,
         )}
       >
@@ -67,7 +67,7 @@ function FileRow({ slug, flagged }: { slug: string; flagged: FlaggedFile }) {
           className="mt-3 shrink-0 text-text-2"
         />
         <span className="flex min-w-0 flex-wrap items-baseline gap-x-8">
-          <Mono className="min-w-0 wrap-anywhere text-text">
+          <Mono className="min-w-0 wrap-anywhere text-text underline-offset-2 group-hover:underline">
             {flagged.path}
           </Mono>
           <span className="text-13 text-text-2">{flaggedFacts(flagged)}</span>

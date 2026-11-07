@@ -10,6 +10,7 @@ import { sharedChangesQuery } from "@/api/repositoryQueries";
 import { Button } from "@/components/button/Button";
 import { Mono } from "@/components/mono/Mono";
 import { Dialog } from "@/components/overlay/Dialog";
+import { dialogActions } from "@/components/overlay/dialogStyles";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import { WriteError } from "@/features/task/parts";
@@ -45,15 +46,20 @@ function DismissButton({
   dismiss,
   count,
   size = "sm",
+  variant = "ghost",
+  className,
 }: {
   dismiss: Dismiss;
   count: number;
   size?: "sm" | "md";
+  variant?: "ghost" | "primary";
+  className?: string;
 }) {
   return (
     <Button
       size={size}
-      variant="ghost"
+      variant={variant}
+      className={className}
       pending={dismiss.isPending}
       pendingLabel="Dismissing…"
       onClick={() => {
@@ -77,7 +83,8 @@ export function SharedChangeDismiss({
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <DismissButton dismiss={dismiss} count={count} />
+        {/* The negative margin takes back the ghost button's padding, so its label starts where the line's words start. */}
+        <DismissButton dismiss={dismiss} count={count} className="-ml-10" />
       </div>
       <DismissError dismiss={dismiss} />
     </div>
@@ -141,11 +148,16 @@ export function SharedFilesDialog({
       description="Shared files are ignored, so fold keeps no history of them: check each file in the project folder by its size and change time, then dismiss."
       wide
       footer={
-        <div className="flex flex-wrap justify-end gap-8">
+        <div className={dialogActions}>
           <Button variant="ghost" disabled={dismiss.isPending} onClick={close}>
             Close
           </Button>
-          <DismissButton dismiss={dismiss} count={count} size="md" />
+          <DismissButton
+            dismiss={dismiss}
+            count={count}
+            size="md"
+            variant="primary"
+          />
         </div>
       }
     >
