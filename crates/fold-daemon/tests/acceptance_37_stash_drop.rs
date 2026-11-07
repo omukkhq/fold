@@ -94,7 +94,8 @@ async fn acceptance_37_the_human_drops_a_junk_stash_entry_and_clears_the_stash()
 
     // The web app drops the junk; the folder does not change.
     write(&root, "draft.md", "unfinished\n");
-    let dropped = web_ok(&h, Method::DELETE, "stash/1").await;
+    let junk = listed["entries"][1]["number"].as_i64().unwrap();
+    let dropped = web_ok(&h, Method::DELETE, &format!("stash/1?number={junk}")).await;
     assert_eq!(dropped["entries"], 1);
     assert_eq!(dropped["dropped"][0]["stash"], "stash@{1}");
     assert_eq!(
@@ -127,7 +128,14 @@ async fn acceptance_37_the_human_drops_a_junk_stash_entry_and_clears_the_stash()
     fld_ok(&h, Method::POST, "stash").await;
     write(&root, "notes.md", "second notes\n");
     fld_ok(&h, Method::POST, "stash").await;
-    let cleared = fld_ok(&h, Method::DELETE, "stash").await;
+    let seen = fld_ok(&h, Method::GET, "stash").await;
+    let newest = seen["entries"][0]["number"].as_i64().unwrap();
+    let cleared = fld_ok(
+        &h,
+        Method::DELETE,
+        &format!("stash?entries=2&newest={newest}"),
+    )
+    .await;
     assert_eq!(cleared["entries"], 0);
     assert_eq!(cleared["dropped"].as_array().unwrap().len(), 2);
     assert!(stash_names(&fld_ok(&h, Method::GET, "stash").await).is_empty());

@@ -208,10 +208,13 @@ fn preview_lines(
     refusal(status)?;
     let body = &status.body;
     let mut changes = Vec::new();
+    let mut left = 0;
     for change in list(body, "changes")? {
         let path = text(change, "path")?;
         if named.is_none_or(|named| named_by(path, named)) {
             changes.push(path);
+        } else {
+            left += 1;
         }
     }
     let waiting = list(body, "blockers")?
@@ -231,17 +234,24 @@ fn preview_lines(
         ));
         push_paths(&mut lines, &changes);
     }
-    if named.is_none() {
-        if let Some(blocker) = markers {
+    if named.is_none()
+        && let Some(blocker) = markers
+    {
+        lines.push(format!(
+            "the unstash conflict in {} is dropped; stash@{{0}} keeps those files with their markers",
+            output::count(list(blocker, "paths")?.len(), "path", "paths")
+        ));
+    }
+    if let Some(blocker) = waiting {
+        let paths = output::count(list(blocker, "paths")?.len(), "path", "paths");
+        if named.is_none() {
             lines.push(format!(
-                "the unstash conflict in {} is dropped; stash@{{0}} keeps those files with their markers",
-                output::count(list(blocker, "paths")?.len(), "path", "paths")
+                "your change that waits for the main agent is dropped, with the merge workspace it made: it conflicts in {paths}"
             ));
-        }
-        if let Some(blocker) = waiting {
+        } else if left == 0 {
+            // A restore that takes every unrecorded change leaves nothing of the waiting change to merge.
             lines.push(format!(
-                "your change that waits for the main agent is dropped, with the merge workspace it made: it conflicts in {}",
-                output::count(list(blocker, "paths")?.len(), "path", "paths")
+                "your change that waits for the main agent is withdrawn, and the main agent is asked to abandon the merge workspace it made: it conflicts in {paths}"
             ));
         }
     }
@@ -284,9 +294,16 @@ fn outcome_lines(response: &Response) -> Result<Vec<String>, RemoteError> {
     let change = &body["dropped_change"];
     if !change.is_null() {
         let conflicted = list(change, "conflicted")?.len();
+        let abandoned = change["workspace_abandoned"]
+            .as_bool()
+            .ok_or(RemoteError::Answer)?;
         lines.push(match change["workspace"].as_str() {
-            Some(workspace) => format!(
+            Some(workspace) if abandoned => format!(
                 "dropped your change that waited for the main agent ({}) and abandoned {workspace}, which held its merge",
+                output::count(conflicted, "conflicted path", "conflicted paths")
+            ),
+            Some(workspace) => format!(
+                "withdrew your change that waited for the main agent ({}); the main agent is asked to abandon {workspace}, which holds its merge",
                 output::count(conflicted, "conflicted path", "conflicted paths")
             ),
             None => format!(
@@ -378,6 +395,18 @@ mod tests {
             preview_lines(&status, Some(&["docs".to_owned()])).unwrap(),
             None
         );
+        // A restore of every unrecorded change withdraws the waiting change and never drops the markers.
+        assert_eq!(
+            preview_lines(
+                &status,
+                Some(&["plan.md".to_owned(), "src".to_owned(), "srcs.md".to_owned()])
+            )
+            .unwrap()
+            .unwrap()[4..],
+            [
+                "your change that waits for the main agent is withdrawn, and the main agent is asked to abandon the merge workspace it made: it conflicts in 1 path",
+            ]
+        );
         let clean = reply(json!({"changes": [], "blockers": []}));
         assert_eq!(preview_lines(&clean, None).unwrap(), None);
         let waiting = reply(
@@ -391,7 +420,7 @@ mod tests {
         let lines = outcome_lines(&reply(json!({
             "revision": "r4", "at_head": true, "files": ["a", "plan.md"], "entries": 1, "stashed": true,
             "unchanged": [], "dropped_unstash": [], "skipped": [], "unstash": null,
-            "dropped_change": {"commit": null, "conflicted": ["plan.md"], "workspace": "ws-9"},
+            "dropped_change": {"commit": null, "conflicted": ["plan.md"], "workspace": "ws-9", "workspace_abandoned": true},
         })))
         .unwrap();
         assert_eq!(
@@ -406,7 +435,7 @@ mod tests {
         let lines = outcome_lines(&reply(json!({
             "revision": "r3", "at_head": false, "files": [], "entries": 0, "stashed": false,
             "unchanged": ["docs"], "dropped_unstash": ["x"], "skipped": [{"path": "big.bin", "reason": "too_large"}],
-            "unstash": null, "dropped_change": {"commit": null, "conflicted": ["a", "b"], "workspace": null},
+            "unstash": null, "dropped_change": {"commit": null, "conflicted": ["a", "b"], "workspace": null, "workspace_abandoned": false},
         })))
         .unwrap();
         assert_eq!(
@@ -419,6 +448,24 @@ mod tests {
                 "big.bin stays in the folder: larger than the limit",
             ]
         );
+        let withdrawn = outcome_lines(&reply(json!({
+            "revision": "r4", "at_head": true, "files": ["plan.md"], "entries": 1, "stashed": true,
+            "unchanged": [], "dropped_unstash": [], "skipped": [], "unstash": null,
+            "dropped_change": {"commit": null, "conflicted": ["plan.md"], "workspace": "ws-9", "workspace_abandoned": false},
+        })))
+        .unwrap();
+        assert_eq!(
+            withdrawn.last().unwrap(),
+            "withdrew your change that waited for the main agent (1 conflicted path); the main agent is asked to abandon ws-9, which holds its merge"
+        );
+        assert!(matches!(
+            outcome_lines(&reply(json!({
+                "revision": "r4", "at_head": true, "files": [], "entries": 0, "stashed": false,
+                "unchanged": [], "dropped_unstash": [], "skipped": [], "unstash": null,
+                "dropped_change": {"commit": null, "conflicted": [], "workspace": "ws-9"},
+            }))),
+            Err(RemoteError::Answer)
+        ));
         assert!(matches!(
             outcome_lines(&reply(json!({"revision": "r1"}))),
             Err(RemoteError::Answer)

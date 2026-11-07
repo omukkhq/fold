@@ -169,6 +169,7 @@ async fn a_reset_drops_the_waiting_human_change_and_abandons_its_merge_workspace
     let dropped = done.dropped_change.unwrap();
     assert_eq!(dropped.conflicted, ["README.md"]);
     assert_eq!(dropped.workspace.unwrap().to_string(), ws);
+    assert!(dropped.workspace_abandoned);
     assert_eq!(read(&dir, "README.md").as_deref(), Some("# fold\n"));
     assert_eq!(human_change_states(&h).await, ["superseded"]);
     assert_eq!(main_workspace_state(&h).await, "abandoned");
@@ -190,6 +191,78 @@ async fn a_reset_drops_the_waiting_human_change_and_abandons_its_merge_workspace
     );
     // Both safety entries hold the changes: notes.md, then README.md.
     assert_eq!(stack_files(&h).await, [vec!["README.md"], vec!["notes.md"]]);
+}
+
+/// A restore of every unrecorded change withdraws the waiting human change as `fld stash` does, and leaves the main agent's merge workspace open: only `fld reset` abandons it, and the main agent's notice asks it to.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restore_of_every_change_withdraws_the_waiting_change_and_keeps_its_merge_workspace() {
+    let mut h = Harness::start().await;
+    branch_born(&h).await;
+    h.connect_tagged("main", &["main"]).await;
+    let mut inbox = h.register_inbox("main").await;
+    let dir = PathBuf::from(h.root());
+    write(&dir, "README.md", "# mine\n");
+    write(&dir, "notes.md", "notes\n");
+    integrate(&h, "frontend", &[("README.md", "# fold\n")]).await;
+    assert!(matches!(
+        record_as_ana(&h).await.unwrap(),
+        RecordOutcome::Conflicted { created: true, .. }
+    ));
+    let opened = h.call("main", "open_main_workspace", json!({})).await;
+    let ws = opened["workspace"].as_str().unwrap().to_owned();
+
+    let done = restore_as_ana(&h, &["README.md", "notes.md"])
+        .await
+        .unwrap();
+    assert!(done.stashed);
+    let dropped = done.dropped_change.unwrap();
+    assert_eq!(dropped.conflicted, ["README.md"]);
+    assert_eq!(dropped.workspace.unwrap().to_string(), ws);
+    assert!(!dropped.workspace_abandoned);
+    assert_eq!(human_change_states(&h).await, ["superseded"]);
+    assert_eq!(main_workspace_state(&h).await, "active");
+    let withdrawn = stored(&h, types::HUMAN_CHANGE_WITHDRAWN).await;
+    assert_eq!(withdrawn.len(), 1);
+    assert_eq!(withdrawn[0].data["workspace_abandoned"], false);
+    assert_eq!(withdrawn[0].data["restore"], true);
+    assert!(stored(&h, types::WORKSPACE_ABANDONED).await.is_empty());
+    let notice = notice_with(&mut inbox, "took back").await;
+    assert!(notice.contains(&format!("abandon {ws}")), "{notice}");
+    assert_eq!(stack_files(&h).await, [vec!["README.md", "notes.md"]]);
+}
+
+/// A reset that a later check refuses, here a tracked file over the size limit, leaves the waiting unstash conflict as it was: the entry stays conflicted and its markers stay in the folder, so `fld record` still refuses them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refused_reset_keeps_the_waiting_unstash_conflict() {
+    let h = Harness::start_plain().await;
+    let dir = PathBuf::from(h.root());
+    write(&dir, "README.md", "# mine\n");
+    stash_as_ana(&h).await.unwrap();
+    integrate(&h, "frontend", &[("README.md", "# fold\n")]).await;
+    wait_for(&dir, "README.md", "# fold\n").await;
+    assert!(matches!(
+        unstash_as_ana(&h).await.unwrap(),
+        UnstashOutcome::Conflicted { .. }
+    ));
+    let marked = read(&dir, "README.md").unwrap();
+    let config = dir.join(".fold/config.toml");
+    let kept = std::fs::read_to_string(&config).unwrap_or_default();
+    std::fs::write(&config, format!("max_file_bytes = 16\n{kept}")).unwrap();
+
+    let (reason, paths) = refusal(reset_as_ana(&h).await.unwrap_err());
+    assert_eq!(reason, "skipped_tracked");
+    assert_eq!(paths, json!(["README.md"]));
+    let listed = entries(&h).await;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].conflicted, ["README.md"]);
+    assert!(stored(&h, types::STASH_DISCARDED).await.is_empty());
+    assert_eq!(read(&dir, "README.md").unwrap(), marked);
+
+    std::fs::write(&config, kept).unwrap();
+    let done = reset_as_ana(&h).await.unwrap();
+    assert_eq!(done.dropped_unstash, ["README.md"]);
+    assert_eq!(stored(&h, types::STASH_DISCARDED).await.len(), 1);
+    assert_eq!(entries(&h).await.len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -1302,7 +1302,7 @@ const REFERENCE_SECTIONS: [&str; 7] = [
 ];
 
 /// Backticked names of the reference that are neither tools, codes, config or checks keys nor run states, but the values and fields it explains.
-const REFERENCE_NAMES: [&str; 7] = [
+const REFERENCE_NAMES: [&str; 8] = [
     "session_days",
     "needs_you",
     "sent_back",
@@ -1310,6 +1310,7 @@ const REFERENCE_NAMES: [&str; 7] = [
     "to_human",
     "whsec_",
     "target_changed",
+    "stash_changed",
 ];
 
 /// Every key of `.fold/config.toml` as `(section, key)`, from the serialised form of a config that sets every optional key, so a new field of the config structs fails the reference test until the reference shows it. A section of named tables, such as `[remotes.<name>]`, is its name with a `.` after it.

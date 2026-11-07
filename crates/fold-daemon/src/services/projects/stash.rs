@@ -104,6 +104,8 @@ pub struct AfterUnstash<T> {
 pub struct StashEntry {
     /// Its place on the stack: 0 is the newest, `stash@{0}`.
     pub position: usize,
+    /// Its number, which stays the same while its place moves; a drop names it.
+    pub number: i64,
     pub created_at: Timestamp,
     /// The main revision the folder held when the entry was made.
     pub base: RevisionId,
@@ -148,6 +150,7 @@ pub async fn stash_list(handle: &ProjectHandle) -> Result<Vec<StashEntry>, Proje
     for (position, entry) in stack.into_iter().enumerate() {
         entries.push(StashEntry {
             position,
+            number: entry.number,
             created_at: entry.created_at,
             base: entry.revision,
             files: entry_files(handle, &entry).await?,
@@ -162,13 +165,13 @@ pub async fn stash_list(handle: &ProjectHandle) -> Result<Vec<StashEntry>, Proje
     Ok(entries)
 }
 
-/// Which entries `fld stash drop` or `fld stash clear` drops.
+/// Which entries `fld stash drop` or `fld stash clear` drops, with what the human saw of the stack when they agreed, so a stack that changed meanwhile is refused instead of dropping an entry nobody saw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StashDrop {
-    /// The entry at this place on the stack: 0 is `stash@{0}`, the newest.
-    One(usize),
-    /// Every entry.
-    All,
+    /// The entry at this place on the stack, 0 for `stash@{0}`, the newest, while it is still the entry with this number.
+    One { position: usize, number: i64 },
+    /// Every entry, while the stack still holds `entries` entries and its newest has the number `newest`, `None` for an empty stack.
+    All { entries: usize, newest: Option<i64> },
 }
 
 /// What `fld stash drop` or `fld stash clear` dropped.
@@ -180,7 +183,7 @@ pub struct StashDropped {
     pub entries: usize,
 }
 
-/// Drops entries of the stash for the named human who runs `fld stash drop` or `fld stash clear`: the changes they hold are gone from the stack for good, while their objects stay in the store until `fld gc`. No file of the project folder changes. Under the remote lock and folder lock, an unstash that a stop left part-way is finished first, so no journal row names a dropped entry; then one transaction records each drop and appends `stash.discarded`. An entry whose unstash conflict waits in the folder is refused, since its markers are still there: the human fixes them and runs `fld record`, which drops the entry, or runs `fld reset`. A place past the stack is refused; `fld stash clear` of an empty stash drops nothing.
+/// Drops entries of the stash for the named human who runs `fld stash drop` or `fld stash clear`: the changes they hold are gone from the stack for good, while their objects stay in the store until `fld gc`. The drop itself changes no file of the project folder. Under the remote lock and folder lock, an unstash that a stop left part-way is finished first, which writes its files into the folder as `fld unstash` would, so no journal row names a dropped entry; then the stack must still be the one the human saw, as `target` names it, or the drop is refused with `stash_changed`, since an entry's place moves when an entry is pushed, applied or dropped meanwhile. One transaction then records each drop and appends `stash.discarded`. An entry whose unstash conflict waits in the folder is refused, since its markers are still there: the human fixes them and runs `fld record`, which drops the entry, or runs `fld reset`. A place past the stack is refused; `fld stash clear` of an empty stash drops nothing.
 pub async fn drop_stash_entries(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
@@ -224,9 +227,15 @@ async fn run_drop(
     }
     let stack = stack(handle).await?;
     let chosen: Vec<(usize, &StashRow)> = match target {
-        StashDrop::All => stack.iter().enumerate().collect(),
-        StashDrop::One(position) => match stack.get(position) {
-            Some(entry) => vec![(position, entry)],
+        StashDrop::All { entries, newest } => {
+            if stack.len() != entries || stack.first().map(|entry| entry.number) != newest {
+                return Err(stash_changed(stack.len()).into());
+            }
+            stack.iter().enumerate().collect()
+        }
+        StashDrop::One { position, number } => match stack.get(position) {
+            Some(entry) if entry.number == number => vec![(position, entry)],
+            Some(_) => return Err(stash_changed(stack.len()).into()),
             None if stack.is_empty() => {
                 return Err(FoldError::new(codes::INVALID_REQUEST, "the stash is empty")
                     .with_hint("`fld stash list` shows the stash")
@@ -262,6 +271,7 @@ async fn run_drop(
     for (position, entry) in &chosen {
         dropped.push(StashEntry {
             position: *position,
+            number: entry.number,
             created_at: entry.created_at,
             base: entry.revision,
             files: entry_files(handle, entry).await?,
@@ -274,7 +284,7 @@ async fn run_drop(
         return Ok(StashDropped { dropped, entries });
     }
     let event = match (target, dropped.as_slice()) {
-        (StashDrop::One(position), [entry]) => stash_event(
+        (StashDrop::One { position, .. }, [entry]) => stash_event(
             types::STASH_DISCARDED,
             actor,
             entry.base,
@@ -301,6 +311,21 @@ async fn run_drop(
     handle.bus.publish(buffer);
     tracing::info!(dropped = ids.len(), "stash entries are dropped");
     Ok(StashDropped { dropped, entries })
+}
+
+/// The refusal of a drop whose stack changed after the human saw it, such as by a new entry, an unstash or another drop: nothing is dropped.
+fn stash_changed(entries: usize) -> FoldError {
+    FoldError::new(
+        codes::INVALID_REQUEST,
+        "the stash changed since it was listed, so nothing was dropped",
+    )
+    .with_hint(
+        "run `fld stash list`, or reload the stash in the web app, and choose the entry again",
+    )
+    .with_details([
+        ("reason", json!("stash_changed")),
+        ("entries", json!(entries)),
+    ])
 }
 
 fn entries_text(count: usize) -> String {
@@ -1018,11 +1043,14 @@ pub(super) async fn settle_markers_on_main(handle: &ProjectHandle) -> Result<(),
 pub(super) fn refuse_branch(branch: &str, followed: &FolderFollowed) -> Result<(), FoldError> {
     match &followed.branch {
         Some(BranchState::Moved(moved)) => Err(head_moved(branch, moved)),
-        Some(BranchState::Ahead { .. }) => Err(FoldError::new(
+        Some(BranchState::Ahead { from, .. }) => Err(FoldError::new(
             codes::INVALID_REQUEST,
             "your Git commits on the project's branch wait for the main agent, so the project folder holds them",
         )
-        .with_hint("ask the main agent to resolve them, then run the command again")
+        .with_hint(format!(
+            "ask the main agent to resolve them, or run `git reset --soft {}` in the project folder, which takes the commits back and keeps your files as they are, then run the command again",
+            &from.as_str()[..12]
+        ))
         .with_details([("reason", json!("git_commits_wait"))])),
         _ => Ok(()),
     }

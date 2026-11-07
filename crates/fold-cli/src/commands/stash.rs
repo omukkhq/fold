@@ -76,18 +76,7 @@ pub fn run_stash(
         Some(StashCommand::Drop(drop)) => {
             let position = entry_position(drop.entry.as_deref())?;
             let listed = request_project(socket, project, Method::GET, "stash")?;
-            let Some(shown) = entry_lines(&listed, position)? else {
-                // The daemon names what is missing: an empty stash or a place past it.
-                return print(
-                    out,
-                    drop_lines(&request_project(
-                        socket,
-                        project,
-                        Method::DELETE,
-                        &format!("stash/{position}"),
-                    )?)?,
-                );
-            };
+            let (shown, number) = shown_entry(&listed, position)?;
             print(out, shown)?;
             let question = format!("drop stash@{{{position}}}? Its changes are gone for good");
             if !Consent::of(drop.yes).ask(&question, "fld stash drop", input, out)? {
@@ -97,29 +86,36 @@ pub fn run_stash(
                 socket,
                 project,
                 Method::DELETE,
-                &format!("stash/{position}"),
+                &format!("stash/{position}?number={number}"),
             )?)?
         }
         Some(StashCommand::Clear(clear)) => {
             let listed = request_project(socket, project, Method::GET, "stash")?;
-            let entries = list(&listed.body, "entries").map(Vec::len).unwrap_or(0);
             let shown = list_lines(&listed)?;
-            if entries == 0 {
+            let entries = list(&listed.body, "entries")?;
+            let Some(newest) = entries.first() else {
                 return print(out, shown);
-            }
+            };
+            let newest = newest["number"].as_i64().ok_or(RemoteError::Answer)?;
+            let count = entries.len();
             print(out, shown)?;
             let question = format!(
                 "drop {}? Their changes are gone for good",
-                if entries == 1 {
+                if count == 1 {
                     "the 1 entry".to_owned()
                 } else {
-                    format!("all {entries} entries")
+                    format!("all {count} entries")
                 }
             );
             if !Consent::of(clear.yes).ask(&question, "fld stash clear", input, out)? {
                 return print(out, vec!["nothing dropped".to_owned()]);
             }
-            drop_lines(&request_project(socket, project, Method::DELETE, "stash")?)?
+            drop_lines(&request_project(
+                socket,
+                project,
+                Method::DELETE,
+                &format!("stash?entries={count}&newest={newest}"),
+            )?)?
         }
         None => stash_lines(&request_project(socket, project, Method::POST, "stash")?)?,
     };
@@ -155,17 +151,37 @@ fn entry_position(entry: Option<&str>) -> Result<usize, RemoteError> {
         })
 }
 
-/// The lines of the listed entry at `position`, as `fld stash list` shows it; `None` when the stash has none there.
-fn entry_lines(listed: &Response, position: usize) -> Result<Option<Vec<String>>, RemoteError> {
+/// The lines of the listed entry at `position`, as `fld stash list` shows it, and its number, which the drop sends so a stack that changed meanwhile drops nothing. An empty stash, or a place past it, is refused here, so no drop goes out for an entry the human did not see.
+fn shown_entry(listed: &Response, position: usize) -> Result<(Vec<String>, i64), RemoteError> {
     refusal(listed)?;
-    let Some(entry) = list(&listed.body, "entries")?.get(position) else {
-        return Ok(None);
+    let entries = list(&listed.body, "entries")?;
+    let Some(entry) = entries.get(position) else {
+        let error = if entries.is_empty() {
+            fold_core::FoldError::new(fold_core::codes::INVALID_REQUEST, "the stash is empty")
+                .with_hint("`fld stash list` shows the stash")
+                .with_details([("reason", serde_json::json!("stash_empty"))])
+        } else {
+            fold_core::FoldError::new(
+                fold_core::codes::INVALID_REQUEST,
+                format!(
+                    "stash@{{{position}}} does not exist: the stash has {}",
+                    output::count(entries.len(), "entry", "entries")
+                ),
+            )
+            .with_hint("`fld stash list` names each entry")
+            .with_details([
+                ("reason", serde_json::json!("stash_entry_missing")),
+                ("entries", serde_json::json!(entries.len())),
+            ])
+        };
+        return Err(error.into());
     };
+    let number = entry["number"].as_i64().ok_or(RemoteError::Answer)?;
     let one = Response {
         status: listed.status,
         body: serde_json::json!({ "entries": [entry] }),
     };
-    list_lines(&one).map(Some)
+    Ok((list_lines(&one)?, number))
 }
 
 fn drop_lines(response: &Response) -> Result<Vec<String>, RemoteError> {
@@ -495,7 +511,7 @@ mod tests {
                 "{bad}"
             );
         }
-        let entry = json!({"stash": "stash@{1}", "created_at": 0, "base": "r5", "actor": "human:ana", "files": ["b.txt", "c.txt"], "conflicted": []});
+        let entry = json!({"stash": "stash@{1}", "number": 4, "created_at": 0, "base": "r5", "actor": "human:ana", "files": ["b.txt", "c.txt"], "conflicted": []});
         assert_eq!(
             drop_lines(&reply(json!({"dropped": [entry.clone()], "entries": 1}))).unwrap(),
             ["dropped stash@{1}: 2 files; 1 entry is left"]
@@ -519,15 +535,30 @@ mod tests {
             drop_lines(&reply(json!({"dropped": []}))),
             Err(RemoteError::Answer)
         ));
-        let listed = reply(json!({"entries": [entry]}));
+        let listed = reply(json!({"entries": [entry.clone()]}));
+        let (shown, number) = shown_entry(&listed, 0).unwrap();
         assert_eq!(
-            entry_lines(&listed, 0).unwrap().unwrap(),
+            shown,
             [
                 "stash@{1} 1970-01-01T00:00:00.000Z base r5 by @ana: 2 files",
                 "  b.txt",
                 "  c.txt",
             ]
         );
-        assert_eq!(entry_lines(&listed, 1).unwrap(), None);
+        assert_eq!(number, 4);
+        let missing = shown_entry(&listed, 1).unwrap_err();
+        assert_eq!(missing.code(), Some("invalid_request"));
+        assert_eq!(
+            missing.to_string(),
+            "stash@{1} does not exist: the stash has 1 entry"
+        );
+        let empty = shown_entry(&reply(json!({"entries": []})), 0).unwrap_err();
+        assert_eq!(empty.to_string(), "the stash is empty");
+        let mut unnumbered = entry;
+        unnumbered.as_object_mut().unwrap().remove("number");
+        assert!(matches!(
+            shown_entry(&reply(json!({"entries": [unnumbered]})), 0),
+            Err(RemoteError::Answer)
+        ));
     }
 }

@@ -76,3 +76,45 @@ async fn a_crash_inside_fld_reset_is_finished_by_the_next_reset() {
     assert_eq!(stored(&h, types::WORKSPACE_ABANDONED).await.len(), 1);
     scenario.teardown();
 }
+
+/// A crash after the transaction that drops the waiting unstash conflict and pushes the safety entry leaves both done or neither: the stack holds the safety entry alone, with the markers, and the next reset puts the files back without a second entry or a second drop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_crash_inside_fld_reset_drops_the_unstash_conflict_and_pushes_the_safety_entry_together()
+{
+    let scenario = fail::FailScenario::setup();
+    let mut h = Harness::start_plain().await;
+    let dir = PathBuf::from(h.root());
+    std::fs::write(dir.join("README.md"), "# mine\n").unwrap();
+    crate::folder_stash::stash_as_ana(&h).await.unwrap();
+    integrate(&h, "frontend", &[("README.md", "# fold\n")]).await;
+    crate::folder_stash::wait_for(&dir, "README.md", "# fold\n").await;
+    crate::folder_stash::unstash_as_ana(&h).await.unwrap();
+    let marked = std::fs::read_to_string(dir.join("README.md")).unwrap();
+    assert_eq!(entries(&h).await[0].conflicted, ["README.md"]);
+
+    fail::cfg("reset_after_row", "return").unwrap();
+    failed_at(reset_as_ana(&h).await, "reset_after_row");
+    fail::remove("reset_after_row");
+    let listed = entries(&h).await;
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].conflicted.is_empty());
+    assert_eq!(stored(&h, types::STASH_DISCARDED).await.len(), 1);
+    assert_eq!(stored(&h, types::STASH_PUSHED).await.len(), 2);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("README.md")).unwrap(),
+        marked
+    );
+
+    h.restart().await;
+    let done = reset_as_ana(&h).await.unwrap();
+    assert!(done.at_head);
+    assert!(done.dropped_unstash.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(dir.join("README.md")).unwrap(),
+        "# fold\n"
+    );
+    assert_eq!(entries(&h).await.len(), 1);
+    assert_eq!(stored(&h, types::STASH_DISCARDED).await.len(), 1);
+    assert_eq!(stored(&h, types::STASH_PUSHED).await.len(), 2);
+    scenario.teardown();
+}
