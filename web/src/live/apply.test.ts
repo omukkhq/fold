@@ -570,6 +570,33 @@ describe("invalidation rules", () => {
     }
   });
 
+  it("refreshes Needs you and the project when a worker's change of the project folder opens or ends", () => {
+    for (const type of [
+      "folder.agent_changed",
+      "folder.agent_change_cleared",
+    ]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type));
+      expect(hit(keys.needsYou(slug)), type).toBe(true);
+      expect(hit(keys.project(slug)), type).toBe(true);
+      expect(hit(keys.board(slug)), type).toBe(false);
+    }
+  });
+
+  it("refreshes Needs you and the shared paths for every event of shared files", () => {
+    for (const type of [
+      "shared.changed",
+      "shared.changes_dismissed",
+      "shared.paths_changed",
+    ]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type));
+      expect(hit(keys.needsYou(slug)), type).toBe(true);
+      expect(hit(keys.shared(slug)), type).toBe(true);
+      expect(hit(keys.board(slug)), type).toBe(false);
+    }
+  });
+
   it("invalidates repository and board, and no proposal key, for a pull integration", () => {
     for (const type of [
       "integration.succeeded",

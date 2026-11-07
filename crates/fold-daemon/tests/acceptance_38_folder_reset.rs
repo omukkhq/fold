@@ -44,7 +44,7 @@ fn write(root: &Path, path: &str, text: &str) {
     std::fs::write(root.join(path), text).unwrap();
 }
 
-/// Acceptance 38, recovering the project folder without the main agent: a command that went wrong truncated `plan.md` and left empty files in the project folder, the human recorded them by mistake, and the record conflicts with main, so fold holds the folder for the main agent, which opens its main workspace for the merge. From the web app the human resets the folder: fold stashes the junk as `stash@{0}`, the folder matches main again, the waiting change is dropped with its merge workspace abandoned, and the main agent hears that fold did it. The human then drops the junk entry with `fld stash drop`, and nothing waits in Needs you.
+/// Acceptance 38, recovering the project folder without the main agent: a command that went wrong truncated `plan.md` and left empty files in the project folder, the human recorded them by mistake, saying yes to fld record's question, and the record conflicts with main, so fold holds the folder for the main agent, which opens its main workspace for the merge. From the web app the human resets the folder: fold stashes the junk as `stash@{0}`, the folder matches main again, the waiting change is dropped with its merge workspace abandoned, and the main agent hears that fold did it. The human then drops the junk entry with `fld stash drop`, and nothing waits in Needs you.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acceptance_38_the_human_resets_the_folder_and_drops_the_held_change() {
     let mut h = Harness::start().await;
@@ -61,7 +61,15 @@ async fn acceptance_38_the_human_resets_the_folder_and_drops_the_held_change() {
         write(&root, name, "");
     }
     let head = integrate(&h, "frontend", &[("plan.md", "the plan, version 2\n")]).await;
-    let recorded = fld_ok(&h, Method::POST, "record").await;
+    // fld record asks first, since the change empties a tracked file, and the human says yes.
+    let (status, asked) = h
+        .socket(Method::POST, "/api/v1/projects/demo/record", None)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{asked}");
+    assert_eq!(asked["error"]["code"], "record_needs_confirmation");
+    assert_eq!(asked["error"]["details"]["emptied"], json!(["plan.md"]));
+    let tree = asked["error"]["details"]["tree"].as_str().unwrap();
+    let recorded = fld_ok(&h, Method::POST, &format!("record?confirm={tree}")).await;
     assert_eq!(recorded["outcome"], "conflicted", "{recorded}");
     let opened = h.call("main", "open_main_workspace", json!({})).await;
     let ws = opened["workspace"].as_str().unwrap().to_owned();

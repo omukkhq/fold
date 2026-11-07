@@ -636,6 +636,78 @@ describe("eventLine", () => {
     );
   });
 
+  it("names the files a worker changed in the project folder and how each change ended", () => {
+    expect(
+      eventLine(
+        event("folder.agent_changed", {
+          data: {
+            agents: ["reviewer-35"],
+            paths: ["README.md"],
+            path_count: 27,
+          },
+        }),
+      ).text,
+    ).toBe(
+      "found README.md and 26 more of the project folder changed while reviewer-35 worked",
+    );
+    expect(eventLine(event("folder.agent_changed")).text).toBe(
+      "found files of the project folder that changed while an agent worked",
+    );
+    const ended = (how: string, path_count?: number) =>
+      eventLine(
+        event("folder.agent_change_cleared", { data: { how, path_count } }),
+      ).text;
+    expect(ended("restored", 27)).toBe(
+      "put 27 files that an agent changed aside in the stash",
+    );
+    expect(ended("ignored", 1)).toBe(
+      "took 1 file that an agent changed as the human's own",
+    );
+    expect(ended("recorded", 2)).toBe("recorded 2 files that an agent changed");
+    expect(ended("settled")).toBe(
+      "saw the files that an agent changed hold main's version again",
+    );
+  });
+
+  it("names the shared files that changed while a worker worked and their dismissal", () => {
+    expect(
+      eventLine(
+        event("shared.changed", {
+          data: {
+            agent: "web-worker",
+            paths: ["design/home.pen"],
+            path_count: 1,
+          },
+        }),
+      ).text,
+    ).toBe(
+      "found design/home.pen of the shared files changed while web-worker worked",
+    );
+    expect(eventLine(event("shared.changed")).text).toBe(
+      "found shared files that changed while an agent worked",
+    );
+    expect(eventLine(event("shared.changes_dismissed")).text).toBe(
+      "dismissed the changes of shared files",
+    );
+  });
+
+  it("names the paths a human shared with workers or stopped sharing", () => {
+    const changed = (data: Record<string, unknown>) =>
+      eventLine(event("shared.paths_changed", { data })).text;
+    expect(changed({ added: ["design/", "docs/spec.pdf"], removed: [] })).toBe(
+      "shared design/, docs/spec.pdf with workers, read-only",
+    );
+    expect(changed({ added: [], removed: ["notes.md"] })).toBe(
+      "stopped sharing notes.md",
+    );
+    expect(changed({ added: ["design/"], removed: ["notes.md"] })).toBe(
+      "shared design/ with workers, read-only, and stopped sharing notes.md",
+    );
+    expect(eventLine(event("shared.paths_changed")).text).toBe(
+      "changed the shared paths",
+    );
+  });
+
   it("keeps a backtick in a path from pairing with the marks of a command", () => {
     const line = eventLine(
       event("git.uncommitted_changes", {

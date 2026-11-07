@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO agent_changes (path, agent_id, changed_at, seen_at)\n         SELECT ?, a.id, ?, ? FROM agents a\n         WHERE a.name = ? AND NOT EXISTS (\n             SELECT 1 FROM agent_changes c\n             WHERE c.path = ? AND c.agent_id = a.id\n               AND (c.cleared_at IS NULL OR c.changed_at = ?)\n         )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "f86f8b8c70cf9bf6afcae7a5cd2c788e031a55d5144e0d33a8621c966f47139b"
+}

@@ -673,7 +673,17 @@ async fn get_task(server: &FoldServer, arguments: &JsonObject) -> Result<Value, 
         }
     };
     let detail = tasks.get_view(id(&input.id)?).await.map_err(from_task)?;
-    Ok(detail_json(&detail, all_history))
+    let mut value = detail_json(&detail, all_history);
+    // Names only: a worker reads the files through the links in its workspace.
+    let shared = server
+        .workspaces
+        .shared_names()
+        .await
+        .map_err(super::error::from_workspace)?;
+    if !shared.is_empty() {
+        value["shared"] = json!(shared);
+    }
+    Ok(value)
 }
 
 async fn create_task(

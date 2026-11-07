@@ -318,9 +318,12 @@ impl AgentService {
         let Some(supervisor) = &self.workers else {
             return vec![None; rows.len()];
         };
-        let ids = rows.iter().map(|row| row.session_id.clone()).collect();
+        let sessions = rows
+            .iter()
+            .map(|row| (row.session_id.clone(), row.agent.clone(), row.role))
+            .collect();
         supervisor
-            .transcripts(ids)
+            .transcripts(sessions)
             .await
             .into_iter()
             .map(|path| path.map(|path| path.to_string_lossy().into_owned()))

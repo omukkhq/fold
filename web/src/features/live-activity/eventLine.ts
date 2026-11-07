@@ -15,6 +15,7 @@ import {
   GitMerge,
   GitPullRequest,
   Hand,
+  Link2,
   ListChecks,
   MessageSquare,
   Milestone,
@@ -299,6 +300,13 @@ function filesText(event: DurableEvent): string {
   if (files === null) {
     return "changes";
   }
+  return files === 1 ? "1 file" : `${String(files)} files`;
+}
+
+/** `1 file` or `3 files` of a count, `the files` without one. */
+function filesOf(value: unknown): string {
+  const files = count(value);
+  if (files === null) return "the files";
   return files === 1 ? "1 file" : `${String(files)} files`;
 }
 
@@ -1000,6 +1008,66 @@ const SPECS: Record<EventType, Spec> = {
       return members.length === 0
         ? `${batchOf(e)} is ready to integrate`
         : `${batchOf(e)} is ready: ${members.join(", ")} integrate together`;
+    },
+  },
+  "folder.agent_changed": {
+    icon: Bot,
+    text: (e) => {
+      const paths = heldText(e.data.paths, e.data.path_count);
+      const agents = Array.isArray(e.data.agents)
+        ? e.data.agents
+            .filter((agent): agent is string => typeof agent === "string")
+            .map(codeData)
+        : [];
+      const who = agents.length === 0 ? "an agent" : agents.join(", ");
+      return paths === null
+        ? `found files of the project folder that changed while ${who} worked`
+        : `found ${paths} of the project folder changed while ${who} worked`;
+    },
+  },
+  "folder.agent_change_cleared": {
+    icon: Check,
+    text: (e) => {
+      const files = filesOf(e.data.path_count);
+      switch (e.data.how) {
+        case "restored":
+          return `put ${files} that an agent changed aside in the stash`;
+        case "ignored":
+          return `took ${files} that an agent changed as the human's own`;
+        case "recorded":
+          return `recorded ${files} that an agent changed`;
+        default:
+          return `saw ${files} that an agent changed hold main's version again`;
+      }
+    },
+  },
+  "shared.changed": {
+    icon: Link2,
+    text: (e) => {
+      const paths = heldText(e.data.paths, e.data.path_count);
+      const agent =
+        typeof e.data.agent === "string" ? codeData(e.data.agent) : "an agent";
+      return paths === null
+        ? `found shared files that changed while ${agent} worked`
+        : `found ${paths} of the shared files changed while ${agent} worked`;
+    },
+  },
+  "shared.changes_dismissed": {
+    icon: Check,
+    text: () => "dismissed the changes of shared files",
+  },
+  "shared.paths_changed": {
+    icon: Link2,
+    text: (e) => {
+      const added = heldText(e.data.added, undefined);
+      const removed = heldText(e.data.removed, undefined);
+      const parts = [
+        added === null ? null : `shared ${added} with workers, read-only`,
+        removed === null ? null : `stopped sharing ${removed}`,
+      ].filter((part): part is string => part !== null);
+      return parts.length === 0
+        ? "changed the shared paths"
+        : parts.join(", and ");
     },
   },
 };

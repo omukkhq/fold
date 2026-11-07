@@ -71,6 +71,24 @@ impl Host {
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&bytes).unwrap())
     }
+
+    /// A write of the signed-in human `ana`, as the web app sends it with the session cookie.
+    async fn post(&self, path: &str) -> (StatusCode, Value) {
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/alpha{path}"))
+            .header(fold_daemon::http::host::CLIENT_HEADER, "test")
+            .body(Body::empty())
+            .unwrap();
+        let response = crate::common::signed_in_router(self.daemon.state(), "ana")
+            .await
+            .oneshot(request)
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
 }
 
 fn code(body: &Value) -> &str {
@@ -265,11 +283,15 @@ async fn the_revision_pages_reach_the_genesis_r0_and_end_there() {
     )
     .unwrap();
     let human = fold_core::Actor::human(fold_core::HumanName::parse(HUMAN).unwrap());
-    let recorded =
-        fold_daemon::services::projects::record(&h.handle, &human, &fold_vcs::git::Git::default())
-            .await
-            .unwrap()
-            .outcome;
+    let recorded = fold_daemon::services::projects::record(
+        &h.handle,
+        &human,
+        &fold_vcs::git::Git::default(),
+        None,
+    )
+    .await
+    .unwrap()
+    .outcome;
     assert!(
         matches!(
             &recorded,
@@ -307,5 +329,120 @@ async fn the_revision_pages_reach_the_genesis_r0_and_end_there() {
             ("r1".to_owned(), json!("r1")),
             ("r0".to_owned(), Value::Null),
         ]
+    );
+}
+
+#[tokio::test]
+async fn a_signed_in_human_dismisses_the_changed_shared_files_from_the_web_app() {
+    let project = TestProject::new().await;
+    let lead = fold_core::AgentName::parse("web-lead").unwrap();
+    project
+        .store()
+        .write(async |tx| {
+            fold_store::agents::insert_agent(tx, &lead, Timestamp::from_millis(1).unwrap()).await?;
+            workspaces::note_shared_change(
+                tx,
+                &lead,
+                &["design/home.pen".to_owned()],
+                Timestamp::from_millis(2).unwrap(),
+            )
+            .await?;
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
+    let host = host(&project).await;
+    let kinds = |items: &Value| -> Vec<String> {
+        items["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["kind"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let (_, needs) = host.get("/needs-you").await;
+    assert_eq!(kinds(&needs), ["shared_changed"]);
+
+    let (status, dismissed) = host.post("/shared/dismiss").await;
+    assert_eq!(status, StatusCode::OK, "{dismissed}");
+    assert_eq!(dismissed["dismissed"], 1);
+    let (_, needs) = host.get("/needs-you").await;
+    assert!(kinds(&needs).is_empty(), "{needs}");
+}
+
+#[tokio::test]
+async fn the_changed_shared_files_route_gives_each_path_its_size_and_time_and_never_follows_a_link()
+{
+    let project = TestProject::new().await;
+    let lead = fold_core::AgentName::parse("web-lead").unwrap();
+    let root = project.paths().root().to_path_buf();
+    std::fs::create_dir_all(root.join("design/sub")).unwrap();
+    std::fs::write(root.join("design/home.pen"), "12345").unwrap();
+    std::os::unix::fs::symlink("/etc/hostname", root.join("design/out")).unwrap();
+    project
+        .store()
+        .write(async |tx| {
+            fold_store::agents::insert_agent(tx, &lead, Timestamp::from_millis(1).unwrap()).await?;
+            let paths = [
+                "design/home.pen",
+                "design/out",
+                "design/sub",
+                "design/gone.pen",
+            ]
+            .map(str::to_owned);
+            workspaces::note_shared_change(tx, &lead, &paths, Timestamp::from_millis(2).unwrap())
+                .await?;
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
+    let host = host(&project).await;
+
+    let (status, changed) = host.get("/shared/changes").await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let files = changed["files"].as_array().unwrap();
+    let kinds: Vec<(&str, &str)> = files
+        .iter()
+        .map(|file| {
+            (
+                file["path"].as_str().unwrap(),
+                file["kind"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("design/gone.pen", "missing"),
+            ("design/home.pen", "file"),
+            ("design/out", "symlink"),
+            ("design/sub", "folder"),
+        ]
+    );
+    assert_eq!(files[0]["size"], Value::Null);
+    assert_eq!(files[0]["modified"], Value::Null);
+    assert_eq!(files[1]["size"], 5);
+    assert!(files[1]["modified"].as_i64().unwrap() > 0);
+    assert_eq!(files[2]["size"], "/etc/hostname".len());
+    assert_eq!(files[3]["size"], Value::Null);
+}
+
+#[tokio::test]
+async fn the_shared_route_ends_a_shared_folder_with_a_slash_and_never_follows_a_link() {
+    let project = TestProject::new().await;
+    let root = project.paths().root().to_path_buf();
+    std::fs::create_dir_all(root.join("design")).unwrap();
+    std::fs::write(root.join("spec.pdf"), "pdf").unwrap();
+    std::os::unix::fs::symlink("design", root.join("styles")).unwrap();
+    let listed = ["design", "spec.pdf", "styles", "gone"]
+        .map(|path| fold_vcs::paths::RepoPath::parse(path.as_bytes()).unwrap());
+    fold_vcs::shared::write_shared(&project.paths().fold_dir(), &listed).unwrap();
+    let host = host(&project).await;
+
+    let (status, state) = host.get("/shared").await;
+    assert_eq!(status, StatusCode::OK, "{state}");
+    assert_eq!(
+        state["shared"],
+        json!(["design/", "gone", "spec.pdf", "styles"])
     );
 }

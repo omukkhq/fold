@@ -187,9 +187,19 @@ async fn an_area_lead_starts_task_workers_only_for_tasks_of_its_own_area() {
         assert!(!run.has("--strict-mcp-config"));
         assert!(!run.has("--resume"));
         assert!(run.flag("--append-system-prompt-file").is_some());
+        let start = std::path::Path::new(harness.root())
+            .join(".fold/workers")
+            .join(run.agent())
+            .join("start");
+        assert_eq!(std::path::Path::new(&run.cwd), start);
         assert_eq!(
-            std::path::Path::new(&run.cwd),
-            std::path::Path::new(harness.root())
+            run.env["FOLD_START_DIR"],
+            start.to_string_lossy().into_owned()
+        );
+        assert_eq!(run.env["CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR"], "1");
+        assert_eq!(
+            run.flag("--add-dir").map(std::path::PathBuf::from),
+            Some(std::path::Path::new(harness.root()).join(".fold/ws"))
         );
     }
     let task_worker = worker(&harness, "web-worker").await;
@@ -218,8 +228,13 @@ async fn an_area_lead_starts_task_workers_only_for_tasks_of_its_own_area() {
             &std::fs::read_to_string(run.flag("--settings").unwrap()).unwrap(),
         )
         .unwrap();
-        assert_eq!(own, fold_core::layout::session_settings());
-        assert_eq!(own["permissions"]["allow"], json!(["mcp__fold"]));
+        assert_eq!(own["hooks"], fold_core::layout::worker_settings()["hooks"]);
+        let root = std::path::Path::new(harness.root()).canonicalize().unwrap();
+        // The worker reads the project folder, where the shared paths lead, as it could when it ran there.
+        assert_eq!(
+            own["permissions"]["allow"],
+            json!(["mcp__fold", format!("Read(/{}/**)", root.display())])
+        );
         assert_eq!(
             own["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
             "fld hook pre-tool-use"

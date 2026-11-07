@@ -30,6 +30,8 @@ pub const SYNC_WORKSPACE: &str = "sync_workspace";
 pub const ABANDON_WORKSPACE: &str = "abandon_workspace";
 pub const OPEN_MAIN_WORKSPACE: &str = "open_main_workspace";
 pub const ADD_EXCLUDE_PATTERNS: &str = "add_exclude_patterns";
+pub const SETTLE_AGENT_CHANGES: &str = "settle_agent_changes";
+pub const SHARE_PATHS: &str = "share_paths";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -139,6 +141,31 @@ pub struct AddExcludePatternsInput {
     pub patterns: Vec<String>,
 }
 
+/// What `settle_agent_changes` does with the files workers changed in the project folder.
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(rename_all = "snake_case")]
+pub enum SettleChoice {
+    /// Only show the files and the agents.
+    List,
+    /// Let the files count as the user's own unrecorded changes, which `fld record` records.
+    Ignore,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct SettleAgentChangesInput {
+    /// list or ignore. Ignore only when the user chose it; recording the files is the user's own `fld record`, and putting them aside is the user's own `fld agent-changes restore`.
+    pub choice: SettleChoice,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct SharePathsInput {
+    /// Ignored files or folders to share, each relative to the project folder, such as design/ or docs/spec.pdf. A path that is shared already is left out.
+    pub paths: Vec<String>,
+}
+
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
@@ -210,6 +237,16 @@ pub fn tools() -> Vec<Tool> {
             ADD_EXCLUDE_PATTERNS,
             "Main agent only, when the user asks. Add patterns to .fold/exclude, the project's local ignore rules: paths that are never recorded, imported or proposed and that Git leaves out too, without a change to .gitignore or .foldignore. A ! line in .gitignore or .foldignore brings a path back.",
             schema_for_type::<AddExcludePatternsInput>(),
+        ),
+        Tool::new(
+            SETTLE_AGENT_CHANGES,
+            "Main agent only. The files a supervised worker changed in the project folder during one of its tool calls, which fold does not offer as the user's change: list them with their agents, or, when the user chose it, ignore them (they count as the user's own unrecorded change). The user records them with fld record, or puts them into a new stash entry and brings main's version back with fld agent-changes restore.",
+            schema_for_type::<SettleAgentChangesInput>(),
+        ),
+        Tool::new(
+            SHARE_PATHS,
+            "Main agent only, when the user asks. Share ignored files or folders of the project folder, such as design files, with every workspace through read-only links: each workspace gets a link to the project folder's copy at its next create or sync, and workers read it but never change it. A shared path must be in the project folder and left out by .gitignore, .foldignore or .fold/exclude; fold never shares one the user did not choose, because many ignored files are secrets.",
+            schema_for_type::<SharePathsInput>(),
         ),
     ]
 }
@@ -611,6 +648,50 @@ pub async fn call(
                 .await
                 .map_err(from_workspace)?;
             json!({"file": ".fold/exclude", "added": added})
+        }
+        SETTLE_AGENT_CHANGES => {
+            let input: SettleAgentChangesInput = parse(arguments)?;
+            let actor = server.actor().await?;
+            let handle = server.project()?;
+            let project_error = |error: crate::services::projects::ProjectError| match error {
+                crate::services::projects::ProjectError::Fold(error) => error,
+                crate::services::projects::ProjectError::Store(error) => {
+                    crate::services::error::from_store(error)
+                }
+            };
+            match input.choice {
+                SettleChoice::List => {
+                    let changes = crate::services::projects::list_agent_changes(&handle, &actor)
+                        .await
+                        .map_err(project_error)?;
+                    let files: Vec<Value> = changes
+                        .iter()
+                        .map(|change| {
+                            json!({
+                                "path": change.path,
+                                "agents": change.agents.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                            })
+                        })
+                        .collect();
+                    json!({"files": files})
+                }
+                SettleChoice::Ignore => {
+                    let files = crate::services::projects::ignore_agent_changes(&handle, &actor)
+                        .await
+                        .map_err(project_error)?;
+                    json!({"ignored": files})
+                }
+            }
+        }
+        SHARE_PATHS => {
+            let input: SharePathsInput = parse(arguments)?;
+            let actor = server.actor().await?;
+            let added = server
+                .workspaces
+                .share_paths(&actor, input.paths)
+                .await
+                .map_err(from_workspace)?;
+            json!({"file": ".fold/shared", "added": added})
         }
         _ => return Ok(None),
     };

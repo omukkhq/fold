@@ -1,3 +1,4 @@
+mod agent_changes;
 mod changesets;
 mod checkpoints;
 mod columns;
@@ -9,8 +10,13 @@ mod lifecycle;
 mod refs;
 mod remotes;
 mod revisions;
+mod shared_changes;
 mod stashes;
 
+pub use agent_changes::{
+    AgentChangeEnd, AgentChangeRow, clear_agent_change, insert_agent_change, last_agent_change,
+    open_agent_changes, settle_agent_change,
+};
 pub(crate) use changesets::parse_stats;
 pub use changesets::{
     Changeset, ChangesetStats, get_changeset, insert_changeset, latest_changeset, list_changesets,
@@ -50,6 +56,9 @@ pub use revisions::{
     IntegratedProposal, IntegrationInfo, IntegrationKind, MAX_PAGE, RevisionRow, ancestors,
     create_initial_revision, genesis, genesis_revision, get_by_hash, get_by_number, head,
     initial_revision, insert_revision, list_after, list_recent,
+};
+pub use shared_changes::{
+    SharedChangeRow, dismiss_shared_changes, note_shared_change, open_shared_changes,
 };
 pub use stashes::{
     NewStash, NewUnstash, StashRow, StashState, UnstashEnd, UnstashRow, apply_stash, close_unstash,

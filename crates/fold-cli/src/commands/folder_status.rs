@@ -106,6 +106,24 @@ fn status_lines(
     let settings_note = ignored_tracked.contains(&LOCAL_SETTINGS).then(|| {
         format!("{LOCAL_SETTINGS} holds your own Claude Code settings; `fld untrack {LOCAL_SETTINGS}` stops tracking it and leaves it on disk")
     });
+    let shared = list(body, "shared")?
+        .iter()
+        .map(|path| path.as_str().map(output::escape_control))
+        .collect::<Option<Vec<_>>>()
+        .ok_or(RemoteError::Answer)?;
+    let shared_note = (!shared.is_empty())
+        .then(|| format!("Shared read-only with workers: {}", shared.join(", ")));
+    let unseen_note = super::share::unseen_note(body)?;
+    let notes: Vec<&String> = [
+        &ignored_note,
+        &skills_note,
+        &settings_note,
+        &shared_note,
+        &unseen_note,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     if at_main
         && changes.is_empty()
         && skipped.is_empty()
@@ -118,13 +136,7 @@ fn status_lines(
         if let Some(synced) = &synced {
             clean.detail(synced);
         }
-        if let Some(note) = &ignored_note {
-            clean.detail(note);
-        }
-        if let Some(note) = &skills_note {
-            clean.detail(note);
-        }
-        if let Some(note) = &settings_note {
+        for note in &notes {
             clean.detail(note);
         }
         return Ok(output::items(vec![clean]));
@@ -147,18 +159,13 @@ fn status_lines(
     if let Some(synced) = &synced {
         place.detail(synced);
     }
-    if let Some(note) = &ignored_note {
-        place.detail(note);
-    }
-    if let Some(note) = &skills_note {
-        place.detail(note);
-    }
-    if let Some(note) = &settings_note {
+    for note in &notes {
         place.detail(note);
     }
     items.push(place);
 
     let mut held = 0;
+    let mut from_agents = 0;
     if !changes.is_empty() {
         let mut record = Item::new(format!(
             "To record: {}",
@@ -188,9 +195,26 @@ fn status_lines(
                 held += 1;
                 line.push_str(", held by main");
             }
+            let agents: Vec<&str> = change["agents"]
+                .as_array()
+                .map(|agents| agents.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            if !agents.is_empty() {
+                from_agents += 1;
+                line.push_str(&format!(
+                    ", changed while {} worked",
+                    output::escape_control(&agents.join(", "))
+                ));
+            }
             record.detail(line);
         }
         record.detail("Next: `fld record` records them on main; `fld stash` puts them aside");
+        if from_agents > 0 {
+            record.detail(format!(
+                "A worker changed {} during its tool calls, so fold asks before `fld record` records them: `fld agent-changes restore` puts them aside in the stash, `fld agent-changes ignore` makes them yours",
+                output::count(from_agents, "file", "files")
+            ));
+        }
         items.push(record);
     }
 
@@ -399,6 +423,7 @@ mod tests {
         let mut body = json!({
             "head": "r12", "folder": "r12", "at_main": true, "behind_because": null, "branch": null,
             "changes": [], "skipped": [], "ignored_tracked": [], "blockers": [], "stash": [],
+            "shared": [], "unseen": [], "unseen_count": 0,
         });
         for (key, value) in fields.as_object().unwrap() {
             body[key] = value.clone();
@@ -463,6 +488,22 @@ mod tests {
                 "6 files to record",
             ]
         );
+    }
+
+    #[test]
+    fn a_change_a_worker_made_names_its_agents_and_the_steps_that_settle_it() {
+        let mut junk = change("plan.md", "modified", "file", false);
+        junk["agents"] = json!(["reviewer-35"]);
+        let shown = lines(answer(json!({
+            "changes": [change("a.txt", "modified", "file", false), junk],
+        })));
+        assert_eq!(shown[3], "  ↳ modified: a.txt");
+        assert_eq!(
+            shown[4],
+            "  ↳ modified: plan.md, changed while reviewer-35 worked"
+        );
+        assert!(shown[6].contains("A worker changed 1 file during its tool calls"));
+        assert!(shown[6].contains("`fld agent-changes restore`"));
     }
 
     #[test]
@@ -771,5 +812,22 @@ mod tests {
         );
         assert_eq!(skipped_reason("unreadable"), "not readable");
         assert_eq!(skipped_reason("other"), "other");
+    }
+
+    #[test]
+    fn the_head_item_names_the_shared_paths_and_the_ignored_paths_workers_cannot_see() {
+        let shown = lines(answer(json!({
+            "shared": ["design/"],
+            "unseen": [".env"],
+            "unseen_count": 2,
+        })));
+        assert_eq!(
+            shown,
+            [
+                "Nothing to record: the project folder is at main r12",
+                "  ↳ Shared read-only with workers: design/",
+                "  ↳ Workers cannot see 2 ignored paths: .env and 1 more. `fld share <path>` shares one with them, read-only",
+            ]
+        );
     }
 }

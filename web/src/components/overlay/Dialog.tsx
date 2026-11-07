@@ -7,6 +7,7 @@ import {
   dialogBody,
   dialogContent,
   dialogFill,
+  dialogFillBody,
   dialogFillOverlay,
   dialogOverlay,
 } from "./dialogStyles";
@@ -80,7 +81,7 @@ export function Dialog({
             </div>
             {/* A body whose parts all render nothing, such as an error that has not happened, takes no space. */}
             {body ? (
-              <div className={dialogBody}>
+              <div className={cn(dialogBody, wide && dialogFillBody)}>
                 <div
                   className={cn(
                     "flex flex-col gap-12 px-20 pt-4 empty:hidden",

@@ -12,7 +12,7 @@ import {
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
-import { describeError } from "./errors";
+import { describeError, type ErrorView } from "./errors";
 
 /** react-hook-form's submit handler returns a promise that a form event cannot take; validation errors land in the form state. */
 export function submit(
@@ -181,12 +181,18 @@ export function SmallAction({
   );
 }
 
-/** A refused write: a mapped refusal names its cause, any other shows the daemon's message. A refusal that belongs to a form field is shown by the field. */
-export function WriteError({ error }: { error: Error | null }) {
+/** A refused write: a mapped refusal names its cause, any other shows the daemon's message. A refusal that belongs to a form field is shown by the field. `describe` maps the refusals of a screen other than the task's. */
+export function WriteError({
+  error,
+  describe = describeError,
+}: {
+  error: Error | null;
+  describe?: (error: Error) => ErrorView | null;
+}) {
   if (error === null) {
     return null;
   }
-  const view = describeError(error);
+  const view = describe(error);
   if (view?.field) {
     return null;
   }

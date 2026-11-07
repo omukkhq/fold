@@ -416,6 +416,7 @@ fn fld_untrack_stops_tracking_a_file_the_rules_match_and_leaves_it_on_disk() {
         [
             "Project folder at main r2",
             "  ↳ Git: main is synced with the branch main",
+            "  ↳ Workers cannot see 1 ignored path: secret.env. `fld share <path>` shares one with them, read-only",
             "",
             "To record: 1 file",
             "  ↳ modified: .foldignore",

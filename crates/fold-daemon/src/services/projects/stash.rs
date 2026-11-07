@@ -20,6 +20,7 @@ use fold_vcs::integrate::tree_merge;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::RepoPath;
 use fold_vcs::platform::Capabilities;
+use fold_vcs::revision_store::write_initial_tree;
 use fold_vcs::scan::Skipped;
 use fold_vcs::stash::{changed_paths, occupied_paths, open_conflicts};
 use fold_vcs::sync::{
@@ -128,6 +129,165 @@ pub async fn stash(
     policy::can_stash(actor).map_err(FoldError::from)?;
     let (handle, actor, git) = (Arc::clone(handle), actor.clone(), git.clone());
     spawned(async move { run_stash(&handle, &actor, &git).await }).await
+}
+
+/// What a restore of the changes workers made in the project folder did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreOutcome {
+    /// The main revision the folder holds now.
+    pub revision: RevisionId,
+    /// The paths that went into `stash@{0}` and back to the checkout record's entries, in path order; empty when the folder held them as recorded already.
+    pub files: Vec<String>,
+    /// The entries on the stack now.
+    pub entries: usize,
+}
+
+/// Puts the changes that supervised workers made in the project folder aside, for a human only (`policy::can_restore_agent_changes`): the paths fold placed in a worker's tool call, and only those, go into a new stash entry as `fld stash` puts changes there, so `fld unstash` brings them back, and the folder holds the checkout record's entries at those paths again. The human's other changes stay in the folder. The locks, the refusals and the order of writes are those of [`stash`]; the open changes end as `restored` with `folder.agent_change_cleared` once the files are back, so a stop before that leaves them open until the next follow finds the folder holding the record and ends them as `settled`.
+pub async fn restore_agent_changes(
+    handle: &Arc<ProjectHandle>,
+    actor: &Actor,
+    git: &Git,
+) -> Result<RestoreOutcome, ProjectError> {
+    let starter = super::agent_changes::starter(handle, actor).await?;
+    policy::can_restore_agent_changes(&starter).map_err(FoldError::from)?;
+    let (handle, actor, git) = (Arc::clone(handle), actor.clone(), git.clone());
+    spawned(async move { run_restore(&handle, &actor, &git).await }).await
+}
+
+async fn run_restore(
+    handle: &Arc<ProjectHandle>,
+    actor: &Actor,
+    git: &Git,
+) -> Result<RestoreOutcome, ProjectError> {
+    let config = load_config(&handle.paths).await?;
+    let _remote = handle.remote_lock.clone().lock_owned().await;
+    let _folder = handle.folder_lock.clone().lock_owned().await;
+    loop {
+        let (followed, _) = sync(handle, git, false).await?;
+        refuse_branch(&config.git.branch, &followed)?;
+        match finish_open_unstash(handle, config.max_file_bytes).await? {
+            Finish::Nothing => break,
+            Finish::Abandoned | Finish::Finished(_) => {}
+        }
+    }
+    let stack = stack(handle).await?;
+    if let Some(entry) = stack
+        .first()
+        .filter(|entry| entry.state == StashState::Conflicted)
+    {
+        return Err(markers_wait(&entry.conflicts).into());
+    }
+    let open: std::collections::BTreeSet<Vec<u8>> =
+        workspaces::open_agent_changes(handle.store.read())
+            .await?
+            .into_iter()
+            .map(|row| row.path)
+            .collect();
+    if open.is_empty() {
+        return Err(super::agent_changes::no_agent_change().into());
+    }
+    let record = workspaces::checkout(handle.store.read())
+        .await?
+        .ok_or(StoreError::Corrupt("checkout"))?;
+    let (folder_tree, skipped) =
+        snapshot_folder(handle, record.tree, config.max_file_bytes).await?;
+    let objects_guard = handle.objects.clone().read_owned().await;
+    let fold_dir = handle.paths.fold_dir();
+    let (restored, record_tree) = (open.clone(), record.tree);
+    let tree = blocking(move || {
+        let _objects = objects_guard;
+        let objects = ObjectStore::open_existing(&fold_dir)?;
+        let folder = load_flat(&objects, &folder_tree)?;
+        let mut target = load_flat(&objects, &record_tree)?;
+        for path in &restored {
+            match folder.get(path) {
+                Some(entry) => {
+                    target.insert(path.clone(), *entry);
+                }
+                None => {
+                    target.remove(path);
+                }
+            }
+        }
+        write_initial_tree(&objects, target)
+    })
+    .await?;
+    let newest = stack.first().map(|entry| (entry.base_tree, entry.tree));
+    let markers = refuse_unstashable(handle, record.tree, tree, &skipped, newest).await?;
+    if !markers.is_empty() {
+        return Err(markers_left(&markers).into());
+    }
+    let mut entries = stack.len();
+    let files = if tree == record.tree {
+        Vec::new()
+    } else {
+        let files = changed(handle, record.tree, tree).await?;
+        let label = actor.event_actor().to_string();
+        let event = stash_event(
+            types::STASH_PUSHED,
+            actor,
+            record.revision,
+            &files,
+            json!({"stash": "stash@{0}", "entries": stack.len() + 1}),
+        )?;
+        let now = handle.clock.now();
+        let new = NewStash {
+            base_tree: record.tree,
+            tree,
+            revision: record.revision,
+            actor: &label,
+            now,
+        };
+        let buffer = handle
+            .store
+            .write(async |tx| -> Result<EventBuffer, ProjectError> {
+                let mut buffer = EventBuffer::new();
+                insert_stash(tx, &new).await?;
+                buffer.append(tx, &event, now).await?;
+                Ok(buffer)
+            })
+            .await?;
+        handle.bus.publish(buffer);
+        entries += 1;
+        if workspaces::git_sync(handle.store.read()).await?.is_some() {
+            let (git, paths) = (git.clone(), handle.paths.clone());
+            let reset: Vec<Vec<u8>> = files.iter().map(|file| file.as_bytes().to_vec()).collect();
+            blocking(move || {
+                let tip = git.ref_commit(&paths.git_dir(), "HEAD")?;
+                reset_index_paths(&git, &paths, tip.as_ref(), &reset)
+            })
+            .await?;
+        }
+        put_back(handle, record.tree, tree, config.max_file_bytes).await?;
+        files
+    };
+    super::agent_changes::end_agent_changes(
+        handle,
+        actor,
+        workspaces::AgentChangeEnd::Restored,
+        Some(&open),
+        false,
+    )
+    .await?;
+    let (followed, _) = sync(handle, git, false).await?;
+    let revision = match followed.at {
+        Some(at) => at,
+        None => {
+            workspaces::checkout(handle.store.read())
+                .await?
+                .ok_or(StoreError::Corrupt("checkout"))?
+                .revision
+        }
+    };
+    tracing::info!(
+        files = files.len(),
+        "the changes workers made in the project folder are stashed"
+    );
+    Ok(RestoreOutcome {
+        revision,
+        files,
+        entries,
+    })
 }
 
 /// Merges the newest entry of the stash into the project folder as it is now, for the named human who runs `fld unstash`: the entry's change from its base to its tree, merged three-way with the folder's files, including changes the human made since that no revision records.

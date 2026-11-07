@@ -677,3 +677,33 @@ async fn the_supervised_main_hands_off_through_its_note_and_is_asked_again_witho
     assert!(!fresh.has("--resume"), "the note starts a fresh session");
     assert_ne!(worker(&harness, MAIN).await.session_id, first_session);
 }
+
+/// The supervised main works in the project folder for the humans, so a file its own shell command writes there is no worker's change: the human's record takes it with no question.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_supervised_mains_own_shell_writes_never_wait_as_a_workers_change() {
+    let fake = FakeClaude::new("bash_call").running_tool_scripts();
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    fold_daemon::services::projects::ensure_human(
+        harness.project.registry(),
+        harness.project.clock(),
+        &fold_core::HumanName::parse(HUMAN).unwrap(),
+    )
+    .await
+    .unwrap();
+    let root = std::path::PathBuf::from(harness.root());
+    fake.set_tool_script(&format!(
+        "printf 'from main\\n' > '{}/notes.txt'\n",
+        root.display()
+    ));
+    supervise(&harness, true);
+    harness.restart().await;
+    until_runs(&fake, MAIN, 1).await;
+    until_state(&harness, MAIN, WorkerState::Idle).await;
+    assert!(root.join("notes.txt").is_file());
+    let (status, recorded) = harness
+        .socket(Method::POST, &format!("{BASE}/record"), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{recorded}");
+    assert_eq!(recorded["outcome"], "recorded");
+    assert_eq!(recorded["files"], json!(["notes.txt"]));
+}

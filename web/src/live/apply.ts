@@ -39,6 +39,8 @@ const DOMAINS = new Set([
   "stash",
   "checks",
   "notify",
+  "folder",
+  "shared",
 ]);
 
 export function domainOf(type: string): string | null {
@@ -505,6 +507,12 @@ function invalidationKeys(
         keys.needsYou(slug),
         keys.stash(slug),
       ];
+    case "folder":
+      // Needs you lists the files a worker changed in the project folder until each is settled.
+      return [repository, keys.project(slug), keys.needsYou(slug)];
+    case "shared":
+      // Needs you lists the shared files that changed while a worker worked until a human dismisses them, and the repository screen names the shared paths, which `shared.paths_changed` changes.
+      return [keys.needsYou(slug), keys.shared(slug)];
     case "project":
       return [keys.project(slug), keys.workers(slug), keys.agents(slug)];
     // A host target's change reaches every open project. The notify key is the prefix of each target's send log, and fold turning a target off or on opens or ends its Needs you item.

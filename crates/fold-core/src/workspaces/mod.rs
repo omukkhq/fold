@@ -1,3 +1,4 @@
+pub mod agent_changes;
 pub mod checkpoint_policy;
 pub mod folder;
 pub mod merge;

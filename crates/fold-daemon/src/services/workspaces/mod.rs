@@ -37,6 +37,7 @@ mod lifecycle;
 mod reconcile;
 mod repository;
 mod review_fix;
+mod shared;
 mod stalls;
 mod sync;
 mod sync_task;
@@ -71,6 +72,7 @@ pub use repository::{
     RevisionPage, RevisionSummary,
 };
 pub(crate) use review_fix::ReviewFixTree;
+pub use shared::{LISTED_UNSEEN, SharedFileKind, SharedFileState, SharedState};
 pub use stalls::{check_stalls, follow_stall_turns};
 pub use sync::Synced;
 pub use sync_task::{SyncTaskCreated, SyncWorkspace, short_commit};

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE shared_changes SET paths = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "5b7a57faaeb481afc1a2bb5fc7e0d4783a33e5503a0f7ee052d192b670b18f36"
+}

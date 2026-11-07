@@ -46,6 +46,8 @@ async fn each_role_loads_its_frequent_tools_at_once_and_defers_the_rare_ones() {
         "set_worker_limits",
         "restart_worker",
         "add_exclude_patterns",
+        "settle_agent_changes",
+        "share_paths",
         "list_review_batches",
         "release_task",
     ];

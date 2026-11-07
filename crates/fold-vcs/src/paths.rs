@@ -192,6 +192,28 @@ pub fn resolve(root: &Path, path: &RepoPath) -> Result<PathBuf, WorkspaceError> 
     Ok(located)
 }
 
+/// When the entry at `path` under `root` last changed, read without following a symlink: its own modification time, or for an entry that is gone that of the nearest folder above it that is still there, whose time moves when an entry inside it is added or removed. `None` when no time can be read or a parent is a symlink or no directory.
+pub fn changed_time(root: &Path, path: &RepoPath) -> Option<std::time::SystemTime> {
+    let located = resolve(root, path).ok()?;
+    match std::fs::symlink_metadata(&located) {
+        Ok(meta) => return meta.modified().ok(),
+        Err(error) if error.kind() != io::ErrorKind::NotFound => return None,
+        Err(_) => {}
+    }
+    let (parents, _) = path.parents_and_name();
+    (0..=parents.len()).rev().find_map(|depth| {
+        let folder: PathBuf = std::iter::once(root.to_path_buf())
+            .chain(
+                parents[..depth]
+                    .iter()
+                    .map(|name| PathBuf::from(OsString::from_vec(name.to_vec()))),
+            )
+            .collect();
+        let meta = std::fs::symlink_metadata(folder).ok()?;
+        meta.is_dir().then(|| meta.modified().ok()).flatten()
+    })
+}
+
 /// The directory that holds `path`, reached from `root` one handle at a time with no symlink followed, and the entry's name in it. `None` when the root or a parent is missing; a parent that is a symlink or not a directory is refused.
 pub(crate) fn open_parent<'p>(
     root: &Path,

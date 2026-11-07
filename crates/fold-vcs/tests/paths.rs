@@ -4,7 +4,7 @@ use std::fs;
 
 use fold_core::tree::{EntryKind, FlatEntry};
 use fold_vcs::materialise::{remove_entry, write_entry};
-use fold_vcs::paths::{RepoPath, WorkspaceError, resolve};
+use fold_vcs::paths::{RepoPath, WorkspaceError, changed_time, resolve};
 
 use crate::common::*;
 
@@ -123,4 +123,31 @@ fn a_directory_entry_cannot_be_written() {
     let path = RepoPath::parse(b"d").unwrap();
     let error = write_entry(&store, dir.path(), &path, &entry, &opts(HOST, false)).unwrap_err();
     assert_eq!(error.code(), "tree_invalid");
+}
+
+#[test]
+fn a_change_time_is_the_entrys_own_or_for_a_removed_one_its_nearest_folders() {
+    let root = tempfile::tempdir().unwrap();
+    let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+    fs::create_dir_all(root.path().join("a/b")).unwrap();
+    fs::write(root.path().join("a/b/file.txt"), "x").unwrap();
+    let file = fs::File::options()
+        .write(true)
+        .open(root.path().join("a/b/file.txt"))
+        .unwrap();
+    file.set_modified(old).unwrap();
+    let path = |text: &str| RepoPath::parse(text.as_bytes()).unwrap();
+    assert_eq!(changed_time(root.path(), &path("a/b/file.txt")), Some(old));
+    let folder = fs::metadata(root.path().join("a/b"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    assert_eq!(
+        changed_time(root.path(), &path("a/b/gone.txt")),
+        Some(folder)
+    );
+    let top = fs::metadata(root.path()).unwrap().modified().unwrap();
+    assert_eq!(changed_time(root.path(), &path("c/d/gone.txt")), Some(top));
+    std::os::unix::fs::symlink(root.path().join("a"), root.path().join("link")).unwrap();
+    assert_eq!(changed_time(root.path(), &path("link/b/file.txt")), None);
 }
