@@ -26,6 +26,18 @@ describe("rowPreview", () => {
   });
 });
 
+describe("rowPreview of Markdown", () => {
+  it("shows the plain words of a Markdown message on one line, with ids as written", () => {
+    const done = message("m-8", {
+      sender: "web-lead",
+      body: "The copy lines of **T-14** are done.\n\n- see [the guide](/p/demo/board)\n- `hashPassword(values.password)`",
+    });
+    expect(segmentsText(rowPreview(done, "tanim", "web-lead"))).toBe(
+      "The copy lines of T-14 are done. see the guide hashPassword(values.password)",
+    );
+  });
+});
+
 describe("chatRow", () => {
   const waiting = thread("m-2", {
     awaiting_human: true,

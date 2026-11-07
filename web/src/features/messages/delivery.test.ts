@@ -209,5 +209,8 @@ describe("delivery", () => {
       "@tanim → @frontend/ui, @backend, @review, @tanim",
     );
     expect(previewLine(message)).toBe("@tanim: Hello");
+    expect(previewLine({ ...message, body: "- **Done**: `fld record`" })).toBe(
+      "@tanim: Done: fld record",
+    );
   });
 });
