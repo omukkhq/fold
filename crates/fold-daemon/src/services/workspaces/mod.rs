@@ -73,7 +73,7 @@ pub use repository::{
 };
 pub(crate) use review_fix::ReviewFixTree;
 pub use shared::{LISTED_UNSEEN, SharedFileKind, SharedFileState, SharedState};
-pub use stalls::check_stalls;
+pub use stalls::{check_stalls, follow_stall_turns};
 pub use sync::Synced;
 pub use sync_task::{SyncTaskCreated, SyncWorkspace, short_commit};
 

@@ -8,8 +8,8 @@ use fold_core::{TaskDescription, TaskKind, TaskTitle};
 use fold_store::StoreError;
 use fold_store::workspaces::{
     self, ConflictRow, NewStash, NewUnstash, StashRow, StashState, UnstashEnd, apply_stash,
-    close_unstash, conflict_stash, drop_stash, insert_stash, insert_unstash, open_unstash,
-    stash_stack,
+    close_unstash, conflict_stash, drop_stash, insert_stash, insert_stash_drop, insert_unstash,
+    open_unstash, stash_stack,
 };
 use fold_vcs::checkout::{folder_changes, follow};
 use fold_vcs::compare::load_flat;
@@ -20,7 +20,6 @@ use fold_vcs::integrate::tree_merge;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::RepoPath;
 use fold_vcs::platform::Capabilities;
-use fold_vcs::revision_store::write_initial_tree;
 use fold_vcs::scan::Skipped;
 use fold_vcs::stash::{changed_paths, occupied_paths, open_conflicts};
 use fold_vcs::sync::{
@@ -37,7 +36,7 @@ use crate::services::events::EventBuffer;
 use crate::services::fired;
 
 /// The most paths a stash event lists; the rest are counted.
-const LISTED_PATHS: usize = 50;
+pub(super) const LISTED_PATHS: usize = 50;
 
 /// What `fld stash` did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +104,8 @@ pub struct AfterUnstash<T> {
 pub struct StashEntry {
     /// Its place on the stack: 0 is the newest, `stash@{0}`.
     pub position: usize,
+    /// Its number, which stays the same while its place moves; a drop names it.
+    pub number: i64,
     pub created_at: Timestamp,
     /// The main revision the folder held when the entry was made.
     pub base: RevisionId,
@@ -140,7 +141,7 @@ pub struct RestoreOutcome {
     pub entries: usize,
 }
 
-/// Puts the changes that supervised workers made in the project folder aside, for a human only (`policy::can_restore_agent_changes`): the paths fold placed in a worker's tool call, and only those, go into a new stash entry as `fld stash` puts changes there, so `fld unstash` brings them back, and the folder holds the checkout record's entries at those paths again. The human's other changes stay in the folder. The locks, the refusals and the order of writes are those of [`stash`]; the open changes end as `restored` with `folder.agent_change_cleared` once the files are back, so a stop before that leaves them open until the next follow finds the folder holding the record and ends them as `settled`.
+/// Puts the changes that supervised workers made in the project folder aside, for a human only (`policy::can_restore_agent_changes`): the paths fold placed in a worker's tool call, and only those, go back as `fld restore` puts named paths back, so the safety entry `stash@{0}` holds them and `fld unstash` brings them back, and the human's other changes stay in the folder. The locks, the refusals and the order of writes are those of [`super::reset`]. The open changes end as `restored` with `folder.agent_change_cleared` only once the files are back, so a refusal keeps them open, and a stop before that leaves them open until the next follow finds the folder holding the record and ends them as `settled`.
 pub async fn restore_agent_changes(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
@@ -160,21 +161,7 @@ async fn run_restore(
     let config = load_config(&handle.paths).await?;
     let _remote = handle.remote_lock.clone().lock_owned().await;
     let _folder = handle.folder_lock.clone().lock_owned().await;
-    loop {
-        let (followed, _) = sync(handle, git, false).await?;
-        refuse_branch(&config.git.branch, &followed)?;
-        match finish_open_unstash(handle, config.max_file_bytes).await? {
-            Finish::Nothing => break,
-            Finish::Abandoned | Finish::Finished(_) => {}
-        }
-    }
-    let stack = stack(handle).await?;
-    if let Some(entry) = stack
-        .first()
-        .filter(|entry| entry.state == StashState::Conflicted)
-    {
-        return Err(markers_wait(&entry.conflicts).into());
-    }
+    let unstash = super::reset::follow_first(handle, git, &config).await?;
     let open: std::collections::BTreeSet<Vec<u8>> =
         workspaces::open_agent_changes(handle.store.read())
             .await?
@@ -184,107 +171,40 @@ async fn run_restore(
     if open.is_empty() {
         return Err(super::agent_changes::no_agent_change().into());
     }
-    let record = workspaces::checkout(handle.store.read())
-        .await?
-        .ok_or(StoreError::Corrupt("checkout"))?;
-    let (folder_tree, skipped) =
-        snapshot_folder(handle, record.tree, config.max_file_bytes).await?;
-    let objects_guard = handle.objects.clone().read_owned().await;
-    let fold_dir = handle.paths.fold_dir();
-    let (restored, record_tree) = (open.clone(), record.tree);
-    let tree = blocking(move || {
-        let _objects = objects_guard;
-        let objects = ObjectStore::open_existing(&fold_dir)?;
-        let folder = load_flat(&objects, &folder_tree)?;
-        let mut target = load_flat(&objects, &record_tree)?;
-        for path in &restored {
-            match folder.get(path) {
-                Some(entry) => {
-                    target.insert(path.clone(), *entry);
-                }
-                None => {
-                    target.remove(path);
-                }
-            }
-        }
-        write_initial_tree(&objects, target)
-    })
-    .await?;
-    let newest = stack.first().map(|entry| (entry.base_tree, entry.tree));
-    let markers = refuse_unstashable(handle, record.tree, tree, &skipped, newest).await?;
-    if !markers.is_empty() {
-        return Err(markers_left(&markers).into());
-    }
-    let mut entries = stack.len();
-    let files = if tree == record.tree {
-        Vec::new()
-    } else {
-        let files = changed(handle, record.tree, tree).await?;
-        let label = actor.event_actor().to_string();
-        let event = stash_event(
-            types::STASH_PUSHED,
+    let paths = open
+        .iter()
+        .map(|path| RepoPath::parse(path).map_err(|_| StoreError::Corrupt("agent_changes.path")))
+        .collect::<Result<Vec<_>, _>>()?;
+    let done =
+        super::reset::reset_followed(handle, actor, git, &config, Some(paths), unstash).await?;
+    // Only a path that went back, or held no change, ends: a file the read left out stays as the worker left it.
+    let back: std::collections::BTreeSet<Vec<u8>> = done
+        .files
+        .iter()
+        .chain(&done.unchanged)
+        .map(|path| path.as_bytes().to_vec())
+        .filter(|path| {
+            open.contains(path) && !done.skipped.iter().any(|skip| skip.path.as_bytes() == path)
+        })
+        .collect();
+    if !back.is_empty() {
+        super::agent_changes::end_agent_changes(
+            handle,
             actor,
-            record.revision,
-            &files,
-            json!({"stash": "stash@{0}", "entries": stack.len() + 1}),
-        )?;
-        let now = handle.clock.now();
-        let new = NewStash {
-            base_tree: record.tree,
-            tree,
-            revision: record.revision,
-            actor: &label,
-            now,
-        };
-        let buffer = handle
-            .store
-            .write(async |tx| -> Result<EventBuffer, ProjectError> {
-                let mut buffer = EventBuffer::new();
-                insert_stash(tx, &new).await?;
-                buffer.append(tx, &event, now).await?;
-                Ok(buffer)
-            })
-            .await?;
-        handle.bus.publish(buffer);
-        entries += 1;
-        if workspaces::git_sync(handle.store.read()).await?.is_some() {
-            let (git, paths) = (git.clone(), handle.paths.clone());
-            let reset: Vec<Vec<u8>> = files.iter().map(|file| file.as_bytes().to_vec()).collect();
-            blocking(move || {
-                let tip = git.ref_commit(&paths.git_dir(), "HEAD")?;
-                reset_index_paths(&git, &paths, tip.as_ref(), &reset)
-            })
-            .await?;
-        }
-        put_back(handle, record.tree, tree, config.max_file_bytes).await?;
-        files
-    };
-    super::agent_changes::end_agent_changes(
-        handle,
-        actor,
-        workspaces::AgentChangeEnd::Restored,
-        Some(&open),
-        false,
-    )
-    .await?;
-    let (followed, _) = sync(handle, git, false).await?;
-    let revision = match followed.at {
-        Some(at) => at,
-        None => {
-            workspaces::checkout(handle.store.read())
-                .await?
-                .ok_or(StoreError::Corrupt("checkout"))?
-                .revision
-        }
-    };
+            workspaces::AgentChangeEnd::Restored,
+            Some(&back),
+            false,
+        )
+        .await?;
+    }
     tracing::info!(
-        files = files.len(),
+        files = done.files.len(),
         "the changes workers made in the project folder are stashed"
     );
     Ok(RestoreOutcome {
-        revision,
-        files,
-        entries,
+        revision: done.revision,
+        files: done.files,
+        entries: done.entries,
     })
 }
 
@@ -308,6 +228,7 @@ pub async fn stash_list(handle: &ProjectHandle) -> Result<Vec<StashEntry>, Proje
     for (position, entry) in stack.into_iter().enumerate() {
         entries.push(StashEntry {
             position,
+            number: entry.number,
             created_at: entry.created_at,
             base: entry.revision,
             files: entry_files(handle, &entry).await?,
@@ -320,6 +241,177 @@ pub async fn stash_list(handle: &ProjectHandle) -> Result<Vec<StashEntry>, Proje
         });
     }
     Ok(entries)
+}
+
+/// Which entries `fld stash drop` or `fld stash clear` drops, with what the human saw of the stack when they agreed, so a stack that changed meanwhile is refused instead of dropping an entry nobody saw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StashDrop {
+    /// The entry at this place on the stack, 0 for `stash@{0}`, the newest, while it is still the entry with this number.
+    One { position: usize, number: i64 },
+    /// Every entry, while the stack still holds `entries` entries and its newest has the number `newest`, `None` for an empty stack.
+    All { entries: usize, newest: Option<i64> },
+}
+
+/// What `fld stash drop` or `fld stash clear` dropped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StashDropped {
+    /// The dropped entries, newest first, each with its place on the stack before the drop.
+    pub dropped: Vec<StashEntry>,
+    /// The entries left on the stack.
+    pub entries: usize,
+}
+
+/// Drops entries of the stash for the named human who runs `fld stash drop` or `fld stash clear`: the changes they hold are gone from the stack for good, while their objects stay in the store until `fld gc`. The drop itself changes no file of the project folder. Under the remote lock and folder lock, an unstash that a stop left part-way is finished first, which writes its files into the folder as `fld unstash` would, so no journal row names a dropped entry; then the stack must still be the one the human saw, as `target` names it, or the drop is refused with `stash_changed`, since an entry's place moves when an entry is pushed, applied or dropped meanwhile. One transaction then records each drop and appends `stash.discarded`. An entry whose unstash conflict waits in the folder is refused, since its markers are still there: the human fixes them and runs `fld record`, which drops the entry, or runs `fld reset`. A place past the stack is refused; `fld stash clear` of an empty stash drops nothing.
+pub async fn drop_stash_entries(
+    handle: &Arc<ProjectHandle>,
+    actor: &Actor,
+    git: &Git,
+    target: StashDrop,
+) -> Result<StashDropped, ProjectError> {
+    policy::can_drop_stash(actor).map_err(FoldError::from)?;
+    let (handle, actor, git) = (Arc::clone(handle), actor.clone(), git.clone());
+    spawned(async move { run_drop(&handle, &actor, &git, target).await }).await
+}
+
+async fn run_drop(
+    handle: &Arc<ProjectHandle>,
+    actor: &Actor,
+    git: &Git,
+    target: StashDrop,
+) -> Result<StashDropped, ProjectError> {
+    let config = load_config(&handle.paths).await?;
+    let _remote = handle.remote_lock.clone().lock_owned().await;
+    let _folder = handle.folder_lock.clone().lock_owned().await;
+    let open = {
+        let mut conn = handle
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        open_unstash(&mut conn).await?
+    };
+    if open.is_some() {
+        loop {
+            let (followed, _) = sync(handle, git, false).await?;
+            refuse_branch(&config.git.branch, &followed)?;
+            if matches!(
+                finish_open_unstash(handle, config.max_file_bytes).await?,
+                Finish::Nothing
+            ) {
+                break;
+            }
+        }
+    }
+    let stack = stack(handle).await?;
+    let chosen: Vec<(usize, &StashRow)> = match target {
+        StashDrop::All { entries, newest } => {
+            if stack.len() != entries || stack.first().map(|entry| entry.number) != newest {
+                return Err(stash_changed(stack.len()).into());
+            }
+            stack.iter().enumerate().collect()
+        }
+        StashDrop::One { position, number } => match stack.get(position) {
+            Some(entry) if entry.number == number => vec![(position, entry)],
+            Some(_) => return Err(stash_changed(stack.len()).into()),
+            None if stack.is_empty() => {
+                return Err(FoldError::new(codes::INVALID_REQUEST, "the stash is empty")
+                    .with_hint("`fld stash list` shows the stash")
+                    .with_details([("reason", json!("stash_empty"))])
+                    .into());
+            }
+            None => {
+                return Err(FoldError::new(
+                    codes::INVALID_REQUEST,
+                    format!(
+                        "stash@{{{position}}} does not exist: the stash has {}",
+                        entries_text(stack.len())
+                    ),
+                )
+                .with_hint("`fld stash list` names each entry")
+                .with_details([
+                    ("reason", json!("stash_entry_missing")),
+                    ("entries", json!(stack.len())),
+                ])
+                .into());
+            }
+        },
+    };
+    if let Some((_, entry)) = chosen
+        .iter()
+        .find(|(_, entry)| entry.state == StashState::Conflicted)
+    {
+        return Err(markers_wait(&entry.conflicts)
+            .with_hint("fix the conflict markers in these files and run `fld record`, or run `fld reset`, which drops the entry and stashes the files with their markers")
+            .into());
+    }
+    let mut dropped = Vec::with_capacity(chosen.len());
+    for (position, entry) in &chosen {
+        dropped.push(StashEntry {
+            position: *position,
+            number: entry.number,
+            created_at: entry.created_at,
+            base: entry.revision,
+            files: entry_files(handle, entry).await?,
+            conflicted: Vec::new(),
+            actor: entry.actor.clone(),
+        });
+    }
+    let entries = stack.len() - chosen.len();
+    if dropped.is_empty() {
+        return Ok(StashDropped { dropped, entries });
+    }
+    let event = match (target, dropped.as_slice()) {
+        (StashDrop::One { position, .. }, [entry]) => stash_event(
+            types::STASH_DISCARDED,
+            actor,
+            entry.base,
+            &entry.files,
+            json!({"stash": format!("stash@{{{position}}}"), "dropped": 1, "entries": entries}),
+        )?,
+        _ => NewEvent::new(types::STASH_DISCARDED, actor.event_actor())
+            .and_then(|event| event.data(json!({"dropped": dropped.len(), "entries": entries})))
+            .map_err(|error| FoldError::new(codes::INTERNAL_ERROR, error.to_string()))?,
+    };
+    let ids: Vec<i64> = chosen.iter().map(|(_, entry)| entry.id).collect();
+    let (label, now) = (actor.event_actor().to_string(), handle.clock.now());
+    let buffer = handle
+        .store
+        .write(async |tx| -> Result<EventBuffer, ProjectError> {
+            let mut buffer = EventBuffer::new();
+            for id in &ids {
+                insert_stash_drop(tx, *id, &label, now).await?;
+            }
+            buffer.append(tx, &event, now).await?;
+            Ok(buffer)
+        })
+        .await?;
+    handle.bus.publish(buffer);
+    tracing::info!(dropped = ids.len(), "stash entries are dropped");
+    Ok(StashDropped { dropped, entries })
+}
+
+/// The refusal of a drop whose stack changed after the human saw it, such as by a new entry, an unstash or another drop: nothing is dropped.
+fn stash_changed(entries: usize) -> FoldError {
+    FoldError::new(
+        codes::INVALID_REQUEST,
+        "the stash changed since it was listed, so nothing was dropped",
+    )
+    .with_hint(
+        "run `fld stash list`, or reload the stash in the web app, and choose the entry again",
+    )
+    .with_details([
+        ("reason", json!("stash_changed")),
+        ("entries", json!(entries)),
+    ])
+}
+
+fn entries_text(count: usize) -> String {
+    if count == 1 {
+        "1 entry".to_owned()
+    } else {
+        format!("{count} entries")
+    }
 }
 
 /// Runs a command to its end on its own task, so a client that goes away does not stop it between the files and the row.
@@ -456,7 +548,7 @@ async fn stash_folder(
 }
 
 /// Refuses a stash, before anything is written, that could not put its paths back: a file of the checkout record that the folder read left out, too large, special or unreadable, would be a removal in the entry that no follow makes while the file is there. Returns the paths of the newest entry where `tree` holds the markers or `.fold-stash` sides of an unstash, which must not go into a new entry.
-async fn refuse_unstashable(
+pub(super) async fn refuse_unstashable(
     handle: &ProjectHandle,
     record: ObjectHash,
     tree: ObjectHash,
@@ -519,7 +611,7 @@ async fn refuse_unstashable(
 }
 
 /// Brings the paths that differ between `base`, the checkout record, and `tree`, what fold read from the folder, back to `base`'s entries, as a follow from `tree` to `base`: nothing is written when one of them no longer holds what fold read.
-async fn put_back(
+pub(super) async fn put_back(
     handle: &ProjectHandle,
     base: ObjectHash,
     tree: ObjectHash,
@@ -1029,17 +1121,20 @@ pub(super) async fn settle_markers_on_main(handle: &ProjectHandle) -> Result<(),
 pub(super) fn refuse_branch(branch: &str, followed: &FolderFollowed) -> Result<(), FoldError> {
     match &followed.branch {
         Some(BranchState::Moved(moved)) => Err(head_moved(branch, moved)),
-        Some(BranchState::Ahead { .. }) => Err(FoldError::new(
+        Some(BranchState::Ahead { from, .. }) => Err(FoldError::new(
             codes::INVALID_REQUEST,
             "your Git commits on the project's branch wait for the main agent, so the project folder holds them",
         )
-        .with_hint("ask the main agent to resolve them, then run the command again")
+        .with_hint(format!(
+            "ask the main agent to resolve them, or run `git reset --soft {}` in the project folder, which takes the commits back and keeps your files as they are, then run the command again",
+            &from.as_str()[..12]
+        ))
         .with_details([("reason", json!("git_commits_wait"))])),
         _ => Ok(()),
     }
 }
 
-async fn stack(handle: &ProjectHandle) -> Result<Vec<StashRow>, ProjectError> {
+pub(super) async fn stack(handle: &ProjectHandle) -> Result<Vec<StashRow>, ProjectError> {
     let mut conn = handle
         .store
         .read()
@@ -1057,7 +1152,7 @@ async fn entry_files(
 }
 
 /// The paths that differ between the stored trees `base` and `tree`, in path order.
-async fn changed(
+pub(super) async fn changed(
     handle: &ProjectHandle,
     base: ObjectHash,
     tree: ObjectHash,
@@ -1075,13 +1170,13 @@ async fn changed(
     .await
 }
 
-fn paths_of(rows: &[ConflictRow]) -> Vec<String> {
+pub(super) fn paths_of(rows: &[ConflictRow]) -> Vec<String> {
     rows.iter()
         .map(|row| String::from_utf8_lossy(&row.path).into_owned())
         .collect()
 }
 
-fn stash_event(
+pub(super) fn stash_event(
     kind: fold_core::EventType,
     actor: &Actor,
     base: RevisionId,
@@ -1097,7 +1192,7 @@ fn stash_event(
 }
 
 /// The refusal while the markers of an unstash wait in the folder.
-fn markers_wait(conflicts: &[ConflictRow]) -> FoldError {
+pub(super) fn markers_wait(conflicts: &[ConflictRow]) -> FoldError {
     let paths = paths_of(conflicts);
     FoldError::new(
         codes::INVALID_REQUEST,

@@ -5,7 +5,8 @@ use fold_core::merge::ConflictKind;
 use fold_store::testing::TestProject;
 use fold_store::workspaces::{
     ConflictRow, NewStash, NewUnstash, StashState, UnstashEnd, apply_stash, close_unstash,
-    conflict_stash, drop_stash, gc_roots, insert_stash, insert_unstash, open_unstash, stash_stack,
+    conflict_stash, drop_stash, gc_roots, insert_stash, insert_stash_drop, insert_unstash,
+    open_unstash, stash_stack,
 };
 use fold_store::{Store, StoreError};
 
@@ -246,4 +247,68 @@ async fn one_unstash_journal_row_is_open_at_a_time_and_it_only_closes_once() {
         })
         .await;
     assert!(matches!(missing, Err(StoreError::RevisionNotFound(_))));
+}
+
+#[tokio::test]
+async fn a_dropped_entry_leaves_the_stack_for_good_and_its_trees_go_to_the_collection() {
+    let project = TestProject::new().await;
+    let store = project.store();
+    seed::workspace(store, 1).await;
+    let older = push(store, "older").await;
+    let newer = push(store, "newer").await;
+    let at = Timestamp::from_millis(7).unwrap();
+    store
+        .write(async |tx| insert_stash_drop(tx, newer, "human:ana", at).await)
+        .await
+        .unwrap();
+    assert_eq!(
+        states(store).await,
+        [(seed::tree("older").to_string(), StashState::Stashed)]
+    );
+    let roots = gc_roots(store.read()).await.unwrap();
+    assert!(!roots.contains(&seed::tree("newer")) && roots.contains(&seed::tree("older")));
+    // A second drop, and a dropped entry's apply or conflict, are refused.
+    assert!(
+        store
+            .write(async |tx| insert_stash_drop(tx, newer, "human:ana", at).await)
+            .await
+            .is_err()
+    );
+    assert!(
+        store
+            .write(async |tx| apply_stash(tx, newer, at).await)
+            .await
+            .is_err()
+    );
+    // Only a stashed entry is dropped: a conflicted one waits for its markers.
+    let rows = [ConflictRow {
+        path: b"a.txt".to_vec(),
+        kind: ConflictKind::BothModifiedText,
+    }];
+    store
+        .write(async |tx| conflict_stash(tx, older, &rows, at).await)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .write(async |tx| insert_stash_drop(tx, older, "human:ana", at).await)
+            .await
+            .is_err()
+    );
+    for sql in [
+        "UPDATE folder_stash_drops SET actor = 'human:bo'",
+        "DELETE FROM folder_stash_drops",
+        "INSERT INTO folder_stash_drops (stash_id, actor, created_at) VALUES (99, 'human:ana', 0)",
+    ] {
+        assert!(exec(store, sql).await.is_err(), "{sql}");
+    }
+    let third = push(store, "third").await;
+    assert!(
+        exec(
+            store,
+            &format!("INSERT INTO folder_stash_drops (stash_id, actor, created_at) VALUES ({third}, 'frontend', 0)")
+        )
+        .await
+        .is_err()
+    );
 }

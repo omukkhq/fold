@@ -156,7 +156,7 @@ impl Blocker {
             }
             Self::UnstashOpen { .. } => "run `fld unstash` to finish it".to_owned(),
             Self::UnstashConflicted { .. } => UNSTASH_CONFLICTED_NEXT.to_owned(),
-            Self::HumanChange { .. } => "ask the main agent to explain the conflict and prepare the merge for your OK, or run `fld stash` to take your change back".to_owned(),
+            Self::HumanChange { .. } => "ask the main agent to explain the conflict and prepare the merge for your OK, or run `fld reset` to drop your change, which fold stashes first".to_owned(),
             Self::FolderHeld { .. } => FOLDER_HELD_NEXT.to_owned(),
         }
     }
@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(found[2].paths(), ["d.txt"]);
         assert_eq!(found[3].next(), UNSTASH_CONFLICTED_NEXT);
         assert!(found[4].next().contains("main agent"));
-        assert!(found[4].next().contains("`fld stash`"));
+        assert!(found[4].next().contains("`fld reset`"));
         assert_eq!(found[4].paths(), ["b.txt"]);
 
         let held = FolderFacts {

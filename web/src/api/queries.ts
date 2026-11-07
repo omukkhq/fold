@@ -27,6 +27,7 @@ import {
   listReviewBatches,
 } from "./reviews";
 import { getSession } from "./session";
+import { listStash } from "./stash";
 import { listNeedsYou, listWorkerQuestions, listWorkers } from "./workers";
 import { getWorkspace } from "./workspaces";
 
@@ -49,6 +50,12 @@ export const gitQuery = (slug: string) =>
   queryOptions({
     queryKey: keys.git(slug),
     queryFn: () => getProjectGit(slug),
+  });
+
+export const stashQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.stash(slug),
+    queryFn: () => listStash(slug),
   });
 
 export const sessionQuery = () =>

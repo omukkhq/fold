@@ -1,10 +1,11 @@
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use clap::Args;
 use fold_cli::daemon_client::Response;
 use serde_json::Value;
 
+use super::confirm::Consent;
 use super::remote::{RemoteError, post_to_project, refusal};
 use crate::output;
 
@@ -27,24 +28,21 @@ const LISTED_PATHS: usize = 20;
 /// The code of a record that waits for the human's confirmation.
 const NEEDS_CONFIRMATION: &str = "record_needs_confirmation";
 
-/// Asks the daemon to record the human's changes in the project folder on main, starting the daemon when none runs. A change the daemon holds back for a confirmation is named, then recorded with `--yes` or after a yes on the terminal; without either the refusal stands.
+/// Asks the daemon to record the human's changes in the project folder on main, starting the daemon when none runs. A change the daemon holds back for a confirmation is named, then recorded with `--yes` or after a yes on the terminal, as [`Consent`] decides; without a terminal or `--yes` it is refused with `needs_confirmation`.
 pub fn run_record(args: &RecordArgs, out: &mut impl Write) -> Result<(), RemoteError> {
-    let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
     record_with(
-        args,
         |action| post_to_project(args.socket.as_deref(), args.project.as_deref(), action),
-        interactive,
+        Consent::of(args.yes),
         // Not locked for the whole command: a request can read the human's name from the terminal.
         &mut io::BufReader::new(io::stdin()),
         out,
     )
 }
 
-/// [`run_record`] with the daemon's answers from `post`, which takes the action below the project, and the answer of the human from `input` when `interactive`.
+/// [`run_record`] with the daemon's answers from `post`, which takes the action below the project, and the human's yes from `consent`, which reads `input`.
 fn record_with(
-    args: &RecordArgs,
     mut post: impl FnMut(&str) -> Result<Response, RemoteError>,
-    interactive: bool,
+    consent: Consent,
     input: &mut impl BufRead,
     out: &mut impl Write,
 ) -> Result<(), RemoteError> {
@@ -53,13 +51,14 @@ fn record_with(
         for line in confirmation_lines(&response) {
             output::line(out, &line)?;
         }
-        let go_on = args.yes || (interactive && ask(input, out)?);
-        if !go_on {
-            if interactive {
-                output::line(out, "nothing was recorded")?;
-                return Ok(());
-            }
-            refusal(&response)?;
+        if !consent.ask(
+            "Record these files as your change?",
+            "fld record",
+            input,
+            out,
+        )? {
+            output::line(out, "nothing was recorded")?;
+            return Ok(());
         }
         response = post(&format!("record?confirm={tree}"))?;
     }
@@ -118,21 +117,6 @@ fn confirmation_lines(response: &Response) -> Vec<String> {
         }
     }
     lines
-}
-
-/// No unless the human answers `y` or `yes`, in any case.
-fn ask(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<bool> {
-    write!(out, "Record these files as your change? [y/N] ")?;
-    out.flush()?;
-    let mut line = String::new();
-    if input.read_line(&mut line)? == 0 {
-        writeln!(out)?;
-        return Ok(false);
-    }
-    Ok(matches!(
-        line.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
 }
 
 /// The lines `fld record` prints for the daemon's answer, or the error it carries: one line, then one per listed path, touched workspace and skipped file.
@@ -330,14 +314,6 @@ mod tests {
         )
     }
 
-    fn args(yes: bool) -> RecordArgs {
-        RecordArgs {
-            yes,
-            socket: None,
-            project: None,
-        }
-    }
-
     /// Runs a record whose first answer is `first` and whose confirmed one records, with `typed` as the human's answer; returns the actions sent and the output.
     fn run(
         first: Response,
@@ -349,12 +325,11 @@ mod tests {
         let mut first = Some(first);
         let mut out = Vec::new();
         let result = record_with(
-            &args(yes),
             |action| {
                 sent.push(action.to_owned());
                 Ok(first.take().unwrap_or_else(recorded))
             },
-            interactive,
+            Consent { yes, interactive },
             &mut typed.as_bytes(),
             &mut out,
         );
@@ -389,9 +364,21 @@ mod tests {
         assert_eq!(sent, ["record"]);
         assert!(out.ends_with("nothing was recorded\n"), "{out}");
 
-        let (sent, _, result) = run(held_back(), false, false, "");
+        // Without a terminal the question cannot be answered, so the record stops with the reason the other commands that ask give.
+        let (sent, out, result) = run(held_back(), false, false, "y\n");
         assert_eq!(sent, ["record"]);
-        assert_eq!(result.unwrap_err().code(), Some(NEEDS_CONFIRMATION));
+        assert!(out.contains("emptied:\n  plan.md\n"), "{out}");
+        let RemoteError::Fold(refused) = result.unwrap_err() else {
+            panic!("a local refusal");
+        };
+        assert_eq!(refused.code(), "invalid_request");
+        assert_eq!(refused.details().unwrap()["reason"], "needs_confirmation");
+        assert!(
+            refused
+                .hint()
+                .unwrap()
+                .contains("`fld record` in a terminal")
+        );
 
         let (sent, _, result) = run(recorded(), false, false, "");
         result.unwrap();

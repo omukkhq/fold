@@ -157,6 +157,31 @@ describe("Dialog layout", () => {
     }
   });
 
+  it("draws no body band without a body, and hides a body whose parts render nothing", () => {
+    function Nothing() {
+      return null;
+    }
+    const { unmount } = render(
+      <Dialog open title="Drop stash@{0}?" footer={<Button>Drop</Button>}>
+        {null}
+      </Dialog>,
+    );
+    expect(
+      screen.getByRole("dialog").querySelector(".overflow-y-auto"),
+    ).toBeNull();
+    unmount();
+    render(
+      <Dialog open title="Drop stash@{0}?" footer={<Button>Drop</Button>}>
+        <Nothing />
+      </Dialog>,
+    );
+    const inner = screen
+      .getByRole("dialog")
+      .querySelector(".overflow-y-auto")?.firstElementChild;
+    expect(inner?.childElementCount).toBe(0);
+    expect(inner?.classList.contains("empty:hidden")).toBe(true);
+  });
+
   it("sits inside its scrim on the dialog layer, which pads it inside the window", () => {
     render(<Dialog open title="Rename" />);
     const scrim = screen.getByRole("dialog").parentElement;

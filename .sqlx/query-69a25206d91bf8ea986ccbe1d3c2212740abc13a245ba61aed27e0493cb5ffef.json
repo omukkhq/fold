@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT g.name AS agent, w.started_at\n           FROM worker_processes w JOIN agents g ON g.id = w.agent_id\n           ORDER BY w.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "started_at",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "started_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "69a25206d91bf8ea986ccbe1d3c2212740abc13a245ba61aed27e0493cb5ffef"
+}

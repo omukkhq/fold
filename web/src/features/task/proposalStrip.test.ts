@@ -90,7 +90,7 @@ describe("proposalStrip", () => {
       ),
     ).toEqual({
       proposal: "P-7",
-      lead: "P-7 v2 is with @review-lead",
+      lead: "P-7 v2 is being reviewed by @review-lead",
       rest: "Add the form · 3 files",
       waitsForYou: false,
     });

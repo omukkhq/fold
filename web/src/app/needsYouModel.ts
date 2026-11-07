@@ -272,7 +272,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         task: null,
         title: pathsText(item.paths),
         text: "Unstash conflicts. Fix the files and run `fld record`",
-        href: null,
+        href: projectPath(slug, "repository"),
       };
     case "checks_file_invalid_on_main":
       return {

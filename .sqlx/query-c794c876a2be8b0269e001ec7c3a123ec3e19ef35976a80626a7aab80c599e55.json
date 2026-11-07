@@ -1,0 +1,28 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COALESCE(MAX(c.state = 'running'), 0) AS \"running!: bool\",\n                  MAX(c.finished_at) AS \"ended_at?: i64\"\n           FROM check_runs c\n           WHERE c.stage = 'proposal' AND c.worker_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "running!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "ended_at?: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "c794c876a2be8b0269e001ec7c3a123ec3e19ef35976a80626a7aab80c599e55"
+}

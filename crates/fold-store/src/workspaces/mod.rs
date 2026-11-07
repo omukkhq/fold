@@ -62,5 +62,6 @@ pub use shared_changes::{
 };
 pub use stashes::{
     NewStash, NewUnstash, StashRow, StashState, UnstashEnd, UnstashRow, apply_stash, close_unstash,
-    conflict_stash, drop_stash, insert_stash, insert_unstash, open_unstash, stash_stack,
+    conflict_stash, drop_stash, insert_stash, insert_stash_drop, insert_unstash, open_unstash,
+    stash_stack,
 };

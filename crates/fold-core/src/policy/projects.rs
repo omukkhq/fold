@@ -69,6 +69,32 @@ pub fn can_stash(actor: &Actor) -> Result<(), PolicyDenied> {
     }
 }
 
+/// A dropped stash entry is the human's own work that nothing brings back, so only a named human runs `fld stash drop` and `fld stash clear`; the main agent never gets the choice either, since it never put the work aside.
+pub fn can_drop_stash(actor: &Actor) -> Result<(), PolicyDenied> {
+    if actor.is_human() {
+        Ok(())
+    } else {
+        Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human drops entries of the stash",
+            hint: "ask a human to run `fld stash drop` or `fld stash clear` in the project folder",
+        })
+    }
+}
+
+/// A reset discards the human's unrecorded changes in the project folder, after a safety stash, and drops the human change that waits for the main agent with the merge workspace it made, so only a named human runs `fld reset` and `fld restore`. The main agent never gets it: the human decides to give up the change, and the main agent's own way out of a merge is to abandon its workspace.
+pub fn can_reset_folder(actor: &Actor) -> Result<(), PolicyDenied> {
+    if actor.is_human() {
+        Ok(())
+    } else {
+        Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human resets the project folder",
+            hint: "ask a human to run `fld reset` or `fld restore` in the project folder",
+        })
+    }
+}
+
 /// Turning Git on writes `.git` into the human's project folder, records the `.gitignore` as the human's own revision and stays on for good, so only a named human runs `fld init --with-git`.
 pub fn can_enable_git(actor: &Actor) -> Result<(), PolicyDenied> {
     if actor.is_human() {
@@ -131,7 +157,7 @@ pub fn can_restore_agent_changes(starter: &Starter) -> Result<(), PolicyDenied> 
         _ => Err(PolicyDenied {
             code: codes::HUMAN_REQUIRED,
             message: "only a human restores a change a worker made in the project folder",
-            hint: "ask the user to run `fld agent-changes restore`",
+            hint: "ask the user to run `fld restore <paths>` with the files the worker changed",
         }),
     }
 }
@@ -225,6 +251,36 @@ mod tests {
             let denied = can_stash(&actor).unwrap_err();
             assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
             assert!(denied.hint().contains("fld stash"));
+        }
+    }
+
+    #[test]
+    fn only_a_human_drops_stash_entries() {
+        assert!(can_drop_stash(&Actor::human(HumanName::parse("ana").unwrap())).is_ok());
+        let agent = Actor::Agent(AgentActor {
+            agent: AgentName::parse("main").unwrap(),
+            worker: WorkerName::parse("main").unwrap(),
+            tags: Vec::new(),
+        });
+        for actor in [agent, Actor::System] {
+            let denied = can_drop_stash(&actor).unwrap_err();
+            assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
+            assert!(denied.hint().contains("fld stash drop"));
+        }
+    }
+
+    #[test]
+    fn only_a_human_resets_the_project_folder() {
+        assert!(can_reset_folder(&Actor::human(HumanName::parse("ana").unwrap())).is_ok());
+        let agent = Actor::Agent(AgentActor {
+            agent: AgentName::parse("main").unwrap(),
+            worker: WorkerName::parse("main").unwrap(),
+            tags: vec![crate::agents::Tag::parse("main").unwrap()],
+        });
+        for actor in [agent, Actor::System] {
+            let denied = can_reset_folder(&actor).unwrap_err();
+            assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
+            assert!(denied.hint().contains("fld reset"));
         }
     }
 
