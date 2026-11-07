@@ -581,11 +581,16 @@ describe("invalidation rules", () => {
     }
   });
 
-  it("refreshes Needs you when shared files changed while a worker worked or a human dismissed them", () => {
-    for (const type of ["shared.changed", "shared.changes_dismissed"]) {
+  it("refreshes Needs you and the shared paths for every event of shared files", () => {
+    for (const type of [
+      "shared.changed",
+      "shared.changes_dismissed",
+      "shared.paths_changed",
+    ]) {
       invalidated = [];
       applyEvent(client, slug, ev(type));
       expect(hit(keys.needsYou(slug)), type).toBe(true);
+      expect(hit(keys.shared(slug)), type).toBe(true);
       expect(hit(keys.board(slug)), type).toBe(false);
     }
   });

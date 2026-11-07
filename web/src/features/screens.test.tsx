@@ -42,6 +42,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  sharedReply = NOTHING_SHARED;
 });
 
 function renderAt(path: string) {
@@ -396,6 +397,11 @@ const FILES: Record<string, Record<string, unknown>> = {
   },
 };
 
+const NOTHING_SHARED: StubReply = {
+  body: { shared: [], unseen: [], unseen_count: 0 },
+};
+let sharedReply: StubReply = NOTHING_SHARED;
+
 function stubRepository(
   revisions = REVISIONS,
   requests: RequestSummary[] = [],
@@ -433,6 +439,7 @@ function stubRepository(
     "GET /api/v1/projects/demo/revisions": {
       body: { revisions, before: null },
     },
+    "GET /api/v1/projects/demo/shared": () => sharedReply,
     "GET /api/v1/projects/demo/repository": {
       body: {
         head: revisions[0]?.id ?? null,
@@ -977,6 +984,41 @@ describe("Repository screen", () => {
       "true",
     );
     expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("names the shared paths and the ignored paths workers cannot see, wrapping long ones", async () => {
+    sharedReply = {
+      body: {
+        shared: ["design/a-very-long-folder-name-without-any-break/"],
+        unseen: [".env"],
+        unseen_count: 1,
+      },
+    };
+    renderRepository();
+    const shared = await screen.findByText(
+      "Shared read-only with workers: design/a-very-long-folder-name-without-any-break/.",
+    );
+    expect(shared.parentElement?.className).toContain("wrap-anywhere");
+    expect(shared.parentElement?.className).toContain("min-w-0");
+    expect(
+      screen.getByText(/Workers cannot see 1 ignored path: \.env\./),
+    ).toBeTruthy();
+  });
+
+  it("says when the shared paths could not load and reads them again on Retry", async () => {
+    sharedReply = errorReply(500, "internal_error");
+    renderRepository();
+    const banner = await screen.findByText("The shared paths could not load.");
+    sharedReply = {
+      body: { shared: ["design/"], unseen: [], unseen_count: 0 },
+    };
+    const alert = banner.closest<HTMLElement>("[role=alert]");
+    if (alert === null) throw new Error("the banner is no alert");
+    await userEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    expect(
+      await screen.findByText("Shared read-only with workers: design/."),
+    ).toBeTruthy();
+    expect(screen.queryByText("The shared paths could not load.")).toBeNull();
   });
 
   it("has nothing to compare with only r1", async () => {

@@ -236,6 +236,14 @@ export function RepositoryScreen({
             <p className="max-w-measure">{mainCopy}</p>
           </div>
         )}
+        {shared.isError ? (
+          <ErrorBanner
+            className="rounded-m px-14"
+            title="The shared paths could not load."
+            message="The daemon did not answer."
+            onRetry={() => void shared.refetch()}
+          />
+        ) : null}
         {sharing === null ? null : (
           <div className="flex items-start gap-10 rounded-m bg-sunken px-14 py-10 text-14 text-text">
             <Link2
@@ -243,7 +251,7 @@ export function RepositoryScreen({
               size={16}
               className="mt-3 shrink-0 text-text-2"
             />
-            <div className="flex max-w-measure flex-col gap-4">
+            <div className="flex min-w-0 max-w-measure flex-col gap-4 wrap-anywhere">
               {sharing.shared === null ? null : <p>{sharing.shared}</p>}
               {sharing.unseen === null ? null : (
                 <p>

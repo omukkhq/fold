@@ -18,7 +18,7 @@ export const repositoryQuery = (slug: string) =>
 
 export const sharedQuery = (slug: string) =>
   queryOptions({
-    queryKey: [...keys.repository(slug), "shared"] as const,
+    queryKey: keys.shared(slug),
     queryFn: () => getShared(slug),
   });
 

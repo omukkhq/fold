@@ -80,6 +80,8 @@ export const keys = {
   messagesThread: (slug: string, thread: string) =>
     [slug, "messages", "thread", thread] as const,
   repository: (slug: string) => [slug, "repository"] as const,
+  /** Under the repository prefix, so a write that refreshes the repository also refreshes the shared paths. */
+  shared: (slug: string) => [slug, "repository", "shared"] as const,
   /** Outside the repository prefix: a revision never changes, so no integration refreshes its trees and files. */
   revisionTree: (slug: string, revision: string, dir: string) =>
     [slug, "revision-tree", revision, dir] as const,
