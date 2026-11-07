@@ -1043,11 +1043,14 @@ pub(super) async fn settle_markers_on_main(handle: &ProjectHandle) -> Result<(),
 pub(super) fn refuse_branch(branch: &str, followed: &FolderFollowed) -> Result<(), FoldError> {
     match &followed.branch {
         Some(BranchState::Moved(moved)) => Err(head_moved(branch, moved)),
-        Some(BranchState::Ahead { .. }) => Err(FoldError::new(
+        Some(BranchState::Ahead { from, .. }) => Err(FoldError::new(
             codes::INVALID_REQUEST,
             "your Git commits on the project's branch wait for the main agent, so the project folder holds them",
         )
-        .with_hint("ask the main agent to resolve them, then run the command again")
+        .with_hint(format!(
+            "ask the main agent to resolve them, or run `git reset --soft {}` in the project folder, which takes the commits back and keeps your files as they are, then run the command again",
+            &from.as_str()[..12]
+        ))
         .with_details([("reason", json!("git_commits_wait"))])),
         _ => Ok(()),
     }
