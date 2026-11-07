@@ -102,10 +102,12 @@ function components(size: MarkdownSize): Components {
     strong: ({ children }) => (
       <strong className="font-semibold">{children}</strong>
     ),
+    // Lists flow as blocks, not flex columns: a line clamp counts only the lines of block flow, so a clamped preview
+    // with a list would otherwise run past its lines.
     ul: ({ children, className }) => (
       <ul
         className={cn(
-          "flex flex-col gap-4 pl-20",
+          "space-y-4 pl-20",
           className?.includes("contains-task-list")
             ? "list-none pl-0"
             : "list-disc",
@@ -115,7 +117,7 @@ function components(size: MarkdownSize): Components {
       </ul>
     ),
     ol: ({ children }) => (
-      <ol className="flex list-decimal flex-col gap-4 pl-20">{children}</ol>
+      <ol className="list-decimal space-y-4 pl-20">{children}</ol>
     ),
     li: ({ children, className }) => (
       <li

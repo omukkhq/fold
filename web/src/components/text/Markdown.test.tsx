@@ -158,11 +158,19 @@ describe("Markdown text", () => {
   });
 
   it("clamps the rendered text to its lines", () => {
-    const { container } = render(<Markdown clamp={4}>{"one\n\ntwo"}</Markdown>);
+    const { container } = render(
+      <Markdown clamp={4}>{"one\n\ntwo\n\n- three\n\n1. four"}</Markdown>,
+    );
     const box = container.firstElementChild;
     expect(box?.className).toContain("line-clamp-4");
     expect(box?.className).not.toContain("flex-col");
     expect(container.querySelectorAll("p")).toHaveLength(2);
+    // A line clamp counts only the lines of block flow: a list drawn as a flex column would run past the clamp.
+    const lists = [...container.querySelectorAll("ul, ol")];
+    expect(lists).toHaveLength(2);
+    for (const list of lists) {
+      expect(list.className).not.toContain("flex");
+    }
   });
 });
 
