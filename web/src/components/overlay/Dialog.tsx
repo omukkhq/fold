@@ -23,6 +23,8 @@ interface DialogProps {
   wide?: boolean;
   /** The action row, which stays in view under the scrolling body; a form in the body reaches its buttons through their `form` attribute. */
   footer?: ReactNode;
+  /** Runs as the dialog closes, before Radix returns focus to the opener; it calls `preventDefault` when it moved focus itself, such as when its action removed the opener. */
+  onCloseAutoFocus?: (event: Event) => void;
 }
 
 export function Dialog({
@@ -34,6 +36,7 @@ export function Dialog({
   children,
   wide = false,
   footer,
+  onCloseAutoFocus,
 }: DialogProps) {
   return (
     <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
@@ -45,6 +48,7 @@ export function Dialog({
           className={cn(dialogOverlay, wide && dialogFillOverlay)}
         >
           <RadixDialog.Content
+            onCloseAutoFocus={onCloseAutoFocus}
             className={cn(
               dialogContent,
               wide ? cn("w-dialog", dialogFill) : "w-max",
@@ -56,7 +60,7 @@ export function Dialog({
                   {title}
                 </RadixDialog.Title>
                 {description ? (
-                  <RadixDialog.Description className="text-15 text-text-2">
+                  <RadixDialog.Description className="max-w-measure text-15 text-text-2">
                     {description}
                   </RadixDialog.Description>
                 ) : null}

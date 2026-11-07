@@ -120,7 +120,9 @@ describe("FolderActions", () => {
     expect(screen.getByText("Restore 2 files?")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Restore files" }));
     expect(
-      await screen.findByText(/files changed while fold stashed them/),
+      await screen.findByText(
+        "Files changed while fold stashed them. Nothing was put back; try again.",
+      ),
     ).toBeTruthy();
     expect(calls.find((call) => call.method === "POST")?.body).toEqual({
       paths: ["a.md", "b.md"],

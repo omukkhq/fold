@@ -136,7 +136,128 @@ describe("StashPanel", () => {
     expect(screen.getByText("Drop all 2 stash entries?")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Drop all" }));
     expect(
-      await screen.findByText(/waits in the project folder: a/),
+      await screen.findByText(
+        /An unstash conflict waits in the project folder\. Fix the files/,
+      ),
     ).toBeTruthy();
+  });
+
+  it("refuses a drop when a newer entry took the confirmed entry's place, and shows the stash read again", async () => {
+    const junk = entry("stash@{0}", ["junk.txt"]);
+    let listed = [junk];
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo/stash": () => ({ body: { entries: listed } }),
+    });
+    show();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Drop stash@{0}" }),
+    );
+    listed = [
+      { ...entry("stash@{0}", ["plan.md"]), created_at: junk.created_at + 1 },
+      { ...junk, stash: "stash@{1}" },
+    ];
+    fireEvent.click(screen.getByRole("button", { name: "Drop entry" }));
+    expect(
+      await screen.findByText("The stash changed; check the list again."),
+    ).toBeTruthy();
+    // The dialog hides the list from the accessibility tree while it is open.
+    expect(
+      await screen.findByRole("button", {
+        name: "Drop stash@{1}",
+        hidden: true,
+      }),
+    ).toBeTruthy();
+    expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+  });
+
+  it("refuses Clear all when the stash grew after the person confirmed it", async () => {
+    let listed = [entry("stash@{0}", ["a"])];
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo/stash": () => ({ body: { entries: listed } }),
+    });
+    show();
+    fireEvent.click(await screen.findByRole("button", { name: "Clear all" }));
+    listed = [
+      { ...entry("stash@{0}", ["b"]), created_at: 1 },
+      entry("stash@{1}", ["a"]),
+    ];
+    fireEvent.click(screen.getByRole("button", { name: "Drop all" }));
+    expect(
+      await screen.findByText("The stash changed; check the list again."),
+    ).toBeTruthy();
+    expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+  });
+
+  it("says the stash changed when the daemon refuses a drop with stash_changed", async () => {
+    stubFetch({
+      "GET /api/v1/projects/demo/stash": {
+        body: { entries: [entry("stash@{0}", ["a"])] },
+      },
+      "DELETE /api/v1/projects/demo/stash/0": {
+        status: 400,
+        body: {
+          error: {
+            code: "invalid_request",
+            message: "the stash changed",
+            details: { reason: "stash_changed" },
+          },
+        },
+      },
+    });
+    show();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Drop stash@{0}" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Drop entry" }));
+    expect(
+      await screen.findByText("The stash changed; check the list again."),
+    ).toBeTruthy();
+  });
+
+  it("shows an error when the stash cannot be read", async () => {
+    stubFetch({
+      "GET /api/v1/projects/demo/stash": {
+        status: 503,
+        body: {
+          error: { code: "project_unavailable", message: "closed" },
+        },
+      },
+    });
+    show();
+    expect(
+      await screen.findByText("fold could not read the stash."),
+    ).toBeTruthy();
+    expect(screen.getByText("The project is not available now.")).toBeTruthy();
+  });
+
+  it("puts focus on the entry that took the dropped entry's place", async () => {
+    let listed = [
+      entry("stash@{0}", ["notes.md"]),
+      entry("stash@{1}", ["a"]),
+      { ...entry("stash@{2}", ["b"]), created_at: 1 },
+    ];
+    stubFetch({
+      "GET /api/v1/projects/demo/stash": () => ({ body: { entries: listed } }),
+      "DELETE /api/v1/projects/demo/stash/1": () => {
+        listed = [
+          entry("stash@{0}", ["notes.md"]),
+          { ...entry("stash@{1}", ["b"]), created_at: 1 },
+        ];
+        return { body: { dropped: [], entries: 2 } };
+      },
+    });
+    show();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Drop stash@{1}" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Drop entry" }));
+    await waitFor(() => {
+      expect(screen.queryByText("Drop stash@{1}?")).toBeNull();
+    });
+    await waitFor(() => {
+      expect(document.activeElement?.getAttribute("aria-label")).toBe(
+        "Drop stash@{1}",
+      );
+    });
   });
 });

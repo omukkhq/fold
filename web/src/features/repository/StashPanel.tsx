@@ -1,6 +1,6 @@
-import { useIsMutating, useQuery } from "@tanstack/react-query";
+import { useIsMutating, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Archive, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { stashQuery } from "@/api/queries";
 import { clearStash, dropStashEntry } from "@/api/stash";
 import { Button } from "@/components/button/Button";
@@ -8,34 +8,67 @@ import { CodeText } from "@/components/code/CodeText";
 import { Id } from "@/components/id/Id";
 import { Mono } from "@/components/mono/Mono";
 import { Dialog } from "@/components/overlay/Dialog";
-import { WriteError } from "@/features/task/parts";
+import { ErrorBanner } from "@/components/states/ErrorBanner";
+import { failureText } from "@/format/failure";
 import { ActorText } from "@/people/ActorText";
 import { seg, actorSegment } from "@/people/segments";
 import {
   CONFLICTED_NOTE,
   canClear,
   clearDescription,
+  clearSeen,
   clearTitle,
   dropDescription,
   dropTitle,
+  rowStillThere,
   stashRows,
+  stashStillSeen,
+  type ClearSeen,
   type StashRow,
 } from "./stash";
+import { stashChangedError } from "./errors";
+import { FolderError } from "./FolderError";
+import { STASH_HEADING_ID, focusAfterFolderWrite } from "./focus";
 import { useFolderWrite } from "./useFolderWrite";
 
 /** What the open dialog drops: one entry, or every entry. */
-type Asking = { kind: "one"; row: StashRow } | { kind: "all"; count: number };
+type Asking = { kind: "one"; row: StashRow } | { kind: "all"; seen: ClearSeen };
 
-/** The human's stash of the project folder, newest first, with a drop action per entry and Clear all. Each drop asks first and stays pending until the stash has been read again. Nothing renders while the stash is empty or its read has not arrived, because the repository screen carries its own states. */
+/** The human's stash of the project folder, newest first, with a drop action per entry and Clear all. Each drop asks first, reads the stash again and refuses when it no longer holds what the person confirmed, and stays pending until the stash has been read again. Nothing renders while the stash is empty or its read has not arrived; a failed read shows its error. */
 export function StashPanel({ slug, now }: { slug: string; now: number }) {
   const stash = useQuery(stashQuery(slug));
+  const queryClient = useQueryClient();
   const [asking, setAsking] = useState<Asking | null>(null);
-  const drop = useFolderWrite(slug, (asked: Asking) =>
-    asked.kind === "one"
+  /** Set by a drop that went through: the place of the dropped entry, or null after Clear all. */
+  const dropped = useRef<number | null | undefined>(undefined);
+  const drop = useFolderWrite(slug, async (asked: Asking) => {
+    const current = await queryClient.query({
+      ...stashQuery(slug),
+      staleTime: 0,
+    });
+    const same =
+      asked.kind === "one"
+        ? rowStillThere(current.entries, asked.row)
+        : stashStillSeen(current.entries, asked.seen);
+    if (!same) {
+      throw stashChangedError();
+    }
+    await (asked.kind === "one"
       ? dropStashEntry(slug, asked.row.position)
-      : clearStash(slug),
-  );
+      : clearStash(slug));
+    // Set before the reads that follow, which can remove the row that opened the dialog.
+    dropped.current = asked.kind === "one" ? asked.row.position : null;
+  });
   const writing = useIsMutating({ mutationKey: [slug, "folder-write"] }) > 0;
+  if (stash.isError) {
+    return (
+      <ErrorBanner
+        className="rounded-m border-b-0 px-12"
+        title="fold could not read the stash."
+        message={failureText(stash.error)}
+      />
+    );
+  }
   const entries = stash.data?.entries ?? [];
   if (entries.length === 0) {
     return null;
@@ -53,7 +86,11 @@ export function StashPanel({ slug, now }: { slug: string; now: number }) {
       className="flex flex-col gap-8 rounded-m bg-surface px-16 py-12"
     >
       <div className="flex flex-wrap items-center justify-between gap-8">
-        <h2 className="flex items-center gap-8 font-title text-15 leading-tight font-semibold text-text">
+        <h2
+          id={STASH_HEADING_ID}
+          tabIndex={-1}
+          className="flex items-center gap-8 rounded-s font-title text-15 leading-tight font-semibold text-text"
+        >
           <Archive aria-hidden size={15} className="text-text-2" />
           Stash
         </h2>
@@ -63,7 +100,7 @@ export function StashPanel({ slug, now }: { slug: string; now: number }) {
           icon={<Trash2 aria-hidden size={14} />}
           disabled={!canClear(rows) || writing}
           onClick={() => {
-            setAsking({ kind: "all", count: rows.length });
+            setAsking({ kind: "all", seen: clearSeen(rows) });
           }}
         >
           Clear all
@@ -86,7 +123,10 @@ export function StashPanel({ slug, now }: { slug: string; now: number }) {
               </span>
               <span className="flex flex-wrap gap-x-10 gap-y-2">
                 {row.paths.map((path) => (
-                  <Mono key={path} className="text-13 text-text-2">
+                  <Mono
+                    key={path}
+                    className="min-w-0 text-13 wrap-anywhere text-text-2"
+                  >
                     {path}
                   </Mono>
                 ))}
@@ -104,6 +144,7 @@ export function StashPanel({ slug, now }: { slug: string; now: number }) {
                 icon={<Trash2 aria-hidden size={14} />}
                 disabled={writing}
                 aria-label={`Drop ${row.name}`}
+                data-stash-position={row.position}
                 onClick={() => {
                   setAsking({ kind: "one", row });
                 }}
@@ -119,15 +160,24 @@ export function StashPanel({ slug, now }: { slug: string; now: number }) {
         onOpenChange={(open) => {
           if (!open) close();
         }}
+        onCloseAutoFocus={(event) => {
+          if (
+            dropped.current !== undefined &&
+            focusAfterFolderWrite(document, dropped.current)
+          ) {
+            event.preventDefault();
+          }
+          dropped.current = undefined;
+        }}
         title={
           asking?.kind === "one"
             ? dropTitle(asking.row)
-            : clearTitle(asking?.count ?? 0)
+            : clearTitle(asking?.seen.count ?? 0)
         }
         description={
           asking?.kind === "one"
             ? dropDescription(asking.row)
-            : clearDescription(asking?.count ?? 0)
+            : clearDescription(asking?.seen.count ?? 0)
         }
         footer={
           <div className="flex gap-8">
@@ -153,7 +203,7 @@ export function StashPanel({ slug, now }: { slug: string; now: number }) {
           </div>
         }
       >
-        <WriteError error={drop.error} />
+        <FolderError error={drop.error} />
       </Dialog>
     </section>
   );
