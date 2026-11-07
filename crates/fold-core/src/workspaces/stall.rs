@@ -215,6 +215,8 @@ pub struct StallFacts {
     pub reported: bool,
     /// Needs you already names why the worker cannot work: it cannot reach fold or the model, or the daemon finds no Claude Code.
     pub explained: bool,
+    /// The project's agents are paused: no worker may work, so none stalls, and the resumes fold owes wait for the resume of the pause.
+    pub paused: bool,
 }
 
 impl Default for StallFacts {
@@ -226,6 +228,7 @@ impl Default for StallFacts {
             worker: WorkerTurn::default(),
             reported: false,
             explained: false,
+            paused: false,
         }
     }
 }
@@ -265,7 +268,7 @@ impl Activity {
     }
 }
 
-/// Decides what the worker of a workspace does at `now`. Nothing is said of a worker without the implementation claim, a workspace that is not active, a check run that goes, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A process that ended is `Stopped` at once, unless the worker was given the turn after it ended, such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
+/// Decides what the worker of a workspace does at `now`. Nothing is said while the project's agents are paused, nor of a worker without the implementation claim, a workspace that is not active, a check run that goes, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A process that ended is `Stopped` at once, unless the worker was given the turn after it ended, such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
 pub fn activity(
     now: Timestamp,
     facts: &StallFacts,
@@ -273,7 +276,8 @@ pub fn activity(
     start: Timestamp,
     stall_minutes: u64,
 ) -> Activity {
-    if !facts.has_impl_claim
+    if facts.paused
+        || !facts.has_impl_claim
         || facts.workspace != WorkspaceFact::Active
         || facts.checks == WorkspaceChecks::Running
         || facts.worker.waits()
@@ -821,6 +825,7 @@ mod tests {
         worker: IDLE,
         reported: false,
         explained: false,
+        paused: false,
     };
 
     fn running(last_output: i64, call: Option<(CallKind, i64)>) -> WorkerStream {
@@ -1085,6 +1090,29 @@ mod tests {
         }
         assert_eq!(StallFacts::default().workspace, WorkspaceFact::Active);
         assert!(!StallFacts::default().has_impl_claim);
+    }
+
+    #[test]
+    fn a_paused_project_never_stalls_a_worker() {
+        let paused = StallFacts {
+            paused: true,
+            ..CLAIMED
+        };
+        let late = at(24 * 60 * MINUTE);
+        for stream in [
+            WorkerStream::Unread,
+            running(0, None),
+            running(0, Some((CallKind::Command, 0))),
+            WorkerStream::Ended { at: at(0) },
+            WorkerStream::Ended { at: at(MINUTE) },
+        ] {
+            assert_eq!(
+                activity(late, &paused, stream, at(0), 5),
+                Activity::Quiet,
+                "{stream:?}"
+            );
+        }
+        assert!(!StallFacts::default().paused);
     }
 
     #[test]

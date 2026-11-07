@@ -25,7 +25,7 @@ use crate::push::starter_agent;
 use crate::services::events::{BusMessage, EventBuffer, EventBus};
 use crate::services::projects::load_config;
 
-/// Decides what fold saw of the worker of every live workspace of `project` at `now`, with the project's `stall_minutes`, sets it in the live state with the check run that goes in each workspace, and tells the worker's lead of each new stall. A workspace whose files are its open proposal's newest version never stalls while the proposal waits on others; once it comes back to its author, the stall time counts from that moment at the earliest. A workspace whose checks run never stalls, and the stall time counts from the end of its newest run at the earliest, so the worker gets the whole window to act on the result. A worker never stalls while an ask about its task or one of its permission questions waits for a person, and the stall time counts from a person's newest answer and the start of its current process at the earliest. A worker whose process fold supervises counts from its newest output too: an open call is work, a call that runs long, a silence of `stall_minutes` and a process that ended without a report are stalls. Each new stall appends `worker.stalled`, which tells the worker's lead, or else the main agents; the stall needs a person once one more `stall_minutes` passed after that, or at once when no agent can act. A change publishes `workspace.changed`. Returns how many workspaces changed, the ones a starting run cleared included. While the project's agents are paused nothing changes but the clear at a run's start and the end of the work shown, and after a resume the stall time counts from the resume at the earliest, so the paused time never stalls a worker.
+/// Decides what fold saw of the worker of every live workspace of `project` at `now`, with the project's `stall_minutes`, sets it in the live state with the check run that goes in each workspace, and tells the worker's lead of each new stall. A workspace whose files are its open proposal's newest version never stalls while the proposal waits on others; once it comes back to its author, the stall time counts from that moment at the earliest. A workspace whose checks run never stalls, and the stall time counts from the end of its newest run at the earliest, so the worker gets the whole window to act on the result. A worker never stalls while an ask about its task or one of its permission questions waits for a person, and the stall time counts from a person's newest answer and the start of its current process at the earliest. A worker whose process fold supervises counts from its newest output too: an open call is work, a call that runs long, a silence of `stall_minutes` and a process that ended without a report are stalls. Each new stall appends `worker.stalled`, which tells the worker's lead, or else the main agents; the stall needs a person once one more `stall_minutes` passed after that, or at once when no agent can act. A change publishes `workspace.changed`. Returns how many workspaces changed, the ones a starting run cleared included. While the project's agents are paused no worker stalls: the pause clears every activity and stalled flag and appends no `worker.stalled`, and after a resume the stall time counts from the resume at the earliest, so the paused time never stalls a worker.
 pub async fn check_stalls(
     project: &ProjectHandle,
     now: Timestamp,
@@ -54,18 +54,6 @@ pub(super) async fn decide_stalls(
         let run = inputs.running.get(&view.workspace).copied();
         if live.set_check_run(view.workspace, run) {
             changed += 1;
-        }
-        if inputs.paused {
-            let work_ended = view
-                .activity
-                .as_ref()
-                .filter(|activity| !activity.is_stall());
-            if work_ended.is_some()
-                && live.set_activity(view.workspace, view.last_activity_at, None, view.stalled)
-            {
-                changed += 1;
-            }
-            continue;
         }
         let worker = WorkerName::parse(&view.worker).ok();
         let agent = worker.as_ref().map(WorkerName::agent);
@@ -128,6 +116,7 @@ pub(super) async fn decide_stalls(
                 .task
                 .is_some_and(|task| inputs.reported.contains(&task)),
             explained: process.is_some_and(|process| process.explained),
+            paused: inputs.paused,
         };
         let verdict = activity(now, &facts, stream, start, stall_minutes);
         let (told, stalled) = match (verdict.reason(), verdict_since(verdict), &agent) {
@@ -286,7 +275,7 @@ pub async fn follow_stall_turns(
     }
 }
 
-/// A message of a person or an agent, which can be an answer or an ask, the closure of an ask, a permission question or its answer, a verdict, a start of a worker process, and the end of a process or a session, which shows the worker stopped at once. fold's own messages, such as check results, give no turn.
+/// A message of a person or an agent, which can be an answer or an ask, the closure of an ask, a permission question or its answer, a verdict, a start of a worker process, the end of a process or a session, which shows the worker stopped at once, and a pause or its resume, which clears or restarts every stall time. fold's own messages, such as check results, give no turn.
 fn gives_a_turn(event: &Event) -> bool {
     if event.event_type == types::MESSAGE_SENT {
         return event.actor != EventActor::fold();
@@ -303,6 +292,8 @@ fn gives_a_turn(event: &Event) -> bool {
         types::WORKER_STOPPED,
         types::WORKER_FAILED,
         types::SESSION_ENDED,
+        types::PROJECT_PAUSED,
+        types::PROJECT_RESUMED,
     ]
     .contains(&event.event_type)
 }
