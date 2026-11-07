@@ -98,7 +98,8 @@ async fn acceptance_38_the_human_resets_the_folder_and_drops_the_held_change() {
     // The junk goes for good.
     let listed = fld_ok(&h, Method::GET, "stash").await;
     assert_eq!(listed["entries"].as_array().unwrap().len(), 1);
-    let dropped = fld_ok(&h, Method::DELETE, "stash/0").await;
+    let junk = listed["entries"][0]["number"].as_i64().unwrap();
+    let dropped = fld_ok(&h, Method::DELETE, &format!("stash/0?number={junk}")).await;
     assert_eq!(dropped["entries"], 0);
     assert!(needs_you_kinds(&h).await.is_empty());
     crate::common::acceptance::assert_in_order(
