@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stubFetch } from "../../test/stubFetch";
@@ -183,9 +184,17 @@ describe("StashPanel", () => {
     expect(calls.some((call) => call.method === "DELETE")).toBe(false);
     expect(screen.queryByRole("button", { name: "Drop entry" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    // The dialog shows only the refusal, never the row it asked about, which may be gone.
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("Nothing was dropped")).toBeTruthy();
+    expect(dialog.textContent).not.toContain("stash@{0}");
+    expect(dialog.textContent).not.toContain("1 file");
+    expect(
+      within(dialog).getAllByText("The stash changed; check the list again."),
+    ).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Back to the list" }));
     await waitFor(() => {
-      expect(screen.queryByText("Drop stash@{0}?")).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
     });
     expect(screen.getByRole("button", { name: "Drop stash@{1}" })).toBeTruthy();
   });
@@ -207,6 +216,10 @@ describe("StashPanel", () => {
     ).toBeTruthy();
     expect(calls.some((call) => call.method === "DELETE")).toBe(false);
     expect(screen.queryByRole("button", { name: "Drop all" })).toBeNull();
+    expect(
+      within(screen.getByRole("dialog")).getByText("Nothing was dropped"),
+    ).toBeTruthy();
+    expect(screen.getByRole("dialog").textContent).not.toContain("Drop");
     expect(
       screen.getByRole("button", { name: "Back to the list" }),
     ).toBeTruthy();

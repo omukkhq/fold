@@ -8,6 +8,7 @@ import { CodeText } from "@/components/code/CodeText";
 import { Id } from "@/components/id/Id";
 import { Mono } from "@/components/mono/Mono";
 import { Dialog } from "@/components/overlay/Dialog";
+import { dialogActions } from "@/components/overlay/dialogStyles";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { failureText } from "@/format/failure";
 import { ActorText } from "@/people/ActorText";
@@ -25,13 +26,34 @@ import {
   stashStillSeen,
   type StashRow,
 } from "./stash";
-import { stashChanged, stashChangedError } from "./errors";
+import {
+  STASH_CHANGED_TEXT,
+  STASH_CHANGED_TITLE,
+  stashChanged,
+  stashChangedError,
+} from "./errors";
 import { FolderError } from "./FolderError";
 import { STASH_HEADING_ID, focusAfterFolderWrite } from "./focus";
 import { useFolderWrite } from "./useFolderWrite";
 
 /** What the open dialog drops: one entry, or every entry. */
 type Asking = { kind: "one"; row: StashRow } | { kind: "all"; seen: StashSeen };
+
+/** The dialog's words: the question about what the person confirmed, or, once the stack moved under it, only that refusal, since the confirmed row may be gone. */
+function dialogText(
+  asking: Asking | null,
+  changed: boolean,
+): { title: string; description: string } {
+  if (changed) {
+    return { title: STASH_CHANGED_TITLE, description: STASH_CHANGED_TEXT };
+  }
+  return asking?.kind === "one"
+    ? { title: dropTitle(asking.row), description: dropDescription(asking.row) }
+    : {
+        title: clearTitle(asking?.seen.entries ?? 0),
+        description: clearDescription(asking?.seen.entries ?? 0),
+      };
+}
 
 /** The human's stash of the project folder, newest first, with a drop action per entry and Clear all. Each drop asks first, reads the stash again and refuses when it no longer holds what the person confirmed, and names what the person saw so the daemon refuses the same, and stays pending until the stash has been read again. Nothing renders while the stash is empty or its read has not arrived; a failed read shows its error. */
 export function StashPanel({ slug, now }: { slug: string; now: number }) {
@@ -169,48 +191,47 @@ export function StashPanel({ slug, now }: { slug: string; now: number }) {
           }
           dropped.current = undefined;
         }}
-        title={
-          asking?.kind === "one"
-            ? dropTitle(asking.row)
-            : clearTitle(asking?.seen.entries ?? 0)
-        }
-        description={
-          asking?.kind === "one"
-            ? dropDescription(asking.row)
-            : clearDescription(asking?.seen.entries ?? 0)
-        }
+        title={dialogText(asking, changed).title}
+        description={dialogText(asking, changed).description}
         footer={
-          // After a refusal that says the stack moved, the question names an entry that may be gone, so only the way back to the list stays.
-          changed ? (
-            <Button variant="ghost" onClick={close}>
-              Back to the list
-            </Button>
-          ) : (
-            <div className="flex gap-8">
-              <Button
-                variant="danger"
-                pending={drop.isPending}
-                pendingLabel="Dropping…"
-                onClick={() => {
-                  if (asking) {
-                    drop.mutate(asking, {
-                      onSuccess: () => {
-                        setAsking(null);
-                      },
-                    });
-                  }
-                }}
-              >
-                {asking?.kind === "all" ? "Drop all" : "Drop entry"}
+          <div className={dialogActions}>
+            {changed ? (
+              <Button variant="ghost" onClick={close}>
+                Back to the list
               </Button>
-              <Button variant="ghost" disabled={drop.isPending} onClick={close}>
-                Cancel
-              </Button>
-            </div>
-          )
+            ) : (
+              <>
+                <Button
+                  variant="ghost"
+                  disabled={drop.isPending}
+                  onClick={close}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="danger"
+                  pending={drop.isPending}
+                  pendingLabel="Dropping…"
+                  onClick={() => {
+                    if (asking) {
+                      drop.mutate(asking, {
+                        onSuccess: () => {
+                          setAsking(null);
+                        },
+                      });
+                    }
+                  }}
+                >
+                  {asking?.kind === "all" ? "Drop all" : "Drop entry"}
+                </Button>
+              </>
+            )}
+          </div>
         }
       >
-        {drop.error === null ? null : <FolderError error={drop.error} />}
+        {drop.error === null || changed ? null : (
+          <FolderError error={drop.error} />
+        )}
       </Dialog>
     </section>
   );

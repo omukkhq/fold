@@ -4,6 +4,9 @@ import { commonText } from "@/format/failure";
 /** The reason the screen gives when the stash it showed is not the stash the daemon holds; the daemon uses the same one. */
 export const STASH_CHANGED = "stash_changed";
 
+/** The dialog title once a drop or Clear all was refused because the stack moved. */
+export const STASH_CHANGED_TITLE = "Nothing was dropped";
+
 /** The text for a stash that changed between the list and the click. */
 export const STASH_CHANGED_TEXT = "The stash changed; check the list again.";
 
