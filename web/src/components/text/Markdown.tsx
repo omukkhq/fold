@@ -204,13 +204,9 @@ const COMPONENTS: Record<MarkdownSize, Components> = {
   16: components(16),
 };
 
-/** Raw HTML is either dropped or shown as typed; it never becomes an element. */
-const DROP_HTML: MarkdownPlugins = [remarkGfm, remarkLineBreaks];
-const HTML_AS_TEXT: MarkdownPlugins = [
-  remarkGfm,
-  remarkHtmlAsText,
-  remarkLineBreaks,
-];
+/** A document drops raw HTML and joins its lines as Markdown does; other text shows HTML as typed and keeps its line ends. */
+const DOCUMENT: MarkdownPlugins = [remarkGfm];
+const PROSE: MarkdownPlugins = [remarkGfm, remarkHtmlAsText, remarkLineBreaks];
 
 interface Look {
   size: MarkdownSize;
@@ -229,16 +225,16 @@ export interface MarkdownProps {
   clamp?: ClampLines;
   /** The text sits on the sunken surface. */
   onSunken?: boolean;
-  /** Drops raw HTML instead of showing it as typed, for a text whose form says that HTML is not shown. */
-  dropHtml?: boolean;
+  /** The text was written in a Markdown form, such as a task description: raw HTML is dropped, as the form says, and lines join into paragraphs as Markdown joins them. */
+  document?: boolean;
   /** The colour and width of the text box, such as `text-text-2` or `max-w-measure`. */
   className?: string;
 }
 
 /**
  * Text that an agent or a person wrote, rendered as Markdown. GFM adds tables and task lists, and each line end is a
- * line break. Raw HTML never becomes an element, because the text is shown to everyone: it shows as typed, or with
- * `dropHtml` not at all. A link keeps only a safe address. Images show their alt text: the bundle loads nothing remote. A long word or path wraps anywhere.
+ * line break, except in a `document`. Raw HTML never becomes an element, because the text is shown to everyone: it
+ * shows as typed, or in a `document` not at all. A link keeps only a safe address. Images show their alt text: the bundle loads nothing remote. A long word or path wraps anywhere.
  */
 export function Markdown({
   children,
@@ -247,11 +243,11 @@ export function Markdown({
   size = 15,
   clamp,
   onSunken = false,
-  dropHtml = false,
+  document: isDocument = false,
   className,
 }: MarkdownProps) {
   const look: Look = { size, clamp: clamp ?? null, className };
-  const base = dropHtml ? DROP_HTML : HTML_AS_TEXT;
+  const base = isDocument ? DOCUMENT : PROSE;
   return (
     <OnSunken.Provider value={onSunken}>
       {mentions ? (

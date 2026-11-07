@@ -108,7 +108,7 @@ export function DescriptionSection({
       ) : task.description.trim() === "" ? (
         <p className="text-15 text-text-2">No description yet.</p>
       ) : (
-        <Markdown mentions={{ slug }} dropHtml>
+        <Markdown mentions={{ slug }} document>
           {task.description}
         </Markdown>
       )}

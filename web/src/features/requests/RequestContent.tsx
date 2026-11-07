@@ -176,7 +176,7 @@ export function BodySection({
   const id = detail.request.id;
   return (
     <Section title="Request">
-      <Markdown mentions={{ slug, known }} dropHtml>
+      <Markdown mentions={{ slug, known }} document>
         {detail.body}
       </Markdown>
       {detail.request.code === null ? null : (
@@ -309,7 +309,7 @@ export function DraftView({
                   {card.title}
                 </span>
               </p>
-              <Markdown mentions={{ slug, known }} dropHtml>
+              <Markdown mentions={{ slug, known }} document>
                 {card.description}
               </Markdown>
             </li>

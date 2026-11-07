@@ -76,8 +76,8 @@ describe("Markdown safety", () => {
     "[run](javascript:alert(2)) and [board](/p/demo/board)",
   ].join("\n");
 
-  it("renders tables and task lists and, with dropHtml, drops raw HTML", () => {
-    const { container } = render(<Markdown dropHtml>{SOURCE}</Markdown>);
+  it("renders tables and task lists and, in a document, drops raw HTML", () => {
+    const { container } = render(<Markdown document>{SOURCE}</Markdown>);
     expect(screen.getByRole("table")).toBeTruthy();
     expect(
       screen.getAllByRole("columnheader").map((h) => h.textContent),
@@ -125,6 +125,15 @@ describe("Markdown text", () => {
     const paragraph = container.querySelector("p");
     expect(paragraph?.querySelectorAll("br")).toHaveLength(2);
     expect(paragraph?.textContent).toBe("Checked:\nthe board\nthe dialog");
+  });
+
+  it("joins the lines of a document into one paragraph, as Markdown does", () => {
+    const { container } = render(
+      <Markdown document>{"Scope:\nthe board\nthe dialog"}</Markdown>,
+    );
+    const paragraph = container.querySelector("p");
+    expect(paragraph?.querySelector("br")).toBeNull();
+    expect(paragraph?.textContent).toBe("Scope:\nthe board\nthe dialog");
   });
 
   it("renders emphasis, lists and headings in the size it is given, and wraps a long path", () => {
