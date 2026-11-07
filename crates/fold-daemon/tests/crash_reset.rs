@@ -118,3 +118,50 @@ async fn a_crash_inside_fld_reset_drops_the_unstash_conflict_and_pushes_the_safe
     assert_eq!(stored(&h, types::STASH_PUSHED).await.len(), 2);
     scenario.teardown();
 }
+
+/// A crash inside the restore of a worker's changes after the safety entry's row leaves the marks open and the files in the folder; the next restore puts the files back without a second entry and only then ends the marks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_crash_inside_the_restore_of_a_workers_changes_ends_its_marks_only_after_the_files() {
+    let scenario = fail::FailScenario::setup();
+    let mut h = Harness::start_plain().await;
+    h.connect_tagged("main", &["main"]).await;
+    let dir = PathBuf::from(h.root());
+    std::fs::write(dir.join("README.md"), "").unwrap();
+    crate::folder_reset::place_agent_change(&h, "README.md").await;
+
+    fail::cfg("reset_after_row", "return").unwrap();
+    failed_at(restore_changes(&h).await, "reset_after_row");
+    fail::remove("reset_after_row");
+    assert_eq!(entries(&h).await.len(), 1);
+    assert_eq!(std::fs::read_to_string(dir.join("README.md")).unwrap(), "");
+    assert_eq!(
+        crate::folder_reset::open_agent_paths(&h).await,
+        ["README.md"]
+    );
+
+    h.restart().await;
+    let done = restore_changes(&h).await.unwrap();
+    assert_eq!(done.entries, 1);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("README.md")).unwrap(),
+        "# demo\n"
+    );
+    assert!(crate::folder_reset::open_agent_paths(&h).await.is_empty());
+    assert_eq!(stored(&h, types::STASH_PUSHED).await.len(), 1);
+    scenario.teardown();
+}
+
+async fn restore_changes(
+    h: &Harness,
+) -> Result<
+    fold_daemon::services::projects::RestoreOutcome,
+    fold_daemon::services::projects::ProjectError,
+> {
+    let ana = fold_core::Actor::human(fold_core::HumanName::parse("ana").unwrap());
+    fold_daemon::services::projects::restore_agent_changes(
+        &h.handle,
+        &ana,
+        &fold_vcs::git::Git::default(),
+    )
+    .await
+}

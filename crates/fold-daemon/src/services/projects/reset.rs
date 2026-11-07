@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
-use fold_core::{Actor, FoldError, NewEvent, RevisionId, WorkspaceId, codes, policy};
+use fold_core::{
+    Actor, FoldError, NewEvent, ProjectConfig, RevisionId, WorkspaceId, codes, policy,
+};
 use fold_store::StoreError;
 use fold_store::workspaces::{self, ClosedState, NewStash, StashState, drop_stash, insert_stash};
 use fold_vcs::git::Git;
@@ -125,16 +127,37 @@ async fn run_reset(
     let config = load_config(&handle.paths).await?;
     let _remote = handle.remote_lock.clone().lock_owned().await;
     let _folder = handle.folder_lock.clone().lock_owned().await;
+    let unstash = follow_first(handle, git, &config).await?;
+    reset_followed(handle, actor, git, &config, paths, unstash).await
+}
+
+/// The folder follows main under the caller's remote lock and folder lock, with the refusals of `fld stash`, and an unstash that a stop left part-way is finished, before a reset reads the folder. Returns that unstash's outcome.
+pub(super) async fn follow_first(
+    handle: &Arc<ProjectHandle>,
+    git: &Git,
+    config: &ProjectConfig,
+) -> Result<Option<UnstashOutcome>, ProjectError> {
     let mut unstash = None;
     loop {
         let (followed, _) = sync(handle, git, false).await?;
         refuse_branch(&config.git.branch, &followed)?;
         match finish_open_unstash(handle, config.max_file_bytes).await? {
-            Finish::Nothing => break,
+            Finish::Nothing => return Ok(unstash),
             Finish::Abandoned => {}
             Finish::Finished(outcome) => unstash = Some(outcome),
         }
     }
+}
+
+/// The reset after [`follow_first`], under the caller's locks: `paths` are the named paths, or `None` for the whole folder.
+pub(super) async fn reset_followed(
+    handle: &Arc<ProjectHandle>,
+    actor: &Actor,
+    git: &Git,
+    config: &ProjectConfig,
+    paths: Option<Vec<RepoPath>>,
+    unstash: Option<UnstashOutcome>,
+) -> Result<ResetOutcome, ProjectError> {
     let stack = stack(handle).await?;
     // The entry is dropped only in the transaction that pushes the safety entry, after every refusal, so a refused or stopped reset leaves it and its markers waiting as they were.
     let conflicted = stack

@@ -8,6 +8,7 @@ use fold_core::{Actor, EventFilter, HumanName};
 use fold_daemon::services::agents::{NeedsYouKind, needs_you};
 use fold_daemon::services::projects::{
     ProjectError, RecordOutcome, ResetOutcome, ResetScope, UnstashOutcome, reset,
+    restore_agent_changes,
 };
 use fold_vcs::git::Git;
 use serde_json::{Value, json};
@@ -346,4 +347,68 @@ async fn the_reset_routes_serve_the_socket_and_the_signed_in_human() {
     assert!(!dir.join("b.txt").exists());
     let pushed = stored(&h, types::STASH_PUSHED).await;
     assert_eq!(pushed[1].actor.as_str(), "human:ana");
+}
+
+/// Places a change of `path` in a tool call of the agent `main`, as the supervisor's window does.
+pub async fn place_agent_change(h: &Harness, path: &str) {
+    let now = h.handle.clock.now();
+    let agent = fold_core::AgentName::parse("main").unwrap();
+    h.handle
+        .store
+        .write(async |tx| -> Result<bool, fold_store::StoreError> {
+            fold_store::workspaces::insert_agent_change(tx, path.as_bytes(), &agent, now, now).await
+        })
+        .await
+        .unwrap();
+}
+
+pub async fn open_agent_paths(h: &Harness) -> Vec<String> {
+    fold_store::workspaces::open_agent_changes(h.handle.store.read())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| String::from_utf8(row.path).unwrap())
+        .collect()
+}
+
+/// `fld agent-changes restore` goes through the reset of named paths: the safety entry holds exactly the files the worker changed, they go back to main's version, the human's own change stays, and the marks end only once the files are back, so a refusal, here a tracked file over the size limit, keeps them open and stashes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restore_of_a_workers_changes_puts_back_only_its_paths_through_the_reset() {
+    let mut h = Harness::start_plain().await;
+    h.connect_tagged("main", &["main"]).await;
+    let dir = PathBuf::from(h.root());
+    write(&dir, "README.md", &"x".repeat(100));
+    write(&dir, "junk.txt", "");
+    write(&dir, "notes.md", "mine\n");
+    place_agent_change(&h, "README.md").await;
+    place_agent_change(&h, "junk.txt").await;
+    let config = dir.join(".fold/config.toml");
+    let kept = std::fs::read_to_string(&config).unwrap_or_default();
+    std::fs::write(&config, format!("max_file_bytes = 32\n{kept}")).unwrap();
+
+    let (reason, paths) = refusal(
+        restore_agent_changes(&h.handle, &ana(), &Git::default())
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(reason, "skipped_tracked");
+    assert_eq!(paths, json!(["README.md"]));
+    assert!(entries(&h).await.is_empty());
+    assert_eq!(open_agent_paths(&h).await, ["README.md", "junk.txt"]);
+
+    std::fs::write(&config, kept).unwrap();
+    let done = restore_agent_changes(&h.handle, &ana(), &Git::default())
+        .await
+        .unwrap();
+    assert_eq!(done.files, ["README.md", "junk.txt"]);
+    assert_eq!(done.entries, 1);
+    assert_eq!(stack_files(&h).await, [vec!["README.md", "junk.txt"]]);
+    assert_eq!(read(&dir, "README.md").as_deref(), Some("# demo\n"));
+    assert!(!dir.join("junk.txt").exists());
+    assert_eq!(read(&dir, "notes.md").as_deref(), Some("mine\n"));
+    assert!(open_agent_paths(&h).await.is_empty());
+    let error = restore_agent_changes(&h.handle, &ana(), &Git::default())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Some("agent_change_not_found"));
 }
