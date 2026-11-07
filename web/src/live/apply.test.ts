@@ -711,6 +711,31 @@ describe("invalidation rules", () => {
     expect(hit(keys.agents(slug))).toBe(true);
   });
 
+  it("refreshes the proposals list and the proposal page when a reviewer takes, releases or loses a review claim", () => {
+    for (const type of [
+      "claim.acquired",
+      "claim.released",
+      "claim.taken_over",
+    ]) {
+      invalidated = [];
+      applyEvent(
+        client,
+        slug,
+        ev(type, {
+          task: "T-2",
+          proposal: "P-3",
+          data: { kind: "review", proposal: "P-3" },
+        }),
+      );
+      expect(hit(keys.proposals(slug)), type).toBe(true);
+      expect(hit(keys.proposal(slug, "P-3")), type).toBe(true);
+      expect(hit(keys.board(slug)), type).toBe(true);
+    }
+    invalidated = [];
+    applyEvent(client, slug, ev("claim.acquired", { task: "T-2" }));
+    expect(hit(keys.proposals(slug))).toBe(false);
+  });
+
   it("refreshes the agents and the workers, whose workspaces name the run that goes, when a check run starts or ends", () => {
     for (const type of ["checks.started", "checks.finished"]) {
       invalidated = [];

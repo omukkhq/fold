@@ -387,12 +387,14 @@ function invalidationKeys(
     case "checklist":
       return [board, ...taskKey];
     case "claim":
+      // A review claim names its proposal, whose list row and page say whether a reviewer holds it.
       return [
         board,
         keys.workspaces(slug),
         keys.agents(slug),
         ...taskKey,
         ...workspaceKey,
+        ...(proposal === null ? [] : [keys.proposals(slug), ...proposalKey]),
       ];
     case "workspace":
       // A card names its task's live workspace, which opens, closes and moves with these events.
