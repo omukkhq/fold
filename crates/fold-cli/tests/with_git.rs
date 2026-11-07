@@ -305,7 +305,7 @@ fn with_git_in_a_git_repository_makes_its_head_the_genesis() {
 /// A Git repository at `repo` whose one commit holds `files`, with the commit's id.
 #[cfg(test)]
 fn committed_repo(repo: &Path, files: &[(&str, &str)]) -> String {
-    fs::create_dir(repo).unwrap();
+    fs::create_dir_all(repo).unwrap();
     git(repo, &["init", "--quiet", "--initial-branch=main"]);
     for (path, text) in files {
         fs::write(repo.join(path), text).unwrap();
@@ -361,6 +361,10 @@ fn with_git_in_a_git_repository_records_the_section_it_adds_to_agents_md_as_r1()
         "AGENTS.md\n"
     );
     assert_eq!(git(&repo, &["show", "HEAD:AGENTS.md"]), agents);
+    assert_eq!(
+        git(&repo, &["log", "-1", "--format=%B"]),
+        "Add fold's section to AGENTS.md\n\nFold-Revision: r1\n\n"
+    );
     assert_eq!(git(&repo, &["status", "--porcelain"]), "?? notes.txt\n");
     let _daemon = sandbox.serve();
     assert_eq!(
@@ -416,7 +420,12 @@ fn with_git_in_a_git_repository_leaves_an_untracked_agents_md_unrecorded() {
     fs::write(repo.join("AGENTS.md"), "# Not committed\n").unwrap();
     let output = sandbox.fold_in(&repo, &["init", "--with-git"]);
     assert!(output.status.success(), "{output:?}");
-    assert!(!stdout(&output).contains(" records "), "{output:?}");
+    let text = stdout(&output);
+    assert!(!text.contains(" records "), "{text}");
+    assert!(
+        text.contains("\ninit changed AGENTS.md, which is not recorded because Git does not track it; run `fld record` to record it on main\n"),
+        "{text}"
+    );
     let agents = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
     assert!(agents.starts_with("# Not committed\n"), "{agents}");
     assert!(
@@ -425,4 +434,52 @@ fn with_git_in_a_git_repository_leaves_an_untracked_agents_md_unrecorded() {
     );
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]).trim(), head);
     assert_eq!(git(&repo, &["status", "--porcelain"]), "?? AGENTS.md\n");
+    let _daemon = sandbox.serve();
+    assert_eq!(
+        sandbox.status(&repo),
+        [
+            "Project folder at main r0",
+            "  ↳ Git: main is synced with the branch main",
+            "",
+            "To record: 1 file",
+            "  ↳ added: AGENTS.md",
+            "  ↳ Next: `fld record` records them on main; `fld stash` puts them aside",
+            "",
+            "1 file to record",
+        ]
+    );
+}
+
+#[test]
+fn with_git_in_a_git_repository_records_the_section_through_a_claude_md_link() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.path("repo");
+    fs::create_dir(&repo).unwrap();
+    std::os::unix::fs::symlink("AGENTS.md", repo.join("CLAUDE.md")).unwrap();
+    let head = committed_repo(
+        &repo,
+        &[("README.md", "# app\n"), ("AGENTS.md", "# Ours\n")],
+    );
+    let output = sandbox.fold_in(&repo, &["init", "--with-git"]);
+    assert!(output.status.success(), "{output:?}");
+    let text = stdout(&output);
+    assert!(
+        text.contains("\nr1 records the Claude Code files that init changed: AGENTS.md\n"),
+        "{text}"
+    );
+    assert!(
+        fs::symlink_metadata(repo.join("CLAUDE.md"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(git(&repo, &["rev-parse", "HEAD~1"]).trim(), head);
+    assert_eq!(
+        git(
+            &repo,
+            &["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]
+        ),
+        "AGENTS.md\n"
+    );
+    assert_eq!(git(&repo, &["status", "--porcelain"]), "");
 }

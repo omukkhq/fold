@@ -302,6 +302,44 @@ async fn from_git_records_as_r1_only_the_written_files_that_held_heads_version()
 }
 
 #[tokio::test]
+async fn from_git_that_fails_after_its_files_writes_them_back_and_keeps_head() {
+    let host = Host::new();
+    let repo = host.path("repo");
+    let head = source_repo(&repo);
+    let files: FolderFiles = Box::new(|root: &Path| {
+        fs::write(root.join("README.md"), "# app\nfold\n").unwrap();
+        fs::write(root.join("NEW.md"), "new\n").unwrap();
+        // A folder where the sync map goes makes the step after the files fail.
+        fs::create_dir(root.join(".fold/git-sync.map")).unwrap();
+        Ok(WrittenFiles {
+            created: vec![root.join("NEW.md")],
+            changed: vec![(root.join("README.md"), b"# app\n".to_vec())],
+            instructions: None,
+        })
+    });
+    let failed = init_project_from_git_with(
+        &host.paths,
+        &repo,
+        None,
+        &crate::common::ana(),
+        Git::default(),
+        Some(files),
+        &host.clock,
+    )
+    .await;
+    assert!(failed.is_err());
+    assert_eq!(
+        fs::read_to_string(repo.join("README.md")).unwrap(),
+        "# app\n"
+    );
+    assert!(!repo.join("NEW.md").exists());
+    assert!(!repo.join(".fold").exists());
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]).trim(), head);
+    assert_eq!(git(&repo, &["status", "--porcelain"]), "");
+    assert_eq!(host.registered().await, 0);
+}
+
+#[tokio::test]
 async fn from_git_refuses_a_dirty_tree_and_a_detached_head() {
     let host = Host::new();
     let repo = host.path("repo");

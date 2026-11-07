@@ -8,7 +8,7 @@ use fold_core::object::{ObjectKind, hash_object};
 use fold_core::{HostPaths, ManualClock, ProjectPaths};
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::projects::{
-    FolderFiles, InitializedProject, ProjectError, WrittenFiles, init_project,
+    FolderFiles, InitializedProject, ProjectError, WrittenFiles, init_new_project, init_project,
     init_project_from_git_with,
 };
 use fold_store::{Store, projects};
@@ -204,7 +204,7 @@ async fn an_init_from_git_stopped_before_the_registry_insert_keeps_the_files_it_
         std::fs::write(&agents, "fold\n").unwrap();
         Ok(WrittenFiles {
             created: vec![agents],
-            changed: Vec::new(),
+            ..WrittenFiles::default()
         })
     });
     fail::cfg("init_before_register", "return").unwrap();
@@ -216,6 +216,8 @@ async fn an_init_from_git_stopped_before_the_registry_insert_keeps_the_files_it_
         std::fs::read_to_string(paths.root().join("AGENTS.md")).unwrap(),
         "fold\n"
     );
+    // r1's commit comes only after the registry row, so the branch has not moved.
+    assert_eq!(git(&root, &["rev-parse", "HEAD"]).trim(), head);
 
     // The stopped run recorded the genesis and the written file as r1 in one transaction, so the next run only registers the project.
     let project = init(None).await.unwrap();
@@ -372,6 +374,228 @@ async fn a_stopped_init_that_another_init_holds_is_refused_and_finished_once_fre
     let project = host.init().await.unwrap();
     assert!(project.resumed);
     assert_eq!(host.registered().await, ["app"]);
+    assert_project_consistent(&paths).await;
+    scenario.teardown();
+}
+
+/// A Git repository in `app` whose one commit holds its files and `AGENTS.md` with `agents`, with the commit's id.
+fn committed_app(host: &Host, agents: &str) -> String {
+    let root = host.root();
+    std::fs::write(root.join("AGENTS.md"), agents).unwrap();
+    git(&root, &["init", "--quiet", "--initial-branch=main"]);
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "--quiet", "-m", "start"]);
+    git(&root, &["rev-parse", "HEAD"]).trim().to_owned()
+}
+
+/// Files that add a line to the tracked `AGENTS.md` and create `NEW.md` and the folder `.claude/`, as init's Claude Code files do.
+fn claude_like_files() -> FolderFiles {
+    Box::new(|root: &Path| {
+        let agents = root.join("AGENTS.md");
+        let old = std::fs::read(&agents).unwrap();
+        std::fs::write(&agents, "# Ours\nfold\n").unwrap();
+        std::fs::write(root.join("NEW.md"), "new\n").unwrap();
+        std::fs::create_dir_all(root.join(".claude/skills")).unwrap();
+        std::fs::write(root.join(".claude/skills/x.md"), "x\n").unwrap();
+        Ok(WrittenFiles {
+            created: vec![root.join("NEW.md"), root.join(".claude")],
+            changed: vec![(agents.clone(), old)],
+            instructions: Some((agents, "Add fold's section to AGENTS.md".to_owned())),
+        })
+    })
+}
+
+#[tokio::test]
+async fn an_init_from_git_whose_registry_write_fails_leaves_the_repository_as_it_was() {
+    let scenario = fail::FailScenario::setup();
+    let host = Host::new();
+    let head = committed_app(&host, "# Ours\n");
+    let root = host.root();
+    fail::cfg("init_before_register", "return(error)").unwrap();
+    let failed = init_project_from_git_with(
+        &host.paths,
+        &root,
+        None,
+        &crate::common::ana(),
+        Git::default(),
+        Some(claude_like_files()),
+        &host.clock,
+    )
+    .await;
+    fail::remove("init_before_register");
+    assert_eq!(failed.unwrap_err().code(), Some("internal_error"));
+
+    // r1 was recorded, but its commit waits for the registry row, so the branch and the index stay at HEAD and the folder is as it was.
+    assert_eq!(git(&root, &["rev-parse", "HEAD"]).trim(), head);
+    assert_eq!(git(&root, &["status", "--porcelain"]), "");
+    assert_eq!(
+        std::fs::read_to_string(root.join("AGENTS.md")).unwrap(),
+        "# Ours\n"
+    );
+    assert!(!root.join("NEW.md").exists());
+    assert!(!root.join(".claude").exists());
+    assert!(!root.join(".fold").exists());
+    assert!(host.registered().await.is_empty());
+    scenario.teardown();
+}
+
+#[tokio::test]
+async fn a_plain_init_whose_registry_write_fails_writes_back_the_files_it_changed() {
+    let scenario = fail::FailScenario::setup();
+    let host = Host::new();
+    let root = host.root();
+    std::fs::write(root.join("AGENTS.md"), "# Ours\n").unwrap();
+    fail::cfg("init_before_register", "return(error)").unwrap();
+    let failed = init_new_project(
+        &host.paths,
+        &root,
+        None,
+        &crate::common::ana(),
+        Git::default(),
+        Some(claude_like_files()),
+        None,
+        &host.clock,
+    )
+    .await;
+    fail::remove("init_before_register");
+    assert_eq!(failed.unwrap_err().code(), Some("internal_error"));
+    assert_eq!(
+        std::fs::read_to_string(root.join("AGENTS.md")).unwrap(),
+        "# Ours\n"
+    );
+    assert!(!root.join("NEW.md").exists());
+    assert!(!root.join(".claude").exists());
+    assert!(!root.join(".fold").exists());
+    assert!(!root.join(".foldignore").exists());
+    assert_eq!(
+        std::fs::read_to_string(root.join("README.md")).unwrap(),
+        README
+    );
+    assert!(host.registered().await.is_empty());
+    scenario.teardown();
+}
+
+#[tokio::test]
+async fn an_init_from_git_stopped_before_the_registry_insert_finishes_with_the_tracked_file_it_changed()
+ {
+    let scenario = fail::FailScenario::setup();
+    let host = Host::new();
+    let head = committed_app(&host, "# Ours\n");
+    let root = host.root();
+    let ana = crate::common::ana();
+    let init = |files: Option<FolderFiles>| {
+        init_project_from_git_with(
+            &host.paths,
+            &root,
+            None,
+            &ana,
+            Git::default(),
+            files,
+            &host.clock,
+        )
+    };
+    fail::cfg("init_before_register", "return").unwrap();
+    let stopped = init(Some(claude_like_files())).await;
+    fail::remove("init_before_register");
+    assert_eq!(stopped.unwrap_err().code(), Some("failpoint"));
+    assert_eq!(
+        git(&root, &["status", "--porcelain", "--untracked-files=no"]),
+        " M AGENTS.md\n"
+    );
+
+    // The tracked file the stopped run changed and recorded keeps the tree from being clean, which only a new project needs.
+    let project = init(None).await.unwrap();
+    assert!(project.resumed);
+    assert_eq!(project.revision.to_string(), "r1");
+    assert_eq!(git(&root, &["rev-parse", "HEAD"]).trim(), head);
+    assert_eq!(host.registered().await, ["app"]);
+    assert_project_consistent(&host.project_paths()).await;
+    scenario.teardown();
+}
+
+#[tokio::test]
+async fn an_init_from_git_in_a_repository_with_changes_and_no_fold_dir_is_refused() {
+    let host = Host::new();
+    committed_app(&host, "# Ours\n");
+    let root = host.root();
+    std::fs::write(root.join("README.md"), "changed\n").unwrap();
+    let refused = init_project_from_git_with(
+        &host.paths,
+        &root,
+        None,
+        &crate::common::ana(),
+        Git::default(),
+        Some(claude_like_files()),
+        &host.clock,
+    )
+    .await
+    .unwrap_err();
+    let ProjectError::Fold(error) = refused else {
+        panic!("a fold error");
+    };
+    assert_eq!(error.details().unwrap()["reason"], "uncommitted_changes");
+    assert_eq!(
+        std::fs::read_to_string(root.join("AGENTS.md")).unwrap(),
+        "# Ours\n"
+    );
+    assert!(!root.join(".fold").exists());
+}
+
+#[tokio::test]
+async fn an_init_from_git_stopped_after_its_files_names_the_instructions_file_to_take_back() {
+    let scenario = fail::FailScenario::setup();
+    let host = Host::new();
+    let head = committed_app(&host, "# Ours\n");
+    let root = host.root();
+    let ana = crate::common::ana();
+    let init = |files: FolderFiles| {
+        init_project_from_git_with(
+            &host.paths,
+            &root,
+            None,
+            &ana,
+            Git::default(),
+            Some(files),
+            &host.clock,
+        )
+    };
+    fail::cfg("init_from_git_after_files", "return").unwrap();
+    let stopped = init(claude_like_files()).await;
+    fail::remove("init_from_git_after_files");
+    assert_eq!(stopped.unwrap_err().code(), Some("failpoint"));
+    let paths = host.project_paths();
+
+    // The stop came before the transaction, so `.fold/` holds no main and the next run refuses it, naming the file the stopped run changed.
+    let error = init(claude_like_files()).await.unwrap_err();
+    assert_eq!(error.code(), Some("project_incomplete"));
+    let ProjectError::Fold(error) = error else {
+        panic!("a fold error");
+    };
+    let hint = error.hint().unwrap();
+    assert!(
+        hint.contains(&format!(
+            "delete {}, run `git restore AGENTS.md` when Git tracks AGENTS.md, and run `fld init --with-git` again",
+            paths.fold_dir().display()
+        )),
+        "{hint}"
+    );
+    assert_eq!(git(&root, &["rev-parse", "HEAD"]).trim(), head);
+
+    // The steps of the hint make the tree clean, and the init then records the change as r1.
+    std::fs::remove_dir_all(paths.fold_dir()).unwrap();
+    git(&root, &["restore", "AGENTS.md"]);
+    std::fs::remove_file(root.join("NEW.md")).unwrap();
+    std::fs::remove_dir_all(root.join(".claude")).unwrap();
+    let project = init(claude_like_files()).await.unwrap();
+    assert_eq!(
+        project.files_revision.unwrap().files,
+        ["AGENTS.md", "NEW.md"]
+    );
+    assert_eq!(git(&root, &["rev-parse", "HEAD~1"]).trim(), head);
+    assert_eq!(
+        git(&root, &["log", "-1", "--format=%s"]).trim(),
+        "Add fold's section to AGENTS.md"
+    );
     assert_project_consistent(&paths).await;
     scenario.teardown();
 }
