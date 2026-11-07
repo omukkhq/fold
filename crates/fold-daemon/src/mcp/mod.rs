@@ -47,6 +47,8 @@ pub struct FoldServer {
     messages: MessageService,
     /// The proposal tools exist only on a server that has it.
     reviews: Option<ReviewService>,
+    /// The open project, for the tools that run a project folder command; a weak link, so a session never keeps a closed project open.
+    project: Option<std::sync::Weak<crate::projects::ProjectHandle>>,
     /// Held across the `register_agent` command, which binds the session.
     session: Mutex<SessionContext>,
     footer: Vec<Arc<dyn FooterSource>>,
@@ -85,6 +87,7 @@ impl FoldServer {
             tasks,
             messages,
             reviews: None,
+            project: None,
             session: Mutex::new(session),
             footer: vec![unread, new_events, near_stale],
         }
@@ -102,6 +105,29 @@ impl FoldServer {
     pub fn with_reviews(mut self, reviews: ReviewService) -> Self {
         self.reviews = Some(reviews);
         self
+    }
+
+    /// Serves the tools that run a project folder command on `project`.
+    #[must_use]
+    pub fn with_project(
+        mut self,
+        project: std::sync::Weak<crate::projects::ProjectHandle>,
+    ) -> Self {
+        self.project = Some(project);
+        self
+    }
+
+    /// The open project of the session, for a tool that runs a project folder command.
+    fn project(&self) -> Result<Arc<crate::projects::ProjectHandle>, FoldError> {
+        self.project
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or_else(|| {
+                FoldError::new(
+                    codes::PROJECT_UNAVAILABLE,
+                    "this session serves no open project folder",
+                )
+            })
     }
 
     async fn session(&self) -> SessionContext {

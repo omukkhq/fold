@@ -88,7 +88,7 @@ async fn acceptance_28_the_human_stops_tracking_a_recorded_file_that_is_now_igno
     assert_eq!(status["at_main"], true);
     assert_eq!(
         status["changes"],
-        json!([{"path": "notes.md", "kind": "added", "entry": "file", "held": false}])
+        json!([{"path": "notes.md", "kind": "added", "entry": "file", "held": false, "agents": []}])
     );
     assert_eq!(status["ignored_tracked"], json!([]));
 

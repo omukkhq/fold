@@ -166,6 +166,7 @@ describe("activityLine", () => {
         checks_failed: false,
         revision: null,
         review_plan: null,
+        review_claim: null,
       },
       edits_after_version: false,
     };
@@ -193,6 +194,32 @@ describe("activityLine", () => {
     ).toBe("Sent P-1 v2 · waits for human review");
   });
 
+  it("says the sent version waits for review until a reviewer holds its claim, then that it is being reviewed", () => {
+    const sent = {
+      ...card({ path: "a.ts", at: NOW - 6 * MINUTE }),
+      proposal: {
+        id: "P-1",
+        state: "open" as const,
+        version: 1,
+        checks_failed: false,
+        revision: null,
+        review_plan: null,
+        review_claim: null,
+      },
+      edits_after_version: false,
+    };
+    expect(activityLine(sent, undefined, NOW)?.text).toBe(
+      "Sent P-1 v1 · waits for review",
+    );
+    expect(
+      activityLine(
+        { ...sent, proposal: { ...sent.proposal, review_claim: "review-2" } },
+        undefined,
+        NOW,
+      )?.text,
+    ).toBe("Sent P-1 v1 · being reviewed");
+  });
+
   it("says the stall while a sent version is back with its author", () => {
     const back = {
       ...card({ path: "a.ts", at: NOW - 6 * MINUTE }, [
@@ -205,6 +232,7 @@ describe("activityLine", () => {
         checks_failed: false,
         revision: null,
         review_plan: null,
+        review_claim: null,
       },
       edits_after_version: false,
     };
@@ -239,6 +267,7 @@ describe("activityLine", () => {
         checks_failed: false,
         revision: null,
         review_plan: null,
+        review_claim: null,
       },
       edits_after_version: true,
     };

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO shared_changes (agent_id, paths, created_at)\n                   SELECT a.id, ?, ? FROM agents a WHERE a.name = ?\n                   RETURNING id AS \"id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "shared_changes",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "1d0df7f7d6afa4dfd77d9b4fdb40aa85b13fdc5d1f17e735587cfaae903caf5a"
+}

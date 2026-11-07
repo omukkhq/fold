@@ -23,6 +23,7 @@ pub mod platform;
 pub mod restore;
 pub mod revision_store;
 pub mod scan;
+pub mod shared;
 pub mod snapshot;
 pub mod stash;
 pub mod sync;

@@ -1,3 +1,4 @@
+pub mod confirm;
 pub mod cost;
 pub mod folder_status;
 pub mod gc;
@@ -6,6 +7,8 @@ pub mod notify;
 pub mod pause;
 pub mod record;
 pub mod remote;
+pub mod reset;
+pub mod share;
 pub mod stash;
 pub mod transcript;
 pub mod untrack;

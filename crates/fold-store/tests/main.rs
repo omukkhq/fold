@@ -6,6 +6,7 @@ pub mod revisions_support;
 #[cfg(test)]
 pub mod seed;
 
+mod agent_changes_schema;
 mod agents_schema;
 mod batch_integration_schema;
 mod changesets;

@@ -113,7 +113,7 @@ pub async fn record_as_ana(h: &Harness) -> Result<RecordOutcome, ProjectError> {
 pub async fn record_finishing_as_ana(
     h: &Harness,
 ) -> Result<AfterUnstash<RecordOutcome>, ProjectError> {
-    record(&h.handle, &ana(), &Git::default()).await
+    record(&h.handle, &ana(), &Git::default(), None).await
 }
 
 /// The file `path` of `revision` as main holds it.
@@ -193,7 +193,7 @@ async fn nothing_is_recorded_without_fld_record() {
     assert!(!root(&h).join(".git").exists());
 
     // Only a human runs it.
-    let refused = record(&h.handle, &Actor::System, &Git::default())
+    let refused = record(&h.handle, &Actor::System, &Git::default(), None)
         .await
         .unwrap_err();
     assert_eq!(refused.code(), Some(codes::HUMAN_REQUIRED));
@@ -1088,4 +1088,71 @@ async fn the_socket_route_records_for_the_named_human() {
         .await;
     assert_eq!(again["outcome"], "up_to_date");
     assert_eq!(again["commit"], Value::Null);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_folder_diff_route_shows_a_human_the_folder_against_its_revision() {
+    use crate::common::acceptance::{HUMAN, SLUG};
+    use axum::http::{Method, StatusCode};
+    let h = Harness::start_plain().await;
+    let dir = root(&h);
+    write(&dir, "README.md", "");
+    write(&dir, "junk.txt", "new\n");
+    std::os::unix::fs::symlink("README.md", dir.join("link")).unwrap();
+    let base = format!("/api/v1/projects/{SLUG}/folder/diff");
+
+    let (status, list) = h.http(Method::GET, &base, None, HUMAN).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(list["view"], "files");
+    let changes: Vec<(&str, &str)> = list["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| {
+            (
+                file["path"].as_str().unwrap(),
+                file["change"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        changes,
+        [
+            ("README.md", "modified"),
+            ("junk.txt", "added"),
+            ("link", "added")
+        ]
+    );
+
+    let (status, emptied) = h
+        .http(Method::GET, &format!("{base}?path=README.md"), None, HUMAN)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{emptied}");
+    assert_eq!(emptied["view"], "file");
+    let kinds: Vec<&str> = emptied["hunks"][0]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["removed"]);
+    assert_eq!(read(&h, "README.md"), "");
+
+    for bad in ["../outside", "/etc/passwd", ".fold/fold.db"] {
+        let (status, refused) = h
+            .http(Method::GET, &format!("{base}?path={bad}"), None, HUMAN)
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {refused}");
+        assert_eq!(refused["error"]["code"], "invalid_path", "{bad}");
+        assert!(!refused.to_string().contains("# demo"), "{refused}");
+    }
+    let (status, unchanged) = h
+        .http(
+            Method::GET,
+            &format!("{base}?path=missing.txt"),
+            None,
+            HUMAN,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{unchanged}");
 }

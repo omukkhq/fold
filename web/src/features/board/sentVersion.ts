@@ -2,13 +2,14 @@ import type { AttentionItem, BoardProposal } from "@/api/board";
 import type { LiveWorkspace } from "@/live/envelope";
 import { hasKind } from "./attention";
 
-/** What a sent version waits for, the first that applies in this order: a conflict, failed integration checks, changes requested, a human's approval, the integration of an approved version, a review. */
+/** What a sent version waits for, the first that applies in this order: a conflict, failed integration checks, changes requested, a human's approval, the integration of an approved version, the review a reviewer holds the claim for, a review. */
 export type SentWait =
   | "conflict"
   | "checks_failed"
   | "changes_requested"
   | "human_review"
   | "integration"
+  | "reviewing"
   | "review";
 
 export interface SentVersion {
@@ -20,7 +21,7 @@ export interface SentVersion {
 /** The proposal fields the decision reads; the board card and the task view both carry them. */
 export type SentProposal = Pick<
   BoardProposal,
-  "id" | "state" | "version" | "checks_failed"
+  "id" | "state" | "version" | "checks_failed" | "review_claim"
 >;
 
 /** Items are typed loosely because the daemon can be newer than this build and send a kind it does not know. */
@@ -32,6 +33,7 @@ const WAITS: Record<SentWait, string> = {
   changes_requested: "changes requested",
   human_review: "waits for human review",
   integration: "approved, waits for integration",
+  reviewing: "being reviewed",
   review: "waits for review",
 };
 
@@ -48,7 +50,10 @@ function waitOf(proposal: SentProposal, attention: Items): SentWait {
   if (hasKind(attention, "human_review")) {
     return "human_review";
   }
-  return proposal.state === "approved" ? "integration" : "review";
+  if (proposal.state === "approved") {
+    return "integration";
+  }
+  return proposal.review_claim === null ? "review" : "reviewing";
 }
 
 /**
@@ -107,7 +112,7 @@ export function sentText(sent: SentVersion): string {
   return `sent ${sent.proposal} v${String(sent.version)}`;
 }
 
-/** `waits for review`, `changes requested`. */
+/** `waits for review`, `being reviewed`, `changes requested`. */
 export function waitText(wait: SentWait): string {
   return WAITS[wait];
 }

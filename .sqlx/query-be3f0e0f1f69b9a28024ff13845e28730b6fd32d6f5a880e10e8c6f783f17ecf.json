@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.name AS \"worker!\", MAX(m.created_at) AS \"at!: i64\"\n           FROM messages m\n           JOIN message_recipients r ON r.message_id = m.id\n           JOIN workers w ON w.id = r.worker_id\n           WHERE m.sender_kind = 'human'\n             AND w.id IN (SELECT c.worker_id FROM claims c\n                          WHERE c.kind = 'implementation' AND c.released_at IS NULL)\n           GROUP BY w.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "worker!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "at!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "be3f0e0f1f69b9a28024ff13845e28730b6fd32d6f5a880e10e8c6f783f17ecf"
+}

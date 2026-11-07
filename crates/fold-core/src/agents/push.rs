@@ -111,6 +111,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::REVIEW_BATCH_WAITING,
         types::REVIEW_BATCH_WAIT_ENDED,
         types::REVIEW_BATCH_READY,
+        types::FOLDER_AGENT_CHANGED,
     ]
     .contains(&event.event_type)
 }
@@ -128,6 +129,7 @@ pub fn request_of(event: &Event) -> Option<RequestId> {
 /// The notices one committed event sends. An agent never hears about what its own workers did, and an event that misses an id its rule names sends nothing.
 pub fn notice_for(event: &Event, ctx: &PushContext) -> Vec<Notice> {
     let rules = match human_change_rules(event, ctx)
+        .or_else(|| agent_change_rules(event, ctx))
         .or_else(|| plan_rules(event, ctx))
         .or_else(|| review_rules(event, ctx))
     {
@@ -231,11 +233,22 @@ fn human_change_rules(
     if kind == types::HUMAN_CHANGE_WITHDRAWN {
         // The folder holds none of the change any more, so a main workspace that holds its merge holds nothing to submit.
         let text = format!("{human} took back the waiting change; nothing is left to merge");
+        let abandoned = event
+            .data
+            .get("workspace_abandoned")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         let rule = match event
             .data
             .get("workspace")
             .and_then(serde_json::Value::as_str)
         {
+            // `fld reset` abandons the workspace itself in the same command.
+            Some(workspace) if abandoned => (
+                main,
+                format!("{text}; fold abandoned {workspace}, which held its merge; tell the user"),
+                "get_repository_state",
+            ),
             Some(workspace) => (
                 main,
                 format!("{text}; abandon {workspace}, which holds its merge, and tell the user"),
@@ -301,6 +314,50 @@ fn human_change_rules(
         rules.push(lead_rule());
     }
     Some(rules)
+}
+
+/// A change a supervised worker made in the project folder during one of its tool calls reaches the main agent, which tells the user, because no task or review covers it and only the user knows whether to keep it. The daemon writes the agents, the first paths and their count into the event.
+fn agent_change_rules(
+    event: &Event,
+    ctx: &PushContext,
+) -> Option<Vec<(Vec<AgentName>, String, &'static str)>> {
+    if event.event_type != types::FOLDER_AGENT_CHANGED {
+        return None;
+    }
+    let strings = |key: &str| -> Vec<String> {
+        event
+            .data
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let agents = strings("agents");
+    let paths = strings("paths");
+    let count = event
+        .data
+        .get("path_count")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|count| usize::try_from(count).ok())
+        .unwrap_or(paths.len());
+    let tool = "settle_agent_changes";
+    let compose = |spelled: bool| {
+        let who = listed(&agents, agents.len(), "agent", "agents", spelled);
+        let files = listed(&paths, count, "file", "files", spelled);
+        format!(
+            "the project folder changed while {who} worked: {files}; ask the user to record, restore or ignore it"
+        )
+    };
+    let text = Some(compose(true))
+        .filter(|text| format!("fold: {text}. Call {tool}.").len() <= MAX_NOTICE_LEN)
+        .unwrap_or_else(|| compose(false));
+    let main: Vec<AgentName> = ctx.main_agents.iter().cloned().collect();
+    Some(vec![(main, text, tool)])
 }
 
 /// `T-4 (ws-7)`, one task per workspace in the order the daemon wrote them, or a count when `spelled` is false or the list is long; `None` when no open workspace is touched.
@@ -2615,6 +2672,30 @@ mod tests {
     }
 
     #[test]
+    fn a_change_a_worker_made_in_the_project_folder_reaches_the_main_agent() {
+        let changed = with_data(
+            event(types::FOLDER_AGENT_CHANGED, "fold"),
+            json!({"agents": ["reviewer-35"], "paths": ["plan.md", "x"], "path_count": 2}),
+        );
+        assert!(is_pushed(&changed));
+        assert_eq!(
+            sent(&notice_for(&changed, &main_ctx())),
+            vec![row(
+                "main",
+                "fold: the project folder changed while reviewer-35 worked: plan.md, x; ask the user to record, restore or ignore it. Call settle_agent_changes.",
+                "settle_agent_changes"
+            )]
+        );
+        let many = with_data(
+            event(types::FOLDER_AGENT_CHANGED, "fold"),
+            json!({"agents": ["reviewer-35"], "paths": ["plan.md"], "path_count": 27}),
+        );
+        let text = &notice_for(&many, &main_ctx())[0].text;
+        assert!(text.contains("reviewer-35 worked: 27 files;"), "{text}");
+        assert!(notice_for(&changed, &PushContext::default()).is_empty());
+    }
+
+    #[test]
     fn a_withdrawn_human_change_tells_the_main_agent_to_drop_its_merge() {
         let mut event = human_change(
             types::HUMAN_CHANGE_WITHDRAWN,
@@ -2640,6 +2721,16 @@ mod tests {
             vec![row(
                 "main",
                 "fold: human:ana took back the waiting change; nothing is left to merge; tell the user. Call get_repository_state.",
+                "get_repository_state"
+            )]
+        );
+        event.data["workspace"] = json!("ws-9");
+        event.data["workspace_abandoned"] = json!(true);
+        assert_eq!(
+            sent(&notice_for(&event, &main_ctx())),
+            vec![row(
+                "main",
+                "fold: human:ana took back the waiting change; nothing is left to merge; fold abandoned ws-9, which held its merge; tell the user. Call get_repository_state.",
                 "get_repository_state"
             )]
         );

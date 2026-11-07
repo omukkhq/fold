@@ -19,13 +19,15 @@ use crate::services::agents::{AgentService, Launcher, SeenPresence, Supervisor, 
 use crate::services::events::EventBus;
 use crate::services::messages::MessageService;
 use crate::services::projects::{
-    FoldSkills, GitAttention, ProjectError, RemoteContext, keep_fold_skills_out, load_config,
+    FoldSkills, GitAttention, ProjectError, RemoteContext, ToolWindows, keep_fold_skills_out,
+    load_config,
 };
 use crate::services::reviews::ReviewService;
 use crate::services::reviews::checks::{CheckPermits, CheckRunner, recover_check_runs};
 use crate::services::tasks::TaskService;
 use crate::services::workspaces::{
     BatchMergeCache, CarryCache, WorkspaceLocks, WorkspaceService, follow_closed_workspaces,
+    follow_stall_turns,
 };
 use crate::support::unpoisoned;
 
@@ -56,6 +58,8 @@ pub struct ProjectHandle {
     pub(crate) shared: Arc<std::sync::OnceLock<std::sync::Weak<ProjectHandle>>>,
     /// What the folder's last follow and the commit writer last found that needs a person: changes in the project folder that no revision records, or a branch or `HEAD` that shows a change fold did not make.
     pub git_attention: Arc<GitAttention>,
+    /// The tool calls of the project's supervised workers that can write files, which place a change of the project folder in a worker's call.
+    pub tool_windows: Arc<ToolWindows>,
     /// One restore, sync or record per workspace at a time, across every session of the project.
     pub workspace_locks: Arc<WorkspaceLocks>,
     /// What the file system under `.fold/` supports, probed by the first workspace command of any session or the first live attach.
@@ -79,6 +83,8 @@ pub struct ProjectHandle {
     workspace_cleanup: ProjectTask,
     /// Wakes `workspace_cleanup` for every closed workspace that is due, not only those its events name.
     cleanup_due: Arc<tokio::sync::Notify>,
+    /// Decides the stalled flags again after each commit that makes a worker wait for someone or gives it the turn.
+    stall_turns: ProjectTask,
     /// The device and inode of the database file this handle opened. SQLite keeps reading a file that was deleted, so only this tells the handle's database from a new one at the same path.
     database_file: Option<(u64, u64)>,
 }
@@ -187,6 +193,7 @@ impl ProjectHandle {
         let folder_lock = Arc::new(tokio::sync::Mutex::new(()));
         let shared: Arc<std::sync::OnceLock<std::sync::Weak<ProjectHandle>>> = Arc::default();
         let git_attention = Arc::new(GitAttention::default());
+        let tool_windows = workers.tool_windows();
         let auto_commit = jobs::auto_commit(
             RemoteContext {
                 slug: row.slug.clone(),
@@ -199,6 +206,7 @@ impl ProjectHandle {
                 objects: objects.clone(),
                 git_attention: git_attention.clone(),
                 handle: shared.clone(),
+                tool_windows: tool_windows.clone(),
             },
             Git::default(),
         );
@@ -215,6 +223,11 @@ impl ProjectHandle {
         .with_locks(objects.clone(), workspace_locks.clone())
         .with_capabilities(capabilities.clone())
         .with_live(live.clone());
+        let stall_turns = ProjectTask::spawn(follow_stall_turns(
+            cleanup.clone(),
+            bus.clone(),
+            bus.subscribe(),
+        ));
         let workspace_cleanup = ProjectTask::spawn(follow_closed_workspaces(
             cleanup,
             bus.clone(),
@@ -237,6 +250,7 @@ impl ProjectHandle {
             folder_lock,
             shared,
             git_attention,
+            tool_windows,
             workspace_locks,
             capabilities,
             live,
@@ -249,6 +263,7 @@ impl ProjectHandle {
             auto_commit,
             workspace_cleanup,
             cleanup_due,
+            stall_turns,
             database_file,
         })
     }
@@ -293,11 +308,12 @@ impl ProjectHandle {
         }
     }
 
-    /// Waits up to `timeout` for the commit writer, the push delivery and the removal of closed workspace directories to end after [`EventBus::close`], then aborts them, so none outlives the project's database.
+    /// Waits up to `timeout` for the commit writer, the push delivery, the removal of closed workspace directories and the stall decisions to end after [`EventBus::close`], then aborts them, so none outlives the project's database.
     pub async fn stop_tasks(&self, timeout: Duration) {
         self.auto_commit.stopped(timeout).await;
         self.push_task.stopped(timeout).await;
         self.workspace_cleanup.stopped(timeout).await;
+        self.stall_turns.stopped(timeout).await;
     }
 
     /// Asks the project's cleanup task to remove every closed workspace directory that is due, such as those a stopped daemon left. It returns at once; the removal runs in the background.

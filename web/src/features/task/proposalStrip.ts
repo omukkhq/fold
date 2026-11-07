@@ -36,7 +36,7 @@ export function proposalStrip(
   } else if (proposal.state === "approved") {
     wait = "is approved";
   } else if (proposal.review_claim !== null) {
-    wait = `is with ${reviewerText(proposal.review_claim)}`;
+    wait = `is being reviewed by ${reviewerText(proposal.review_claim)}`;
   }
   const parts = [
     proposal.title === "" ? null : proposal.title,

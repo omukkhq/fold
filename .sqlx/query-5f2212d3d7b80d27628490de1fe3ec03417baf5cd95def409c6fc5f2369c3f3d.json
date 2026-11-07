@@ -1,0 +1,40 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.worker_id AS \"worker!: i64\",\n                  MAX(c.state = 'running') AS \"running!: bool\",\n                  MAX(c.finished_at) AS \"ended_at?: i64\"\n           FROM check_runs c\n           WHERE c.stage = 'proposal' AND c.worker_id IS NOT NULL\n             AND c.worker_id IN (SELECT k.worker_id FROM claims k WHERE k.released_at IS NULL)\n           GROUP BY c.worker_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "worker!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "check_runs",
+            "name": "worker_id"
+          }
+        }
+      },
+      {
+        "name": "running!: bool",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "ended_at?: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "5f2212d3d7b80d27628490de1fe3ec03417baf5cd95def409c6fc5f2369c3f3d"
+}

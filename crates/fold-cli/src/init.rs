@@ -5,11 +5,11 @@ use std::time::Duration;
 use clap::Args;
 use fold_cli::claude_files::{self, ClaudeFileError};
 use fold_cli::daemon_client::{ClientConfig, ClientError, DaemonClient, Response};
-use fold_core::{FoldError, HostPaths, HumanName, ProjectPaths, codes};
+use fold_core::{FoldError, HostPaths, HumanName, ProjectPaths, RevisionId, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::services::projects::{
-    FolderFiles, ProjectError, RepositorySetup, deleted_project_slug, init_new_project,
-    init_project_from_git, root_for_dir_on_host,
+    FolderFiles, ProjectError, RepositorySetup, WrittenFiles, deleted_project_slug,
+    init_new_project, init_project_from_git_with, root_for_dir_on_host,
 };
 use fold_vcs::git::Git;
 use fold_vcs::git_discovery::Discovery;
@@ -34,7 +34,7 @@ pub struct InitArgs {
     /// The project name; defaults to the directory name
     #[arg(long)]
     pub(crate) name: Option<String>,
-    /// Turn Git on: fold writes a commit of every revision into the folder's .git and keeps its branch on main. In a Git repository the commit at HEAD becomes the genesis r0, which needs a clean tree with a branch checked out; in a fold project, and in a new folder, fold creates .git. Git sync stays on
+    /// Turn Git on: fold writes a commit of every revision into the folder's .git and keeps its branch on main. In a Git repository the commit at HEAD becomes the genesis r0, which needs a clean tree with a branch checked out, and fold's section in the instructions file becomes r1 with its own commit on the branch, unless Git does not track that file; in a fold project, and in a new folder, fold creates .git. Git sync stays on
     #[arg(long)]
     pub(crate) with_git: bool,
     /// Unix socket of the running daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
@@ -220,10 +220,19 @@ pub(crate) fn initialise(
         )
     });
     let project = runtime.block_on(async {
-        if kind == Kind::FromGit {
-            return init_project_from_git(&host, dir, name, &human, git(), &SystemClock).await;
-        }
         let files: FolderFiles = Box::new(|root: &Path| new_claude_files(root));
+        if kind == Kind::FromGit {
+            return init_project_from_git_with(
+                &host,
+                dir,
+                name,
+                &human,
+                git(),
+                Some(files),
+                &SystemClock,
+            )
+            .await;
+        }
         let setup = identity.map(|identity| -> RepositorySetup {
             Box::new(move |root: &Path| {
                 git_identity::store_in(&git(), root, &identity, &mut io::stderr());
@@ -290,7 +299,23 @@ pub(crate) fn initialise(
         )?;
     }
     if let Some(commit) = &project.git_commit {
-        output::line(out, &format!("{} is Git commit {commit}", project.revision))?;
+        output::line(
+            out,
+            &format!("{} is Git commit {commit}", RevisionId::GENESIS),
+        )?;
+    }
+    if let Some(files) = &project.files_revision {
+        output::line(
+            out,
+            &format!(
+                "{} records the Claude Code files that init changed: {}",
+                files.revision,
+                files.files.join(", ")
+            ),
+        )?;
+    }
+    if !project.unrecorded.is_empty() {
+        output::line(out, &unrecorded_line(&project.unrecorded))?;
     }
     if let Some(revision) = &project.gitignore {
         output::line(
@@ -323,6 +348,19 @@ pub(crate) fn initialise(
         output::line(out, &note)?;
     }
     Ok(project.slug)
+}
+
+/// The line for the files init changed in a Git repository that Git does not track, which init leaves to the person to record.
+fn unrecorded_line(files: &[String]) -> String {
+    let (verb, pronoun) = if files.len() == 1 {
+        ("is", "it")
+    } else {
+        ("are", "them")
+    };
+    format!(
+        "init changed {}, which {verb} not recorded because Git does not track {pronoun}; run `fld record` to record {pronoun} on main",
+        files.join(", ")
+    )
 }
 
 /// What init prints while the project has no Git remote.
@@ -454,10 +492,11 @@ fn refresh(dir: Option<&Path>, dirs: &Dirs, out: &mut impl Write) -> Result<(), 
     Ok(())
 }
 
-/// Writes the Claude Code files into a new project's folder before init records it, so the instructions file is part of `r1` while `.fold/exclude` leaves the skills out, and returns the files and folders that did not exist before.
-fn new_claude_files(root: &Path) -> Result<Vec<PathBuf>, FoldError> {
+/// Writes the Claude Code files into a new project's folder before init records it, so the instructions file is part of the revision init records while `.fold/exclude` leaves the skills out, and returns the files and folders that did not exist before, the root files that changed, by the paths their symbolic links lead to, and the instructions file with the subject of its change. A write that fails part-way writes those root files back and removes what it created before it returns the error, since init only learns what a write that succeeds made.
+fn new_claude_files(root: &Path) -> Result<WrittenFiles, FoldError> {
+    let name = claude_files::instructions_file(root);
     // A folder comes before the files below it, so only the topmost new path is recorded.
-    let written = [claude_files::instructions_file(root)]
+    let written = [name]
         .into_iter()
         .chain(claude_files::FOLDERS)
         .chain(claude_files::SKILL_FILES);
@@ -469,14 +508,93 @@ fn new_claude_files(root: &Path) -> Result<Vec<PathBuf>, FoldError> {
             created.push(path);
         }
     }
+    let before = root_files(root);
+    let changed = |before: Vec<(PathBuf, Vec<u8>)>| -> Vec<(PathBuf, Vec<u8>)> {
+        before
+            .into_iter()
+            .filter(|(path, old)| std::fs::read(path).ok().as_ref() != Some(old))
+            .collect()
+    };
     match claude_files::write(root) {
-        Ok(()) => Ok(created),
-        Err(ClaudeFileError::Malformed(error) | ClaudeFileError::Link(error)) => Err(error),
-        Err(ClaudeFileError::Io { source, .. }) => Err(FoldError::new(
-            codes::WORKSPACE_IO,
-            format!("cannot write the Claude Code files: {}", source.kind()),
-        )),
+        Ok(()) => {
+            let instructions = instructions_subject(root, name, &before);
+            Ok(WrittenFiles {
+                created,
+                changed: changed(before),
+                instructions,
+            })
+        }
+        Err(error) => {
+            undo_claude_files(&changed(before), &created);
+            Err(match error {
+                ClaudeFileError::Malformed(error) | ClaudeFileError::Link(error) => error,
+                ClaudeFileError::Io { source, .. } => FoldError::new(
+                    codes::WORKSPACE_IO,
+                    format!("cannot write the Claude Code files: {}", source.kind()),
+                ),
+            })
+        }
     }
+}
+
+/// The instructions file `name` of `root`, by the path its links lead to, with the subject of a revision that records fold's section there: it adds the section, or updates the one that `before` shows the file held.
+fn instructions_subject(
+    root: &Path,
+    name: &str,
+    before: &[(PathBuf, Vec<u8>)],
+) -> Option<(PathBuf, String)> {
+    let project = std::fs::canonicalize(root).ok()?;
+    let end = std::fs::canonicalize(project.join(name)).ok()?;
+    let shown = end.strip_prefix(&project).ok()?.display().to_string();
+    let held = before.iter().any(|(path, old)| {
+        *path == end && String::from_utf8_lossy(old).contains(claude_files::AGENTS_BEGIN)
+    });
+    let subject = if held {
+        format!("Update fold's section in {shown}")
+    } else {
+        format!("Add fold's section to {shown}")
+    };
+    Some((end, subject))
+}
+
+/// Writes back the root files a failed write changed and removes the files and folders it created; a symbolic link is removed, never followed.
+fn undo_claude_files(changed: &[(PathBuf, Vec<u8>)], created: &[PathBuf]) {
+    // The write's own error is what init reports; a file that cannot be written back stays as the write left it.
+    for (path, old) in changed {
+        let _ = fold_vcs::atomic::write_atomic(path, old);
+    }
+    for path in created {
+        let _ = match std::fs::symlink_metadata(path) {
+            Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path),
+            _ => std::fs::remove_file(path),
+        };
+    }
+}
+
+/// The bytes of each existing root file that [`claude_files::write`] may change, by the path in the project that its symbolic links lead to.
+fn root_files(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let Ok(project) = std::fs::canonicalize(root) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    let names = [
+        claude_files::AGENTS_FILE,
+        claude_files::CLAUDE_FILE,
+        claude_files::MCP_FILE,
+        claude_files::SETTINGS_FILE,
+    ];
+    for name in names {
+        let Ok(end) = std::fs::canonicalize(project.join(name)) else {
+            continue;
+        };
+        if !end.starts_with(&project) || found.iter().any(|(path, _)| *path == end) {
+            continue;
+        }
+        if let Ok(bytes) = std::fs::read(&end) {
+            found.push((end, bytes));
+        }
+    }
+    found
 }
 
 /// The warnings never stop the command: the files are written first.
@@ -778,5 +896,79 @@ mod tests {
         let stale = dir.path().join("stale.sock");
         drop(std::os::unix::net::UnixListener::bind(&stale).unwrap());
         assert_eq!(register(&client(stale), "s").await, Registration::NoDaemon);
+    }
+
+    #[test]
+    fn new_claude_files_name_the_file_that_links_lead_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        std::fs::write(root.join("docs/rules.md"), "# Ours\n").unwrap();
+        std::os::unix::fs::symlink("docs/rules.md", root.join("AGENTS.md")).unwrap();
+        std::os::unix::fs::symlink("AGENTS.md", root.join("CLAUDE.md")).unwrap();
+        let written = new_claude_files(&root).unwrap();
+        let rules = root.join("docs/rules.md");
+        assert_eq!(written.changed, [(rules.clone(), b"# Ours\n".to_vec())]);
+        assert_eq!(
+            written.instructions,
+            Some((rules, "Add fold's section to docs/rules.md".to_owned()))
+        );
+        assert_eq!(written.created, [root.join(".claude")]);
+    }
+
+    #[test]
+    fn new_claude_files_update_a_section_the_file_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let old = format!(
+            "# Ours\n{}\nold\n{}\n",
+            claude_files::AGENTS_BEGIN,
+            claude_files::AGENTS_END
+        );
+        std::fs::write(root.join("AGENTS.md"), &old).unwrap();
+        let written = new_claude_files(&root).unwrap();
+        assert_eq!(
+            written.instructions.unwrap().1,
+            "Update fold's section in AGENTS.md"
+        );
+        assert_eq!(
+            written.changed,
+            [(root.join("AGENTS.md"), old.into_bytes())]
+        );
+    }
+
+    #[test]
+    fn new_claude_files_that_fail_part_way_write_back_and_remove_what_they_wrote() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("AGENTS.md"), "# Ours\n").unwrap();
+        // A skill folder that refuses new files stops the write after the instructions file and the first skills.
+        let refused = root.join(claude_files::REVIEWER_SKILL_FILE);
+        let refused = refused.parent().unwrap();
+        std::fs::create_dir_all(refused).unwrap();
+        std::fs::set_permissions(refused, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let error = new_claude_files(&root).unwrap_err();
+        std::fs::set_permissions(refused, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(error.code(), codes::WORKSPACE_IO);
+        assert_eq!(
+            std::fs::read_to_string(root.join("AGENTS.md")).unwrap(),
+            "# Ours\n"
+        );
+        assert!(!root.join(claude_files::SKILL_FILE).exists());
+        assert!(!root.join(claude_files::MAIN_SKILL_FILE).exists());
+        assert!(refused.is_dir(), "a folder that was there stays");
+    }
+
+    #[test]
+    fn the_unrecorded_line_names_each_file_and_the_next_step() {
+        assert_eq!(
+            unrecorded_line(&["AGENTS.md".to_owned()]),
+            "init changed AGENTS.md, which is not recorded because Git does not track it; run `fld record` to record it on main"
+        );
+        assert_eq!(
+            unrecorded_line(&["AGENTS.md".to_owned(), ".mcp.json".to_owned()]),
+            "init changed AGENTS.md, .mcp.json, which are not recorded because Git does not track them; run `fld record` to record them on main"
+        );
     }
 }

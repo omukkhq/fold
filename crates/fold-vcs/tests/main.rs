@@ -23,6 +23,7 @@ mod platform;
 mod restore;
 mod revision_store;
 mod scan;
+mod shared;
 mod snapshot;
 mod sync;
 mod watch;

@@ -16,6 +16,7 @@ mod seed;
 mod serve;
 mod service;
 mod shell_env;
+mod shell_targets;
 mod status;
 mod token;
 
@@ -76,10 +77,18 @@ enum Command {
     Record(commands::record::RecordArgs),
     /// Stop tracking files of the project folder, as git rm --cached does: one revision of yours removes them from main from now on and leaves them on disk. Older revisions keep them, so a leaked secret still needs to be changed. Add them to .foldignore, or fld record records them again. fold's own lines in .fold/exclude leave out its skills and .claude/settings.local.json; a ! line in .foldignore, such as !/.claude/skills/fold/, keeps one of them tracked
     Untrack(commands::untrack::UntrackArgs),
-    /// Put your changes in the project folder aside, so the folder follows main; fld stash list shows the stash, newest first
+    /// Share ignored files or folders, such as design files, with every workspace through read-only links; fld share --list lists them with the ignored paths workers cannot see. Many ignored files are secrets, so fold shares only the paths you name
+    Share(commands::share::ShareArgs),
+    /// Stop sharing paths with the workspaces; each workspace drops its link at its next sync
+    Unshare(commands::share::UnshareArgs),
+    /// Put your changes in the project folder aside, so the folder follows main; fld stash list shows the stash, newest first, and fld stash drop and fld stash clear drop entries for good
     Stash(commands::stash::StashArgs),
     /// Merge the newest stash entry into the project folder as it is now; a conflict writes conflict markers and keeps the entry until fld record
     Unstash(commands::stash::UnstashArgs),
+    /// Put the project folder back to main: fold stashes your unrecorded changes as stash@{0} first and drops your change that waits for the main agent, with its merge workspace. Asks first
+    Reset(commands::reset::ResetArgs),
+    /// Put the named files or folders back to main's files, after the same safety stash. Asks first
+    Restore(commands::reset::RestoreArgs),
     /// Show the project folder against main: the files fld record would record, what keeps the folder from following main with the next step, and the stash; it changes nothing
     Status(commands::folder_status::StatusArgs),
     /// Print this process's environment for the daemon, which runs it through the user's login shell at its start
@@ -180,11 +189,26 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::Untrack(args)) => {
             commands::untrack::run_untrack(&args, out).map_err(Failure::Remote)
         }
+        Some(Command::Share(args)) => {
+            commands::share::run_share(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Unshare(args)) => {
+            commands::share::run_unshare(&args, out).map_err(Failure::Remote)
+        }
         Some(Command::Stash(args)) => {
-            commands::stash::run_stash(&args, out).map_err(Failure::Remote)
+            commands::stash::run_stash(&args, &mut std::io::BufReader::new(std::io::stdin()), out)
+                .map_err(Failure::Remote)
         }
         Some(Command::Unstash(args)) => {
             commands::stash::run_unstash(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Reset(args)) => {
+            commands::reset::run_reset(&args, &mut std::io::BufReader::new(std::io::stdin()), out)
+                .map_err(Failure::Remote)
+        }
+        Some(Command::Restore(args)) => {
+            commands::reset::run_restore(&args, &mut std::io::BufReader::new(std::io::stdin()), out)
+                .map_err(Failure::Remote)
         }
         Some(Command::Status(args)) => {
             commands::folder_status::run_status(&args, out).map_err(Failure::Remote)
@@ -331,7 +355,7 @@ mod tests {
             panic!("expected a parse failure, got {result:?}");
         };
         assert_eq!(error.kind(), ErrorKind::DisplayVersion);
-        assert_eq!(error.to_string().trim(), "fld 0.7.0");
+        assert_eq!(error.to_string().trim(), "fld 0.8.0");
         assert!(out.is_empty());
     }
 

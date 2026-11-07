@@ -822,10 +822,13 @@ impl Drop for ProjectTask {
 /// The Git job of one project. A push already started finishes in its own task.
 pub type AutoCommit = ProjectTask;
 
+/// The shortest time between two follows of the project folder that the end of a confined worker's tool calls starts: a busy project's calls end several times a second, and one follow reads every change they made.
+pub const CALL_FOLLOW_GAP: Duration = Duration::from_secs(3);
+
 /// How often the Git job looks at the files of the project's Git branch and `HEAD` while Git sync is on.
 pub const GIT_WATCH_TICK: Duration = Duration::from_secs(1);
 
-/// Starts `auto_commit` for one project. It brings the project folder to main through fold's own checkout and, while Git sync is on, writes the commit of every revision that has none into the project's repository and moves the branch and the index to the revision the folder holds: once at the start, which catches up an integration a stopped daemon never followed, again after every committed integration of any kind, which the bus carries only after its commit, and whenever the files of the `[git]` branch, `HEAD` or the stash change, or one of the paths that hold the project folder back, with or without Git sync, which it reads every [`GIT_WATCH_TICK`] from their metadata without running `git`. After an integration it then runs the push of `fld push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A run covers every revision so far, so the integrations that arrive while one runs need one more run at most. Each commit recorded in `revision_commits` gets its `git.committed` event in the same transaction, published once the run returns, so the web interface shows the commit without a reload. A failed commit appends `git.commit_failed`, and a failed push appends `remote.push_failed` with the remote's failure in `remote_states`, each in its own transaction, and logs the project and the code only; the integration stands either way.
+/// Starts `auto_commit` for one project. It brings the project folder to main through fold's own checkout and, while Git sync is on, writes the commit of every revision that has none into the project's repository and moves the branch and the index to the revision the folder holds: once at the start, which catches up an integration a stopped daemon never followed, again after every committed integration of any kind, which the bus carries only after its commit, and whenever the files of the `[git]` branch, `HEAD` or the stash change, or one of the paths that hold the project folder back, with or without Git sync, which it reads every [`GIT_WATCH_TICK`] from their metadata without running `git`, and at the tick after a confined worker's tool call that can write files ended, at most once per [`CALL_FOLLOW_GAP`], so a change the call made in the project folder is placed in it. After an integration it then runs the push of `fld push` as `fold` to each remote whose `push_on_integrate` is true, read at that moment. A run covers every revision so far, so the integrations that arrive while one runs need one more run at most. Each commit recorded in `revision_commits` gets its `git.committed` event in the same transaction, published once the run returns, so the web interface shows the commit without a reload. A failed commit appends `git.commit_failed`, and a failed push appends `remote.push_failed` with the remote's failure in `remote_states`, each in its own transaction, and logs the project and the code only; the integration stands either way.
 pub fn auto_commit(context: RemoteContext, git: Git) -> AutoCommit {
     let receiver = context.bus.subscribe();
     ProjectTask::spawn(run_auto_commit(context, git, receiver))
@@ -839,6 +842,9 @@ async fn run_auto_commit(
 ) {
     let mut closing = context.bus.closing();
     let mut watch = FolderWatch::default();
+    // The shared files are noted at the start and read again at each tick, so a person's edit only moves what fold noted and a worker's write during its tool call is found within a tick.
+    let mut shared = crate::services::projects::SharedWatch::default();
+    shared.look(&context).await;
     // The files are noted before each run, so a change made while it runs starts the next one; a run that moved the branch itself costs one more run.
     watch.stamp(&context).await;
     // The handle becomes known once the opener shares it, which can be after this first run; until then a run cannot record the human's Git commits, such as those made while the daemon was down, so the first tick that finds the handle runs again.
@@ -846,6 +852,9 @@ async fn run_auto_commit(
     commit_after_integration(&context, &git).await;
     let mut ticks = tokio::time::interval(GIT_WATCH_TICK);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Tool calls that ended since the last follow they started, and when that follow ran.
+    let mut calls_ended = false;
+    let mut calls_followed: Option<tokio::time::Instant> = None;
     loop {
         let received = tokio::select! {
             biased;
@@ -856,7 +865,16 @@ async fn run_auto_commit(
         let Some(received) = received else {
             let shared_since = without_handle && context.handle.get().is_some();
             without_handle &= !shared_since;
-            if shared_since || watch.changed(&context).await {
+            // A worker's tool call that ended may have changed the project folder, which only a follow reads; the calls that end within [`CALL_FOLLOW_GAP`] share one follow.
+            calls_ended |= context.tool_windows.take_ended();
+            let calls_due =
+                calls_ended && calls_followed.is_none_or(|at| at.elapsed() >= CALL_FOLLOW_GAP);
+            shared.look(&context).await;
+            if shared_since || watch.changed(&context).await || calls_due {
+                if calls_ended {
+                    calls_ended = false;
+                    calls_followed = Some(tokio::time::Instant::now());
+                }
                 commit_after_integration(&context, &git).await;
             }
             continue;

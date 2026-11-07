@@ -152,16 +152,18 @@ export function reviewerText(claim: string): string {
   return `@${claim}`;
 }
 
-/** `waiting for review · v2`, with ` · with @review-lead` while a reviewer holds the review claim. */
+/** `waiting for review · v2`; `being reviewed · v2 · by @review-2` while a reviewer holds the review claim of an open proposal, and ` · with @review-2` after any other state. */
 export function proposalStateText(
   state: CardProposalState,
   version: number,
   reviewClaim: string | null = null,
 ) {
-  const text = `${PROPOSAL_STATES[state]} · v${String(version)}`;
-  return reviewClaim === null
-    ? text
-    : `${text} · with ${reviewerText(reviewClaim)}`;
+  if (reviewClaim === null) {
+    return `${PROPOSAL_STATES[state]} · v${String(version)}`;
+  }
+  return state === "open"
+    ? `being reviewed · v${String(version)} · by ${reviewerText(reviewClaim)}`
+    : `${PROPOSAL_STATES[state]} · v${String(version)} · with ${reviewerText(reviewClaim)}`;
 }
 
 export function integrationText(integration: TaskIntegration): Segment[] {

@@ -52,7 +52,7 @@ pub fn run_untrack(args: &UntrackArgs, out: &mut impl Write) -> Result<(), Remot
 }
 
 /// `path`, given relative to `cwd` or absolute, as a path relative to the project folder `root`, with `.` and `..` resolved by name and no file read, so a deleted file can be named.
-fn project_path(root: &Path, cwd: &Path, path: &Path) -> Result<String, FoldError> {
+pub(super) fn project_path(root: &Path, cwd: &Path, path: &Path) -> Result<String, FoldError> {
     let mut full = PathBuf::new();
     for component in cwd.join(path).components() {
         match component {

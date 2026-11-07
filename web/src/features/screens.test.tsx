@@ -42,6 +42,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  sharedReply = NOTHING_SHARED;
 });
 
 function renderAt(path: string) {
@@ -396,6 +397,11 @@ const FILES: Record<string, Record<string, unknown>> = {
   },
 };
 
+const NOTHING_SHARED: StubReply = {
+  body: { shared: [], unseen: [], unseen_count: 0 },
+};
+let sharedReply: StubReply = NOTHING_SHARED;
+
 function stubRepository(
   revisions = REVISIONS,
   requests: RequestSummary[] = [],
@@ -433,6 +439,7 @@ function stubRepository(
     "GET /api/v1/projects/demo/revisions": {
       body: { revisions, before: null },
     },
+    "GET /api/v1/projects/demo/shared": () => sharedReply,
     "GET /api/v1/projects/demo/repository": {
       body: {
         head: revisions[0]?.id ?? null,
@@ -977,6 +984,54 @@ describe("Repository screen", () => {
       "true",
     );
     expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("names the shared paths and the ignored paths workers cannot see in the path face, wrapping long ones", async () => {
+    sharedReply = {
+      body: {
+        shared: ["design/a-very-long-folder-name-without-any-break/"],
+        unseen: [".env", "notes/"],
+        unseen_count: 3,
+      },
+    };
+    renderRepository();
+    const path = await screen.findByText(
+      "design/a-very-long-folder-name-without-any-break/",
+    );
+    expect(path.className).toContain("font-mono");
+    const shared = path.closest("p");
+    expect(shared?.textContent).toBe(
+      "Shared read-only with workers: design/a-very-long-folder-name-without-any-break/.",
+    );
+    expect(shared?.parentElement?.className).toContain("wrap-anywhere");
+    expect(shared?.parentElement?.className).toContain("min-w-0");
+    const unseen = screen.getByText("notes/");
+    expect(unseen.className).toContain("font-mono");
+    expect(unseen.closest("p")?.textContent).toContain(
+      "Workers cannot see 3 ignored paths: .env, notes/ and 1 more. Run fld share <path>",
+    );
+  });
+
+  it("says by its code why the shared paths could not load and reads them again on Retry", async () => {
+    sharedReply = errorReply(500, "workspace_io");
+    renderRepository();
+    const banner = await screen.findByText("The shared paths could not load.");
+    const alert = banner.closest<HTMLElement>("[role=alert]");
+    if (alert === null) throw new Error("the banner is no alert");
+    expect(alert.textContent).toContain(
+      "fold could not read .fold/shared or the ignored files of the project folder.",
+    );
+    expect(within(alert).getByText(".fold/shared").className).toContain(
+      "font-mono",
+    );
+    sharedReply = {
+      body: { shared: ["design/"], unseen: [], unseen_count: 0 },
+    };
+    await userEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    expect((await screen.findByText("design/")).closest("p")?.textContent).toBe(
+      "Shared read-only with workers: design/.",
+    );
+    expect(screen.queryByText("The shared paths could not load.")).toBeNull();
   });
 
   it("has nothing to compare with only r1", async () => {

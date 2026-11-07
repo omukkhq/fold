@@ -80,12 +80,22 @@ export const keys = {
   messagesThread: (slug: string, thread: string) =>
     [slug, "messages", "thread", thread] as const,
   repository: (slug: string) => [slug, "repository"] as const,
+  /** Under the repository prefix, so a write that refreshes the repository also refreshes the shared paths. */
+  shared: (slug: string) => [slug, "repository", "shared"] as const,
+  /** Under the shared prefix, so every event of shared files refreshes the changed files' sizes and times. */
+  sharedChanges: (slug: string) =>
+    [slug, "repository", "shared", "changes"] as const,
+  /** Under the repository prefix, so every change of the folder or of main reads the folder's diff again. */
+  folderDiff: (slug: string) => [slug, "repository", "folder-diff"] as const,
+  folderFileDiff: (slug: string, path: string) =>
+    [slug, "repository", "folder-diff", path] as const,
   /** Outside the repository prefix: a revision never changes, so no integration refreshes its trees and files. */
   revisionTree: (slug: string, revision: string, dir: string) =>
     [slug, "revision-tree", revision, dir] as const,
   revisionFile: (slug: string, revision: string, path: string) =>
     [slug, "revision-file", revision, path] as const,
   git: (slug: string) => [slug, "git"] as const,
+  stash: (slug: string) => [slug, "stash"] as const,
   /** Every task read of the project, under one prefix. */
   tasks: (slug: string) => [slug, "task"] as const,
   workspaces: (slug: string) => [slug, "workspaces"] as const,

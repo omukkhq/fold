@@ -21,8 +21,8 @@ pub async fn gc_roots<'e>(db: impl SqliteExecutor<'e>) -> Result<Vec<ObjectHash>
            UNION SELECT base_tree_hash FROM human_changes
            UNION SELECT tree_hash FROM human_changes
            UNION SELECT tree_hash FROM checkout
-           UNION SELECT base_tree_hash FROM folder_stashes WHERE state IN ('stashed', 'conflicted')
-           UNION SELECT tree_hash FROM folder_stashes WHERE state IN ('stashed', 'conflicted')
+           UNION SELECT base_tree_hash FROM folder_stashes WHERE state IN ('stashed', 'conflicted') AND id NOT IN (SELECT stash_id FROM folder_stash_drops)
+           UNION SELECT tree_hash FROM folder_stashes WHERE state IN ('stashed', 'conflicted') AND id NOT IN (SELECT stash_id FROM folder_stash_drops)
            UNION SELECT folder_tree_hash FROM folder_unstashes WHERE state = 'open'
            UNION SELECT target_tree_hash FROM folder_unstashes WHERE state = 'open'"#
     )

@@ -950,6 +950,62 @@ pub async fn tasks_awaiting_human(
         .collect()
 }
 
+/// The time of the newest answer of a person about each task an unreleased implementation claim holds: a human's message linked to the task, a reply that answers an ask about the task, the main agent's answer for the user included, or the closure of such an ask. Tasks without one are left out. The stall rule starts its window again from it.
+pub async fn last_answers_by_task(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<BTreeMap<TaskId, Timestamp>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT t.number AS "task!: i64", MAX(x.at) AS "at!: i64"
+           FROM (
+               SELECT m.task_id, m.created_at AS at FROM messages m
+               WHERE m.sender_kind = 'human' AND m.task_id IS NOT NULL
+               UNION ALL
+               SELECT ask.task_id, reply.created_at FROM message_answers a
+               JOIN messages ask ON ask.id = a.ask_id
+               JOIN messages reply ON reply.id = a.reply_id
+               WHERE ask.task_id IS NOT NULL
+               UNION ALL
+               SELECT ask.task_id, x.created_at FROM message_ask_closures x
+               JOIN messages ask ON ask.id = x.message_id
+               WHERE ask.task_id IS NOT NULL
+           ) x
+           JOIN tasks t ON t.id = x.task_id
+           WHERE x.task_id IN (SELECT c.task_id FROM claims c
+                               WHERE c.kind = 'implementation' AND c.released_at IS NULL)
+           GROUP BY t.number"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| Ok((task_id(row.task)?, time(row.at, "messages.created_at")?)))
+        .collect()
+}
+
+/// The time of the newest human message to each worker that holds an unreleased implementation claim. Workers without one are left out.
+pub async fn last_human_messages_by_worker(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<HashMap<WorkerName, Timestamp>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT w.name AS "worker!", MAX(m.created_at) AS "at!: i64"
+           FROM messages m
+           JOIN message_recipients r ON r.message_id = m.id
+           JOIN workers w ON w.id = r.worker_id
+           WHERE m.sender_kind = 'human'
+             AND w.id IN (SELECT c.worker_id FROM claims c
+                          WHERE c.kind = 'implementation' AND c.released_at IS NULL)
+           GROUP BY w.id"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let worker =
+                WorkerName::parse(&row.worker).map_err(|_| StoreError::Corrupt("workers.name"))?;
+            Ok((worker, time(row.at, "messages.created_at")?))
+        })
+        .collect()
+}
+
 /// Why an ask stopped waiting without a human's reply in its thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AskClosure {

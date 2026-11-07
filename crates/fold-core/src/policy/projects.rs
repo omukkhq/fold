@@ -69,6 +69,32 @@ pub fn can_stash(actor: &Actor) -> Result<(), PolicyDenied> {
     }
 }
 
+/// A dropped stash entry is the human's own work that nothing brings back, so only a named human runs `fld stash drop` and `fld stash clear`; the main agent never gets the choice either, since it never put the work aside.
+pub fn can_drop_stash(actor: &Actor) -> Result<(), PolicyDenied> {
+    if actor.is_human() {
+        Ok(())
+    } else {
+        Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human drops entries of the stash",
+            hint: "ask a human to run `fld stash drop` or `fld stash clear` in the project folder",
+        })
+    }
+}
+
+/// A reset discards the human's unrecorded changes in the project folder, after a safety stash, and drops the human change that waits for the main agent with the merge workspace it made, so only a named human runs `fld reset` and `fld restore`. The main agent never gets it: the human decides to give up the change, and the main agent's own way out of a merge is to abandon its workspace.
+pub fn can_reset_folder(actor: &Actor) -> Result<(), PolicyDenied> {
+    if actor.is_human() {
+        Ok(())
+    } else {
+        Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human resets the project folder",
+            hint: "ask a human to run `fld reset` or `fld restore` in the project folder",
+        })
+    }
+}
+
 /// Turning Git on writes `.git` into the human's project folder, records the `.gitignore` as the human's own revision and stays on for good, so only a named human runs `fld init --with-git`.
 pub fn can_enable_git(actor: &Actor) -> Result<(), PolicyDenied> {
     if actor.is_human() {
@@ -107,6 +133,42 @@ pub fn can_add_exclude_patterns(starter: &Starter) -> Result<(), PolicyDenied> {
         _ => Err(PolicyDenied {
             code: codes::MAIN_AGENT_REQUIRED,
             message: "only the main agent adds patterns to .fold/exclude",
+            hint: "ask the main agent, which asks the user",
+        }),
+    }
+}
+
+/// A change a worker made in the project folder is the human's to judge: a named human lists it or treats it as their own, and so does the main agent, which talks with the human, when the human asks. No other agent settles it, so the worker that made a change never clears its own trace. Only a human restores it ([`can_restore_agent_changes`]).
+pub fn can_settle_agent_changes(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::Human | Starter::MainAgent => Ok(()),
+        _ => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "only a human or the main agent settles a change a worker made in the project folder",
+            hint: "ask the main agent, which asks the user",
+        }),
+    }
+}
+
+/// A restore of a worker's change takes files of the human's project folder back to main's version, so only a named human runs it, as only a human resets the folder; the stash entry it makes keeps the files.
+pub fn can_restore_agent_changes(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::Human => Ok(()),
+        _ => Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human restores a change a worker made in the project folder",
+            hint: "ask the user to run `fld restore <paths>` with the files the worker changed",
+        }),
+    }
+}
+
+/// `.fold/shared` lists the ignored files and folders every workspace links to, read-only. Only the human and the main agent, which talks with the human, change it: many ignored files are secrets such as `.env`, so no worker shares a file the human did not choose.
+pub fn can_share_paths(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::MainAgent | Starter::Human => Ok(()),
+        _ => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "only the main agent and a human change the shared paths",
             hint: "ask the main agent, which asks the user",
         }),
     }
@@ -193,6 +255,36 @@ mod tests {
     }
 
     #[test]
+    fn only_a_human_drops_stash_entries() {
+        assert!(can_drop_stash(&Actor::human(HumanName::parse("ana").unwrap())).is_ok());
+        let agent = Actor::Agent(AgentActor {
+            agent: AgentName::parse("main").unwrap(),
+            worker: WorkerName::parse("main").unwrap(),
+            tags: Vec::new(),
+        });
+        for actor in [agent, Actor::System] {
+            let denied = can_drop_stash(&actor).unwrap_err();
+            assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
+            assert!(denied.hint().contains("fld stash drop"));
+        }
+    }
+
+    #[test]
+    fn only_a_human_resets_the_project_folder() {
+        assert!(can_reset_folder(&Actor::human(HumanName::parse("ana").unwrap())).is_ok());
+        let agent = Actor::Agent(AgentActor {
+            agent: AgentName::parse("main").unwrap(),
+            worker: WorkerName::parse("main").unwrap(),
+            tags: vec![crate::agents::Tag::parse("main").unwrap()],
+        });
+        for actor in [agent, Actor::System] {
+            let denied = can_reset_folder(&actor).unwrap_err();
+            assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
+            assert!(denied.hint().contains("fld reset"));
+        }
+    }
+
+    #[test]
     fn only_a_human_turns_git_on() {
         assert!(can_enable_git(&Actor::human(HumanName::parse("ana").unwrap())).is_ok());
         let agent = Actor::Agent(AgentActor {
@@ -243,5 +335,56 @@ mod tests {
                 .hint()
                 .contains(".fold/exclude")
         );
+    }
+
+    #[test]
+    fn a_human_or_the_main_agent_settles_a_change_a_worker_made() {
+        use crate::agents::AreaName;
+        assert!(can_settle_agent_changes(&Starter::Human).is_ok());
+        assert!(can_settle_agent_changes(&Starter::MainAgent).is_ok());
+        for starter in [
+            Starter::Unsupervised,
+            Starter::AreaLead(AreaName::parse("web").unwrap()),
+            Starter::ReviewLead,
+            Starter::ShortLived,
+            Starter::System,
+        ] {
+            let denied = can_settle_agent_changes(&starter).unwrap_err();
+            assert_eq!(denied.code(), codes::MAIN_AGENT_REQUIRED, "{starter:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_human_restores_a_change_a_worker_made() {
+        use crate::agents::AreaName;
+        assert!(can_restore_agent_changes(&Starter::Human).is_ok());
+        for starter in [
+            Starter::MainAgent,
+            Starter::Unsupervised,
+            Starter::AreaLead(AreaName::parse("web").unwrap()),
+            Starter::ReviewLead,
+            Starter::ShortLived,
+            Starter::System,
+        ] {
+            let denied = can_restore_agent_changes(&starter).unwrap_err();
+            assert_eq!(denied.code(), codes::HUMAN_REQUIRED, "{starter:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_main_agent_and_a_human_share_paths() {
+        use crate::agents::AreaName;
+        assert!(can_share_paths(&Starter::MainAgent).is_ok());
+        assert!(can_share_paths(&Starter::Human).is_ok());
+        for starter in [
+            Starter::Unsupervised,
+            Starter::AreaLead(AreaName::parse("web").unwrap()),
+            Starter::ReviewLead,
+            Starter::ShortLived,
+            Starter::System,
+        ] {
+            let denied = can_share_paths(&starter).unwrap_err();
+            assert_eq!(denied.code(), codes::MAIN_AGENT_REQUIRED, "{starter:?}");
+        }
     }
 }

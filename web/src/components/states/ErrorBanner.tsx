@@ -1,10 +1,12 @@
 import { RefreshCw, TriangleAlert } from "lucide-react";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import { Button } from "../button/Button";
 
 interface ErrorBannerProps {
   title: string;
-  message: string;
+  /** Words, or words with a path or a command in its own face. */
+  message: ReactNode;
   /** Shows a Retry button when given. */
   onRetry?: () => void;
   className?: string;

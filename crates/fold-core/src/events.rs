@@ -168,6 +168,12 @@ define_event_types! {
     REVIEW_BATCH_WAIT_ENDED = "review.batch_wait_ended",
     REVIEW_BATCH_READY = "review.batch_ready",
     NOTIFY_TARGET_CHANGED = "notify.target_changed",
+    FOLDER_AGENT_CHANGED = "folder.agent_changed",
+    FOLDER_AGENT_CHANGE_CLEARED = "folder.agent_change_cleared",
+    SHARED_CHANGED = "shared.changed",
+    SHARED_CHANGES_DISMISSED = "shared.changes_dismissed",
+    SHARED_PATHS_CHANGED = "shared.paths_changed",
+    STASH_DISCARDED = "stash.discarded",
 }
 
 impl EventType {

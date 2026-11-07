@@ -129,7 +129,9 @@ pub fn run(args: &StubArgs) -> Result<(), StubError> {
 }
 
 async fn serve_stdio(options: Options) -> Result<(), StubError> {
-    let root = std::env::current_dir()?;
+    // A worker other than the main agent runs in its start folder below the project folder, and the script's paths are relative to the project folder.
+    let cwd = std::env::current_dir()?;
+    let root = crate::init::project_root_at_or_above(&cwd).unwrap_or(cwd);
     let agent = std::env::var(AGENT_ENV)
         .ok()
         .and_then(|name| AgentName::parse(&name).ok())

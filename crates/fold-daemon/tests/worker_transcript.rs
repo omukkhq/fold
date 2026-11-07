@@ -64,8 +64,12 @@ async fn a_worker_shows_its_session_and_the_transcript_path_in_its_claude_folder
     .await;
     let session = run.flag("--session-id").unwrap().to_owned();
     assert_eq!(started["session_id"], session.as_str());
-    let root = Path::new(harness.root()).canonicalize().unwrap();
-    let folder: String = root
+    // A worker runs in its start folder, after which Claude Code names the folder of its transcripts.
+    let start = Path::new(harness.root())
+        .canonicalize()
+        .unwrap()
+        .join(".fold/workers/ui-lead/start");
+    let folder: String = start
         .to_string_lossy()
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
