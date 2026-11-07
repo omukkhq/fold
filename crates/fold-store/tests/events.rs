@@ -451,7 +451,42 @@ fn reach(agent_id: i64) -> events::Reach<'static> {
         message_types: &[types::MESSAGE_SENT],
         own_types: &[types::MESSAGE_ACKNOWLEDGED],
         wake: None,
+        wake_types: &[],
     }
+}
+
+#[tokio::test]
+async fn read_reaching_selects_the_wake_types_past_the_filter() {
+    let project = TestProject::new().await;
+    let seqs = append_all(
+        &project,
+        vec![
+            by(types::REQUEST_CREATED, "human:ana"),
+            by(types::TASK_UPDATED, "be").task(task(1)),
+            by(types::REQUEST_RELEASED, "be"),
+            by(types::REQUEST_CLAIMED, "be"),
+            by(types::TASK_STATUS_CHANGED, "fold").task(task(1)),
+        ],
+    )
+    .await;
+    let filter = EventFilter {
+        types: vec![types::TASK_STATUS_CHANGED],
+        ..EventFilter::default()
+    };
+    let read = async |reach: events::Reach<'_>| -> Vec<u64> {
+        events::read_reaching(project.store().read(), 0, &filter, reach, 10)
+            .await
+            .unwrap()
+            .iter()
+            .map(|event| event.seq)
+            .collect()
+    };
+    assert_eq!(read(reach(1)).await, [seqs[4]]);
+    let woken = events::Reach {
+        wake_types: &[types::REQUEST_CREATED, types::REQUEST_RELEASED],
+        ..reach(1)
+    };
+    assert_eq!(read(woken).await, [seqs[0], seqs[2], seqs[4]]);
 }
 
 #[tokio::test]

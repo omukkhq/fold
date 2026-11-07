@@ -144,7 +144,7 @@ pub async fn read_since_cursor(
         query.proposal.as_deref(),
     )?;
     let limit = parse_limit(query.limit)?;
-    cursor_page(store, worker, &filter, limit, None).await
+    cursor_page(store, worker, &filter, limit, None, &[]).await
 }
 
 fn page(events: Vec<Event>, start: u64) -> EventPage {
@@ -152,13 +152,14 @@ fn page(events: Vec<Event>, start: u64) -> EventPage {
     EventPage { events, next }
 }
 
-/// Reads after the worker's stored cursor, keeps at most `limit` matching events and moves the cursor to the last one kept. With `recipients`, a sent message is kept only when a worker of the worker's agent receives it, and an acknowledgement only when a worker of the agent made it: acknowledging changes only the acknowledging worker's inbox. A `Some` wake inside it also keeps the sent messages its worker receives whatever the filter says. The page is one read-pool query; the single writer is taken only to move the cursor, and only while the cursor still stands where the read started, so two reads of one worker never return the same event. A read that lost that race reads again from where the other one left the cursor.
+/// Reads after the worker's stored cursor, keeps at most `limit` matching events and moves the cursor to the last one kept. With `recipients`, a sent message is kept only when a worker of the worker's agent receives it, and an acknowledgement only when a worker of the agent made it: acknowledging changes only the acknowledging worker's inbox. A `Some` wake inside it also keeps the sent messages its worker receives whatever the filter says, and with `recipients` the events of `wake_types` are kept whatever the filter says too. The page is one read-pool query; the single writer is taken only to move the cursor, and only while the cursor still stands where the read started, so two reads of one worker never return the same event. A read that lost that race reads again from where the other one left the cursor.
 pub(super) async fn cursor_page(
     store: &Store,
     worker: &WorkerRow,
     filter: &EventFilter,
     limit: usize,
     recipients: Option<Option<MessageWake>>,
+    wake_types: &[EventType],
 ) -> Result<EventPage, EventsError> {
     loop {
         let start = events::cursor(store.read(), worker.id).await?;
@@ -168,6 +169,7 @@ pub(super) async fn cursor_page(
                 message_types: &[types::MESSAGE_SENT],
                 own_types: &[types::MESSAGE_ACKNOWLEDGED],
                 wake,
+                wake_types,
             };
             events::read_reaching(store.read(), start, filter, reach, limit).await?
         } else {

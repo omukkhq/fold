@@ -169,6 +169,8 @@ pub struct Reach<'a> {
     pub own_types: &'a [EventType],
     /// The messages that end a wait whatever its filter says.
     pub wake: Option<MessageWake>,
+    /// Events of these types are selected whatever the filter says; the reader decides which of them concern it.
+    pub wake_types: &'a [EventType],
 }
 
 /// An event of `event_type` is selected past the filter when the worker row `worker_id` receives the message it names, on a row that no acknowledgement has reached and that nothing delivered before `since`, and only when that worker did not send it: a wait wakes for a new message, never for one the agent has seen or its own. A row delivered at or after `since` still wakes the wait that started then, because a notice that carried it waits in the session until the wait returns; times are milliseconds, so a notice in the wait's first millisecond counts too.
@@ -212,7 +214,7 @@ pub async fn waiting_messages(
         .collect()
 }
 
-/// [`read_after`] for one reader: the filter's events that reach the agent by the rules of [`Reach`], and the wake's message events whatever the filter says, so one query returns the page an agent's wait keeps.
+/// [`read_after`] for one reader: the filter's events that reach the agent by the rules of [`Reach`], and the wake's message events and the events of its wake types whatever the filter says, so one query returns the page an agent's wait keeps.
 pub async fn read_reaching(
     executor: impl SqliteExecutor<'_>,
     after: u64,
@@ -232,6 +234,7 @@ pub async fn read_reaching(
     let wake_type = reach.wake.map(|wake| wake.event_type.as_str());
     let wake_worker = reach.wake.map(|wake| wake.worker_id);
     let wake_since = reach.wake.map(|wake| wake.since.as_millis());
+    let wake_types = json_list(reach.wake_types.iter(), |t| t.as_str().into());
     let rows = sqlx::query_as!(
         EventRecord,
         r#"SELECT e.seq AS "seq!: i64", e.type AS event_type, e.actor, e.task_id, e.proposal_id,
@@ -249,7 +252,8 @@ pub async fn read_reaching(
                           WHERE m.number = e.message_id
                             AND (r.delivered_at IS NULL OR r.delivered_at >= ?11)
                             AND r.acked_at IS NULL
-                            AND r.worker_id = ?10)))
+                            AND r.worker_id = ?10))
+                  OR e.type IN (SELECT value FROM json_each(?12)))
              AND (e.type NOT IN (SELECT value FROM json_each(?6))
                   OR EXISTS (
                       SELECT 1 FROM messages m
@@ -273,7 +277,8 @@ pub async fn read_reaching(
         own_types,
         wake_type,
         wake_worker,
-        wake_since
+        wake_since,
+        wake_types
     )
     .fetch_all(executor)
     .await?;

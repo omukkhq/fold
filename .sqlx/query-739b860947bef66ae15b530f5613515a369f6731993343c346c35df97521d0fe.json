@@ -1,0 +1,57 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT number AS \"number!: i64\", state, requester,\n                  drafter_worker_id IS NOT NULL AS \"has_drafter!: bool\"\n           FROM requests\n           WHERE state NOT IN ('approved', 'closed')\n           ORDER BY number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "requests",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "requests",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "requester",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "requests",
+            "name": "requester"
+          }
+        }
+      },
+      {
+        "name": "has_drafter!: bool",
+        "ordinal": 3,
+        "type_info": "Null",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "739b860947bef66ae15b530f5613515a369f6731993343c346c35df97521d0fe"
+}

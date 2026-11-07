@@ -5,8 +5,8 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use fold_core::{
-    Actor, Address, AgentActor, AgentName, HumanName, MessageBody, TaskDescription, TaskId,
-    TaskTitle, WorkerName, codes,
+    Actor, Address, AgentActor, AgentName, HumanName, MessageBody, RequestId, Role,
+    TaskDescription, TaskId, TaskTitle, WorkerName, codes,
 };
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
@@ -28,6 +28,20 @@ use tower::ServiceExt;
 #[cfg(test)]
 fn t(number: u32) -> TaskId {
     TaskId::from_number(number).unwrap()
+}
+
+#[cfg(test)]
+fn rq(number: u32) -> RequestId {
+    RequestId::from_number(number).unwrap()
+}
+
+/// Creates a request of `by` with a body that no context may repeat.
+#[cfg(test)]
+async fn create_request(tasks: &fold_daemon::services::tasks::TaskService, by: &Actor) {
+    tasks
+        .create_request(by, "request text", Vec::new())
+        .await
+        .unwrap();
 }
 
 #[cfg(test)]
@@ -203,6 +217,7 @@ async fn the_context_names_the_agent_its_unread_messages_claims_with_minutes_lef
         "fold project demo.\n\
          You are agent frontend.\n\
          Unread messages: 2. Call get_inbox.\n\
+         Requests to claim: none.\n\
          Claims:\n\
          - T-1 implementation: 17 minutes left\n\
          - T-2 implementation: 27 minutes left\n\
@@ -222,7 +237,7 @@ async fn the_context_names_the_agent_its_unread_messages_claims_with_minutes_lef
         .unwrap();
     assert!(
         backend.starts_with(
-            "fold project demo.\nYou are agent backend.\nUnread messages: 0.\nClaims: none.\nReady tasks:\n- T-3 Task 3\n"
+            "fold project demo.\nYou are agent backend.\nUnread messages: 0.\nRequests to claim: none.\nClaims: none.\nReady tasks:\n- T-3 Task 3\n"
         ),
         "{backend}"
     );
@@ -458,6 +473,7 @@ fn the_context_is_capped_at_1500_characters_and_counts_the_claims_it_leaves_out(
         agent: name("frontend"),
         registered: true,
         unread: 3,
+        requests: None,
         claims,
         ready: (20..25)
             .map(|number| (t(number), "é".repeat(400)))
@@ -483,5 +499,84 @@ fn the_context_is_capped_at_1500_characters_and_counts_the_claims_it_leaves_out(
     assert_eq!(
         render_session_context(&short),
         "fold project demo.\nYou are agent frontend.\nUnread messages: 0.\nClaims: none.\nReady tasks: none."
+    );
+
+    let orchestrator = |requests: Vec<u32>| SessionFacts {
+        project: "demo".to_owned(),
+        agent: name("frontend"),
+        registered: true,
+        unread: 0,
+        requests: Some(requests.into_iter().map(rq).collect()),
+        claims: Vec::new(),
+        ready: Vec::new(),
+    };
+    assert_eq!(
+        render_session_context(&orchestrator(Vec::new())),
+        "fold project demo.\nYou are agent frontend.\nUnread messages: 0.\nRequests to claim: none.\nClaims: none.\nReady tasks: none."
+    );
+    let many = render_session_context(&orchestrator((1..=12).collect()));
+    assert!(
+        many.contains(
+            "\nRequests to claim: RQ-1, RQ-2, RQ-3, RQ-4, RQ-5, RQ-6, RQ-7, RQ-8, RQ-9, RQ-10 and 2 more. Call get_request for each, then claim_request.\n"
+        ),
+        "{many}"
+    );
+}
+
+#[tokio::test]
+async fn an_orchestrator_that_starts_after_a_request_was_made_gets_the_requests_that_wait_for_a_drafter()
+ {
+    let fixture = Fixture::new().await;
+    let tasks = &fixture.handle.tasks;
+    let ana = Actor::human(HumanName::parse("ana").unwrap());
+    for _ in 0..3 {
+        create_request(tasks, &ana).await;
+    }
+    create_request(tasks, &agent("frontend")).await;
+    tasks
+        .claim_request(
+            &agent("backend"),
+            rq(2),
+            fold_core::requests::RequestKind::Bug,
+            "Fix the board",
+        )
+        .await
+        .unwrap();
+    tasks
+        .close_request(&ana, rq(3), "not needed")
+        .await
+        .unwrap();
+
+    let context = async |agent: &str| {
+        fixture
+            .handle
+            .agents()
+            .session_context("demo", &name(agent), tasks)
+            .await
+            .unwrap()
+    };
+    let lead = context("frontend").await;
+    assert!(
+        lead.contains(
+            "\nUnread messages: 0.\nRequests to claim: RQ-1. Call get_request for each, then claim_request.\nClaims:"
+        ),
+        "a claimed, a closed and its own request are left out: {lead}"
+    );
+    assert!(
+        !lead.contains("Fix the board") && !lead.contains("request text"),
+        "ids, never the text: {lead}"
+    );
+    crate::common::roles::give_role(&fixture.handle.store, "review", Role::Reviewer, None).await;
+    let reviewer = context("review").await;
+    assert!(!reviewer.contains("Requests"), "{reviewer}");
+
+    tasks
+        .release_request(&agent("backend"), rq(2))
+        .await
+        .unwrap();
+    let lead = context("frontend").await;
+    assert!(
+        lead.contains("Requests to claim: RQ-1, RQ-2."),
+        "a released request waits again: {lead}"
     );
 }

@@ -2,10 +2,12 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use fold_core::requests::Requester;
 use fold_core::text::shorten;
-use fold_core::{AgentName, FoldError, TaskId, Timestamp, codes};
+use fold_core::{AgentName, FoldError, RequestId, TaskId, Timestamp, codes};
 use fold_store::agents::{self, ClaimKind};
 use fold_store::messages;
+use fold_store::tasks::requests;
 
 use super::overview::OverviewFilter;
 use super::{AgentError, AgentService};
@@ -17,6 +19,8 @@ pub const MAX_SESSION_CONTEXT: usize = 1500;
 pub const CONTEXT_READY_TASKS: usize = 5;
 /// How many claims the context lists before it only counts the rest.
 const CONTEXT_CLAIMS: usize = 10;
+/// How many requests to claim the context names before it only counts the rest.
+const CONTEXT_REQUESTS: usize = 10;
 /// The longest task title the context repeats, in characters.
 const CONTEXT_TITLE: usize = 100;
 
@@ -37,13 +41,15 @@ pub struct SessionFacts {
     /// False for an agent the project does not know yet: the adapter registers it when it connects, which can be after the hook runs.
     pub registered: bool,
     pub unread: u64,
+    /// For the main agent and an area lead, the requests that wait for a drafter, oldest first, but those it made itself; `None` for any other agent.
+    pub requests: Option<Vec<RequestId>>,
     pub claims: Vec<ContextClaim>,
     /// The first [`CONTEXT_READY_TASKS`] ready tasks, in ready order.
     pub ready: Vec<(TaskId, String)>,
 }
 
 impl AgentService {
-    /// The text the session-start hook adds to a new Claude Code session of `agent`: who it is, its unread messages, its claims with the minutes left on each lease at the clock's time, and the top ready tasks. Nothing is written.
+    /// The text the session-start hook adds to a new Claude Code session of `agent`: who it is, its unread messages, for the main agent and an area lead the requests that wait for a drafter, its claims with the minutes left on each lease at the clock's time, and the top ready tasks. A request made while the orchestrator was not running reaches it this way, because fold keeps no push for a session that is not open. Nothing is written.
     pub async fn session_context(
         &self,
         project: &str,
@@ -62,6 +68,7 @@ impl AgentService {
             agent: agent.clone(),
             registered: false,
             unread: 0,
+            requests: None,
             claims: Vec::new(),
             ready,
         };
@@ -70,6 +77,23 @@ impl AgentService {
         };
         facts.registered = true;
         facts.unread = messages::unread_count(self.store.read(), row.id).await?;
+        if agents::standing(self.store.read(), agent)
+            .await?
+            .claims_requests()
+        {
+            let own = Requester::Agent(agent.clone());
+            facts.requests = Some(
+                requests::unfinished(self.store.read())
+                    .await?
+                    .into_iter()
+                    .filter(|request| {
+                        request.state.waits_for_drafter(request.has_drafter)
+                            && request.requester != own
+                    })
+                    .map(|request| request.id)
+                    .collect(),
+            );
+        }
         let lease_minutes = self.lease.minutes().await?;
         let now = self.clock.now();
         let filter = OverviewFilter {
@@ -121,6 +145,28 @@ pub fn render(facts: &SessionFacts) -> String {
             text,
             "You are agent {agent}, not registered in this project yet; the fold MCP server registers it when it connects."
         );
+    }
+    match facts.requests.as_deref() {
+        None => {}
+        Some([]) => text.push_str("Requests to claim: none.\n"),
+        Some(requests) => {
+            let named = requests
+                .iter()
+                .take(CONTEXT_REQUESTS)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = requests.len().saturating_sub(CONTEXT_REQUESTS);
+            let more = if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            };
+            let _ = writeln!(
+                text,
+                "Requests to claim: {named}{more}. Call get_request for each, then claim_request."
+            );
+        }
     }
     if facts.claims.is_empty() {
         text.push_str("Claims: none.\n");

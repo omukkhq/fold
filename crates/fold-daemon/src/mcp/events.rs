@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use fold_core::{Event, FoldError, MessageId};
+use fold_core::{Event, FoldError, MessageId, RequestId};
 use fold_store::agents::WorkerRow;
 use rmcp::RoleServer;
 use rmcp::handler::server::common::schema_for_type;
@@ -45,7 +45,7 @@ pub struct GetEventsInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct WaitForEventsInput {
-    /// Wake only for these exact event types, such as proposal.integrated. Leave it out to wake for every type. A new message to you ends the wait whatever this says.
+    /// Wake only for these exact event types, such as proposal.integrated. Leave it out to wake for every type. A new message to you ends the wait whatever this says, and so does, for the main agent and an area lead, a request that waits for a drafter.
     #[serde(default)]
     pub types: Vec<String>,
     /// Wake only for events about this task, such as T-12.
@@ -68,7 +68,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             WAIT_FOR_EVENTS,
-            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. A new message to you also ends the wait, whatever the filter says; the result then carries your new messages in `inbox`, so call get_inbox only when it says more wait. Use it instead of polling get_events.",
+            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. A new message to you also ends the wait, whatever the filter says; the result then carries your new messages in `inbox`, so call get_inbox only when it says more wait. For the main agent and an area lead, a request that another agent or a human created or released and that nobody drafts ends the wait too; the result names it in `requests`: read it with get_request, then claim_request it when it is yours. Use it instead of polling get_events.",
             schema_for_type::<WaitForEventsInput>(),
         ),
     ]
@@ -113,18 +113,35 @@ enum Inbox {
     Unread,
 }
 
-/// The page of a wait, with the messages in it that wait for the worker and, in `inbox`, those that nothing had shown it yet, as many as fit.
-fn wait_json(page: &EventPage, waiting: &[MessageId], inbox: Inbox) -> Value {
+/// The hint of a wait that requests ended.
+pub const REQUESTS_HINT: &str =
+    "a request in requests waits for a drafter; call get_request, then claim_request";
+
+/// The page of a wait, with the messages in it that wait for the worker and, in `inbox`, those that nothing had shown it yet, as many as fit, and the requests in it that wait for an orchestrator to draft them.
+fn wait_json(
+    page: &EventPage,
+    waiting: &[MessageId],
+    inbox: Inbox,
+    requests: &[RequestId],
+) -> Value {
     let mut result = page_json(page);
-    if waiting.is_empty() {
-        return result;
+    let mut hints = Vec::new();
+    if !waiting.is_empty() {
+        let ids: Vec<String> = waiting.iter().map(ToString::to_string).collect();
+        result["messages"] = json!(ids);
+        match inbox {
+            Inbox::Carried(text) => result["inbox"] = json!(text),
+            Inbox::Shown => {}
+            Inbox::Unread => hints.push("a message waits for you; call get_inbox"),
+        }
     }
-    let ids: Vec<String> = waiting.iter().map(ToString::to_string).collect();
-    result["messages"] = json!(ids);
-    match inbox {
-        Inbox::Carried(text) => result["inbox"] = json!(text),
-        Inbox::Shown => {}
-        Inbox::Unread => result["hint"] = json!("a message waits for you; call get_inbox"),
+    if !requests.is_empty() {
+        let ids: Vec<String> = requests.iter().map(ToString::to_string).collect();
+        result["requests"] = json!(ids);
+        hints.push(REQUESTS_HINT);
+    }
+    if !hints.is_empty() {
+        result["hint"] = json!(hints.join("; "));
     }
     result
 }
@@ -203,7 +220,7 @@ pub async fn wait_for_events(
                         }
                     }
                 };
-                return Ok(wait_json(&page, &waiting, inbox));
+                return Ok(wait_json(&page, &waiting, inbox, waiter.requests()));
             }
             WaitStep::TimedOut => return Ok(json!({"timed_out": true})),
             WaitStep::Tick(count) => {

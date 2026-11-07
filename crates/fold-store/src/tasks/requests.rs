@@ -401,6 +401,43 @@ pub async fn list(
     .collect()
 }
 
+/// Where a request that is not approved or closed stands, without its text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnfinishedRequest {
+    pub id: RequestId,
+    pub state: RequestState,
+    pub requester: Requester,
+    pub has_drafter: bool,
+}
+
+/// Every request that is not approved or closed, oldest first. Only unfinished requests are read, so the list stays short in a project with a long history.
+pub async fn unfinished(
+    executor: impl sqlx::SqliteExecutor<'_>,
+) -> Result<Vec<UnfinishedRequest>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT number AS "number!: i64", state, requester,
+                  drafter_worker_id IS NOT NULL AS "has_drafter!: bool"
+           FROM requests
+           WHERE state NOT IN ('approved', 'closed')
+           ORDER BY number"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(UnfinishedRequest {
+                id: RequestId::try_from_db(row.number)
+                    .ok_or(StoreError::Corrupt("requests.number"))?,
+                state: RequestState::parse(&row.state)
+                    .ok_or(StoreError::Corrupt("requests.state"))?,
+                requester: Requester::parse(&row.requester)
+                    .ok_or(StoreError::Corrupt("requests.requester"))?,
+                has_drafter: row.has_drafter,
+            })
+        })
+        .collect()
+}
+
 fn expect_one(affected: u64) -> Result<(), StoreError> {
     if affected == 1 {
         Ok(())
