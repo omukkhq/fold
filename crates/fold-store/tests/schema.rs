@@ -121,6 +121,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
     .await
     .unwrap();
     let expected: BTreeSet<&str> = [
+        "agent_changes",
         "agent_tags",
         "agents",
         "area_mcp_servers",
@@ -195,6 +196,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "revision_commits",
         "revisions",
         "sessions",
+        "shared_changes",
         "task_labels",
         "task_reports",
         "tasks",

@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.id AS \"id!: i64\", c.paths AS \"paths!: String\"\n           FROM shared_changes c JOIN agents a ON a.id = c.agent_id\n           WHERE a.name = ? AND c.dismissed_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "shared_changes",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "paths!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "shared_changes",
+            "name": "paths"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "a4f53edef45bfccde584701ba861eff8002408f4e8b8c3ba9c5a627f5314ed68"
+}

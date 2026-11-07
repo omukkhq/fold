@@ -7,6 +7,7 @@ import {
   dialogBody,
   dialogContent,
   dialogFill,
+  dialogFillBody,
   dialogFillOverlay,
   dialogOverlay,
 } from "./dialogStyles";
@@ -67,7 +68,7 @@ export function Dialog({
                 </IconButton>
               </RadixDialog.Close>
             </div>
-            <div className={dialogBody}>
+            <div className={cn(dialogBody, wide && dialogFillBody)}>
               <div
                 className={cn(
                   "flex flex-col gap-12 px-20 pt-4",

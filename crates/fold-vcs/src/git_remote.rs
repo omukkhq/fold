@@ -154,6 +154,34 @@ pub fn add_exclude_patterns(
     Ok(added)
 }
 
+/// Removes each line of `patterns` from the project's `.fold/exclude`, except fold's own `/.fold/` line, and returns the lines it removed. A caller removes only lines it added itself, never one of the user's.
+pub fn remove_exclude_patterns(
+    fold_dir: &Path,
+    patterns: &[String],
+) -> Result<Vec<String>, FoldError> {
+    let io = |error: io::Error| repository_io(&error);
+    let _writing = crate::lock(&EXCLUDE_WRITES);
+    let current = match fs::read_to_string(fold_dir.join("exclude")) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(io(error)),
+    };
+    let mut removed = Vec::new();
+    let mut text = String::new();
+    for line in current.lines() {
+        if line != EXCLUDE_LINE && patterns.iter().any(|pattern| pattern == line) {
+            removed.push(line.to_owned());
+        } else {
+            text.push_str(line);
+            text.push('\n');
+        }
+    }
+    if !removed.is_empty() {
+        write_exclude(fold_dir, &text).map_err(io)?;
+    }
+    Ok(removed)
+}
+
 /// Pushes [`EXCLUDE_LINE`] and each of `patterns` that `lines` does not hold yet, and returns the patterns it pushed.
 fn push_missing(lines: &mut Vec<String>, patterns: &[String]) -> Vec<String> {
     let mut added = Vec::new();

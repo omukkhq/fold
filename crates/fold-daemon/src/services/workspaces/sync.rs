@@ -22,7 +22,7 @@ pub struct Synced {
 }
 
 impl WorkspaceService {
-    /// Brings main into a workspace the actor's worker owns with a three-way merge of its base, its current files and main. A `before_sync` automatic checkpoint commits first, unless the latest checkpoint already holds the same files on the same base, and is marked as the sync in progress; a checkpoint that cannot be taken refuses the sync; the files are written; then the new base, the conflict list and `workspace.synced` commit and clear the mark.
+    /// Brings main into a workspace the actor's worker owns with a three-way merge of its base, its current files and main. A `before_sync` automatic checkpoint commits first, unless the latest checkpoint already holds the same files on the same base, and is marked as the sync in progress; a checkpoint that cannot be taken refuses the sync; the files are written; then the new base, the conflict list and `workspace.synced` commit and clear the mark. Last the workspace gets the links of the project's shared paths, and loses those of paths no longer shared.
     ///
     /// A mark left by a sync or a restore that stopped after it began to write means the files may be half written. Merging over them would put markers inside markers, so the marked checkpoint is restored first, through a restore with its own safety checkpoint, and the sync runs from clean files. A human edit or a reviewer's fix of the task's proposal leaves the same mark on the checkpoint of its tree, so the worker's next sync writes that version into the files before it merges main.
     pub async fn sync_workspace(
@@ -33,7 +33,16 @@ impl WorkspaceService {
         let _op = self.ops.lock(workspace).await;
         let row = self.owned(actor, workspace).await?;
         self.live_rescan(workspace).await;
+        let dir = self.paths.root().join(&row.path);
         let synced = self.sync_in(actor, row).await;
+        if synced.is_ok() {
+            let root = self.paths.root().to_owned();
+            blocking(move || {
+                super::shared::link_shared_in(&root, &dir);
+                Ok(())
+            })
+            .await?;
+        }
         self.live_checkpoints(workspace).await;
         synced
     }

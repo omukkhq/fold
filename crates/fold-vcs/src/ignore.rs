@@ -18,7 +18,7 @@ pub const EXCLUDE: &str = "exclude";
 pub const EXCLUDE_NOTE: &str =
     "# fold writes this file. To keep a path, add a ! line to .foldignore.";
 
-/// The lines fold keeps in every project's `.fold/exclude`, after the user's own: one for each folder of fold's own skills (`layout::fold_skills`), which fold refreshes after each upgrade and every session reads from the project root, and one for Claude Code's settings of one person on one machine. Each skill has a line of its own, so a skill of the user's whose name starts with `fold-` stays tracked, and a role added in an upgrade gets its line at the next open. A `!` line of a `.gitignore` or `.foldignore` brings one back, and a file main tracks already stays tracked.
+/// The lines fold keeps in every project's `.fold/exclude`, after the user's own: one for each folder of fold's own skills (`layout::fold_skills`), which fold refreshes after each upgrade and every session reads from the project folder or a copy of it, and one for Claude Code's settings of one person on one machine. Each skill has a line of its own, so a skill of the user's whose name starts with `fold-` stays tracked, and a role added in an upgrade gets its line at the next open. A `!` line of a `.gitignore` or `.foldignore` brings one back, and a file main tracks already stays tracked.
 pub fn claude_excludes() -> Vec<String> {
     fold_core::layout::fold_skills()
         .map(|skill| format!("/{}/{skill}/", fold_core::layout::SKILLS_DIR))
@@ -40,24 +40,31 @@ pub struct IgnoreRules {
     root: Option<PathBuf>,
     /// The project's `.fold/exclude`: in the root's own `.fold/` for the project folder, in the `.fold/` that holds it for a workspace and for fold's check directory.
     exclude: Option<PathBuf>,
+    /// The list of the links fold made for shared paths, in a workspace's or the check directory's own `.fold/`; `None` for the project folder. A listed path is fold's link and is never recorded, whatever the ignore files say.
+    links: Option<PathBuf>,
     cache: Mutex<HashMap<MatcherKey, Option<Arc<Gitignore>>>>,
+    /// The paths of [`IgnoreRules::links`], read when first needed and kept until [`IgnoreRules::reload`].
+    linked: Mutex<Option<Arc<BTreeSet<Vec<u8>>>>>,
 }
 
 impl IgnoreRules {
     pub fn new(root: &Path) -> Self {
         // Any root that is neither a workspace nor fold's check directory is a project folder, also one that lies below a folder named `.fold`.
-        let fold_dir = root
+        let project_fold_dir = root
             .parent()
             .filter(|parent| {
                 parent.ends_with(fold_core::layout::WS_DIR)
                     || parent.ends_with(fold_core::layout::CHECKS_DIR)
             })
-            .and_then(Path::parent)
-            .map_or_else(|| root.join(FOLD_DIR), Path::to_path_buf);
+            .and_then(Path::parent);
+        let links = project_fold_dir.map(|_| root.join(FOLD_DIR).join(crate::shared::LINKS));
+        let fold_dir = project_fold_dir.map_or_else(|| root.join(FOLD_DIR), Path::to_path_buf);
         Self {
             root: Some(root.to_path_buf()),
             exclude: Some(fold_dir.join(EXCLUDE)),
+            links,
             cache: Mutex::new(HashMap::new()),
+            linked: Mutex::new(None),
         }
     }
 
@@ -66,13 +73,39 @@ impl IgnoreRules {
         Self {
             root: None,
             exclude: None,
+            links: None,
             cache: Mutex::new(HashMap::new()),
+            linked: Mutex::new(None),
         }
     }
 
     /// Forgets every file read so far.
     pub fn reload(&self) {
         lock(&self.cache).clear();
+        *lock(&self.linked) = None;
+    }
+
+    /// The paths of fold's own links for shared paths in this directory. fold's own file, read by its path; anything but a regular file there lists none.
+    fn linked(&self) -> Option<Arc<BTreeSet<Vec<u8>>>> {
+        let path = self.links.as_ref()?;
+        let mut linked = lock(&self.linked);
+        if let Some(found) = linked.as_ref() {
+            return Some(found.clone());
+        }
+        let paths: BTreeSet<Vec<u8>> = std::fs::symlink_metadata(path)
+            .ok()
+            .filter(std::fs::Metadata::is_file)
+            .and_then(|_| std::fs::read_to_string(path).ok())
+            .map(|text| {
+                crate::shared::parse_shared(&text)
+                    .into_iter()
+                    .map(|path| path.as_bytes().to_vec())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let paths = Arc::new(paths);
+        *linked = Some(paths.clone());
+        Some(paths)
     }
 
     /// True when an ignore rule matches the path or any parent directory. A directory that is ignored hides everything below it, even a `!` rule.
@@ -133,7 +166,10 @@ impl IgnoreRules {
         if let Some(matcher) = self.matcher(&[], EXCLUDE) {
             matchers.push((0, matcher));
         }
-        DirRules { matchers }
+        DirRules {
+            matchers,
+            linked: self.linked(),
+        }
     }
 
     fn matches(&self, path: &[u8], is_dir: bool) -> bool {
@@ -229,6 +265,8 @@ fn rules_of(folder: &Path, source: &Path, text: &[u8]) -> Option<Gitignore> {
 pub(crate) struct DirRules {
     /// Each matcher with the length of its folder's path plus the slash after it, where the path it matches starts.
     matchers: Vec<(usize, Arc<Gitignore>)>,
+    /// The paths of fold's own links for shared paths, which count as ignored before any matcher.
+    linked: Option<Arc<BTreeSet<Vec<u8>>>>,
 }
 
 impl DirRules {
@@ -243,6 +281,13 @@ impl DirRules {
     }
 
     fn matches(&self, path: &[u8], is_dir: bool) -> bool {
+        if self
+            .linked
+            .as_ref()
+            .is_some_and(|linked| linked.contains(path))
+        {
+            return true;
+        }
         for (start, matcher) in &self.matchers {
             let Some(Ok(relative)) = path.get(*start..).map(RepoPath::parse) else {
                 return false;

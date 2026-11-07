@@ -119,3 +119,164 @@ async fn a_crash_while_a_git_commit_is_recorded_records_it_once_after_the_restar
     assert_eq!(rows(&h, "SELECT COUNT(*) FROM human_changes").await, 1);
     scenario.teardown();
 }
+
+/// A confirmed record of a worker's change that stops inside its integration leaves the change marked as the worker's, so the next record asks again; the record that reaches main ends the mark as recorded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_record_that_fails_keeps_a_workers_change_marked() {
+    use fold_core::{Actor, AgentName, HumanName, Timestamp};
+    use fold_daemon::services::projects::{ProjectError, record};
+    use fold_vcs::git::Git;
+
+    let scenario = fail::FailScenario::setup();
+    let h = Harness::start().await;
+    branch_born(&h).await;
+    let root = std::path::PathBuf::from(h.root());
+    std::fs::write(root.join("notes.txt"), "from the worker\n").unwrap();
+    // A follow of the Git job that read the folder before the file was there would settle the mark below; one more follow under the folder lock waits for it.
+    let context = fold_daemon::services::projects::RemoteContext::of(&h.handle);
+    fold_daemon::services::projects::sync_folder(&context, &Git::default())
+        .await
+        .unwrap();
+    let lead = AgentName::parse("web-lead").unwrap();
+    let at = Timestamp::from_millis(1).unwrap();
+    h.handle
+        .store
+        .write(async |tx| {
+            fold_store::agents::insert_agent(tx, &lead, at).await?;
+            fold_store::workspaces::insert_agent_change(tx, b"notes.txt", &lead, at, at).await?;
+            Ok::<_, fold_store::StoreError>(())
+        })
+        .await
+        .unwrap();
+    let ana = Actor::human(HumanName::parse("ana").unwrap());
+    let asked = |error: ProjectError| match error {
+        ProjectError::Fold(error) => {
+            assert_eq!(error.code(), "record_needs_confirmation");
+            let tree = error.details().unwrap()["tree"].as_str().unwrap();
+            tree.parse::<fold_core::object::ObjectHash>().unwrap()
+        }
+        ProjectError::Store(error) => panic!("{error}"),
+    };
+    let tree = asked(
+        record(&h.handle, &ana, &Git::default(), None)
+            .await
+            .unwrap_err(),
+    );
+
+    fail::cfg("integration_in_transaction", "return").unwrap();
+    let stopped = record(&h.handle, &ana, &Git::default(), Some(tree)).await;
+    fail::remove("integration_in_transaction");
+    assert_eq!(stopped.unwrap_err().code(), Some("failpoint"));
+    assert_eq!(h.head().await.number.to_string(), "r1");
+    assert_eq!(
+        rows(
+            &h,
+            "SELECT COUNT(*) FROM agent_changes WHERE cleared_at IS NULL"
+        )
+        .await,
+        1
+    );
+    let tree = asked(
+        record(&h.handle, &ana, &Git::default(), None)
+            .await
+            .unwrap_err(),
+    );
+
+    let done = record(&h.handle, &ana, &Git::default(), Some(tree))
+        .await
+        .unwrap();
+    let RecordOutcome::Recorded { files, .. } = done.outcome else {
+        panic!("{:?}", done.outcome);
+    };
+    assert_eq!(files, ["notes.txt"]);
+    assert_eq!(
+        rows(
+            &h,
+            "SELECT COUNT(*) FROM agent_changes WHERE cleared_how = 'recorded'"
+        )
+        .await,
+        1
+    );
+    scenario.teardown();
+}
+
+/// A follow of the project folder that read the folder before a worker's file was there never settles the mark placed for that file while the follow ran, so the worker's change never passes as the human's for a stale read; a later follow that finds the folder holding its record again does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_mark_placed_while_a_follow_reads_the_folder_stays_open() {
+    use std::sync::{Arc, Condvar, Mutex};
+
+    use fold_core::{AgentName, Timestamp};
+    use fold_daemon::services::projects::{RemoteContext, sync_folder};
+    use fold_vcs::git::Git;
+
+    let scenario = fail::FailScenario::setup();
+    let h = Harness::start().await;
+    let root = std::path::PathBuf::from(h.root());
+    let lead = AgentName::parse("web-lead").unwrap();
+    let at = Timestamp::from_millis(1).unwrap();
+    h.handle
+        .store
+        .write(async |tx| fold_store::agents::insert_agent(tx, &lead, at).await)
+        .await
+        .unwrap();
+    // Each follow stops after its read of the folder until the test lets it go: (a follow stopped, let go).
+    let gate = Arc::new((Mutex::new((false, false)), Condvar::new()));
+    let stop = gate.clone();
+    fail::cfg_callback("folder_before_note", move || {
+        let (state, changed) = &*stop;
+        let mut state = state.lock().unwrap();
+        state.0 = true;
+        changed.notify_all();
+        while !state.1 {
+            state = changed.wait(state).unwrap();
+        }
+    })
+    .unwrap();
+    let context = RemoteContext::of(&h.handle);
+    let follow = tokio::spawn(async move { sync_folder(&context, &Git::default()).await });
+    let stopped = gate.clone();
+    tokio::task::spawn_blocking(move || {
+        let (state, changed) = &*stopped;
+        let mut state = state.lock().unwrap();
+        while !state.0 {
+            state = changed.wait(state).unwrap();
+        }
+    })
+    .await
+    .unwrap();
+
+    // The worker's file and its mark arrive after the follow read the folder.
+    std::fs::write(root.join("notes.txt"), "from the worker\n").unwrap();
+    h.handle
+        .store
+        .write(async |tx| {
+            fold_store::workspaces::insert_agent_change(tx, b"notes.txt", &lead, at, at).await
+        })
+        .await
+        .unwrap();
+    {
+        let (state, changed) = &*gate;
+        state.lock().unwrap().1 = true;
+        changed.notify_all();
+    }
+    fail::remove("folder_before_note");
+    follow.await.unwrap().unwrap();
+    // A follow that waits for the folder lock also waits for any other stopped one.
+    let context = RemoteContext::of(&h.handle);
+    sync_folder(&context, &Git::default()).await.unwrap();
+    let open = "SELECT COUNT(*) FROM agent_changes WHERE cleared_at IS NULL";
+    assert_eq!(rows(&h, open).await, 1);
+
+    std::fs::remove_file(root.join("notes.txt")).unwrap();
+    sync_folder(&context, &Git::default()).await.unwrap();
+    assert_eq!(rows(&h, open).await, 0);
+    assert_eq!(
+        rows(
+            &h,
+            "SELECT COUNT(*) FROM agent_changes WHERE cleared_how = 'settled'"
+        )
+        .await,
+        1
+    );
+    scenario.teardown();
+}

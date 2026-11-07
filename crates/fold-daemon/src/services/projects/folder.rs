@@ -25,6 +25,7 @@ use fold_vcs::stash::changed_paths;
 use fold_core::events::types;
 use fold_core::{Actor, EventError, NewEvent};
 
+use super::agent_changes::{SeenChange, seen_changes};
 use super::commits::{Committed, commit_main};
 use super::remote::{RemoteContext, blocking};
 use super::{ProjectAttention, ProjectError, load_config};
@@ -46,6 +47,10 @@ pub struct FolderFollowed {
     pub unrecorded: bool,
     /// What the `[git]` branch shows, read while Git sync is on.
     pub branch: Option<BranchState>,
+    /// Each path where the folder differs from its checkout record after the follow, with the time that places the change, in path order.
+    pub seen: Vec<SeenChange>,
+    /// The newest mark of a worker's change that was placed when the follow began to read the folder (see [`fold_store::workspaces::last_agent_change`]): only marks up to it may be settled by what this follow read.
+    pub marks_before_read: i64,
 }
 
 /// What one run of [`sync_folder`] did.
@@ -248,6 +253,14 @@ pub async fn sync_folder(context: &RemoteContext, git: &Git) -> Result<FolderSyn
         }
     };
     drop(handle);
+    super::note_agent_changes(
+        &context.store,
+        &context.bus,
+        &context.tool_windows,
+        &followed,
+        context.clock.now(),
+    )
+    .await;
     let committed = commit_main(
         &context.store,
         &context.paths,
@@ -452,10 +465,12 @@ pub(crate) async fn follow_folder(
         unstash,
         ..
     } = read;
+    // Read before the folder, so a mark placed while the folder is read is newer than this number.
+    let marks_before_read = fold_store::workspaces::last_agent_change(store.read()).await?;
     let objects_guard = objects.clone().read_owned().await;
     let paths_owned = paths.clone();
     let head_tree = head.tree_hash;
-    let (tree, held, unrecorded, wrote) = blocking(move || {
+    let (tree, held, unrecorded, wrote, seen) = blocking(move || {
         let _objects = objects_guard;
         let paths = paths_owned;
         let fold_dir = paths.fold_dir();
@@ -488,8 +503,9 @@ pub(crate) async fn follow_folder(
         #[cfg(feature = "failpoints")]
         fail::fail_point!("folder_after_write", |_| Err(fired("folder_after_write")));
         let tree = write_initial_tree(&objects, followed.record.clone())?;
-        let unrecorded =
-            !followed.held.is_empty() || differs(&paths, &followed.record, max_file_bytes, caps)?;
+        let folder = read_settled(&paths, &followed.record, max_file_bytes, caps)?;
+        let unrecorded = !followed.held.is_empty() || folder != followed.record;
+        let seen = seen_changes(root, &followed.record, &folder);
         let held: Vec<String> = match (stash_held, unstash) {
             (Some(held), _) => held,
             (None, Some((from, to))) => {
@@ -501,7 +517,7 @@ pub(crate) async fn follow_folder(
             (None, None) => followed.held.iter().map(ToString::to_string).collect(),
         };
         let unrecorded = unrecorded || !held.is_empty();
-        Ok((tree, held, unrecorded, wrote))
+        Ok((tree, held, unrecorded, wrote, seen))
     })
     .await?;
     let at = wrote.then_some(head.number);
@@ -523,16 +539,18 @@ pub(crate) async fn follow_folder(
         held,
         unrecorded,
         branch,
+        seen,
+        marks_before_read,
     })
 }
 
-/// Whether the folder differs from the record as `fld record` reads it, through the folder's stat index so an unchanged file is not hashed again: the record's paths count although an ignore rule matches them, and a file the scan cannot read, such as one over the size limit, keeps its recorded entry. Blocking.
-fn differs(
+/// The folder as `fld record` reads it, through the folder's stat index so an unchanged file is not hashed again: the record's paths count although an ignore rule matches them, and a file the scan cannot read, such as one over the size limit, keeps its recorded entry. Blocking.
+fn read_settled(
     paths: &ProjectPaths,
     record: &FlatTree,
     max_file_bytes: u64,
     caps: Capabilities,
-) -> Result<bool, ProjectError> {
+) -> Result<FlatTree, ProjectError> {
     let root = paths.root();
     let rules = IgnoreRules::new(root);
     let index_path = paths.folder_index();
@@ -550,7 +568,7 @@ fn differs(
     .map_err(FoldError::from)?;
     // The index only spares work; a failed save makes the next scan read the files again.
     let _ = index.save(&index_path);
-    Ok(scanned.settled(record) != *record)
+    Ok(scanned.settled(record))
 }
 
 fn io_error(error: &std::io::Error) -> ProjectError {

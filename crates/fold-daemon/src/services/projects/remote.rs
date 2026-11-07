@@ -73,6 +73,8 @@ pub struct RemoteContext {
     pub(crate) git_attention: Arc<GitAttention>,
     /// The open project's handle, once it is shared, so the Git job records a commit of the human with the services the handle holds; a weak link, so the job never keeps a closed project open.
     pub(crate) handle: Arc<std::sync::OnceLock<std::sync::Weak<ProjectHandle>>>,
+    /// The tool calls of the project's supervised workers, which place the folder's changes.
+    pub(crate) tool_windows: Arc<super::ToolWindows>,
 }
 
 impl RemoteContext {
@@ -95,6 +97,7 @@ impl RemoteContext {
             objects: Arc::new(tokio::sync::RwLock::new(())),
             git_attention: Arc::new(GitAttention::default()),
             handle: Arc::default(),
+            tool_windows: Arc::default(),
         }
     }
 
@@ -116,6 +119,7 @@ impl RemoteContext {
             objects: handle.objects.clone(),
             git_attention: handle.git_attention.clone(),
             handle: handle.shared.clone(),
+            tool_windows: handle.tool_windows.clone(),
         }
     }
 }

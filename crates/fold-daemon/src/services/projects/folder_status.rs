@@ -15,12 +15,14 @@ use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::RepoPath;
 use fold_vcs::platform::Capabilities;
 use fold_vcs::scan::{ScanOptions, Skipped, scan};
+use fold_vcs::shared::{read_shared, unshared_ignored};
 use fold_vcs::stash::changed_paths;
 
 use super::ProjectError;
 use super::folder::{compare_folder, read_folder};
 use super::remote::blocking;
 use crate::projects::ProjectHandle;
+use crate::services::workspaces::LISTED_UNSEEN;
 
 /// What `fld status` shows of the project folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +43,11 @@ pub struct FolderStatus {
     pub blockers: Vec<Blocker>,
     /// Newest first.
     pub stash: Vec<FolderStashEntry>,
+    /// The paths every workspace links to, read-only, in path order.
+    pub shared: Vec<String>,
+    /// The first ignored files and folders that no workspace holds or links to (see [`fold_vcs::shared::unshared_ignored`]).
+    pub unseen: Vec<String>,
+    pub unseen_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +57,8 @@ pub struct FolderChange {
     pub entry: EntryKind,
     /// Main changed the path too since the folder's revision, so the change holds the folder where it is.
     pub held: bool,
+    /// The agents whose tool calls ran when the path changed, in name order; empty for a change of the human's.
+    pub agents: Vec<fold_core::AgentName>,
 }
 
 /// A file the read of the folder leaves out.
@@ -96,6 +105,14 @@ pub async fn folder_status(
     let read = read_folder(&handle.store, &handle.paths, git)
         .await?
         .ok_or(StoreError::Corrupt("refs.main"))?;
+    let mut from_agents: std::collections::BTreeMap<String, Vec<fold_core::AgentName>> =
+        std::collections::BTreeMap::new();
+    for row in fold_store::workspaces::open_agent_changes(handle.store.read()).await? {
+        from_agents
+            .entry(String::from_utf8_lossy(&row.path).into_owned())
+            .or_default()
+            .push(row.agent);
+    }
     let (waiting, stack, journal) = {
         let mut conn = handle
             .store
@@ -194,6 +211,9 @@ pub async fn folder_status(
             None => None,
         };
         let held: Vec<String> = settled.held.iter().map(ToString::to_string).collect();
+        let shared = read_shared(&fold_dir).map_err(shared_io)?;
+        let unseen = unshared_ignored(root, &rules, &shared, LISTED_UNSEEN).map_err(shared_io)?;
+        let shared: Vec<String> = shared.iter().map(ToString::to_string).collect();
         Ok((
             changes,
             skipped,
@@ -201,10 +221,11 @@ pub async fn folder_status(
             held,
             files,
             unstash_paths,
+            (shared, unseen),
         ))
     })
     .await?;
-    let (changes, skipped, ignored_tracked, held, files, unstash_paths) = scanned;
+    let (changes, skipped, ignored_tracked, held, files, unstash_paths, (shared, unseen)) = scanned;
     let facts = FolderFacts {
         held: held.clone(),
         human_change: waiting.map(|change| {
@@ -259,6 +280,7 @@ pub async fn folder_status(
                 let path = String::from_utf8_lossy(&change.path).into_owned();
                 FolderChange {
                     held: held.contains(&path),
+                    agents: from_agents.remove(&path).unwrap_or_default(),
                     path,
                     kind: change.kind,
                     entry: change.entry,
@@ -269,5 +291,15 @@ pub async fn folder_status(
         ignored_tracked,
         blockers,
         stash,
+        shared,
+        unseen: unseen.0,
+        unseen_count: unseen.1,
     })
+}
+
+fn shared_io(error: std::io::Error) -> FoldError {
+    FoldError::new(
+        fold_core::codes::WORKSPACE_IO,
+        format!("cannot read the shared paths: {}", error.kind()),
+    )
 }

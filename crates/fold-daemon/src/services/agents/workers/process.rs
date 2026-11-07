@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,6 +14,7 @@ use tokio::task::JoinHandle;
 use crate::push::PushTargets;
 use crate::services::agents::claude::{LOCATION_ENV, env_value, transcript_path};
 use crate::services::events::EventBus;
+use crate::services::projects::ToolWindows;
 use crate::support::lock;
 use questions::Waiter;
 use watch::watch_done;
@@ -24,6 +25,7 @@ mod launch;
 mod lines;
 mod main;
 mod message;
+mod project_claude;
 mod questions;
 mod refresh;
 mod restart;
@@ -197,6 +199,8 @@ struct Inner {
     main_waking: Mutex<Option<Vec<String>>>,
     /// Wakes the project's removal of closed workspace directories, which follows only stored events: the supervised main's turn ends with none, and its closed workspaces become due once it is idle.
     cleanup_due: Mutex<Option<Arc<tokio::sync::Notify>>>,
+    /// The workers' tool calls that can write files, which place a change of the project folder in a worker's call.
+    tool_windows: Arc<ToolWindows>,
 }
 
 impl Drop for Inner {
@@ -224,6 +228,8 @@ struct Process {
     stderr: stderr::StderrTail,
     /// Shared with [`Running::open_turns`].
     open_turns: Arc<AtomicU64>,
+    /// The worker runs in its own start folder, apart from the project folder, so its tool calls place the project folder's changes (see [`ToolWindows`]); `false` for the supervised main, which works in the project folder.
+    confined: bool,
 }
 
 impl Supervisor {
@@ -261,6 +267,7 @@ impl Supervisor {
                 main_gate: Mutex::new(main::MainGate::default()),
                 main_waking: Mutex::new(None),
                 cleanup_due: Mutex::new(None),
+                tool_windows: Arc::default(),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();
@@ -278,24 +285,45 @@ impl Supervisor {
         *lock(&self.inner.launcher) = launcher;
     }
 
+    /// The tool calls of the project's workers that can write files, as their output tells them.
+    pub fn tool_windows(&self) -> Arc<ToolWindows> {
+        self.inner.tool_windows.clone()
+    }
+
     /// The notifier of the project's removal of closed workspace directories, which the end of each turn of the supervised main wakes.
     pub fn set_cleanup_due(&self, due: Arc<tokio::sync::Notify>) {
         *lock(&self.inner.cleanup_due) = Some(due);
     }
 
-    /// Where the workers' Claude Code keeps the transcript of each session of `ids`, in the order of `ids`: the folder of the launcher's environment, a relative one in the project folder, where every worker runs, which is followed to its real path as Claude Code names it. Each is `None` when fold cannot tell; see [`transcript_path`].
-    pub async fn transcripts(&self, ids: Vec<String>) -> Vec<Option<PathBuf>> {
+    /// Where the workers' Claude Code keeps the transcript of each session of `sessions`, each an id with the agent and role of its worker, in the order of `sessions`: the folder of the launcher's environment, a relative one in the folder where the worker runs, which is followed to its real path as Claude Code names it. A worker that starts apart from the project folder runs in its start folder; a session it began in the project folder, before fold started workers there, keeps its transcript in the project folder's. Each is `None` when fold cannot tell; see [`transcript_path`].
+    pub async fn transcripts(
+        &self,
+        sessions: Vec<(String, AgentName, Role)>,
+    ) -> Vec<Option<PathBuf>> {
         let env = lock(&self.inner.launcher).env.clone();
-        let root = self.inner.paths.root().to_owned();
-        let count = ids.len();
+        let paths = self.inner.paths.clone();
+        let count = sessions.len();
         tokio::task::spawn_blocking(move || {
-            let root = root.canonicalize().unwrap_or(root);
-            let config = claude_config_dir(|name| env_value(&env, name)).map(|dir| root.join(dir));
-            ids.iter()
-                .map(|id| {
-                    config
-                        .as_deref()
-                        .and_then(|dir| transcript_path(dir, &root, id))
+            let canonical = |dir: PathBuf| dir.canonicalize().unwrap_or(dir);
+            let root = canonical(paths.root().to_owned());
+            let config = claude_config_dir(|name| env_value(&env, name));
+            let at = |folder: &Path, id: &str| {
+                config
+                    .as_deref()
+                    .and_then(|dir| transcript_path(&folder.join(dir), folder, id))
+            };
+            sessions
+                .iter()
+                .map(|(id, agent, role)| {
+                    if !launch::starts_apart(*role) {
+                        return at(&root, id);
+                    }
+                    let start = ProjectPaths::new(&root).worker_start_dir(agent);
+                    let own = at(&start, id);
+                    match &own {
+                        Some(path) if path.is_file() => own,
+                        _ => at(&root, id).filter(|path| path.is_file()).or(own),
+                    }
                 })
                 .collect()
         })

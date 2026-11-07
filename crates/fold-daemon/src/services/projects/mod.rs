@@ -52,6 +52,7 @@ use crate::services::events::EventBuffer;
 #[cfg(feature = "failpoints")]
 use crate::services::fired;
 
+mod agent_changes;
 mod commits;
 mod enable_git;
 mod folder;
@@ -62,10 +63,15 @@ pub mod notify;
 mod pull;
 mod record;
 mod remote;
+mod shared_watch;
 mod stash;
 mod untrack;
 mod web_auth;
 
+pub use agent_changes::{
+    AgentChange, SeenChange, ToolWindows, agent_changes, ignore_agent_changes, list_agent_changes,
+};
+pub(crate) use agent_changes::{file_clock_now, note_agent_changes};
 pub(crate) use commits::error_code;
 pub use commits::{Committed, commit_main, commit_message};
 pub use enable_git::{GitEnabled, GitIdentity, enable_git};
@@ -77,12 +83,13 @@ pub use folder_status::{
 pub use gc::{GcReport, gc};
 pub use git_status::{GitStatus, PushFailed, Pushed, RemoteStatus, git_status, public_location};
 pub use pull::{PullOutcome, PulledConflict, pull};
-pub use record::{RecordOutcome, TouchedTask, record};
+pub use record::{RecordOutcome, TouchedTask, folder_sides, record};
 pub(crate) use remote::push_with;
 pub use remote::{PushOutcome, RemoteContext, push};
+pub(crate) use shared_watch::SharedWatch;
 pub use stash::{
-    AfterUnstash, StashEntry, StashOutcome, UnstashConflict, UnstashOutcome, stash, stash_list,
-    unstash,
+    AfterUnstash, RestoreOutcome, StashEntry, StashOutcome, UnstashConflict, UnstashOutcome,
+    restore_agent_changes, stash, stash_list, unstash,
 };
 pub use untrack::{FOLD_SKILLS_TITLE, FoldSkills, UntrackOutcome, keep_fold_skills_out, untrack};
 pub use web_auth::{

@@ -68,7 +68,7 @@ fn skill_identifiers() -> BTreeSet<String> {
         .collect()
 }
 
-const FOLD_TOOLS: [&str; 97] = [
+const FOLD_TOOLS: [&str; 99] = [
     "register_agent",
     "list_agents",
     "define_area",
@@ -166,13 +166,15 @@ const FOLD_TOOLS: [&str; 97] = [
     "list_review_plans",
     "integrate_review_batch",
     "list_open_asks",
+    "settle_agent_changes",
+    "share_paths",
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 182] = [
+const FOLD_ERROR_CODES: [&str; 184] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -355,6 +357,8 @@ const FOLD_ERROR_CODES: [&str; 182] = [
     "notify_send_not_found",
     "notify_target_inactive",
     "invalid_intent",
+    "record_needs_confirmation",
+    "agent_change_not_found",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
@@ -379,7 +383,7 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 65] = [
+const NON_TOOL_NAMES: [&str; 68] = [
     "file_count",
     "human_review",
     "fold_failed",
@@ -445,6 +449,9 @@ const NON_TOOL_NAMES: [&str; 65] = [
     "part_without_files",
     "part_files_uncovered",
     "part_file_outside_diff",
+    "empty_added",
+    "agent_changed",
+    "shared_changed",
 ];
 
 /// The sections of the index before the shared ones.
@@ -543,6 +550,7 @@ fn role_steps(role: Role) -> &'static [&'static str] {
             "list_review_batches",
             "get_review_batch",
             "list_open_asks",
+            "share_paths",
         ],
         Role::AreaLead => &[
             "get_task_graph",

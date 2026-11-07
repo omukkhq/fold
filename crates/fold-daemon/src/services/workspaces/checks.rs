@@ -65,7 +65,7 @@ impl WorkspaceService {
         .await
     }
 
-    /// Brings fold's check directory to the tree `tree`: its tracked files become the tree's, and ignored files such as the dependencies a setup installed stay. The directory is created on first use. It is fold's own directory, never a workspace, so whatever an earlier run left in it is overwritten.
+    /// Brings fold's check directory to the tree `tree`: its tracked files become the tree's, and ignored files such as the dependencies a setup installed stay, and the project's shared paths get their links, so a check reads them as in a workspace. The directory is created on first use. It is fold's own directory, never a workspace, so whatever an earlier run left in it is overwritten.
     pub(crate) async fn check_dir_to(&self, tree: ObjectHash) -> Result<PathBuf, WorkspaceError> {
         let config = load_config(&self.paths).await?;
         let paths = self.paths.clone();
@@ -90,6 +90,7 @@ impl WorkspaceService {
                 },
             };
             reset_tree(&objects, &root, &mut index, &index_path, &tree, &opts)?;
+            super::shared::link_shared_in(paths.root(), &root);
             Ok(root)
         })
         .await

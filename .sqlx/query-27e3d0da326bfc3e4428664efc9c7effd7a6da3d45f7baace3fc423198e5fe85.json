@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE agent_changes SET cleared_at = ?, cleared_how = ? WHERE path = ? AND cleared_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "27e3d0da326bfc3e4428664efc9c7effd7a6da3d45f7baace3fc423198e5fe85"
+}

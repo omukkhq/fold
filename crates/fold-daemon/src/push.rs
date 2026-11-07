@@ -1153,6 +1153,7 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
         || kind == fold_core::events::types::HUMAN_CHANGE_RESOLVED
         || kind == fold_core::events::types::HUMAN_CHANGE_WITHDRAWN
         || kind == fold_core::events::types::INTEGRATION_HELD
+        || kind == fold_core::events::types::FOLDER_AGENT_CHANGED
     {
         ctx.main_agents = tagged(store, Tag::is_main).await?;
         return Ok(ctx);

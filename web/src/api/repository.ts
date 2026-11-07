@@ -9,6 +9,7 @@ export type Revision = Schemas["RevisionView"];
 export type TreeEntry = Schemas["TreeEntryView"];
 export type FileView = Schemas["FileContentView"];
 export type RepositoryState = Schemas["RepositoryView"];
+export type SharedState = Schemas["SharedView"];
 
 const PAGE_SIZE = 200;
 
@@ -16,6 +17,25 @@ const PAGE_SIZE = 200;
 export async function getRepository(slug: string): Promise<RepositoryState> {
   return unwrap(
     api.GET("/api/v1/projects/{slug}/repository", {
+      params: { path: { slug } },
+    }),
+  );
+}
+/** The ignored paths every workspace links to, read-only, and the ignored paths no worker sees, by name. */
+export async function getShared(slug: string): Promise<SharedState> {
+  return unwrap(
+    api.GET("/api/v1/projects/{slug}/shared", {
+      params: { path: { slug } },
+    }),
+  );
+}
+
+/** A named human ends every Needs you item of shared files that changed during a worker's tool call, once they checked the files. */
+export async function dismissSharedChanges(
+  slug: string,
+): Promise<Schemas["SharedChangesDismissed"]> {
+  return unwrap(
+    api.POST("/api/v1/projects/{slug}/shared/dismiss", {
       params: { path: { slug } },
     }),
   );

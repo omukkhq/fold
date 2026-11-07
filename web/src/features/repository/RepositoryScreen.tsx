@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { FolderClock, FolderLock, SearchX } from "lucide-react";
+import { FolderClock, FolderLock, Link2, SearchX } from "lucide-react";
 import { useState } from "react";
 import { useNow } from "@/live/useNow";
 import { olderNotListed } from "@/api/pages";
@@ -7,6 +7,7 @@ import {
   repositoryQuery,
   revisionQuery,
   revisionsQuery,
+  sharedQuery,
   treeQuery,
 } from "@/api/repositoryQueries";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
@@ -18,9 +19,48 @@ import { folderWaits, mainCopyText } from "./describe";
 import { isMissingRevision, pickRevision } from "./revision";
 import { folderAt, parentDirs, parentOf } from "./search";
 import { CommitId } from "@/components/mono/CommitId";
+import { Mono } from "@/components/mono/Mono";
+import { codeParts } from "@/format/codeText";
+import { sharedFailure, sharedNote } from "./sharedPaths";
 import { GitStatus } from "../git/GitStatus";
 import { RevisionList } from "./RevisionList";
 import { TreeView } from "./TreeView";
+
+/** Paths in the path face, comma-separated, with the count of those left out. */
+function PathWords({
+  paths,
+  more = 0,
+}: {
+  paths: readonly string[];
+  more?: number;
+}) {
+  return (
+    <>
+      {paths.map((path, index) => (
+        <span key={path}>
+          {index > 0 ? ", " : null}
+          <Mono>{path}</Mono>
+        </span>
+      ))}
+      {more > 0 ? ` and ${String(more)} more` : null}
+    </>
+  );
+}
+
+/** A sentence whose paths, marked between backticks, show in the path face. */
+function PathMarked({ text }: { text: string }) {
+  return (
+    <>
+      {codeParts(text).map((part, index) =>
+        typeof part === "string" ? (
+          part
+        ) : (
+          <Mono key={String(index)}>{part.code}</Mono>
+        ),
+      )}
+    </>
+  );
+}
 
 interface RepositoryScreenProps {
   slug: string;
@@ -43,6 +83,7 @@ export function RepositoryScreen({
 }: RepositoryScreenProps) {
   const revisions = useQuery(revisionsQuery(slug));
   const repository = useQuery(repositoryQuery(slug));
+  const shared = useQuery(sharedQuery(slug));
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(
     () => new Set(path === undefined ? [] : parentDirs(path)),
   );
@@ -136,6 +177,7 @@ export function RepositoryScreen({
   )?.commit;
   const onlyFirst = history.length === 1;
   const mainCopy = mainCopyText(repository.data);
+  const sharing = sharedNote(shared.data);
 
   function toggle(path: string) {
     const next = new Set(expanded);
@@ -229,6 +271,42 @@ export function RepositoryScreen({
               />
             )}
             <p className="max-w-measure">{mainCopy}</p>
+          </div>
+        )}
+        {shared.isError ? (
+          <ErrorBanner
+            className="rounded-m px-14"
+            title="The shared paths could not load."
+            message={<PathMarked text={sharedFailure(shared.error)} />}
+            onRetry={() => void shared.refetch()}
+          />
+        ) : null}
+        {sharing === null ? null : (
+          <div className="flex items-start gap-10 rounded-m bg-sunken px-14 py-10 text-14 text-text">
+            <Link2
+              aria-hidden
+              size={16}
+              className="mt-3 shrink-0 text-text-2"
+            />
+            <div className="flex min-w-0 max-w-measure flex-col gap-4 wrap-anywhere">
+              {sharing.shared === null ? null : (
+                <p>
+                  Shared read-only with workers:{" "}
+                  <PathWords paths={sharing.shared} />.
+                </p>
+              )}
+              {sharing.unseen === null ? null : (
+                <p>
+                  {sharing.unseen.lead}{" "}
+                  <PathWords
+                    paths={sharing.unseen.paths}
+                    more={sharing.unseen.more}
+                  />
+                  . Run <Mono>{sharing.hint}</Mono> in the project folder to
+                  share one with them, read-only.
+                </p>
+              )}
+            </div>
           </div>
         )}
         <GitStatus slug={slug} variant="panel" />
