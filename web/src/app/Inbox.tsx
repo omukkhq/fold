@@ -171,11 +171,13 @@ function NeedLine({
           {formatAsOfMinute(now, line.since)}
         </span>
         {!line.inline && line.title ? (
-          // A row that opens nothing has no tooltip to give a cut title, so its title wraps whole.
+          // A row that opens nothing has no tooltip to give a cut title, and a stalled worker's title is the command that restarts it, so each wraps whole.
           <span
             className={cn(
               "min-w-0 basis-full text-13 text-text-2",
-              line.href === null ? "wrap-anywhere" : "truncate",
+              line.href === null || line.restart !== null
+                ? "wrap-anywhere"
+                : "truncate",
             )}
           >
             <CodeText text={line.title} caption />
