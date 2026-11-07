@@ -178,11 +178,11 @@ async fn acceptance_35_a_shared_file_a_worker_changed_waits_in_needs_you() {
     fs::write(&exclude, rules).unwrap();
     fs::create_dir_all(root.join("design")).unwrap();
     fs::write(root.join("design/home.pen"), "home v1").unwrap();
+    // The main agent's file from before the share, made outside any tool call, is only noted. A file written in the second before a worker's call starts would count as the call's.
+    fs::write(root.join("design/notes.md"), "notes").unwrap();
     harness
         .call(WORKER, "share_paths", json!({"paths": ["design"]}))
         .await;
-    // The main agent's edit outside any tool call only moves what fold noted.
-    fs::write(root.join("design/notes.md"), "notes").unwrap();
     fake.set_tool_script(&format!(
         "printf 'v2' >> '{}'\n",
         root.join("design/home.pen").display()

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO shared_changes (agent_id, paths, created_at)\n           SELECT a.id, ?, ? FROM agents a WHERE a.name = ?\n           RETURNING id AS \"id!: i64\"",
+  "query": "INSERT INTO shared_changes (agent_id, paths, created_at)\n                   SELECT a.id, ?, ? FROM agents a WHERE a.name = ?\n                   RETURNING id AS \"id!: i64\"",
   "describe": {
     "columns": [
       {
@@ -22,5 +22,5 @@
       null
     ]
   },
-  "hash": "17cb9e1140abb1f565d50ffd411cf374ba9e881fa78249677fdb11d532a63c07"
+  "hash": "1d0df7f7d6afa4dfd77d9b4fdb40aa85b13fdc5d1f17e735587cfaae903caf5a"
 }

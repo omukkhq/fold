@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fold_core::agent_changes::agents_at;
 use fold_core::events::types;
-use fold_core::{AgentName, EventActor, NewEvent, Timestamp, codes};
+use fold_core::{AgentName, EventActor, FoldError, NewEvent, Timestamp, codes};
 use fold_vcs::paths::RepoPath;
 use fold_vcs::shared::{FileStamp, file_hash, read_shared, shared_files};
 use serde_json::json;
@@ -34,7 +34,7 @@ pub(crate) struct SharedWatch {
 }
 
 impl SharedWatch {
-    /// Reads the shared files again and records each change whose time falls in a supervised worker's tool call as that worker's, with `shared.changed`, so Needs you names it. A change no call covers is a person's or the main agent's, and only moves what fold noted. A failure is logged and changes nothing.
+    /// Reads the shared files again and records each change whose time falls in a confined worker's tool call as that worker's, in the worker's one open change, with `shared.changed` for the paths it adds, so Needs you names them. A change no call covers is a person's or the main agent's, and only moves what fold noted. A failure is logged and changes nothing.
     pub(crate) async fn look(&mut self, context: &RemoteContext) {
         let paths = context.paths.clone();
         let previous = self.seen.take();
@@ -110,29 +110,24 @@ impl SharedWatch {
             return;
         }
         let now = context.clock.now();
-        let mut events = Vec::new();
-        for (agent, paths) in &by_agent {
-            let listed: Vec<&String> = paths.iter().take(LISTED_PATHS).collect();
-            match NewEvent::new(types::SHARED_CHANGED, EventActor::fold()).and_then(|event| {
-                event.data(
-                    json!({"agent": agent.as_str(), "paths": listed, "path_count": paths.len()}),
-                )
-            }) {
-                Ok(event) => events.push((agent, paths, event)),
-                Err(_) => return,
-            }
-        }
         let written = context
             .store
             .write(async |tx| -> Result<EventBuffer, ProjectError> {
                 let mut buffer = EventBuffer::new();
-                for (agent, paths, event) in &events {
-                    if fold_store::workspaces::insert_shared_change(tx, agent, paths, now)
-                        .await?
-                        .is_some()
-                    {
-                        buffer.append(tx, event, now).await?;
-                    }
+                for (agent, paths) in &by_agent {
+                    // The agent's open change gains the new paths; one it holds already makes no event.
+                    let Some(added) =
+                        fold_store::workspaces::note_shared_change(tx, agent, paths, now).await?
+                    else {
+                        continue;
+                    };
+                    let listed: Vec<&String> = added.iter().take(LISTED_PATHS).collect();
+                    let event = NewEvent::new(types::SHARED_CHANGED, EventActor::fold())
+                        .and_then(|event| {
+                            event.data(json!({"agent": agent.as_str(), "paths": listed, "path_count": added.len()}))
+                        })
+                        .map_err(|error| FoldError::new(codes::INTERNAL_ERROR, error.to_string()))?;
+                    buffer.append(tx, &event, now).await?;
                 }
                 Ok(buffer)
             })

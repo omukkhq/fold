@@ -95,7 +95,9 @@ impl Supervisor {
             tracing::debug!(agent = %process.agent, "a worker wrote a line that is not JSON");
             return;
         };
-        self.track_tool_calls(&process.agent, &message);
+        if process.confined {
+            self.track_tool_calls(&process.agent, &message);
+        }
         let LineEffect {
             step,
             mut change,
@@ -199,7 +201,7 @@ impl Supervisor {
         }
     }
 
-    /// Notes each tool call of the line that can write files as it starts, from its `tool_use` block, and ends, from the `tool_result` block that names it, so a change of the project folder made meanwhile counts as the worker's.
+    /// Notes each tool call of a confined worker's line that can write files where no guard looks ([`may_write_files`]) as it starts, from its `tool_use` block, and ends, from the `tool_result` block that names it, so a change of the project folder made meanwhile counts as the worker's.
     fn track_tool_calls(&self, agent: &AgentName, message: &ClaudeMessage) {
         let windows = &self.inner.tool_windows;
         match message {

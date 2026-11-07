@@ -220,6 +220,7 @@ impl Supervisor {
             session: Arc::new(session),
             stderr: StderrTail::read(stderr),
             open_turns: Arc::clone(&open_turns),
+            confined: start.is_some(),
         };
         let start = StartWatch {
             session: sessions,

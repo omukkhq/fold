@@ -228,6 +228,8 @@ struct Process {
     stderr: stderr::StderrTail,
     /// Shared with [`Running::open_turns`].
     open_turns: Arc<AtomicU64>,
+    /// The worker runs in its own start folder, apart from the project folder, so its tool calls place the project folder's changes (see [`ToolWindows`]); `false` for the supervised main, which works in the project folder.
+    confined: bool,
 }
 
 impl Supervisor {
