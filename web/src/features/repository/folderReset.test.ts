@@ -30,7 +30,7 @@ describe("the folder actions", () => {
     expect(text.label).toBe("Drop my change");
     expect(text.title).toBe("Drop your waiting change?");
     expect(text.description).toBe(
-      "fold first stashes your unrecorded changes as stash@{0}, so fld unstash brings them back. Then the project folder matches main again. Your change that waits for the main agent is withdrawn: its files, with the conflict in 1 file, go into stash@{0} too, and fold closes the workspace the main agent opened to merge it.",
+      "fold first stashes your unrecorded changes as stash@{0}, so fld unstash brings them back. Then the project folder matches main again. Your change that waits for the main agent is withdrawn: its files, with the conflict in 1 file, go into stash@{0} too. If the main agent opened a workspace to merge it, fold closes that workspace.",
     );
     expect(resetPaths(actions)).toEqual(["plan.md"]);
   });

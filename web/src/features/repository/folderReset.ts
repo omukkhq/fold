@@ -46,7 +46,7 @@ export function resetText(actions: FolderActions): {
   const parts = [SAFETY, "Then the project folder matches main again."];
   if (actions.heldChange !== null) {
     parts.push(
-      `Your change that waits for the main agent is withdrawn: its files, with the conflict in ${filesText(actions.heldChange.length)}, go into stash@{0} too, and fold closes the workspace the main agent opened to merge it.`,
+      `Your change that waits for the main agent is withdrawn: its files, with the conflict in ${filesText(actions.heldChange.length)}, go into stash@{0} too. If the main agent opened a workspace to merge it, fold closes that workspace.`,
     );
   }
   if (actions.markers.length > 0) {

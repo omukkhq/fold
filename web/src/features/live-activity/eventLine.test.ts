@@ -561,6 +561,33 @@ describe("eventLine", () => {
     expect(eventLine(event("human_change.withdrawn")).text).toBe(
       "took back the change of the project folder that waited for the main agent",
     );
+    expect(
+      eventLine(
+        event("human_change.withdrawn", {
+          data: { reset: true, workspace_abandoned: true },
+        }),
+      ).text,
+    ).toBe(
+      "took back the change of the project folder that waited for the main agent with fld reset, and closed its merge workspace",
+    );
+    expect(
+      eventLine(
+        event("human_change.withdrawn", {
+          data: { restore: true, workspace_abandoned: false },
+        }),
+      ).text,
+    ).toBe(
+      "took back the change of the project folder that waited for the main agent with fld restore",
+    );
+    expect(
+      eventLine(
+        event("human_change.withdrawn", {
+          data: { reset: true, workspace_abandoned: false },
+        }),
+      ).text,
+    ).toBe(
+      "took back the change of the project folder that waited for the main agent with fld reset",
+    );
   });
 
   it("writes a line for each step of a stash", () => {

@@ -863,9 +863,22 @@ const SPECS: Record<EventType, Spec> = {
   },
   "human_change.withdrawn": {
     icon: Undo2,
-    text: fixed(
-      "took back the change of the project folder that waited for the main agent",
-    ),
+    text: (e) => {
+      const line =
+        "took back the change of the project folder that waited for the main agent";
+      const command =
+        e.data.reset === true
+          ? " with fld reset"
+          : e.data.restore === true
+            ? " with fld restore"
+            : "";
+      // Only a reset closes the main agent's merge workspace, and only when the main agent had opened one.
+      const closed =
+        e.data.workspace_abandoned === true
+          ? ", and closed its merge workspace"
+          : "";
+      return `${line}${command}${closed}`;
+    },
   },
   "stash.pushed": {
     icon: Archive,
