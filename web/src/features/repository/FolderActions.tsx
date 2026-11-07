@@ -75,7 +75,7 @@ export function FolderActions({ slug }: { slug: string }) {
     <div className="flex flex-col gap-8">
       {waiting === null ? null : (
         <p className="max-w-measure">
-          <CodeText text={waiting} />
+          <CodeText text={waiting} onSunken />
         </p>
       )}
       <div className="flex flex-wrap gap-8">

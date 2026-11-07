@@ -147,7 +147,11 @@ describe("FolderActions", () => {
     expect(note.textContent).toBe(
       "An unstash conflict waits in 1 file of the project folder. Fix the conflict markers and run fld record, or reset the folder.",
     );
-    expect(within(note).getByText("fld record").tagName).toBe("CODE");
+    const command = within(note).getByText("fld record");
+    expect(command.tagName).toBe("CODE");
+    // The note sits on the sunken surface, so its command chip takes the plain surface to stay visible.
+    expect(command.className).toContain("bg-surface");
+    expect(command.className).toContain("whitespace-nowrap");
     expect(
       screen.queryByRole("button", { name: "Restore held files" }),
     ).toBeNull();
