@@ -1,3 +1,8 @@
+use std::collections::BTreeSet;
+use std::time::Duration;
+
+use crate::agents::AgentName;
+use crate::layout::MCP_SERVER_NAME;
 use crate::time::Timestamp;
 
 /// The kind and state of a workspace as the stall rule sees it.
@@ -97,7 +102,7 @@ pub fn stall_start(
     worker.given_at().map_or(start, |given| start.max(given))
 }
 
-/// A worker is stalled when it holds the unreleased implementation claim of the task whose active workspace has had no tracked content change for `stall_minutes`, runs no checks and waits for nobody. The time counts from `last_activity_at`, which is the creation time of a workspace with no edits. Calls do not count: a stalled worker can hold a fresh lease. A `last_activity_at` later than `now` is not stalled.
+/// A worker is stalled when it holds the unreleased implementation claim of the task whose active workspace has had no tracked content change for `stall_minutes`, runs no checks and waits for nobody. The time counts from `last_activity_at`, which is the creation time of a workspace with no edits. Calls do not count: a stalled worker can hold a fresh lease. A `last_activity_at` later than `now` is not stalled. This is [`activity`] for a worker whose stream fold does not read.
 pub fn is_stalled(
     now: Timestamp,
     has_impl_claim: bool,
@@ -107,14 +112,236 @@ pub fn is_stalled(
     last_activity_at: Timestamp,
     stall_minutes: u64,
 ) -> bool {
-    if !has_impl_claim
-        || workspace != WorkspaceFact::Active
-        || checks == WorkspaceChecks::Running
-        || worker.waits()
-    {
-        return false;
+    let facts = StallFacts {
+        has_impl_claim,
+        workspace,
+        checks,
+        worker,
+        ..StallFacts::default()
+    };
+    activity(
+        now,
+        &facts,
+        WorkerStream::Unread,
+        last_activity_at,
+        stall_minutes,
+    )
+    .is_stall()
+}
+
+/// Claude Code's Bash tool ends a command at its timeout, which is ten minutes at most.
+pub const COMMAND_LIMIT: Duration = Duration::from_secs(10 * 60);
+
+/// How long a call stays open before it counts as long: twice [`COMMAND_LIMIT`]. By then Claude Code has ended any command and written its result, also on a slow machine whose process tree takes a while to end, so a command still open means its result was lost or the session hangs. A subagent or another server's tool has no limit of its own and writes lines while it works, so it counts as long once the worker wrote nothing for this time.
+pub const LONG_CALL: Duration = Duration::from_secs(20 * 60);
+
+/// How long a call is open before it shows as work in progress; a shorter call is an ordinary step.
+pub const WORKING_AFTER: Duration = Duration::from_secs(60);
+
+/// The kind of a worker's tool call, as the activity rule tells calls apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallKind {
+    /// A shell command, which Claude Code ends after [`COMMAND_LIMIT`] at most.
+    Command,
+    /// A fold tool. fold serves it and its longest call, `wait_for_events`, ends after 25 minutes at most, so a fold call never counts as long.
+    Fold,
+    /// A subagent, which writes its own lines while it works.
+    Subagent,
+    /// A question to a person, which waits as long as the person does.
+    Question,
+    /// Any other tool.
+    Tool,
+}
+
+impl CallKind {
+    /// The kind of a call of the Claude Code tool `tool`.
+    pub fn of(tool: &str) -> Self {
+        match tool {
+            "Bash" => Self::Command,
+            "Task" | "Agent" => Self::Subagent,
+            "AskUserQuestion" => Self::Question,
+            _ if tool
+                .strip_prefix("mcp__")
+                .and_then(|rest| rest.strip_prefix(MCP_SERVER_NAME))
+                .is_some_and(|rest| rest.starts_with("__")) =>
+            {
+                Self::Fold
+            }
+            _ => Self::Tool,
+        }
     }
-    crate::tasks::claims::is_stale(last_activity_at, now, stall_minutes)
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Command => "command",
+            Self::Fold => "fold",
+            Self::Subagent => "subagent",
+            Self::Question => "question",
+            Self::Tool => "tool",
+        }
+    }
+}
+
+/// A worker's oldest tool call that has no result yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenCall {
+    pub kind: CallKind,
+    pub since: Timestamp,
+}
+
+/// What fold read of the worker's own output, the stream of the process fold supervises, as the stall rule sees it beside the workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkerStream {
+    /// fold reads no output of the worker: it runs in a session that fold does not supervise, so the workspace and the worker's turn are all fold sees of it.
+    #[default]
+    Unread,
+    /// The worker's process runs. `last_output_at` is the time of its newest line, or of the start of its process or of the daemon when it wrote none since; `open_call` is its oldest call without a result.
+    Running {
+        last_output_at: Timestamp,
+        open_call: Option<OpenCall>,
+    },
+    /// The worker's process ended at `at`, and no process of it runs.
+    Ended { at: Timestamp },
+}
+
+/// The facts of the claim, the workspace and the worker that the stall rule reads beside the worker's stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StallFacts {
+    pub has_impl_claim: bool,
+    pub workspace: WorkspaceFact,
+    pub checks: WorkspaceChecks,
+    pub worker: WorkerTurn,
+    /// The task has an open report: the worker said its work is done and waits for the lead's check.
+    pub reported: bool,
+    /// Needs you already names why the worker cannot work: it cannot reach fold or the model, or the daemon finds no Claude Code.
+    pub explained: bool,
+}
+
+impl Default for StallFacts {
+    fn default() -> Self {
+        Self {
+            has_impl_claim: false,
+            workspace: WorkspaceFact::Active,
+            checks: WorkspaceChecks::None,
+            worker: WorkerTurn::default(),
+            reported: false,
+            explained: false,
+        }
+    }
+}
+
+/// What the stall rule says about the worker of a workspace: what fold saw, and whether someone must act.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Activity {
+    /// Nothing to say: the worker works in short steps, waits for others, or holds no claim on an active workspace.
+    Quiet,
+    /// The call open since `since` has run for [`WORKING_AFTER`] or longer and is not long: the worker works.
+    Working { call: CallKind, since: Timestamp },
+    /// No call is open and nothing happened since `since` for the stall window: the session hangs between its steps or ended its turn without its work done.
+    Silent { since: Timestamp },
+    /// The call open since `since` ran long; see [`LONG_CALL`].
+    LongCall { call: CallKind, since: Timestamp },
+    /// The worker's process ended at `since` and the task has no report.
+    Stopped { since: Timestamp },
+}
+
+impl Activity {
+    /// The worker needs someone to act: it is silent, its call ran long, or its process ended.
+    pub fn is_stall(self) -> bool {
+        matches!(
+            self,
+            Self::Silent { .. } | Self::LongCall { .. } | Self::Stopped { .. }
+        )
+    }
+
+    /// The name of a stall, as events and the live state write it; `None` for `Quiet` and `Working`.
+    pub fn reason(self) -> Option<&'static str> {
+        match self {
+            Self::Silent { .. } => Some("silent"),
+            Self::LongCall { .. } => Some("long_call"),
+            Self::Stopped { .. } => Some("stopped"),
+            Self::Quiet | Self::Working { .. } => None,
+        }
+    }
+}
+
+/// Decides what the worker of a workspace does at `now`. Nothing is said of a worker without the implementation claim, a workspace that is not active, a check run that goes, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A process that ended is `Stopped` at once, unless the worker was given the turn after it ended, such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
+pub fn activity(
+    now: Timestamp,
+    facts: &StallFacts,
+    stream: WorkerStream,
+    start: Timestamp,
+    stall_minutes: u64,
+) -> Activity {
+    if !facts.has_impl_claim
+        || facts.workspace != WorkspaceFact::Active
+        || facts.checks == WorkspaceChecks::Running
+        || facts.worker.waits()
+        || facts.reported
+        || facts.explained
+    {
+        return Activity::Quiet;
+    }
+    let silent = |since: Timestamp| {
+        if crate::tasks::claims::is_stale(since, now, stall_minutes) {
+            Activity::Silent { since }
+        } else {
+            Activity::Quiet
+        }
+    };
+    let lasted = |since: Timestamp, span: Duration| {
+        now.duration_since(since)
+            .is_some_and(|elapsed| elapsed >= span)
+    };
+    match stream {
+        WorkerStream::Unread => silent(start),
+        WorkerStream::Ended { at } if at >= start => Activity::Stopped { since: at },
+        WorkerStream::Ended { .. } => silent(start),
+        WorkerStream::Running {
+            last_output_at,
+            open_call: None,
+        } => silent(start.max(last_output_at)),
+        WorkerStream::Running {
+            last_output_at,
+            open_call: Some(call),
+        } => {
+            let quiet_since = match call.kind {
+                CallKind::Question => return Activity::Quiet,
+                CallKind::Fold => None,
+                CallKind::Command => Some(call.since),
+                CallKind::Subagent | CallKind::Tool => Some(call.since.max(last_output_at)),
+            };
+            if quiet_since.is_some_and(|since| lasted(since, LONG_CALL)) {
+                Activity::LongCall {
+                    call: call.kind,
+                    since: call.since,
+                }
+            } else if lasted(call.since, WORKING_AFTER) {
+                Activity::Working {
+                    call: call.kind,
+                    since: call.since,
+                }
+            } else {
+                Activity::Quiet
+            }
+        }
+    }
+}
+
+/// Whether a stall needs a person: nobody was told because no agent can act on it (`told_at` is `None`), or the agent told at `told_at` let one more stall window pass without fixing it.
+pub fn needs_person(now: Timestamp, told_at: Option<Timestamp>, stall_minutes: u64) -> bool {
+    told_at.is_none_or(|told| crate::tasks::claims::is_stale(told, now, stall_minutes))
+}
+
+/// Who hears of a stall first: the agent that started the worker, which is its lead, or else the main agents, such as for a worker a person started. An empty list means no agent can act.
+pub fn stall_receivers(
+    starter: Option<&AgentName>,
+    main_agents: &BTreeSet<AgentName>,
+) -> Vec<AgentName> {
+    match starter {
+        Some(starter) => vec![starter.clone()],
+        None => main_agents.iter().cloned().collect(),
+    }
 }
 
 #[cfg(test)]
@@ -538,5 +765,297 @@ mod tests {
         assert_eq!(stall_start(at(0), back, NONE, worker), at(40));
         let ended = WorkspaceChecks::Ended { at: at(45) };
         assert_eq!(stall_start(at(0), back, ended, worker), at(45));
+    }
+
+    const CLAIMED: StallFacts = StallFacts {
+        has_impl_claim: true,
+        workspace: WorkspaceFact::Active,
+        checks: NONE,
+        worker: IDLE,
+        reported: false,
+        explained: false,
+    };
+
+    fn running(last_output: i64, call: Option<(CallKind, i64)>) -> WorkerStream {
+        WorkerStream::Running {
+            last_output_at: at(last_output),
+            open_call: call.map(|(kind, since)| OpenCall {
+                kind,
+                since: at(since),
+            }),
+        }
+    }
+
+    #[test]
+    fn a_call_of_each_tool_has_its_kind() {
+        assert_eq!(CallKind::of("Bash"), CallKind::Command);
+        assert_eq!(CallKind::of("Task"), CallKind::Subagent);
+        assert_eq!(CallKind::of("Agent"), CallKind::Subagent);
+        assert_eq!(CallKind::of("AskUserQuestion"), CallKind::Question);
+        assert_eq!(CallKind::of("mcp__fold__wait_for_events"), CallKind::Fold);
+        assert_eq!(CallKind::of("mcp__folder__read"), CallKind::Tool);
+        assert_eq!(CallKind::of("mcp__pencil__draw"), CallKind::Tool);
+        assert_eq!(CallKind::of("Edit"), CallKind::Tool);
+        let names: Vec<&str> = [
+            CallKind::Command,
+            CallKind::Fold,
+            CallKind::Subagent,
+            CallKind::Question,
+            CallKind::Tool,
+        ]
+        .into_iter()
+        .map(CallKind::as_str)
+        .collect();
+        assert_eq!(names, ["command", "fold", "subagent", "question", "tool"]);
+    }
+
+    #[test]
+    fn an_open_call_is_work_and_never_silence() {
+        let call = Some((CallKind::Command, 0));
+        assert_eq!(
+            activity(at(30_000), &CLAIMED, running(0, call), at(0), 5),
+            Activity::Quiet,
+            "a short call is an ordinary step"
+        );
+        for minutes in [1, 5, 8, 19] {
+            assert_eq!(
+                activity(at(minutes * MINUTE), &CLAIMED, running(0, call), at(0), 5),
+                Activity::Working {
+                    call: CallKind::Command,
+                    since: at(0)
+                },
+                "{minutes} min"
+            );
+        }
+        let working = activity(at(8 * MINUTE), &CLAIMED, running(0, call), at(0), 5);
+        assert!(!working.is_stall());
+        assert_eq!(working.reason(), None);
+    }
+
+    #[test]
+    fn no_open_call_and_no_output_for_the_window_is_silence() {
+        let stream = running(3 * MINUTE, None);
+        assert_eq!(
+            activity(at(8 * MINUTE - 1), &CLAIMED, stream, at(0), 5),
+            Activity::Quiet
+        );
+        let silent = activity(at(8 * MINUTE), &CLAIMED, stream, at(0), 5);
+        assert_eq!(
+            silent,
+            Activity::Silent {
+                since: at(3 * MINUTE)
+            },
+            "the newest line starts the window"
+        );
+        assert!(silent.is_stall());
+        assert_eq!(silent.reason(), Some("silent"));
+        assert_eq!(
+            activity(at(8 * MINUTE), &CLAIMED, stream, at(4 * MINUTE), 5),
+            Activity::Quiet,
+            "a later edit, answer or start counts too"
+        );
+    }
+
+    #[test]
+    fn a_command_open_past_twice_claude_codes_limit_is_a_long_call() {
+        assert_eq!(LONG_CALL, COMMAND_LIMIT * 2);
+        let call = Some((CallKind::Command, 0));
+        let at_limit = at(i64::try_from(LONG_CALL.as_millis()).unwrap());
+        assert!(matches!(
+            activity(at(20 * MINUTE - 1), &CLAIMED, running(0, call), at(0), 5),
+            Activity::Working { .. }
+        ));
+        let long = activity(at_limit, &CLAIMED, running(0, call), at(0), 5);
+        assert_eq!(
+            long,
+            Activity::LongCall {
+                call: CallKind::Command,
+                since: at(0)
+            }
+        );
+        assert_eq!(long.reason(), Some("long_call"));
+        assert!(long.is_stall());
+        assert_eq!(
+            activity(
+                at(25 * MINUTE),
+                &CLAIMED,
+                running(15 * MINUTE, call),
+                at(0),
+                5
+            ),
+            long,
+            "the lines of a parallel call do not make a command shorter"
+        );
+    }
+
+    #[test]
+    fn a_subagent_or_another_tool_is_long_only_after_the_window_without_output() {
+        for kind in [CallKind::Subagent, CallKind::Tool] {
+            let call = Some((kind, 0));
+            assert!(
+                matches!(
+                    activity(
+                        at(45 * MINUTE),
+                        &CLAIMED,
+                        running(30 * MINUTE, call),
+                        at(0),
+                        5
+                    ),
+                    Activity::Working { .. }
+                ),
+                "{kind:?} that writes lines works"
+            );
+            assert_eq!(
+                activity(
+                    at(50 * MINUTE),
+                    &CLAIMED,
+                    running(30 * MINUTE, call),
+                    at(0),
+                    5
+                ),
+                Activity::LongCall {
+                    call: kind,
+                    since: at(0)
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_fold_call_never_runs_long_and_a_question_is_never_work() {
+        let fold = Some((CallKind::Fold, 0));
+        assert_eq!(
+            activity(at(24 * 60 * MINUTE), &CLAIMED, running(0, fold), at(0), 5),
+            Activity::Working {
+                call: CallKind::Fold,
+                since: at(0)
+            }
+        );
+        let question = Some((CallKind::Question, 0));
+        assert_eq!(
+            activity(at(60 * MINUTE), &CLAIMED, running(0, question), at(0), 5),
+            Activity::Quiet
+        );
+    }
+
+    #[test]
+    fn a_process_that_ended_is_stopped_at_once() {
+        let ended = WorkerStream::Ended {
+            at: at(10 * MINUTE),
+        };
+        let stopped = activity(at(10 * MINUTE), &CLAIMED, ended, at(0), 5);
+        assert_eq!(
+            stopped,
+            Activity::Stopped {
+                since: at(10 * MINUTE)
+            }
+        );
+        assert!(stopped.is_stall());
+        assert_eq!(stopped.reason(), Some("stopped"));
+        let reported = StallFacts {
+            reported: true,
+            ..CLAIMED
+        };
+        assert_eq!(
+            activity(at(60 * MINUTE), &reported, ended, at(0), 5),
+            Activity::Quiet,
+            "a worker that reported its task is done"
+        );
+        let explained = StallFacts {
+            explained: true,
+            ..CLAIMED
+        };
+        assert_eq!(
+            activity(at(60 * MINUTE), &explained, ended, at(0), 5),
+            Activity::Quiet,
+            "Needs you already names the failure"
+        );
+    }
+
+    #[test]
+    fn a_turn_given_after_the_end_waits_one_window_for_the_owed_resume() {
+        let ended = WorkerStream::Ended {
+            at: at(10 * MINUTE),
+        };
+        let back = at(12 * MINUTE);
+        assert_eq!(
+            activity(at(16 * MINUTE), &CLAIMED, ended, back, 5),
+            Activity::Quiet
+        );
+        assert_eq!(
+            activity(at(17 * MINUTE), &CLAIMED, ended, back, 5),
+            Activity::Silent { since: back }
+        );
+    }
+
+    #[test]
+    fn a_worker_that_waits_for_a_person_never_stalls_whatever_its_stream() {
+        let asked = StallFacts {
+            worker: WorkerTurn {
+                waits_for_person: true,
+                ..IDLE
+            },
+            ..CLAIMED
+        };
+        for stream in [
+            WorkerStream::Unread,
+            running(0, None),
+            running(0, Some((CallKind::Command, 0))),
+            WorkerStream::Ended { at: at(0) },
+        ] {
+            assert_eq!(
+                activity(at(24 * 60 * MINUTE), &asked, stream, at(0), 5),
+                Activity::Quiet,
+                "{stream:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_is_said_without_a_claim_on_an_active_workspace_or_during_a_check_run() {
+        let stream = running(0, Some((CallKind::Command, 0)));
+        let late = at(60 * MINUTE);
+        let cases = [
+            StallFacts {
+                has_impl_claim: false,
+                ..CLAIMED
+            },
+            StallFacts {
+                workspace: WorkspaceFact::Sent,
+                ..CLAIMED
+            },
+            StallFacts {
+                checks: WorkspaceChecks::Running,
+                ..CLAIMED
+            },
+        ];
+        for facts in cases {
+            assert_eq!(
+                activity(late, &facts, stream, at(0), 5),
+                Activity::Quiet,
+                "{facts:?}"
+            );
+        }
+        assert_eq!(StallFacts::default().workspace, WorkspaceFact::Active);
+        assert!(!StallFacts::default().has_impl_claim);
+    }
+
+    #[test]
+    fn a_stall_needs_a_person_one_window_after_the_agent_was_told_or_at_once_when_nobody_can_act() {
+        assert!(needs_person(at(0), None, 5));
+        assert!(!needs_person(at(5 * MINUTE - 1), Some(at(0)), 5));
+        assert!(needs_person(at(5 * MINUTE), Some(at(0)), 5));
+    }
+
+    #[test]
+    fn a_stall_goes_to_the_starter_or_else_to_the_main_agents() {
+        let lead = AgentName::parse("web-lead").unwrap();
+        let main: BTreeSet<AgentName> = [AgentName::parse("frontend").unwrap()].into();
+        assert_eq!(stall_receivers(Some(&lead), &main), vec![lead.clone()]);
+        assert_eq!(
+            stall_receivers(None, &main),
+            main.iter().cloned().collect::<Vec<_>>()
+        );
+        assert!(stall_receivers(None, &BTreeSet::new()).is_empty());
     }
 }
