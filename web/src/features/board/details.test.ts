@@ -111,7 +111,7 @@ describe("cardDetails", () => {
       text: "3 files",
     });
     expect(details.why).toBe(
-      "Stalled: its worker made no edits for a while · Stale claim: the worker's lease ran out.",
+      "Stalled: fold told the worker's lead and it did not start again, or no agent can act · Stale claim: the worker's lease ran out.",
     );
     expect(details.notes).toEqual(["rp-2 waits for T-9 until the next check"]);
   });

@@ -112,6 +112,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::REVIEW_BATCH_WAIT_ENDED,
         types::REVIEW_BATCH_READY,
         types::FOLDER_AGENT_CHANGED,
+        types::WORKER_STALLED,
     ]
     .contains(&event.event_type)
 }
@@ -609,6 +610,9 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
     if kind == types::WORKER_MODEL_UNREACHABLE {
         return model_unreachable_rule(event, ctx);
     }
+    if kind == types::WORKER_STALLED {
+        return stall_rule(event);
+    }
     if let Some(rule) = request_rule(event, ctx) {
         return Some(rule);
     }
@@ -710,6 +714,51 @@ fn model_unreachable_rule(
         .cloned()
         .collect();
     Some((agents, text, "list_workers"))
+}
+
+/// A stall reaches the agents the daemon told in `data.told`, the worker's lead or else the main agents, with what fold saw and the next tool that starts the worker again: a message wakes an idle worker and resumes a stopped one in its session, and a stop first ends a process that hangs. Needs you shows the stall only when it lasts one more stall window after this notice.
+fn stall_rule(event: &Event) -> Option<(Vec<AgentName>, String, &'static str)> {
+    let data = &event.data;
+    let agent = data.get("agent")?.as_str()?;
+    let task = event.task?;
+    let minutes = data
+        .get("minutes")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let told: Vec<AgentName> = data
+        .get("told")?
+        .as_array()?
+        .iter()
+        .filter_map(|name| AgentName::parse(name.as_str()?).ok())
+        .collect();
+    let resume = "send_message resumes it in its session";
+    let (text, next) = match data.get("reason")?.as_str()? {
+        "silent" => (
+            format!(
+                "{agent} shows no activity on {task} for {minutes} min; send_message wakes it, or stop_worker it and then {resume}"
+            ),
+            "send_message",
+        ),
+        "long_call" => {
+            let call = match data.get("call").and_then(serde_json::Value::as_str) {
+                Some("command") => "a command",
+                Some("subagent") => "a subagent",
+                _ => "a tool call",
+            };
+            (
+                format!(
+                    "{call} of {agent} on {task} has run for {minutes} min; stop_worker ends it, then {resume}"
+                ),
+                "stop_worker",
+            )
+        }
+        "stopped" => (
+            format!("{agent} stopped on {task} without a report; {resume}"),
+            "send_message",
+        ),
+        _ => return None,
+    };
+    Some((told, text, next))
 }
 
 /// A ready task nobody claimed goes to whoever starts its builder. A task of Main goes to the main agent, which claims and builds it itself; the lead of any other area starts a task worker; while the area has no lead, the main agent starts one; a task in no area waits for the main agent to give it an area label. Both an approved request card and a dependent of an integrated task turn ready through `task.status_changed`, so this one rule routes them.
@@ -1887,6 +1936,85 @@ mod tests {
                 "open_main_workspace"
             )]
         );
+    }
+
+    #[test]
+    fn a_stall_tells_the_agents_the_daemon_named_with_the_tool_that_starts_the_worker_again() {
+        let stalled =
+            |data: serde_json::Value| with_data(event(types::WORKER_STALLED, "fold"), data);
+        let silent = stalled(
+            json!({"agent": "web-worker", "reason": "silent", "minutes": 12, "told": ["web-lead"]}),
+        );
+        assert!(is_pushed(&silent));
+        assert_eq!(
+            sent(&notice_for(&silent, &ctx())),
+            vec![row(
+                "web-lead",
+                "fold: web-worker shows no activity on T-12 for 12 min; send_message wakes it, or stop_worker it and then send_message resumes it in its session. Call send_message.",
+                "send_message"
+            )]
+        );
+        let long = stalled(
+            json!({"agent": "web-worker", "reason": "long_call", "call": "command", "minutes": 25, "told": ["main"]}),
+        );
+        assert_eq!(
+            sent(&notice_for(&long, &ctx())),
+            vec![row(
+                "main",
+                "fold: a command of web-worker on T-12 has run for 25 min; stop_worker ends it, then send_message resumes it in its session. Call stop_worker.",
+                "stop_worker"
+            )]
+        );
+        let subagent = stalled(
+            json!({"agent": "web-worker", "reason": "long_call", "call": "subagent", "minutes": 21, "told": ["main"]}),
+        );
+        assert!(
+            notice_for(&subagent, &ctx())[0]
+                .text
+                .starts_with("fold: a subagent of web-worker")
+        );
+        let tool = stalled(
+            json!({"agent": "web-worker", "reason": "long_call", "call": "tool", "minutes": 21, "told": ["main"]}),
+        );
+        assert!(
+            notice_for(&tool, &ctx())[0]
+                .text
+                .starts_with("fold: a tool call of web-worker")
+        );
+        let stopped = stalled(
+            json!({"agent": "web-worker", "reason": "stopped", "minutes": 0, "told": ["web-lead", "main"]}),
+        );
+        assert_eq!(
+            sent(&notice_for(&stopped, &ctx())),
+            vec![
+                row(
+                    "web-lead",
+                    "fold: web-worker stopped on T-12 without a report; send_message resumes it in its session. Call send_message.",
+                    "send_message"
+                ),
+                row(
+                    "main",
+                    "fold: web-worker stopped on T-12 without a report; send_message resumes it in its session. Call send_message.",
+                    "send_message"
+                ),
+            ]
+        );
+        let nobody =
+            stalled(json!({"agent": "web-worker", "reason": "silent", "minutes": 5, "told": []}));
+        assert!(notice_for(&nobody, &ctx()).is_empty());
+        let unknown = stalled(
+            json!({"agent": "web-worker", "reason": "dozing", "minutes": 5, "told": ["main"]}),
+        );
+        assert!(notice_for(&unknown, &ctx()).is_empty());
+        let longest = "w".repeat(32);
+        let widest = with_data(
+            Event {
+                task: Some(TaskId::from_number(99_999).unwrap()),
+                ..event(types::WORKER_STALLED, "fold")
+            },
+            json!({"agent": longest, "reason": "silent", "minutes": 9_999, "told": ["main"]}),
+        );
+        assert!(notice_for(&widest, &ctx())[0].text.len() <= MAX_NOTICE_LEN);
     }
 
     #[test]

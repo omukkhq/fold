@@ -102,9 +102,45 @@ describe("files", () => {
 });
 
 describe("attention", () => {
+  it("shows what fold saw of the worker from the live state, and a stall as the badge only once it waits for a person", () => {
+    const activity = {
+      state: "silent" as const,
+      call: null,
+      since: 0,
+      supervised: true,
+      told: ["web-lead"],
+    };
+    const told = attentionView([], 0, 12 * 60_000, {
+      check_run: null,
+      activity,
+      stalled: false,
+      worker: "web-worker",
+    });
+    expect(told).toMatchObject({
+      activity: "No activity from @web-worker for 12 min",
+      stalled: null,
+    });
+    const flagged = attentionView(
+      [{ kind: "stalled", closable: false }],
+      0,
+      12 * 60_000,
+      {
+        check_run: null,
+        activity,
+        stalled: true,
+        worker: "web-worker",
+      },
+    );
+    expect(flagged).toMatchObject({
+      activity: null,
+      stalled: "No activity from @web-worker for 12 min",
+    });
+  });
+
   it("shows the daemon's stalled and stale items and nothing else", () => {
     expect(attentionView([], 0, 1000)).toEqual({
       checks: null,
+      activity: null,
       stalled: null,
       staleClaim: false,
     });
@@ -112,6 +148,7 @@ describe("attention", () => {
       attentionView([{ kind: "stalled", closable: false }], 0, 7 * 60_000),
     ).toEqual({
       checks: null,
+      activity: null,
       stalled: "no edits for 7 min",
       staleClaim: false,
     });
@@ -119,6 +156,7 @@ describe("attention", () => {
       attentionView([{ kind: "stale_claim", closable: false }], 0, 1000),
     ).toEqual({
       checks: null,
+      activity: null,
       stalled: null,
       staleClaim: true,
     });
@@ -131,7 +169,12 @@ describe("attention", () => {
         0,
         1000,
       ),
-    ).toEqual({ checks: null, stalled: null, staleClaim: false });
+    ).toEqual({
+      checks: null,
+      activity: null,
+      stalled: null,
+      staleClaim: false,
+    });
   });
 
   it("says how far main is ahead of the base", () => {
@@ -170,6 +213,7 @@ describe("attention", () => {
     ];
     expect(attentionView(items, 0, 7 * 60_000, { check_run: run })).toEqual({
       checks: "running checks",
+      activity: null,
       stalled: null,
       staleClaim: true,
     });

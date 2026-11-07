@@ -113,6 +113,7 @@ function live(id: string, summary: string): LiveWorkspace {
     stalled: false,
     edits_after_version: null,
     check_run: null,
+    activity: null,
   };
 }
 
@@ -262,6 +263,33 @@ describe("patch rules", () => {
     expect(invalidated.filter((key) => key !== undefined)).toEqual([
       JSON.stringify(keys.workspaceTrees(slug, "ws-1")),
     ]);
+  });
+
+  it("reads Needs you, the board and the agents again when a stall starts or stops waiting for a person", () => {
+    client.setQueryData(keys.workspaceLive(slug, "ws-1"), live("ws-1", "x"));
+    applyEvent(
+      client,
+      slug,
+      guarded({
+        kind: "workspace_changed",
+        ...live("ws-1", "x"),
+        stalled: true,
+      }),
+    );
+    expect(hit(keys.needsYou(slug))).toBe(true);
+    expect(hit(keys.board(slug))).toBe(true);
+    expect(hit(keys.agents(slug))).toBe(true);
+    invalidated = [];
+    applyEvent(
+      client,
+      slug,
+      guarded({
+        kind: "workspace_changed",
+        ...live("ws-1", "y"),
+        stalled: true,
+      }),
+    );
+    expect(hit(keys.needsYou(slug))).toBe(false);
   });
 
   it("reads the directory listings of a workspace again when it changes", () => {

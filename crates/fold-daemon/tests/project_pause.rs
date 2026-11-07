@@ -211,7 +211,13 @@ async fn a_claim_held_through_a_long_pause_stays_fresh_and_gets_a_full_lease_at_
     check_stalls(&harness.handle, harness.project.now())
         .await
         .unwrap();
-    assert!(harness.handle.live.get(workspace).unwrap().view.stalled);
+    let view = harness.handle.live.get(workspace).unwrap().view.clone();
+    let seen = view
+        .activity
+        .expect("the worker is silent since the resume");
+    assert_eq!(seen.state, fold_daemon::live::ActivityState::Silent);
+    assert_eq!(seen.told, [MAIN], "the main agent hears of it first");
+    assert!(!view.stalled, "a person sees it one window later");
     clock.advance(Duration::from_secs(60)).unwrap();
     let read = harness.call(MAIN, "get_task", json!({"id": task})).await;
     assert_eq!(read["claim"]["stale"], true, "{read}");

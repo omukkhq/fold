@@ -443,7 +443,7 @@ describe("BoardScreen", () => {
     const quiet = await openPanel("Quiet worker");
     expect(
       within(quiet).getByText(
-        "Stalled: its worker made no edits for a while · Stale claim: the worker's lease ran out.",
+        "Stalled: fold told the worker's lead and it did not start again, or no agent can act · Stale claim: the worker's lease ran out.",
       ),
     ).toBeTruthy();
     const review = await openPanel("Needs a person");

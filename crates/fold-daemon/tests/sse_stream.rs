@@ -249,6 +249,7 @@ fn live_workspace(number: u32, summary: &str) -> LiveWorkspace {
         stalled: false,
         edits_after_version: None,
         check_run: None,
+        activity: None,
     }
 }
 

@@ -10,7 +10,9 @@ pub fn item_key(item: &NeedsYouItem) -> String {
         NeedsYouKind::Permission => item.question.map(|id| id.to_string()),
         NeedsYouKind::HumanReview => item.proposal.map(|id| id.to_string()),
         NeedsYouKind::RequestDraft => item.request.map(|id| id.to_string()),
-        NeedsYouKind::HumanTask | NeedsYouKind::Blocker => item.task.map(|id| id.to_string()),
+        NeedsYouKind::HumanTask | NeedsYouKind::Blocker | NeedsYouKind::WorkerStalled => {
+            item.task.map(|id| id.to_string())
+        }
         NeedsYouKind::WorkerUnreachable
         | NeedsYouKind::WorkerModelUnreachable
         | NeedsYouKind::ClaudeNotFound => item.agent.as_ref().map(ToString::to_string),
@@ -92,6 +94,7 @@ fn title(item: &NeedsYouItem) -> String {
             format!("The project folder changed while {agent} worked")
         }
         NeedsYouKind::SharedChanged => format!("A shared file changed while {agent} worked"),
+        NeedsYouKind::WorkerStalled => format!("{agent} stalled{on_task}"),
     }
 }
 
@@ -113,7 +116,7 @@ fn path(item: &NeedsYouItem) -> String {
         NeedsYouKind::RequestDraft => {
             format!("requests/{}", id(item.request.map(|r| r.to_string())))
         }
-        NeedsYouKind::HumanTask | NeedsYouKind::Blocker => {
+        NeedsYouKind::HumanTask | NeedsYouKind::Blocker | NeedsYouKind::WorkerStalled => {
             format!("t/{}", id(item.task.map(|t| t.to_string())))
         }
         NeedsYouKind::HumanChange
@@ -213,6 +216,26 @@ mod tests {
         assert_eq!(
             notice_item(&worker).title,
             "@api-lead cannot reach the model"
+        );
+
+        let stalled = NeedsYouItem::worker_stalled(
+            AgentName::parse("web-worker").unwrap(),
+            TaskId::from_number(12),
+            crate::live::LiveActivity {
+                state: crate::live::ActivityState::Silent,
+                call: None,
+                since: Timestamp::from_millis(9).unwrap(),
+                supervised: true,
+                told: vec!["web-lead".to_owned()],
+            },
+        );
+        assert_eq!(item_key(&stalled), "worker_stalled:T-12");
+        let shown = notice_item(&stalled);
+        assert_eq!(shown.title, "@web-worker stalled on T-12");
+        assert_eq!(shown.path, "t/T-12");
+        assert_eq!(
+            stalled.reason.as_deref(),
+            Some("restart it in a new session: `fld worker restart web-worker`")
         );
 
         let off = NeedsYouItem::notify_target_off(

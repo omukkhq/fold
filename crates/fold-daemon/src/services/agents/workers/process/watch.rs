@@ -69,6 +69,7 @@ impl Supervisor {
         self.inner
             .tool_windows
             .close_all(&process.agent, file_clock_now());
+        self.inner.streams.ended(&process.agent, process.generation);
         let code = status.ok().and_then(exit_code);
         if let Err(error) = self
             .on_exit(&process, code, detached.load(Ordering::SeqCst))
@@ -97,6 +98,14 @@ impl Supervisor {
         };
         if process.confined {
             self.track_tool_calls(&process.agent, &message);
+        }
+        if !detached {
+            self.inner.streams.line(
+                &process.agent,
+                process.generation,
+                self.inner.clock.now(),
+                &message,
+            );
         }
         let LineEffect {
             step,

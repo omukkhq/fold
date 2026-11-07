@@ -49,6 +49,7 @@ mod acceptance_37_stash_drop;
 mod acceptance_38_folder_reset;
 mod acceptance_39_request_wakeup;
 mod acceptance_3_parallel_workspaces;
+mod acceptance_40_stall_tells_the_lead_first;
 mod acceptance_4_live_diff;
 mod acceptance_5_review_and_integrate;
 mod acceptance_6_dependency_unblocks;
@@ -204,6 +205,7 @@ mod web_tokens;
 mod webhook_notices;
 #[cfg(feature = "failpoints")]
 mod webhook_notices_failpoints;
+mod worker_activity;
 mod worker_cost;
 mod worker_limits;
 mod worker_questions;

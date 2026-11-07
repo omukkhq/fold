@@ -58,6 +58,7 @@ import {
 } from "./AgentChangeChoices";
 import { HrefLink } from "./HrefLink";
 import { SharedChangeDismiss, SharedFilesDialog } from "./SharedChangeDismiss";
+import { RestartStalled } from "@/features/workers/RestartStalled";
 import { listNote, listState } from "./listNote";
 import { PanelNote } from "./PanelNote";
 import {
@@ -87,6 +88,7 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   notify_target_off: BellOff,
   agent_change: Bot,
   shared_changed: Link2,
+  worker_stalled: Hand,
 };
 
 const MINUTE_MS = 60_000;
@@ -475,6 +477,8 @@ export function Inbox({ slug }: { slug: string }) {
                                 choices={agentChange}
                                 change={line.settle}
                               />
+                            ) : line.restart !== null ? (
+                              <RestartStalled slug={slug} name={line.restart} />
                             ) : line.dismiss === null ? undefined : (
                               <SharedChangeDismiss
                                 slug={slug}
