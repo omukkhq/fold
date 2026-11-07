@@ -4,7 +4,7 @@ use fold_core::{FoldError, codes};
 
 use super::remote::RemoteError;
 
-/// How a command that discards the human's work gets its yes: `--yes` gives it at once, a terminal asks, and anything else refuses, so a script never discards work by accident.
+/// How a command that discards the human's work gets its yes: `--yes` gives it at once, a terminal asks, and anything else refuses with `needs_confirmation`, so neither a script nor an agent's shell discards work by accident. The hint sends the caller to a terminal first, because an agent that reads `--yes` in a hint passes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Consent {
     pub yes: bool,
@@ -37,8 +37,9 @@ impl Consent {
                 format!("{command} discards work, so it asks first, and no terminal can answer"),
             )
             .with_hint(format!(
-                "run `{command} --yes` to go on without the question"
+                "run `{command}` in a terminal and answer the question; only a script that a person set up for this runs `{command} --yes`"
             ))
+            .with_details([("reason", serde_json::json!("needs_confirmation"))])
             .into());
         }
         write!(out, "{question} [y/N] ")?;
@@ -108,8 +109,14 @@ mod tests {
         assert_eq!(refused.code(), Some("invalid_request"));
         assert_eq!(
             refused.hint(),
-            Some("run `fld stash drop --yes` to go on without the question")
+            Some(
+                "run `fld stash drop` in a terminal and answer the question; only a script that a person set up for this runs `fld stash drop --yes`"
+            )
         );
+        let RemoteError::Fold(error) = &refused else {
+            panic!("expected a local refusal, got {refused:?}");
+        };
+        assert_eq!(error.details().unwrap()["reason"], "needs_confirmation");
         assert!(out.is_empty());
     }
 }
