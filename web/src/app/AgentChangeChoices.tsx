@@ -1,8 +1,10 @@
 import {
   type UseMutationResult,
+  useIsMutating,
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
+import { Archive } from "lucide-react";
 import { useState } from "react";
 import {
   ignoreAgentChanges,
@@ -13,12 +15,16 @@ import { keys } from "@/api/keys";
 import { Button } from "@/components/button/Button";
 import { Dialog } from "@/components/overlay/Dialog";
 import { Mono } from "@/components/mono/Mono";
+import { WriteError } from "@/features/task/parts";
 import {
-  ACTION_LABELS,
-  PENDING_LABELS,
-  confirmationOf,
-  settleFailure,
-  type RecordConfirmation,
+  RECORD_PENDING,
+  dialogText,
+  failureAt,
+  folderWriteKey,
+  nextAsking,
+  putAsideLabel,
+  type AgentChange,
+  type Asking,
   type SettleAction,
 } from "./agentChanges";
 
@@ -29,17 +35,22 @@ interface Choice {
 
 type Settle = UseMutationResult<unknown, Error, Choice>;
 
-/** The human's choice for a worker's change of the project folder, which stays pending until Needs you is read again, and the confirmation a record waits for. It lives above the Inbox's popover, so the dialog outlives the popover. */
-export function useAgentChangeChoices(slug: string): {
+export interface AgentChangeChoicesState {
   settle: Settle;
-  confirmation: RecordConfirmation | null;
-  dismiss: () => void;
-} {
+  /** The open dialog; the Inbox's popover stays closed while one is open. */
+  asking: Asking | null;
+  /** A write of the project folder from this page is in flight. */
+  writing: boolean;
+  ask: (action: "restore" | "ignore", change: AgentChange) => void;
+  close: () => void;
+}
+
+/** The human's choice for a worker's change of the project folder, which stays pending until Needs you is read again, and the dialog it waits on. It lives above the Inbox's popover, so the dialog outlives the popover. */
+export function useAgentChangeChoices(slug: string): AgentChangeChoicesState {
   const queryClient = useQueryClient();
-  const [confirmation, setConfirmation] = useState<RecordConfirmation | null>(
-    null,
-  );
+  const [asking, setAsking] = useState<Asking | null>(null);
   const settle = useMutation<unknown, Error, Choice>({
+    mutationKey: folderWriteKey(slug),
     mutationFn: async ({ action, confirm }) => {
       const done =
         action === "record"
@@ -55,124 +66,183 @@ export function useAgentChangeChoices(slug: string): {
       return done;
     },
     onError: (error) => {
-      setConfirmation(confirmationOf(error));
+      setAsking((current) => nextAsking(current, { type: "failed", error }));
     },
     onSuccess: () => {
-      setConfirmation(null);
+      setAsking((current) => nextAsking(current, { type: "done" }));
     },
   });
+  const writing = useIsMutating({ mutationKey: folderWriteKey(slug) }) > 0;
   return {
     settle,
-    confirmation,
-    dismiss: () => {
-      setConfirmation(null);
+    asking,
+    writing,
+    ask: (action, change) => {
+      settle.reset();
+      setAsking((current) =>
+        nextAsking(current, { type: "ask", action, change }),
+      );
+    },
+    close: () => {
+      if (settle.isPending) return;
+      setAsking((current) => nextAsking(current, { type: "close" }));
       settle.reset();
     },
   };
 }
 
-const ACTIONS: readonly SettleAction[] = ["record", "restore", "ignore"];
+function failureView(text: string | null) {
+  return () => (text === null ? null : { field: null, text });
+}
 
-/** Record, Restore and Ignore under the Needs you line of a worker's change. */
-export function AgentChangeChoices({ settle }: { settle: Settle }) {
-  const failed = settle.error ? settleFailure(settle.error) : null;
+/** Put aside, Keep as mine and Record under the Needs you line of a worker's change. */
+export function AgentChangeChoices({
+  choices,
+  change,
+}: {
+  choices: AgentChangeChoicesState;
+  change: AgentChange;
+}) {
+  const { settle, asking, writing } = choices;
+  const failed = failureAt(asking, settle.error, "line");
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap gap-6">
-        {ACTIONS.map((action) => (
-          <Button
-            key={action}
-            size="sm"
-            variant={action === "record" ? "primary" : "quiet"}
-            disabled={settle.isPending}
-            pending={settle.isPending && settle.variables.action === action}
-            pendingLabel={PENDING_LABELS[action]}
-            onClick={() => {
-              settle.mutate({ action });
-            }}
-          >
-            {ACTION_LABELS[action]}
-          </Button>
-        ))}
+        <Button
+          size="sm"
+          variant="primary"
+          icon={<Archive aria-hidden="true" size={14} />}
+          disabled={writing}
+          onClick={() => {
+            choices.ask("restore", change);
+          }}
+        >
+          {putAsideLabel(change.agents)}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={writing}
+          onClick={() => {
+            choices.ask("ignore", change);
+          }}
+        >
+          Keep as mine
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={writing}
+          pending={
+            settle.isPending &&
+            asking === null &&
+            settle.variables.action === "record"
+          }
+          pendingLabel={RECORD_PENDING}
+          onClick={() => {
+            settle.mutate({ action: "record" });
+          }}
+        >
+          Record
+        </Button>
       </div>
-      {failed === null ? null : (
-        <span role="alert" className="text-13 font-medium text-bad">
-          {failed}
-        </span>
-      )}
+      <WriteError
+        error={failed === null ? null : settle.error}
+        describe={failureView(failed)}
+      />
     </div>
   );
 }
 
-/** The files a record empties, adds empty or took from a worker, which the human checks before the record goes on. */
-export function RecordConfirmDialog({
-  confirmation,
-  settle,
-  onClose,
+function PathList({
+  paths,
+  more = 0,
 }: {
-  confirmation: RecordConfirmation | null;
-  settle: Settle;
-  onClose: () => void;
+  paths: readonly string[];
+  more?: number;
 }) {
-  const failed =
-    settle.error && confirmationOf(settle.error) === null
-      ? settleFailure(settle.error)
-      : null;
+  return (
+    <ul className="flex min-w-0 flex-col gap-2">
+      {paths.map((path) => (
+        <li key={path} className="min-w-0 wrap-anywhere">
+          <Mono className="text-text">{path}</Mono>
+        </li>
+      ))}
+      {more > 0 ? (
+        <li className="text-13 text-text-2">and {String(more)} more</li>
+      ) : null}
+    </ul>
+  );
+}
+
+/** The dialog a choice waits on: the files that Put aside or Keep as mine changes, or the files a record empties, adds empty or took from a worker, which the human checks before the write goes on. */
+export function AgentChangeDialog({
+  choices,
+}: {
+  choices: AgentChangeChoicesState;
+}) {
+  const { settle, asking } = choices;
+  const text = asking === null ? null : dialogText(asking);
+  const failed = failureAt(asking, settle.error, "dialog");
   return (
     <Dialog
-      open={confirmation !== null}
+      open={asking !== null}
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (!open) choices.close();
       }}
-      title="Record these files?"
-      description="Check them first: fold found files that are often a mistake."
+      title={text?.title ?? ""}
+      description={text?.description}
       wide
       footer={
-        <div className="flex flex-wrap items-center justify-end gap-8">
-          {failed === null ? null : (
-            <span role="alert" className="mr-auto text-13 font-medium text-bad">
-              {failed}
-            </span>
-          )}
-          <Button variant="quiet" onClick={onClose} disabled={settle.isPending}>
+        <div className="flex flex-wrap justify-end gap-8">
+          <Button
+            variant="ghost"
+            onClick={choices.close}
+            disabled={settle.isPending}
+          >
             Cancel
           </Button>
           <Button
-            variant="primary"
+            variant={text?.danger ? "danger" : "primary"}
             pending={settle.isPending}
-            pendingLabel={PENDING_LABELS.record}
+            pendingLabel={text?.pending ?? ""}
             onClick={() => {
-              if (confirmation !== null) {
-                settle.mutate({ action: "record", confirm: confirmation.tree });
-              }
+              if (asking === null) return;
+              settle.mutate(
+                asking.action === "record"
+                  ? { action: "record", confirm: asking.confirmation.tree }
+                  : { action: asking.action },
+              );
             }}
           >
-            Record anyway
+            {text?.confirm ?? ""}
           </Button>
         </div>
       }
     >
-      {confirmation?.groups.map((group) => (
-        <section
-          key={group.key}
-          aria-label={group.title}
-          className="flex flex-col gap-4"
-        >
-          <h3 className="text-14 font-semibold text-text">{group.title}</h3>
-          <ul className="flex flex-col gap-2">
-            {group.paths.map((path) => (
-              <li key={path}>
-                <Mono className="text-text-2">{path}</Mono>
-              </li>
-            ))}
-            {group.more > 0 ? (
-              <li className="text-13 text-text-2">
-                and {String(group.more)} more
-              </li>
-            ) : null}
-          </ul>
-        </section>
-      ))}
+      {text?.notice ? (
+        <p role="status" className="text-14 font-medium text-text">
+          {text.notice}
+        </p>
+      ) : null}
+      {asking === null ? null : asking.action === "record" ? (
+        asking.confirmation.groups.map((group) => (
+          <section
+            key={group.key}
+            aria-label={group.title}
+            className="flex min-w-0 flex-col gap-4"
+          >
+            <h3 className="text-14 font-semibold text-text">{group.title}</h3>
+            <PathList paths={group.paths} more={group.more} />
+          </section>
+        ))
+      ) : (
+        <PathList paths={asking.change.paths} />
+      )}
+      <WriteError
+        error={failed === null ? null : settle.error}
+        describe={failureView(failed)}
+      />
     </Dialog>
   );
 }

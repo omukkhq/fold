@@ -4,6 +4,12 @@ import { failureText } from "@/format/failure";
 /** The choices of a Needs you item about a worker's change of the project folder. */
 export type SettleAction = "record" | "restore" | "ignore";
 
+/** The files and agents of the Needs you item that the choices settle. */
+export interface AgentChange {
+  paths: readonly string[];
+  agents: readonly string[];
+}
+
 /** One reason a record waits for a confirmation, with the files it names. */
 export interface ConfirmGroup {
   key: "emptied" | "empty_added" | "agent_changed";
@@ -27,6 +33,9 @@ const GROUP_TITLES: readonly [ConfirmGroup["key"], string][] = [
 
 /** The files the dialog lists of each reason; the rest are counted. */
 export const LISTED_PATHS = 20;
+
+/** Every write of the project folder from the web shares this mutation key, so a screen can hold its own folder writes while another runs. */
+export const folderWriteKey = (slug: string) => [slug, "folder-write"] as const;
 
 function strings(value: unknown): string[] {
   return Array.isArray(value)
@@ -64,28 +73,161 @@ export function agentsText(agents: readonly string[]): string {
   return `${String(agents.length)} agents`;
 }
 
-/** What each choice's button says while its write is in flight. */
-export const PENDING_LABELS: Readonly<Record<SettleAction, string>> = {
-  record: "Recording…",
-  restore: "Restoring…",
-  ignore: "Ignoring…",
+function filesCount(count: number): string {
+  return count === 1 ? "1 file" : `${String(count)} files`;
+}
+
+/**
+ * The dialog of a choice. Put aside and Keep as mine ask before they write and keep the files the person saw when they chose. A record asks once the daemon names what it holds back; `changed` says the folder changed since the list the person saw.
+ */
+export type Asking =
+  | { action: "restore" | "ignore"; change: AgentChange }
+  | { action: "record"; confirmation: RecordConfirmation; changed: boolean };
+
+export type ChoiceEvent =
+  | { type: "ask"; action: "restore" | "ignore"; change: AgentChange }
+  | { type: "failed"; error: unknown }
+  | { type: "done" }
+  | { type: "close" };
+
+/** The dialog after `event`. A refusal keeps the open dialog, so its error shows where the person looks; a `record_needs_confirmation` opens the record dialog or gives it the new list. */
+export function nextAsking(
+  asking: Asking | null,
+  event: ChoiceEvent,
+): Asking | null {
+  switch (event.type) {
+    case "ask":
+      return { action: event.action, change: event.change };
+    case "done":
+    case "close":
+      return null;
+    case "failed": {
+      const confirmation = confirmationOf(event.error);
+      if (confirmation === null) return asking;
+      const changed =
+        asking?.action === "record" &&
+        asking.confirmation.tree !== confirmation.tree;
+      return { action: "record", confirmation, changed };
+    }
+  }
+}
+
+/** What the dialog of a choice says and what its confirm button does. */
+export interface DialogText {
+  title: string;
+  description: string;
+  confirm: string;
+  pending: string;
+  danger: boolean;
+  /** A line above the files, such as the note that the folder changed. */
+  notice: string | null;
+}
+
+/** The words of the open dialog. */
+export function dialogText(asking: Asking): DialogText {
+  switch (asking.action) {
+    case "restore": {
+      const files = filesCount(asking.change.paths.length);
+      return {
+        title: `Put ${files} aside?`,
+        description: `fold puts these ${files} in stash@{0} and puts main's version back; a file main does not have leaves the folder. Your other changes stay. fld unstash brings them back.`,
+        confirm: "Put files aside",
+        pending: "Putting files aside…",
+        danger: false,
+        notice: null,
+      };
+    }
+    case "ignore": {
+      const files = filesCount(asking.change.paths.length);
+      return {
+        title: `Keep ${files} as yours?`,
+        description: `fold stops marking these ${files} as a change of ${agentsText(asking.change.agents)}. They stay in the project folder as your own unrecorded change, and a later record does not ask about them again.`,
+        confirm: "Keep as mine",
+        pending: "Keeping files…",
+        danger: false,
+        notice: null,
+      };
+    }
+    case "record":
+      return {
+        title: "Record these files?",
+        description:
+          "Check them first: fold found files that are often a mistake. This records the whole project folder on main, also your other unrecorded changes.",
+        confirm: "Record anyway",
+        pending: "Recording…",
+        danger: true,
+        notice: asking.changed
+          ? "The folder changed; check the files again."
+          : null,
+      };
+  }
+}
+
+/** The label of the line's Put aside button, which names whose files it puts aside. */
+export function putAsideLabel(agents: readonly string[]): string {
+  return agents.length > 1
+    ? "Put the agents' files aside"
+    : "Put the agent's files aside";
+}
+
+/** What the line's Record button says while the first record, which has no dialog yet, is in flight. */
+export const RECORD_PENDING = "Recording…";
+
+function reasonOf(error: unknown): string | null {
+  if (!(error instanceof ApiError)) return null;
+  const { reason } = error.details;
+  return typeof reason === "string" ? reason : null;
+}
+
+const REASONS: Readonly<Record<string, string>> = {
+  git_commits_wait:
+    "The project's Git branch has commits that fold did not make. Run fld status, then try again.",
+  head_moved:
+    "The Git branch or HEAD of the project folder moved outside fold. Run fld status, then try again.",
+  stash_conflicted:
+    "The conflict of an unstash waits in the project folder. Fix those files first.",
+  stash_markers:
+    "Files still hold the conflict markers of an unstash. Fix those files first.",
+  main_changed:
+    "Main changed these files since the revision of the project folder. Run fld status, then try again.",
+  changed_during_stash:
+    "A file changed while fold put the files aside. Try again.",
 };
 
-/** What each choice's button says. */
-export const ACTION_LABELS: Readonly<Record<SettleAction, string>> = {
-  record: "Record",
-  restore: "Restore",
-  ignore: "Ignore",
-};
-
-/** The sentence for a refused choice; null for the confirmation, which the dialog shows instead. */
+/** The sentence for a refused choice, by its code and `details.reason`; null for the confirmation, which the record dialog shows instead. */
 export function settleFailure(error: unknown): string | null {
   switch (apiErrorCode(error)) {
     case "record_needs_confirmation":
       return null;
     case "agent_change_not_found":
       return "No change of an agent waits any more.";
+    case "head_moved":
+      return "Main moved during every try to record. Try again.";
+    case "git_failed":
+      return "A Git command failed. Run fld status to see why.";
+    case "worker_peer_refused":
+      return "fold refuses this from a process of a worker or a check.";
+    case "client_header_required":
+    case "host_not_allowed":
+      return "The daemon refused this page. Open fold at its own address, then try again.";
+    case "invalid_request": {
+      const reason = reasonOf(error);
+      return (
+        (reason === null ? undefined : REASONS[reason]) ?? failureText(error)
+      );
+    }
     default:
       return failureText(error);
   }
+}
+
+/** Where the error of the last choice shows: in the open dialog, else under the line. */
+export function failureAt(
+  asking: Asking | null,
+  error: unknown,
+  place: "dialog" | "line",
+): string | null {
+  if (error === null || error === undefined) return null;
+  if ((asking === null) !== (place === "line")) return null;
+  return settleFailure(error);
 }

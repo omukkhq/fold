@@ -2,7 +2,7 @@ import type { NeedsYouItem, NeedsYouKind } from "@/api/workers";
 import { taskPath } from "@/features/board/card";
 import { messagesHref } from "@/features/messages/search";
 import { asksText } from "@/features/workers/permission";
-import { agentsText } from "./agentChanges";
+import { agentsText, type AgentChange } from "./agentChanges";
 import { codeData, codeParts } from "@/format/codeText";
 import { projectPath, withQuery } from "@/routes/paths";
 
@@ -23,8 +23,8 @@ export interface NeedsYouLine {
   inline: boolean;
   /** What the line opens; null for a line that opens nothing. */
   href: string | null;
-  /** The line takes the human's choice in place: record, restore or ignore a worker's change of the project folder. */
-  settle: boolean;
+  /** The worker's change of the project folder that the line settles in place, by putting it aside, keeping it or recording it; null for every other line. */
+  settle: AgentChange | null;
 }
 
 export type NeedsYouGroupId = "ask" | "wait" | "project";
@@ -164,7 +164,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         : null,
     since: item.since,
     inline: INLINE_KINDS.has(item.kind),
-    settle: false,
+    settle: null,
   };
   switch (item.kind) {
     case "human_task":
@@ -311,7 +311,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         title: filesText(item.paths),
         text: `The project folder changed while ${codeData(agentsText(item.agents))} worked`,
         href: null,
-        settle: true,
+        settle: { paths: item.paths, agents: item.agents },
       };
     case "shared_changed":
       return {
@@ -320,8 +320,8 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         chip: null,
         task: null,
         title: filesText(item.paths),
-        text: "A shared file changed while this agent worked. Check the files, then run `fld share --dismiss`",
-        href: projectPath(slug, "repository"),
+        text: `changed ${item.paths.length === 1 ? "a shared file" : "shared files"} while it worked. Check the files, then run \`fld share --dismiss\``,
+        href: null,
       };
     case "human_review":
       return {

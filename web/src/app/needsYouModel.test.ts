@@ -323,14 +323,17 @@ describe("needsYouGroups", () => {
       title: "3 files: README.md and 2 more",
       text: "The project folder changed while reviewer-35 worked",
       href: null,
-      settle: true,
+      settle: {
+        paths: ["README.md", "junk1.txt", "junk2.txt"],
+        agents: ["reviewer-35"],
+      },
     });
     expect(group?.lines[0]?.key).toBe("agent_change:0");
     expect(filesText(["a.txt"])).toBe("1 file: a.txt");
     expect(filesText([])).toBeNull();
   });
 
-  it("shows shared files that changed while a worker worked, with the agent and the step that ends it", () => {
+  it("shows shared files that changed while a worker worked, with the agent and the step that ends it, opening nothing", () => {
     const [group] = needsYouGroups("demo", [
       needsItem({
         kind: "shared_changed",
@@ -338,14 +341,24 @@ describe("needsYouGroups", () => {
         agent: "web-worker",
         paths: ["design/home.pen"],
       }),
+      needsItem({
+        kind: "shared_changed",
+        screen: "repository",
+        agent: "backend",
+        paths: ["design/a.pen", "docs/spec.pdf"],
+      }),
     ]);
     expect(group?.title).toBe("Project");
     expect(group?.lines[0]).toMatchObject({
       person: "web-worker",
       title: "1 file: design/home.pen",
-      text: "A shared file changed while this agent worked. Check the files, then run `fld share --dismiss`",
-      href: "/p/demo/repository",
+      text: "changed a shared file while it worked. Check the files, then run `fld share --dismiss`",
+      href: null,
+      settle: null,
     });
+    expect(group?.lines[1]?.text).toBe(
+      "changed shared files while it worked. Check the files, then run `fld share --dismiss`",
+    );
   });
 
   it("shows an unstash whose conflict markers wait with the conflicted files, opening nothing", () => {

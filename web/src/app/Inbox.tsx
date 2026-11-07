@@ -52,7 +52,7 @@ import { idHref } from "@/routes/paths";
 import { PersonName } from "@/people/PersonName";
 import {
   AgentChangeChoices,
-  RecordConfirmDialog,
+  AgentChangeDialog,
   useAgentChangeChoices,
 } from "./AgentChangeChoices";
 import { HrefLink } from "./HrefLink";
@@ -305,6 +305,8 @@ export function Inbox({ slug }: { slug: string }) {
   });
   const rows = movesByTask(feed);
   const unread = unreadCount(feed);
+  // The popover layer sits above the dialog layer, so the Inbox steps aside while a choice's dialog is open and comes back when it closes.
+  const shown = open && agentChange.asking === null;
   const close = () => {
     setOpen(false);
   };
@@ -319,7 +321,7 @@ export function Inbox({ slug }: { slug: string }) {
   };
   return (
     <RadixPopover.Root
-      open={open}
+      open={shown}
       onOpenChange={(next) => {
         if (next) {
           const first = inboxTab(items.length);
@@ -415,7 +417,10 @@ export function Inbox({ slug }: { slug: string }) {
                           onOpen={close}
                           choices={
                             line.settle ? (
-                              <AgentChangeChoices settle={agentChange.settle} />
+                              <AgentChangeChoices
+                                choices={agentChange}
+                                change={line.settle}
+                              />
                             ) : undefined
                           }
                         />
@@ -465,11 +470,7 @@ export function Inbox({ slug }: { slug: string }) {
           </RadixTabs.Root>
         </RadixPopover.Content>
       </RadixPopover.Portal>
-      <RecordConfirmDialog
-        confirmation={agentChange.confirmation}
-        settle={agentChange.settle}
-        onClose={agentChange.dismiss}
-      />
+      <AgentChangeDialog choices={agentChange} />
     </RadixPopover.Root>
   );
 }
