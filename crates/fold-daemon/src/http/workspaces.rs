@@ -986,7 +986,7 @@ pub struct SharedChangesDismissed {
     pub dismissed: u64,
 }
 
-/// Ends the Needs you items of shared files that changed during a worker's tool call, as `fld share --dismiss` asks once the human checked the files. Socket only; the human comes from `x-fold-human`.
+/// Ends the Needs you items of shared files that changed during a worker's tool call, as `fld share --dismiss` asks once the human checked the files. For a human, over the socket or over HTTP with the session cookie, so the Needs you item can be dismissed from the web app.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/shared/dismiss",
@@ -995,13 +995,12 @@ pub struct SharedChangesDismissed {
     responses(
         (status = 200, description = "The items ended", body = SharedChangesDismissed),
         (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
-        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
 pub async fn dismiss_shared_changes(
-    _socket: SocketOnly,
     human: Human,
     project: Project,
 ) -> Result<Json<SharedChangesDismissed>, ApiError> {

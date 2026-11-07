@@ -1401,7 +1401,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Ends the Needs you items of shared files that changed during a worker's tool call, as `fld share --dismiss` asks once the human checked the files. Socket only; the human comes from `x-fold-human`. */
+        /** Ends the Needs you items of shared files that changed during a worker's tool call, as `fld share --dismiss` asks once the human checked the files. For a human, over the socket or over HTTP with the session cookie, so the Needs you item can be dismissed from the web app. */
         post: operations["dismiss_shared_changes"];
         delete?: never;
         options?: never;
@@ -13645,7 +13645,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Not on the socket, or the slug is not registered */
+            /** @description The slug is not registered */
             404: {
                 headers: {
                     [name: string]: unknown;

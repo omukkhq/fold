@@ -71,6 +71,24 @@ impl Host {
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&bytes).unwrap())
     }
+
+    /// A write of the signed-in human `ana`, as the web app sends it with the session cookie.
+    async fn post(&self, path: &str) -> (StatusCode, Value) {
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/alpha{path}"))
+            .header(fold_daemon::http::host::CLIENT_HEADER, "test")
+            .body(Body::empty())
+            .unwrap();
+        let response = crate::common::signed_in_router(self.daemon.state(), "ana")
+            .await
+            .oneshot(request)
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
 }
 
 fn code(body: &Value) -> &str {
@@ -312,4 +330,42 @@ async fn the_revision_pages_reach_the_genesis_r0_and_end_there() {
             ("r0".to_owned(), Value::Null),
         ]
     );
+}
+
+#[tokio::test]
+async fn a_signed_in_human_dismisses_the_changed_shared_files_from_the_web_app() {
+    let project = TestProject::new().await;
+    let lead = fold_core::AgentName::parse("web-lead").unwrap();
+    project
+        .store()
+        .write(async |tx| {
+            fold_store::agents::insert_agent(tx, &lead, Timestamp::from_millis(1).unwrap()).await?;
+            workspaces::note_shared_change(
+                tx,
+                &lead,
+                &["design/home.pen".to_owned()],
+                Timestamp::from_millis(2).unwrap(),
+            )
+            .await?;
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
+    let host = host(&project).await;
+    let kinds = |items: &Value| -> Vec<String> {
+        items["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["kind"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let (_, needs) = host.get("/needs-you").await;
+    assert_eq!(kinds(&needs), ["shared_changed"]);
+
+    let (status, dismissed) = host.post("/shared/dismiss").await;
+    assert_eq!(status, StatusCode::OK, "{dismissed}");
+    assert_eq!(dismissed["dismissed"], 1);
+    let (_, needs) = host.get("/needs-you").await;
+    assert!(kinds(&needs).is_empty(), "{needs}");
 }
