@@ -117,7 +117,7 @@ fold keeps its project data in `.fold/`. Agents build in workspaces under `.fold
 
 Each worker that fold starts, except the main agent, starts in its own folder, `.fold/workers/<name>/start`, and its shell goes back there after each command. fold refuses a worker's shell command that starts in the project folder outside the workspaces, so a stray command of a worker does not land among your files. This is a net for common mistakes, not a boundary; Claude Code's sandbox refuses every write outside a worker's folders (see [Change files yourself](#change-files-yourself)). A worker gets a server of the project's `.mcp.json` only when you approved it for the project in Claude Code; the servers that you added for the project folder alone with `claude mcp add` reach it too. It gets the `permissions.allow` rules of `.claude/settings.json` only when you trusted the project folder in Claude Code.
 
-A project's history starts at the genesis revision `r0`: an empty tree, or the commit at `HEAD` of an existing Git repository. The files of a new project are your first change, `r1`.
+A project's history starts at the genesis revision `r0`: an empty tree, or the commit at `HEAD` of an existing Git repository. The files of a new project are your first change, `r1`. In a Git repository, `r1` is fold's section in the instructions file (`AGENTS.md`, or `CLAUDE.md` when the repository has one), with its own commit on the checked-out branch.
 
 ## Change files yourself
 
@@ -141,7 +141,7 @@ Ignored files never reach a workspace, so workers cannot see them. To let worker
 
 `fld init --with-git` turns Git on for a project, and Git stays on after that:
 
-- In a Git repository, the commit at `HEAD` becomes the genesis, and the repository keeps its history.
+- In a Git repository, the commit at `HEAD` becomes the genesis, and the repository keeps its history. init adds fold's section to the instructions file and records that change as `r1`, a commit on the checked-out branch. When Git does not track the instructions file, init does not record it: init names the file, and `fld record` records it.
 - In a fold project or a new folder, fold creates the repository. If your Git configuration has no name and email, fold asks for them and keeps them in the repository's own configuration. `--git-name` and `--git-email` give them without the question.
 
 When Git is on, every revision of main becomes a commit on the checked-out branch, with your Git identity as author and committer. Use fold's commands to connect a remote and exchange changes:

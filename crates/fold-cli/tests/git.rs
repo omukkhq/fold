@@ -115,14 +115,29 @@ fn init_with_git_in_a_repository_prints_the_genesis_and_its_commit() {
     assert_eq!(
         stdout(&output),
         format!(
-            "initialised project repo at {}\nr0: 2 files, 70 bytes\nr0 is Git commit {head}\nGit sync is on: every revision gets its Git commit in .git\nno Git remote yet: add one with fld remote add <name> <url> [<branch>]\n{}",
+            "initialised project repo at {}\nr0: 2 files, 70 bytes\nr0 is Git commit {head}\nr1 records the Claude Code files that init changed: AGENTS.md\nGit sync is on: every revision gets its Git commit in .git\nno Git remote yet: add one with fld remote add <name> <url> [<branch>]\n{}",
             canonical.display(),
             machine_warnings(&repo)
         )
     );
+    // fold's section in the new AGENTS.md is r1, whose commit follows HEAD, so the tree stays clean.
+    let r1 = git(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
     let map = fs::read_to_string(repo.join(".fold/git-sync.map")).unwrap();
-    assert_eq!(map, format!("r0 {head}\n"));
-    assert_eq!(git(&repo, &["rev-parse", "HEAD"]).trim(), head);
+    assert_eq!(map, format!("r0 {head}\nr1 {r1}\n"));
+    assert_eq!(git(&repo, &["rev-parse", "HEAD~1"]).trim(), head);
+    assert_eq!(
+        git(
+            &repo,
+            &["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]
+        ),
+        "AGENTS.md\n"
+    );
+    assert!(
+        fs::read_to_string(repo.join("AGENTS.md"))
+            .unwrap()
+            .contains(claude_files::AGENTS_BEGIN)
+    );
+    assert_eq!(git(&repo, &["status", "--porcelain"]), "");
     let both = sandbox.fold(&["init", "x", "--with-git", "b"]);
     assert!(!both.status.success());
 }

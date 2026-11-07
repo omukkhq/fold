@@ -9,7 +9,10 @@ use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{
     HostPaths, IntegrationId, ManualClock, ProjectPaths, RevisionId, Timestamp, codes,
 };
-use fold_daemon::services::projects::{ProjectError, commit_main, init_project_from_git};
+use fold_daemon::services::projects::{
+    FilesRevision, FolderFiles, ProjectError, WrittenFiles, commit_main, init_project_from_git,
+    init_project_from_git_with,
+};
 use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::workspaces::{self, advance_main, insert_revision};
 use fold_store::{Store, projects};
@@ -231,6 +234,109 @@ async fn from_git_makes_the_repository_the_project_and_head_its_first_commit() {
     assert_eq!(fs::read(repo.join("README.md")).unwrap(), b"# app\n");
     assert!(paths.db().is_file());
     assert_eq!(host.registered().await, 1);
+}
+
+#[tokio::test]
+async fn from_git_records_as_r1_only_the_written_files_that_held_heads_version() {
+    let host = Host::new();
+    let repo = host.path("repo");
+    source_repo(&repo);
+    write(&repo, ".gitignore", b"ignored.md\n");
+    write(&repo, "gone.md", b"gone\n");
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "--quiet", "-m", "more"]);
+    let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
+    write(&repo, "notes.md", b"mine\n");
+    let files: FolderFiles = Box::new(|root: &Path| {
+        let mut written = WrittenFiles::default();
+        let changed = [
+            ("README.md", "# app\n", "# app\nmore\n"),
+            ("bin/run", "#!/bin/sh\n", "#!/bin/sh\necho\n"),
+            ("notes.md", "mine\n", "mine, changed\n"),
+        ];
+        for (path, old, new) in changed {
+            fs::write(root.join(path), new).unwrap();
+            written
+                .changed
+                .push((root.join(path), old.as_bytes().to_vec()));
+        }
+        fs::remove_file(root.join("gone.md")).unwrap();
+        written
+            .changed
+            .push((root.join("gone.md"), b"gone\n".to_vec()));
+        for path in ["NEW.md", "ignored.md"] {
+            fs::write(root.join(path), b"new\n").unwrap();
+            written.created.push(root.join(path));
+        }
+        fs::create_dir(root.join("dir")).unwrap();
+        written.created.push(root.join("dir"));
+        Ok(written)
+    });
+    let project = init_project_from_git_with(
+        &host.paths,
+        &repo,
+        None,
+        &crate::common::ana(),
+        Git::default(),
+        Some(files),
+        &host.clock,
+    )
+    .await
+    .unwrap();
+    assert_eq!(project.revision, RevisionId::GENESIS);
+    assert_eq!(project.git_commit.unwrap().as_str(), head);
+    // A file the folder held apart from `HEAD`, an ignored file and a folder stay out.
+    assert_eq!(
+        project.files_revision,
+        Some(FilesRevision {
+            revision: id(1),
+            files: ["NEW.md", "README.md", "bin/run", "gone.md"]
+                .map(str::to_owned)
+                .to_vec(),
+        })
+    );
+    assert_eq!(git(&repo, &["rev-parse", "HEAD~1"]).trim(), head);
+    assert_eq!(git(&repo, &["show", "HEAD:README.md"]), "# app\nmore\n");
+    assert!(git(&repo, &["ls-files", "-s", "bin/run"]).starts_with("100755 "));
+    assert_eq!(git(&repo, &["status", "--porcelain"]), "?? notes.md\n");
+}
+
+#[tokio::test]
+async fn from_git_that_fails_after_its_files_writes_them_back_and_keeps_head() {
+    let host = Host::new();
+    let repo = host.path("repo");
+    let head = source_repo(&repo);
+    let files: FolderFiles = Box::new(|root: &Path| {
+        fs::write(root.join("README.md"), "# app\nfold\n").unwrap();
+        fs::write(root.join("NEW.md"), "new\n").unwrap();
+        // A folder where the sync map goes makes the step after the files fail.
+        fs::create_dir(root.join(".fold/git-sync.map")).unwrap();
+        Ok(WrittenFiles {
+            created: vec![root.join("NEW.md")],
+            changed: vec![(root.join("README.md"), b"# app\n".to_vec())],
+            instructions: None,
+        })
+    });
+    let failed = init_project_from_git_with(
+        &host.paths,
+        &repo,
+        None,
+        &crate::common::ana(),
+        Git::default(),
+        Some(files),
+        &host.clock,
+    )
+    .await;
+    assert!(failed.is_err());
+    assert_eq!(
+        fs::read_to_string(repo.join("README.md")).unwrap(),
+        "# app\n"
+    );
+    assert!(!repo.join("NEW.md").exists());
+    assert!(!repo.join(".fold").exists());
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]).trim(), head);
+    assert_eq!(git(&repo, &["status", "--porcelain"]), "");
+    assert_eq!(host.registered().await, 0);
 }
 
 #[tokio::test]
