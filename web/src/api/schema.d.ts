@@ -212,23 +212,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/projects/{slug}/agent-changes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** The paths that fold placed in a tool call of a supervised worker, which it does not offer as the human's change until a human records, restores or ignores them, or the main agent ignores them when the human asks. A read. */
-        get: operations["list_agent_changes"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/projects/{slug}/agent-changes/ignore": {
         parameters: {
             query?: never;
@@ -2066,26 +2049,6 @@ export interface components {
             kind: components["schemas"]["AttentionKind"];
             /** @example T-12 */
             task: string;
-        };
-        AgentChangeList: {
-            /** @description In path order. */
-            changes: components["schemas"]["AgentChangeView"][];
-        };
-        /** @description A path of the project folder that changed during a tool call of a supervised worker. */
-        AgentChangeView: {
-            /**
-             * @description The agents whose tool calls ran when the path changed, in name order.
-             * @example [
-             *       "reviewer-35"
-             *     ]
-             */
-            agents: string[];
-            path: string;
-            /**
-             * Format: int64
-             * @description UTC milliseconds when fold first saw the change.
-             */
-            since: number;
         };
         AgentChangesIgnored: {
             /** @description The paths that now count as the human's own unrecorded changes, in path order. */
@@ -7417,74 +7380,6 @@ export interface operations {
             };
             /** @description Internal error */
             500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    list_agent_changes: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The project slug */
-                slug: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The changes */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentChangeList"];
-                };
-            };
-            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description The slug is not registered */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Internal error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description The project failed to open */
-            503: {
                 headers: {
                     [name: string]: unknown;
                 };
