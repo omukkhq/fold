@@ -526,13 +526,14 @@ describe("needsYouGroups", () => {
       kind: "worker_stalled",
       person: null,
       task: "T-12",
-      title: "restart it in a new session: `fld worker restart web-worker`",
+      title: "Restart it in a new session: `fld worker restart web-worker`",
       text: "A command of @web-worker has run for 25 min",
       href: "/p/demo/t/T-12",
       restart: "web-worker",
     });
     expect(silent).toMatchObject({
       text: "No activity from @frontend for 25 min",
+      title: "fold does not run its session; check the session where it runs",
       restart: null,
     });
     expect(stopped?.text).toBe("@api-worker stopped");

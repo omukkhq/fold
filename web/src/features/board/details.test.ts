@@ -3,6 +3,14 @@ import { boardCard } from "@/test/payloads";
 import { PREVIEW_CHARS, PREVIEW_LINES, cardDetails, proseRow } from "./details";
 
 describe("cardDetails", () => {
+  it("leaves the stall to the note under the activity line and gives no sentence for it alone", () => {
+    const card = boardCard("T-9", {
+      status: "in_progress",
+      attention: [{ kind: "stalled", closable: false }],
+    });
+    expect(cardDetails(card, null, 0).why).toBeNull();
+  });
+
   it("heads the panel with the id and the column", () => {
     const details = cardDetails(
       boardCard("T-4", { status: "in_progress" }),
@@ -110,9 +118,7 @@ describe("cardDetails", () => {
       name: "Files",
       text: "3 files",
     });
-    expect(details.why).toBe(
-      "Stalled: fold told the worker's lead and it did not start again, or no agent can act · Stale claim: the worker's lease ran out.",
-    );
+    expect(details.why).toBe("Stale claim: the worker's lease ran out.");
     expect(details.notes).toEqual(["rp-2 waits for T-9 until the next check"]);
   });
 

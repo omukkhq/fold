@@ -145,7 +145,10 @@ export function cardDetails(
     rows.push({ kind: "labels", name: "Labels" });
   }
   const column = COLUMNS.find((c) => c.status === card.status);
-  const mark = attentionMark(card.attention);
+  // The stall note under the activity line says who was told and what waits, so the stall needs no sentence of its own here.
+  const mark = attentionMark(
+    card.attention.filter((item) => item.kind !== "stalled"),
+  );
   return {
     head: `${card.task} · ${column?.name ?? card.status}`,
     rows,

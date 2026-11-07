@@ -69,7 +69,7 @@ describe("activityLine", () => {
     };
     expect(activityLine(card(null), frame, NOW)).toMatchObject({
       text: "Running a command for 8 min",
-      since: "8 min ago",
+      since: null,
       stalled: false,
     });
     const silent = {

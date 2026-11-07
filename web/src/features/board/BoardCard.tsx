@@ -55,7 +55,9 @@ function Activity({ line }: { line: ActivityLine }) {
       <span className="min-w-0 flex-1 font-medium wrap-anywhere">
         {line.text}
       </span>
-      <span className="shrink-0 text-13 text-text-2">{line.since}</span>
+      {line.since === null ? null : (
+        <span className="shrink-0 text-13 text-text-2">{line.since}</span>
+      )}
     </p>
   );
 }

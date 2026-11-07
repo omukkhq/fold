@@ -183,6 +183,14 @@ export function questionText(
   return item.choices.length > 0 ? "asks you to choose" : "asks a question";
 }
 
+/** `text` as a sentence of its own, with a capital first letter, except fold's name, which is always written in lower case; null stays null. */
+function sentence(text: string | null): string | null {
+  if (text === null || text.startsWith("fold ")) {
+    return text;
+  }
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
 /** What fold saw of a stalled worker, in the words of its card's chip; the line names its task after it. */
 function stalledText(item: NeedsYouItem, now: number): string {
   const agent = item.agent ?? "a worker";
@@ -382,7 +390,7 @@ function lineOf(
         ...base,
         person: null,
         chip: null,
-        title: markedText(item.reason),
+        title: sentence(markedText(item.reason)),
         text: stalledText(item, now),
         href: taskPath(slug, item.task ?? ""),
         restart:

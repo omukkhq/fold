@@ -8,8 +8,8 @@ import { sentText, sentVersion, showsStall, waitText } from "./sentVersion";
 export interface ActivityLine {
   /** `Running checks for v2` while a check run goes in the workspace; what fold saw of the worker, such as `Running a command for 8 min` or `No activity from @web-worker for 12 min`; `Editing src/a.ts`; `Sent P-1 v1 · waits for review` while the workspace files are the open proposal's newest version; or `No edits for 6 min` when the worker is stalled and no sent version waits on others, with `· blocked` when the task also waits on a prerequisite. */
   text: string;
-  /** `12 s ago`: since the run started while one goes, since what fold saw of the worker, else since the last edit. */
-  since: string;
+  /** `12 s ago`: since the run started while one goes, else since the last edit; null when the text already says how long, as what fold saw of the worker does. */
+  since: string | null;
   /** The worker's stall waits for a person, which the line marks in gold. */
   stalled: boolean;
   /** The check run that goes in the workspace, `cr-4`; null while none goes. */
@@ -85,7 +85,7 @@ export function activityLine(
   }
   return {
     text,
-    since: formatSince(now, run?.started_at ?? seen?.since ?? at),
+    since: seen === null ? formatSince(now, run?.started_at ?? at) : null,
     stalled,
     run: run?.run ?? null,
     files: live ? live.files.length : null,
