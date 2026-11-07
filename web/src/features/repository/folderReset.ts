@@ -32,7 +32,10 @@ function filesText(count: number): string {
 }
 
 const SAFETY =
-  "fold first stashes your unrecorded changes as stash@{0}, so Unstash brings them back.";
+  "fold first stashes your unrecorded changes as stash@{0}, so fld unstash brings them back.";
+
+const RESTORE_SAFETY =
+  "fold first stashes the changes of these files as stash@{0}, so fld unstash brings them back.";
 
 /** The reset button's label, and its dialog's title and words. */
 export function resetText(actions: FolderActions): {
@@ -43,12 +46,12 @@ export function resetText(actions: FolderActions): {
   const parts = [SAFETY, "Then the project folder matches main again."];
   if (actions.heldChange !== null) {
     parts.push(
-      `Your change that waits for the main agent is dropped, with its conflict in ${filesText(actions.heldChange.length)}, and fold abandons the merge workspace the main agent made for it.`,
+      `Your change that waits for the main agent is withdrawn: its files, with the conflict in ${filesText(actions.heldChange.length)}, go into stash@{0} too, and fold closes the workspace the main agent opened to merge it.`,
     );
   }
   if (actions.markers.length > 0) {
     parts.push(
-      `The unstash conflict in ${filesText(actions.markers.length)} ends; stash@{0} keeps those files with their markers.`,
+      `The unstash conflict in ${filesText(actions.markers.length)} ends: fold drops the stash entry that conflicted, and stash@{0} keeps its files as they are now, with the conflict markers.`,
     );
   }
   return actions.heldChange === null
@@ -64,6 +67,11 @@ export function resetText(actions: FolderActions): {
       };
 }
 
+/** The files a reset dialog names: those of the waiting change, else the held files. */
+export function resetPaths(actions: FolderActions): readonly string[] {
+  return actions.heldChange ?? actions.heldPaths;
+}
+
 /** The restore dialog's title and words for the held paths. */
 export function restoreText(paths: readonly string[]): {
   title: string;
@@ -71,6 +79,6 @@ export function restoreText(paths: readonly string[]): {
 } {
   return {
     title: `Restore ${filesText(paths.length)}?`,
-    description: `${SAFETY.replace("your unrecorded changes", "their changes")} Then these files match main again; your other changes stay.`,
+    description: `${RESTORE_SAFETY} Then these files match main again; your other changes stay. A restore never closes a workspace of the main agent; only a reset does.`,
   };
 }
