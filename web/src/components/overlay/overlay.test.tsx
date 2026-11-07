@@ -167,12 +167,34 @@ describe("Dialog layout", () => {
     expect(scrim?.classList.contains("max-md:p-0")).toBe(false);
   });
 
-  it("takes the reading width when wide, and the whole screen of a phone", () => {
-    render(<Dialog open wide title="Changes requested on v1" />);
+  it("takes the reading width when wide, and the whole screen of a phone with the action row at its bottom", () => {
+    render(
+      <Dialog
+        open
+        wide
+        title="Changes requested on v1"
+        footer={<button type="button">Send</button>}
+      >
+        <p>Body</p>
+      </Dialog>,
+    );
     const dialog = screen.getByRole("dialog");
     expect(dialog.classList.contains("w-dialog")).toBe(true);
     expect(dialog.classList.contains("max-md:h-full")).toBe(true);
     expect(dialog.parentElement?.classList.contains("max-md:p-0")).toBe(true);
+    const body = screen.getByText("Body").parentElement?.parentElement;
+    expect(body?.classList.contains("max-md:flex-1")).toBe(true);
+    expect(dialog.lastElementChild?.textContent).toBe("Send");
+  });
+
+  it("sizes a narrow dialog to its content on a phone", () => {
+    render(
+      <Dialog open title="Rename">
+        <p>Body</p>
+      </Dialog>,
+    );
+    const body = screen.getByText("Body").parentElement?.parentElement;
+    expect(body?.classList.contains("max-md:flex-1")).toBe(false);
   });
 });
 

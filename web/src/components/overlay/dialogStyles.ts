@@ -15,3 +15,6 @@ export const dialogBody = "min-h-0 overflow-y-auto";
 /** A wide dialog takes the whole screen of a phone: the scrim drops its gutter and the box its corners. */
 export const dialogFillOverlay = "max-md:p-0";
 export const dialogFill = "max-md:h-full max-md:w-full max-md:rounded-none";
+
+/** On a phone the filled box is taller than its content, so the body takes the free height and the action row stays at the bottom of the screen. */
+export const dialogFillBody = "max-md:flex-1";
