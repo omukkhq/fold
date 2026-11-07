@@ -14,7 +14,7 @@ import {
   flaggedFiles,
   folderFailure,
   type FlaggedFile,
-} from "./folderFiles";
+} from "./flaggedFiles";
 
 function noop() {}
 

@@ -7,7 +7,7 @@ import {
   flaggedFiles,
   folderFailure,
   sharedFileFacts,
-} from "./folderFiles";
+} from "./flaggedFiles";
 
 describe("the files of a worker's change", () => {
   it("keeps the named order and marks a file the folder holds as the revision's again", () => {

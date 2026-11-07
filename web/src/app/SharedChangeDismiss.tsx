@@ -14,7 +14,7 @@ import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import { WriteError } from "@/features/task/parts";
 import { dismissLabel, settleFailure } from "./agentChanges";
-import { folderFailure, sharedFileFacts } from "./folderFiles";
+import { folderFailure, sharedFileFacts } from "./flaggedFiles";
 
 type Dismiss = UseMutationResult<unknown, Error, void>;
 
