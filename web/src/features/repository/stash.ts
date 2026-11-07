@@ -1,4 +1,4 @@
-import type { StashEntry } from "@/api/stash";
+import type { StashEntry, StashSeen } from "@/api/stash";
 import { formatAsOfMinute } from "@/format/time";
 
 /** The most paths a stash row names; the rest are counted. */
@@ -6,8 +6,9 @@ export const LISTED_PATHS = 3;
 
 /** One entry of the stash as the repository screen lists it. */
 export interface StashRow {
-  /** The entry's name and time, which tell it apart from an entry that took its place on the stack. */
   key: string;
+  /** The entry's number, which stays with it while its place moves; a drop names it, so the daemon refuses the drop when another entry took the place. */
+  number: number;
   /** `stash@{0}` for the newest. */
   name: string;
   /** Its place on the stack, which the drop route takes. */
@@ -23,10 +24,6 @@ export interface StashRow {
   when: string;
   /** Its unstash conflict waits in the project folder, so it cannot be dropped. */
   conflicted: boolean;
-}
-
-function keyOf(entry: StashEntry): string {
-  return `${entry.stash}:${String(entry.created_at)}`;
 }
 
 export function filesText(count: number): string {
@@ -48,7 +45,8 @@ export function stashRows(
     const listed = entry.files.slice(0, LISTED_PATHS);
     const more = entry.files.length - listed.length;
     return {
-      key: keyOf(entry),
+      key: String(entry.number),
+      number: entry.number,
       name: entry.stash,
       position: positionOf(entry.stash, index),
       files: filesText(entry.files.length),
@@ -66,33 +64,25 @@ export function rowStillThere(
   entries: readonly StashEntry[],
   row: StashRow,
 ): boolean {
-  const index = entries.findIndex(
-    (entry, at) => positionOf(entry.stash, at) === row.position,
+  const entry = entries.find(
+    (candidate, index) => positionOf(candidate.stash, index) === row.position,
   );
-  const entry = index < 0 ? undefined : entries[index];
-  return entry !== undefined && keyOf(entry) === row.key;
+  return entry?.number === row.number;
 }
 
-/** What Clear all confirmed: how many entries, and the newest one. */
-export interface ClearSeen {
-  count: number;
-  newest: string;
-}
-
-export function clearSeen(rows: readonly StashRow[]): ClearSeen {
-  return { count: rows.length, newest: rows[0]?.key ?? "" };
+/** What Clear all confirmed: how many entries, and the number of the newest. */
+export function clearSeen(rows: readonly StashRow[]): StashSeen {
+  return { entries: rows.length, newest: rows[0]?.number ?? null };
 }
 
 /** Whether the stash as read just now is the one Clear all confirmed. */
 export function stashStillSeen(
   entries: readonly StashEntry[],
-  seen: ClearSeen,
+  seen: StashSeen,
 ): boolean {
-  const newest = entries[0];
   return (
-    entries.length === seen.count &&
-    newest !== undefined &&
-    keyOf(newest) === seen.newest
+    entries.length === seen.entries &&
+    (entries[0]?.number ?? null) === seen.newest
   );
 }
 

@@ -18,9 +18,11 @@ afterEach(() => {
 
 const NOW = new Date(2026, 10, 7, 15, 0).getTime();
 
+/** An entry whose number follows from its place, 100 for `stash@{0}`, unless a test gives another. */
 function entry(stash: string, files: string[], conflicted: string[] = []) {
   return {
     stash,
+    number: 100 - Number(/\d+/.exec(stash)?.[0] ?? 0),
     created_at: new Date(2026, 10, 7, 14, 12).getTime(),
     base: "r8",
     actor: "human:ana",
@@ -86,8 +88,10 @@ describe("StashPanel", () => {
     });
     expect(screen.queryByRole("button", { name: "Drop stash@{1}" })).toBeNull();
     expect(
-      calls.filter((call) => call.method === "DELETE").map((call) => call.path),
-    ).toEqual(["/api/v1/projects/demo/stash/1"]);
+      calls
+        .filter((call) => call.method === "DELETE")
+        .map((call) => `${call.path}?${call.search.toString()}`),
+    ).toEqual(["/api/v1/projects/demo/stash/1?number=99"]);
   });
 
   it("clears every entry, and has no drop while an unstash conflict waits", async () => {
@@ -112,8 +116,8 @@ describe("StashPanel", () => {
     expect(calls.length).toBe(1);
   });
 
-  it("clears all after the question and shows a refusal", async () => {
-    stubFetch({
+  it("clears all after the question, naming the stash it saw, and shows a refusal", async () => {
+    const calls = stubFetch({
       "GET /api/v1/projects/demo/stash": {
         body: {
           entries: [entry("stash@{0}", ["a"]), entry("stash@{1}", ["b"])],
@@ -140,6 +144,11 @@ describe("StashPanel", () => {
         /An unstash conflict waits in the project folder\. Fix the files/,
       ),
     ).toBeTruthy();
+    expect(
+      calls
+        .filter((call) => call.method === "DELETE")
+        .map((call) => call.search.toString()),
+    ).toEqual(["entries=2&newest=100"]);
   });
 
   it("refuses a drop when a newer entry took the confirmed entry's place, and shows the stash read again", async () => {
@@ -153,7 +162,7 @@ describe("StashPanel", () => {
       await screen.findByRole("button", { name: "Drop stash@{0}" }),
     );
     listed = [
-      { ...entry("stash@{0}", ["plan.md"]), created_at: junk.created_at + 1 },
+      { ...entry("stash@{0}", ["plan.md"]), number: junk.number + 1 },
       { ...junk, stash: "stash@{1}" },
     ];
     fireEvent.click(screen.getByRole("button", { name: "Drop entry" }));
@@ -178,7 +187,7 @@ describe("StashPanel", () => {
     show();
     fireEvent.click(await screen.findByRole("button", { name: "Clear all" }));
     listed = [
-      { ...entry("stash@{0}", ["b"]), created_at: 1 },
+      { ...entry("stash@{0}", ["b"]), number: 1 },
       entry("stash@{1}", ["a"]),
     ];
     fireEvent.click(screen.getByRole("button", { name: "Drop all" }));
@@ -234,14 +243,14 @@ describe("StashPanel", () => {
     let listed = [
       entry("stash@{0}", ["notes.md"]),
       entry("stash@{1}", ["a"]),
-      { ...entry("stash@{2}", ["b"]), created_at: 1 },
+      { ...entry("stash@{2}", ["b"]), number: 1 },
     ];
     stubFetch({
       "GET /api/v1/projects/demo/stash": () => ({ body: { entries: listed } }),
       "DELETE /api/v1/projects/demo/stash/1": () => {
         listed = [
           entry("stash@{0}", ["notes.md"]),
-          { ...entry("stash@{1}", ["b"]), created_at: 1 },
+          { ...entry("stash@{1}", ["b"]), number: 1 },
         ];
         return { body: { dropped: [], entries: 2 } };
       },

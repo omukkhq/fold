@@ -2,7 +2,7 @@ import { useIsMutating, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Archive, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { stashQuery } from "@/api/queries";
-import { clearStash, dropStashEntry } from "@/api/stash";
+import { clearStash, dropStashEntry, type StashSeen } from "@/api/stash";
 import { Button } from "@/components/button/Button";
 import { CodeText } from "@/components/code/CodeText";
 import { Id } from "@/components/id/Id";
@@ -23,7 +23,6 @@ import {
   rowStillThere,
   stashRows,
   stashStillSeen,
-  type ClearSeen,
   type StashRow,
 } from "./stash";
 import { stashChangedError } from "./errors";
@@ -32,9 +31,9 @@ import { STASH_HEADING_ID, focusAfterFolderWrite } from "./focus";
 import { useFolderWrite } from "./useFolderWrite";
 
 /** What the open dialog drops: one entry, or every entry. */
-type Asking = { kind: "one"; row: StashRow } | { kind: "all"; seen: ClearSeen };
+type Asking = { kind: "one"; row: StashRow } | { kind: "all"; seen: StashSeen };
 
-/** The human's stash of the project folder, newest first, with a drop action per entry and Clear all. Each drop asks first, reads the stash again and refuses when it no longer holds what the person confirmed, and stays pending until the stash has been read again. Nothing renders while the stash is empty or its read has not arrived; a failed read shows its error. */
+/** The human's stash of the project folder, newest first, with a drop action per entry and Clear all. Each drop asks first, reads the stash again and refuses when it no longer holds what the person confirmed, and names what the person saw so the daemon refuses the same, and stays pending until the stash has been read again. Nothing renders while the stash is empty or its read has not arrived; a failed read shows its error. */
 export function StashPanel({ slug, now }: { slug: string; now: number }) {
   const stash = useQuery(stashQuery(slug));
   const queryClient = useQueryClient();
@@ -54,8 +53,8 @@ export function StashPanel({ slug, now }: { slug: string; now: number }) {
       throw stashChangedError();
     }
     await (asked.kind === "one"
-      ? dropStashEntry(slug, asked.row.position)
-      : clearStash(slug));
+      ? dropStashEntry(slug, asked.row.position, asked.row.number)
+      : clearStash(slug, asked.seen));
     // Set before the reads that follow, which can remove the row that opened the dialog.
     dropped.current = asked.kind === "one" ? asked.row.position : null;
   });
@@ -172,12 +171,12 @@ export function StashPanel({ slug, now }: { slug: string; now: number }) {
         title={
           asking?.kind === "one"
             ? dropTitle(asking.row)
-            : clearTitle(asking?.seen.count ?? 0)
+            : clearTitle(asking?.seen.entries ?? 0)
         }
         description={
           asking?.kind === "one"
             ? dropDescription(asking.row)
-            : clearDescription(asking?.seen.count ?? 0)
+            : clearDescription(asking?.seen.entries ?? 0)
         }
         footer={
           <div className="flex gap-8">
