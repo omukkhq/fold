@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { keys } from "@/api/keys";
-import { Markdown } from "@/features/task/Markdown";
+import { Markdown } from "@/components/text/Markdown";
 import { MentionText } from "./MentionText";
 
 afterEach(cleanup);

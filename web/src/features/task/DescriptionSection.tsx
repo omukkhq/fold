@@ -5,7 +5,7 @@ import { Controller, useForm } from "react-hook-form";
 import { setDescription, type TaskDetail } from "@/api/tasks";
 import { Button } from "@/components/button/Button";
 import { MentionField } from "@/mentions/MentionField";
-import { Markdown } from "./Markdown";
+import { Markdown } from "@/components/text/Markdown";
 import { SectionHead, SmallAction, submit, WriteError } from "./parts";
 import { descriptionSchema, type DescriptionForm } from "./schemas";
 import { useTaskWrite } from "./useTaskWrite";
@@ -108,7 +108,9 @@ export function DescriptionSection({
       ) : task.description.trim() === "" ? (
         <p className="text-15 text-text-2">No description yet.</p>
       ) : (
-        <Markdown mentions={{ slug }}>{task.description}</Markdown>
+        <Markdown mentions={{ slug }} dropHtml>
+          {task.description}
+        </Markdown>
       )}
     </section>
   );

@@ -1,8 +1,9 @@
-export type ClampLines = 2 | 3;
+export type ClampLines = 2 | 3 | 4;
 
 const CLAMPS: Record<ClampLines, string> = {
   2: "line-clamp-2",
   3: "line-clamp-3",
+  4: "line-clamp-4",
 };
 
 /** The class that cuts the text to its lines while it is collapsed; open, it shows every line. */

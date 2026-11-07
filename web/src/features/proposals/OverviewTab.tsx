@@ -28,11 +28,12 @@ import { Id } from "@/components/id/Id";
 import { CommitId } from "@/components/mono/CommitId";
 import { Dialog } from "@/components/overlay/Dialog";
 import { IdText } from "@/components/text/IdText";
+import { Markdown } from "@/components/text/Markdown";
 import { textFlow } from "@/components/text/textFlow";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
-import { MentionInline, MentionText } from "@/mentions/MentionText";
+import { MentionInline } from "@/mentions/MentionText";
 import { ActorText } from "@/people/ActorText";
 import { PersonName } from "@/people/PersonName";
 import { idHref, projectPath } from "@/routes/paths";
@@ -43,6 +44,7 @@ import { conversationFact, type ConversationThread } from "./conversation";
 import { changedFolders, changeTree, filesWord } from "./folderTree";
 import { checklistGates, gateText, waitingSummary } from "./gates";
 import {
+  EXCERPT_LINES,
   historyEntries,
   reviewCommentWhere,
   runSummary,
@@ -276,11 +278,9 @@ function IntentCard({
         <p className="text-15 leading-normal text-text-2">{NO_INTENT}</p>
       ) : (
         <>
-          <MentionText
-            text={intent.summary}
-            slug={slug}
-            className="max-w-measure text-16 leading-normal"
-          />
+          <Markdown mentions={{ slug }} size={16} className="max-w-measure">
+            {intent.summary}
+          </Markdown>
           <p
             className={cn(
               "rounded-m px-14 py-10 text-14 text-text",
@@ -349,14 +349,9 @@ function ReviewCard({
             </span>
           </p>
           {summary.excerpt.text === "" ? null : (
-            <MentionText
-              text={summary.excerpt.text}
-              slug={slug}
-              className={cn(
-                "text-14 leading-normal text-text",
-                textFlow("lines"),
-              )}
-            />
+            <Markdown mentions={{ slug }} size={14} clamp={EXCERPT_LINES}>
+              {summary.review.body}
+            </Markdown>
           )}
           {summary.excerpt.cut ||
           summary.review.comments > 0 ||
@@ -390,11 +385,9 @@ function HistoryIntent({
   });
   return (
     <div className="flex min-w-0 flex-col gap-8">
-      <MentionText
-        text={intent.summary}
-        slug={slug}
-        className="max-w-measure text-15 leading-normal"
-      />
+      <Markdown mentions={{ slug }} className="max-w-measure">
+        {intent.summary}
+      </Markdown>
       <button
         type="button"
         aria-expanded={open}
@@ -436,11 +429,9 @@ function ReviewCommentItem({
         <Id>{comment.id}</Id> ·{" "}
         <span className="font-mono">{reviewCommentWhere(comment)}</span>
       </span>
-      <MentionText
-        text={comment.body}
-        slug={slug}
-        className="text-13 leading-normal"
-      />
+      <Markdown mentions={{ slug }} size={13} onSunken>
+        {comment.body}
+      </Markdown>
     </li>
   );
 }
@@ -474,11 +465,9 @@ function FullReview({
         {formatAsOfMinute(now, item.review.created_at)}
         {item.scope === null ? "" : ` · ${item.scope}`}
       </p>
-      <MentionText
-        text={item.review.body.trim() || item.head}
-        slug={slug}
-        className="text-15 leading-normal"
-      />
+      <Markdown mentions={{ slug }}>
+        {item.review.body.trim() || item.head}
+      </Markdown>
       {item.comments.length === 0 ? null : (
         <section
           aria-label="Comments of the review"
@@ -678,14 +667,13 @@ function VersionCard({
                   </span>
                 </p>
                 {item.excerpt.text === "" ? null : (
-                  <MentionText
-                    text={item.excerpt.text}
-                    slug={slug}
-                    className={cn(
-                      "max-w-measure text-15 leading-normal text-text",
-                      textFlow("lines"),
-                    )}
-                  />
+                  <Markdown
+                    mentions={{ slug }}
+                    clamp={EXCERPT_LINES}
+                    className="max-w-measure"
+                  >
+                    {item.review.body}
+                  </Markdown>
                 )}
                 {item.excerpt.cut ||
                 item.review.comments > 0 ||

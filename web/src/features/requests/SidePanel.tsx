@@ -27,7 +27,7 @@ import { COLUMNS } from "@/features/board/columns";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
-import { MentionText } from "@/mentions/MentionText";
+import { Markdown } from "@/components/text/Markdown";
 import { MentionTextarea } from "@/mentions/MentionTextarea";
 import type { Known } from "@/mentions/parse";
 import {
@@ -456,12 +456,9 @@ export function ClosedPanel({
         only reads now.
       </p>
       {detail.close_reason ? (
-        <MentionText
-          text={detail.close_reason}
-          slug={slug}
-          known={known}
-          className="text-14"
-        />
+        <Markdown mentions={{ slug, known }} size={14}>
+          {detail.close_reason}
+        </Markdown>
       ) : null}
     </Block>
   );
