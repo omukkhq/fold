@@ -5,11 +5,11 @@ use std::time::Duration;
 use clap::Args;
 use fold_cli::claude_files::{self, ClaudeFileError};
 use fold_cli::daemon_client::{ClientConfig, ClientError, DaemonClient, Response};
-use fold_core::{FoldError, HostPaths, HumanName, ProjectPaths, codes};
+use fold_core::{FoldError, HostPaths, HumanName, ProjectPaths, RevisionId, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::services::projects::{
-    FolderFiles, ProjectError, RepositorySetup, deleted_project_slug, init_new_project,
-    init_project_from_git, root_for_dir_on_host,
+    FolderFiles, ProjectError, RepositorySetup, WrittenFiles, deleted_project_slug,
+    init_new_project, init_project_from_git_with, root_for_dir_on_host,
 };
 use fold_vcs::git::Git;
 use fold_vcs::git_discovery::Discovery;
@@ -220,10 +220,19 @@ pub(crate) fn initialise(
         )
     });
     let project = runtime.block_on(async {
-        if kind == Kind::FromGit {
-            return init_project_from_git(&host, dir, name, &human, git(), &SystemClock).await;
-        }
         let files: FolderFiles = Box::new(|root: &Path| new_claude_files(root));
+        if kind == Kind::FromGit {
+            return init_project_from_git_with(
+                &host,
+                dir,
+                name,
+                &human,
+                git(),
+                Some(files),
+                &SystemClock,
+            )
+            .await;
+        }
         let setup = identity.map(|identity| -> RepositorySetup {
             Box::new(move |root: &Path| {
                 git_identity::store_in(&git(), root, &identity, &mut io::stderr());
@@ -290,7 +299,20 @@ pub(crate) fn initialise(
         )?;
     }
     if let Some(commit) = &project.git_commit {
-        output::line(out, &format!("{} is Git commit {commit}", project.revision))?;
+        output::line(
+            out,
+            &format!("{} is Git commit {commit}", RevisionId::GENESIS),
+        )?;
+    }
+    if let Some(files) = &project.files_revision {
+        output::line(
+            out,
+            &format!(
+                "{} records the Claude Code files that init changed: {}",
+                files.revision,
+                files.files.join(", ")
+            ),
+        )?;
     }
     if let Some(revision) = &project.gitignore {
         output::line(
@@ -454,8 +476,8 @@ fn refresh(dir: Option<&Path>, dirs: &Dirs, out: &mut impl Write) -> Result<(), 
     Ok(())
 }
 
-/// Writes the Claude Code files into a new project's folder before init records it, so the instructions file is part of `r1` while `.fold/exclude` leaves the skills out, and returns the files and folders that did not exist before.
-fn new_claude_files(root: &Path) -> Result<Vec<PathBuf>, FoldError> {
+/// Writes the Claude Code files into a new project's folder before init records it, so the instructions file is part of the revision init records while `.fold/exclude` leaves the skills out, and returns the files and folders that did not exist before and the root files that changed, by the paths their symbolic links lead to.
+fn new_claude_files(root: &Path) -> Result<WrittenFiles, FoldError> {
     // A folder comes before the files below it, so only the topmost new path is recorded.
     let written = [claude_files::instructions_file(root)]
         .into_iter()
@@ -469,14 +491,47 @@ fn new_claude_files(root: &Path) -> Result<Vec<PathBuf>, FoldError> {
             created.push(path);
         }
     }
+    let before = root_files(root);
     match claude_files::write(root) {
-        Ok(()) => Ok(created),
+        Ok(()) => {
+            let changed = before
+                .into_iter()
+                .filter(|(path, old)| std::fs::read(path).ok().as_ref() != Some(old))
+                .collect();
+            Ok(WrittenFiles { created, changed })
+        }
         Err(ClaudeFileError::Malformed(error) | ClaudeFileError::Link(error)) => Err(error),
         Err(ClaudeFileError::Io { source, .. }) => Err(FoldError::new(
             codes::WORKSPACE_IO,
             format!("cannot write the Claude Code files: {}", source.kind()),
         )),
     }
+}
+
+/// The bytes of each existing root file that [`claude_files::write`] may change, by the path in the project that its symbolic links lead to.
+fn root_files(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let Ok(project) = std::fs::canonicalize(root) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    let names = [
+        claude_files::AGENTS_FILE,
+        claude_files::CLAUDE_FILE,
+        claude_files::MCP_FILE,
+        claude_files::SETTINGS_FILE,
+    ];
+    for name in names {
+        let Ok(end) = std::fs::canonicalize(project.join(name)) else {
+            continue;
+        };
+        if !end.starts_with(&project) || found.iter().any(|(path, _)| *path == end) {
+            continue;
+        }
+        if let Ok(bytes) = std::fs::read(&end) {
+            found.push((end, bytes));
+        }
+    }
+    found
 }
 
 /// The warnings never stop the command: the files are written first.

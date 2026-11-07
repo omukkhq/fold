@@ -72,6 +72,21 @@ impl Sandbox {
         self.command(cwd, args).output().unwrap()
     }
 
+    /// The lines of `fld status` for `project` through the sandbox daemon.
+    fn status(&self, project: &Path) -> Vec<String> {
+        let socket = self.socket();
+        let args = [
+            "status",
+            "--socket",
+            socket.to_str().unwrap(),
+            "--project",
+            project.to_str().unwrap(),
+        ];
+        let output = self.fold_in(project, &args);
+        assert!(output.status.success(), "{output:?}");
+        stdout(&output).lines().map(str::to_owned).collect()
+    }
+
     fn serve(&self) -> Daemon {
         let socket = self.socket();
         let child = self
@@ -273,9 +288,9 @@ fn with_git_in_a_git_repository_makes_its_head_the_genesis() {
         "{refused:?}"
     );
     git(&repo, &["checkout", "--quiet", "--", "README.md"]);
+    let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
     let output = sandbox.fold_in(&repo, &["init", "--with-git"]);
     assert!(output.status.success(), "{output:?}");
-    let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
     let text = stdout(&output);
     assert!(
         text.contains(&format!("\nr0 is Git commit {head}\n")),
@@ -285,4 +300,129 @@ fn with_git_in_a_git_repository_makes_its_head_the_genesis() {
         text.contains("no Git remote yet: add one with fld remote add"),
         "{text}"
     );
+}
+
+/// A Git repository at `repo` whose one commit holds `files`, with the commit's id.
+#[cfg(test)]
+fn committed_repo(repo: &Path, files: &[(&str, &str)]) -> String {
+    fs::create_dir(repo).unwrap();
+    git(repo, &["init", "--quiet", "--initial-branch=main"]);
+    for (path, text) in files {
+        fs::write(repo.join(path), text).unwrap();
+    }
+    git(repo, &["add", "."]);
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=A",
+            "-c",
+            "user.email=a@b",
+            "commit",
+            "--quiet",
+            "-m",
+            "start",
+        ],
+    );
+    git(repo, &["rev-parse", "HEAD"]).trim().to_owned()
+}
+
+#[test]
+fn with_git_in_a_git_repository_records_the_section_it_adds_to_agents_md_as_r1() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.path("repo");
+    let head = committed_repo(
+        &repo,
+        &[("README.md", "# app\n"), ("AGENTS.md", "# Our rules\n")],
+    );
+    fs::write(repo.join("notes.txt"), "mine\n").unwrap();
+    let output = sandbox.fold_in(&repo, &["init", "--with-git"]);
+    assert!(output.status.success(), "{output:?}");
+    let text = stdout(&output);
+    assert!(
+        text.contains(&format!(
+            "\nr0 is Git commit {head}\nr1 records the Claude Code files that init changed: AGENTS.md\n"
+        )),
+        "{text}"
+    );
+    let agents = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
+    assert!(agents.starts_with("# Our rules\n"), "{agents}");
+    assert!(
+        agents.contains(fold_cli::claude_files::AGENTS_BEGIN),
+        "{agents}"
+    );
+    // r1's commit holds fold's section and nothing else, so the user's untracked file stays theirs.
+    assert_eq!(git(&repo, &["rev-parse", "HEAD~1"]).trim(), head);
+    assert_eq!(
+        git(
+            &repo,
+            &["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]
+        ),
+        "AGENTS.md\n"
+    );
+    assert_eq!(git(&repo, &["show", "HEAD:AGENTS.md"]), agents);
+    assert_eq!(git(&repo, &["status", "--porcelain"]), "?? notes.txt\n");
+    let _daemon = sandbox.serve();
+    assert_eq!(
+        sandbox.status(&repo),
+        [
+            "Project folder at main r1",
+            "  ↳ Git: main is synced with the branch main",
+            "",
+            "To record: 1 file",
+            "  ↳ added: notes.txt",
+            "  ↳ Next: `fld record` records them on main; `fld stash` puts them aside",
+            "",
+            "1 file to record",
+        ]
+    );
+}
+
+#[test]
+fn with_git_in_a_git_repository_whose_agents_md_has_the_section_makes_no_revision() {
+    let sandbox = Sandbox::new();
+    let written = sandbox.path("written");
+    fs::create_dir(&written).unwrap();
+    fold_cli::claude_files::write(&written).unwrap();
+    let agents = fs::read_to_string(written.join("AGENTS.md")).unwrap();
+    let repo = sandbox.path("repo");
+    let head = committed_repo(&repo, &[("README.md", "# app\n"), ("AGENTS.md", &agents)]);
+    let output = sandbox.fold_in(&repo, &["init", "--with-git"]);
+    assert!(output.status.success(), "{output:?}");
+    let text = stdout(&output);
+    assert!(!text.contains(" records "), "{text}");
+    assert_eq!(fs::read_to_string(repo.join("AGENTS.md")).unwrap(), agents);
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]).trim(), head);
+    assert_eq!(
+        fs::read_to_string(repo.join(".fold/git-sync.map")).unwrap(),
+        format!("r0 {head}\n")
+    );
+    assert_eq!(git(&repo, &["status", "--porcelain"]), "");
+    let _daemon = sandbox.serve();
+    assert_eq!(
+        sandbox.status(&repo),
+        [
+            "Nothing to record: the project folder is at main r0",
+            "  ↳ Git: main is synced with the branch main",
+        ]
+    );
+}
+
+#[test]
+fn with_git_in_a_git_repository_leaves_an_untracked_agents_md_unrecorded() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.path("repo");
+    let head = committed_repo(&repo, &[("README.md", "# app\n")]);
+    fs::write(repo.join("AGENTS.md"), "# Not committed\n").unwrap();
+    let output = sandbox.fold_in(&repo, &["init", "--with-git"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(!stdout(&output).contains(" records "), "{output:?}");
+    let agents = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
+    assert!(agents.starts_with("# Not committed\n"), "{agents}");
+    assert!(
+        agents.contains(fold_cli::claude_files::AGENTS_BEGIN),
+        "{agents}"
+    );
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]).trim(), head);
+    assert_eq!(git(&repo, &["status", "--porcelain"]), "?? AGENTS.md\n");
 }

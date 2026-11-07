@@ -7,8 +7,12 @@ use crate::common::invariants::assert_store_consistent;
 use fold_core::object::{ObjectKind, hash_object};
 use fold_core::{HostPaths, ManualClock, ProjectPaths};
 use fold_daemon::projects::ProjectHandle;
-use fold_daemon::services::projects::{InitializedProject, ProjectError, init_project};
+use fold_daemon::services::projects::{
+    FolderFiles, InitializedProject, ProjectError, WrittenFiles, init_project,
+    init_project_from_git_with,
+};
 use fold_store::{Store, projects};
+use fold_vcs::git::Git;
 use fold_vcs::objects::ObjectStore;
 use tempfile::TempDir;
 
@@ -154,6 +158,72 @@ async fn an_init_with_git_stopped_before_its_repository_creates_it_on_the_next_r
         .unwrap();
     assert!(project.resumed && project.git_sync);
     assert!(paths.git_dir().join("HEAD").is_file());
+    assert_eq!(host.registered().await, ["app"]);
+    assert_project_consistent(&paths).await;
+    scenario.teardown();
+}
+
+/// `git <args>` in `dir` with a fixed identity and no user configuration, returning its output.
+fn git(dir: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=Ana", "-c", "user.email=ana@example.com"])
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[tokio::test]
+async fn an_init_from_git_stopped_before_the_registry_insert_keeps_the_files_it_recorded() {
+    let scenario = fail::FailScenario::setup();
+    let host = Host::new();
+    let root = host.root();
+    git(&root, &["init", "--quiet", "--initial-branch=main"]);
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "--quiet", "-m", "start"]);
+    let head = git(&root, &["rev-parse", "HEAD"]).trim().to_owned();
+    let ana = crate::common::ana();
+    let init = |files: Option<FolderFiles>| {
+        init_project_from_git_with(
+            &host.paths,
+            &root,
+            None,
+            &ana,
+            Git::default(),
+            files,
+            &host.clock,
+        )
+    };
+    let files: FolderFiles = Box::new(|root: &Path| {
+        let agents = root.join("AGENTS.md");
+        std::fs::write(&agents, "fold\n").unwrap();
+        Ok(WrittenFiles {
+            created: vec![agents],
+            changed: Vec::new(),
+        })
+    });
+    fail::cfg("init_before_register", "return").unwrap();
+    let stopped = init(Some(files)).await;
+    fail::remove("init_before_register");
+    assert_eq!(stopped.unwrap_err().code(), Some("failpoint"));
+    let paths = host.project_paths();
+    assert_eq!(
+        std::fs::read_to_string(paths.root().join("AGENTS.md")).unwrap(),
+        "fold\n"
+    );
+
+    // The stopped run recorded the genesis and the written file as r1 in one transaction, so the next run only registers the project.
+    let project = init(None).await.unwrap();
+    assert!(project.resumed && project.git_sync);
+    assert_eq!(project.revision.to_string(), "r1");
+    assert_eq!(project.imported.files, 3);
+    assert_eq!(project.git_commit.unwrap().as_str(), head);
+    assert_eq!(project.files_revision, None);
     assert_eq!(host.registered().await, ["app"]);
     assert_project_consistent(&paths).await;
     scenario.teardown();
