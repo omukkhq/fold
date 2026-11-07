@@ -4,19 +4,21 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
-use fold_core::agent_changes::{ToolWindow, agents_at};
+use fold_core::agent_changes::{ToolWindow, agents_at, settled_by_follow};
 use fold_core::events::types;
 use fold_core::folder::unrecorded_changes;
 use fold_core::tree::FlatTree;
 use fold_core::{Actor, AgentName, FoldError, NewEvent, Timestamp, codes, policy};
 use fold_store::workspaces::{
     AgentChangeEnd, clear_agent_change, insert_agent_change, open_agent_changes,
+    settle_agent_change,
 };
 use fold_store::{Store, StoreError};
 use fold_vcs::paths::{RepoPath, changed_time};
 use serde_json::json;
 
 use super::ProjectError;
+use super::folder::FolderFollowed;
 use crate::projects::ProjectHandle;
 use crate::services::agents::starter_of;
 use crate::services::events::{EventBuffer, EventBus};
@@ -177,15 +179,18 @@ fn cleared_event(
         .map_err(|error| FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
 }
 
-/// Notes, after a follow of the project folder read `seen`, the paths that changed during a tool call of a supervised worker as that worker's, with `folder.agent_changed`, and ends as `settled`, with `folder.agent_change_cleared`, those whose path the folder holds as its checkout record again. One transaction holds both. The caller holds the folder lock. A failure is logged and changes nothing, so the follow and the commits it leads to go on: the change then shows as the human's, as it would without the note.
+/// Notes, after a follow of the project folder read what `followed` holds, the paths that changed during a tool call of a supervised worker as that worker's, with `folder.agent_changed`, and ends as `settled`, with `folder.agent_change_cleared`, those whose path the folder holds as its checkout record again, among the marks placed before the follow read the folder ([`settled_by_follow`]): a mark placed meanwhile, for a file the read may not show, stays open. One transaction holds both. The caller holds the folder lock. A failure is logged and changes nothing, so the follow and the commits it leads to go on: the change then shows as the human's, as it would without the note.
 pub(crate) async fn note_agent_changes(
     store: &Store,
     bus: &EventBus,
     windows: &ToolWindows,
-    seen: &[SeenChange],
+    followed: &FolderFollowed,
     now: Timestamp,
 ) {
-    if let Err(error) = note(store, bus, windows, seen, now).await {
+    #[cfg(feature = "failpoints")]
+    fail::fail_point!("folder_before_note");
+    let (seen, marks_before_read) = (&followed.seen, followed.marks_before_read);
+    if let Err(error) = note(store, bus, windows, seen, marks_before_read, now).await {
         tracing::warn!(
             code = error.code().unwrap_or(codes::INTERNAL_ERROR),
             "the changes of workers in the project folder were not noted"
@@ -198,6 +203,7 @@ async fn note(
     bus: &EventBus,
     windows: &ToolWindows,
     seen: &[SeenChange],
+    marks_before_read: i64,
     now: Timestamp,
 ) -> Result<(), ProjectError> {
     let calls = windows.windows(file_clock_now());
@@ -206,11 +212,11 @@ async fn note(
         return Ok(());
     }
     let present: BTreeSet<&[u8]> = seen.iter().map(|change| change.path.as_slice()).collect();
-    let settled: BTreeSet<Vec<u8>> = open
-        .iter()
-        .filter(|row| !present.contains(row.path.as_slice()))
-        .map(|row| row.path.clone())
-        .collect();
+    let settled = settled_by_follow(
+        open.iter().map(|row| (row.id, row.path.as_slice())),
+        &present,
+        marks_before_read,
+    );
     let known: BTreeSet<(&[u8], &AgentName)> = open
         .iter()
         .map(|row| (row.path.as_slice(), &row.agent))
@@ -236,7 +242,7 @@ async fn note(
         .write(async |tx| -> Result<EventBuffer, ProjectError> {
             let mut buffer = EventBuffer::new();
             for path in &settled {
-                clear_agent_change(tx, path, AgentChangeEnd::Settled, now).await?;
+                settle_agent_change(tx, path, marks_before_read, now).await?;
             }
             if let Some(event) = &settled_event {
                 buffer.append(tx, event, now).await?;

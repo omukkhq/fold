@@ -14,7 +14,8 @@ mod shared_changes;
 mod stashes;
 
 pub use agent_changes::{
-    AgentChangeEnd, AgentChangeRow, clear_agent_change, insert_agent_change, open_agent_changes,
+    AgentChangeEnd, AgentChangeRow, clear_agent_change, insert_agent_change, last_agent_change,
+    open_agent_changes, settle_agent_change,
 };
 pub(crate) use changesets::parse_stats;
 pub use changesets::{

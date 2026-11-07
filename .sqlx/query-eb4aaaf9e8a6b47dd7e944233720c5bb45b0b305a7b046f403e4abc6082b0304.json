@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COALESCE(MAX(id), 0) AS \"last!: i64\" FROM agent_changes",
+  "describe": {
+    "columns": [
+      {
+        "name": "last!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "eb4aaaf9e8a6b47dd7e944233720c5bb45b0b305a7b046f403e4abc6082b0304"
+}

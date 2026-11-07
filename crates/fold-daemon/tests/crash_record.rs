@@ -199,3 +199,84 @@ async fn a_record_that_fails_keeps_a_workers_change_marked() {
     );
     scenario.teardown();
 }
+
+/// A follow of the project folder that read the folder before a worker's file was there never settles the mark placed for that file while the follow ran, so the worker's change never passes as the human's for a stale read; a later follow that finds the folder holding its record again does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_mark_placed_while_a_follow_reads_the_folder_stays_open() {
+    use std::sync::{Arc, Condvar, Mutex};
+
+    use fold_core::{AgentName, Timestamp};
+    use fold_daemon::services::projects::{RemoteContext, sync_folder};
+    use fold_vcs::git::Git;
+
+    let scenario = fail::FailScenario::setup();
+    let h = Harness::start().await;
+    let root = std::path::PathBuf::from(h.root());
+    let lead = AgentName::parse("web-lead").unwrap();
+    let at = Timestamp::from_millis(1).unwrap();
+    h.handle
+        .store
+        .write(async |tx| fold_store::agents::insert_agent(tx, &lead, at).await)
+        .await
+        .unwrap();
+    // Each follow stops after its read of the folder until the test lets it go: (a follow stopped, let go).
+    let gate = Arc::new((Mutex::new((false, false)), Condvar::new()));
+    let stop = gate.clone();
+    fail::cfg_callback("folder_before_note", move || {
+        let (state, changed) = &*stop;
+        let mut state = state.lock().unwrap();
+        state.0 = true;
+        changed.notify_all();
+        while !state.1 {
+            state = changed.wait(state).unwrap();
+        }
+    })
+    .unwrap();
+    let context = RemoteContext::of(&h.handle);
+    let follow = tokio::spawn(async move { sync_folder(&context, &Git::default()).await });
+    let stopped = gate.clone();
+    tokio::task::spawn_blocking(move || {
+        let (state, changed) = &*stopped;
+        let mut state = state.lock().unwrap();
+        while !state.0 {
+            state = changed.wait(state).unwrap();
+        }
+    })
+    .await
+    .unwrap();
+
+    // The worker's file and its mark arrive after the follow read the folder.
+    std::fs::write(root.join("notes.txt"), "from the worker\n").unwrap();
+    h.handle
+        .store
+        .write(async |tx| {
+            fold_store::workspaces::insert_agent_change(tx, b"notes.txt", &lead, at, at).await
+        })
+        .await
+        .unwrap();
+    {
+        let (state, changed) = &*gate;
+        state.lock().unwrap().1 = true;
+        changed.notify_all();
+    }
+    fail::remove("folder_before_note");
+    follow.await.unwrap().unwrap();
+    // A follow that waits for the folder lock also waits for any other stopped one.
+    let context = RemoteContext::of(&h.handle);
+    sync_folder(&context, &Git::default()).await.unwrap();
+    let open = "SELECT COUNT(*) FROM agent_changes WHERE cleared_at IS NULL";
+    assert_eq!(rows(&h, open).await, 1);
+
+    std::fs::remove_file(root.join("notes.txt")).unwrap();
+    sync_folder(&context, &Git::default()).await.unwrap();
+    assert_eq!(rows(&h, open).await, 0);
+    assert_eq!(
+        rows(
+            &h,
+            "SELECT COUNT(*) FROM agent_changes WHERE cleared_how = 'settled'"
+        )
+        .await,
+        1
+    );
+    scenario.teardown();
+}
