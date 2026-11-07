@@ -648,6 +648,23 @@ describe("eventLine", () => {
     );
   });
 
+  it("names the paths a human shared with workers or stopped sharing", () => {
+    const changed = (data: Record<string, unknown>) =>
+      eventLine(event("shared.paths_changed", { data })).text;
+    expect(changed({ added: ["design/", "docs/spec.pdf"], removed: [] })).toBe(
+      "shared design/, docs/spec.pdf with workers, read-only",
+    );
+    expect(changed({ added: [], removed: ["notes.md"] })).toBe(
+      "stopped sharing notes.md",
+    );
+    expect(changed({ added: ["design/"], removed: ["notes.md"] })).toBe(
+      "shared design/ with workers, read-only, and stopped sharing notes.md",
+    );
+    expect(eventLine(event("shared.paths_changed")).text).toBe(
+      "changed the shared paths",
+    );
+  });
+
   it("keeps a backtick in a path from pairing with the marks of a command", () => {
     const line = eventLine(
       event("git.uncommitted_changes", {

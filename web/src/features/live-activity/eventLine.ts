@@ -1027,6 +1027,20 @@ const SPECS: Record<EventType, Spec> = {
     icon: Check,
     text: () => "dismissed the changes of shared files",
   },
+  "shared.paths_changed": {
+    icon: Link2,
+    text: (e) => {
+      const added = heldText(e.data.added, undefined);
+      const removed = heldText(e.data.removed, undefined);
+      const parts = [
+        added === null ? null : `shared ${added} with workers, read-only`,
+        removed === null ? null : `stopped sharing ${removed}`,
+      ].filter((part): part is string => part !== null);
+      return parts.length === 0
+        ? "changed the shared paths"
+        : parts.join(", and ");
+    },
+  },
 };
 
 /** The line of a notice target's change. The data does not tell a person's add from an edit, so a person's line names the state the target is in. */
