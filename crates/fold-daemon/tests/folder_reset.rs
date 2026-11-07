@@ -371,32 +371,18 @@ pub async fn open_agent_paths(h: &Harness) -> Vec<String> {
         .collect()
 }
 
-/// `fld agent-changes restore` goes through the reset of named paths: the safety entry holds exactly the files the worker changed, they go back to main's version, the human's own change stays, and the marks end only once the files are back, so a refusal, here a tracked file over the size limit, keeps them open and stashes nothing.
+/// `fld agent-changes restore` goes through the reset of named paths: the safety entry holds exactly the files the worker changed, they go back to main's version, the human's own change stays, and the marks end only once the files are back, so a refusal, here an unstash conflict that waits in the folder, keeps them open and stashes nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_restore_of_a_workers_changes_puts_back_only_its_paths_through_the_reset() {
     let mut h = Harness::start_plain().await;
     h.connect_tagged("main", &["main"]).await;
     let dir = PathBuf::from(h.root());
-    write(&dir, "README.md", &"x".repeat(100));
+    write(&dir, "README.md", "worker\n");
     write(&dir, "junk.txt", "");
     write(&dir, "notes.md", "mine\n");
     place_agent_change(&h, "README.md").await;
     place_agent_change(&h, "junk.txt").await;
-    let config = dir.join(".fold/config.toml");
-    let kept = std::fs::read_to_string(&config).unwrap_or_default();
-    std::fs::write(&config, format!("max_file_bytes = 32\n{kept}")).unwrap();
 
-    let (reason, paths) = refusal(
-        restore_agent_changes(&h.handle, &ana(), &Git::default())
-            .await
-            .unwrap_err(),
-    );
-    assert_eq!(reason, "skipped_tracked");
-    assert_eq!(paths, json!(["README.md"]));
-    assert!(entries(&h).await.is_empty());
-    assert_eq!(open_agent_paths(&h).await, ["README.md", "junk.txt"]);
-
-    std::fs::write(&config, kept).unwrap();
     let done = restore_agent_changes(&h.handle, &ana(), &Git::default())
         .await
         .unwrap();
@@ -411,4 +397,27 @@ async fn a_restore_of_a_workers_changes_puts_back_only_its_paths_through_the_res
         .await
         .unwrap_err();
     assert_eq!(error.code(), Some("agent_change_not_found"));
+
+    // An unstash conflict waits in the folder: the restore refuses, and the worker's file and its mark stay.
+    std::fs::remove_file(dir.join("notes.md")).unwrap();
+    write(&dir, "README.md", "# mine\n");
+    stash_as_ana(&h).await.unwrap();
+    integrate(&h, "frontend", &[("README.md", "# fold\n")]).await;
+    wait_for(&dir, "README.md", "# fold\n").await;
+    assert!(matches!(
+        unstash_as_ana(&h).await.unwrap(),
+        UnstashOutcome::Conflicted { .. }
+    ));
+    write(&dir, "junk2.txt", "");
+    place_agent_change(&h, "junk2.txt").await;
+    let (reason, paths) = refusal(
+        restore_agent_changes(&h.handle, &ana(), &Git::default())
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(reason, "stash_conflicted");
+    assert_eq!(paths, json!(["README.md"]));
+    assert_eq!(read(&dir, "junk2.txt").as_deref(), Some(""));
+    assert_eq!(open_agent_paths(&h).await, ["junk2.txt"]);
+    assert_eq!(entries(&h).await.len(), 2);
 }

@@ -177,14 +177,26 @@ async fn run_restore(
         .collect::<Result<Vec<_>, _>>()?;
     let done =
         super::reset::reset_followed(handle, actor, git, &config, Some(paths), unstash).await?;
-    super::agent_changes::end_agent_changes(
-        handle,
-        actor,
-        workspaces::AgentChangeEnd::Restored,
-        Some(&open),
-        false,
-    )
-    .await?;
+    // Only a path that went back, or held no change, ends: a file the read left out stays as the worker left it.
+    let back: std::collections::BTreeSet<Vec<u8>> = done
+        .files
+        .iter()
+        .chain(&done.unchanged)
+        .map(|path| path.as_bytes().to_vec())
+        .filter(|path| {
+            open.contains(path) && !done.skipped.iter().any(|skip| skip.path.as_bytes() == path)
+        })
+        .collect();
+    if !back.is_empty() {
+        super::agent_changes::end_agent_changes(
+            handle,
+            actor,
+            workspaces::AgentChangeEnd::Restored,
+            Some(&back),
+            false,
+        )
+        .await?;
+    }
     tracing::info!(
         files = done.files.len(),
         "the changes workers made in the project folder are stashed"
