@@ -3,11 +3,14 @@ import type { StashEntry } from "@/api/stash";
 import {
   canClear,
   clearDescription,
+  clearSeen,
   clearTitle,
   dropDescription,
   dropTitle,
   positionOf,
+  rowStillThere,
   stashRows,
+  stashStillSeen,
 } from "./stash";
 
 const NOW = new Date(2026, 10, 7, 15, 0).getTime();
@@ -78,5 +81,38 @@ describe("the stash rows", () => {
     expect(clearTitle(3)).toBe("Drop all 3 stash entries?");
     expect(clearDescription(1)).toContain("The changes of the entry");
     expect(clearDescription(3)).toContain("every entry");
+  });
+
+  it("drop only the entry the person confirmed, which a newer entry pushed to another place no longer is", () => {
+    const junk = entry({ files: ["junk"] });
+    const [row] = stashRows([junk], NOW);
+    if (!row) throw new Error("a row");
+    expect(rowStillThere([junk], row)).toBe(true);
+    const safety = entry({
+      created_at: junk.created_at + 60_000,
+      files: ["plan.md"],
+    });
+    expect(rowStillThere([safety, { ...junk, stash: "stash@{1}" }], row)).toBe(
+      false,
+    );
+    expect(rowStillThere([], row)).toBe(false);
+  });
+
+  it("clear only the stash the person confirmed: the same count and the same newest entry", () => {
+    const listed = [entry(), entry({ stash: "stash@{1}", created_at: 5 })];
+    const seen = clearSeen(stashRows(listed, NOW));
+    expect(seen.count).toBe(2);
+    expect(stashStillSeen(listed, seen)).toBe(true);
+    expect(stashStillSeen(listed.slice(0, 1), seen)).toBe(false);
+    expect(
+      stashStillSeen(
+        [
+          entry({ created_at: 9 }),
+          entry({ stash: "stash@{1}", created_at: 5 }),
+        ],
+        seen,
+      ),
+    ).toBe(false);
+    expect(stashStillSeen([], clearSeen([]))).toBe(false);
   });
 });
