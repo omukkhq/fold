@@ -494,7 +494,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Puts the named files and directories of the project folder back to the files fold last wrote there, as `fld restore` asks: their changes that no revision records are first stashed as `stash@{0}`, which `fld unstash` brings back. The conflicted human change that waits for the main agent is dropped as `fld reset` drops it only when the named paths held every unrecorded change. Only a named human restores, over the socket or signed in to the web app. */
+        /** Puts the named files and directories of the project folder back to the files fold last wrote there, as `fld restore` asks: their changes that no revision records are first stashed as `stash@{0}`, which `fld unstash` brings back. The conflicted human change that waits for the main agent is withdrawn with `human_change.withdrawn` only when the named paths held every unrecorded change; the main workspace that holds its merge stays open, and the main agent's notice asks it to abandon the workspace. Only a named human restores, over the socket or signed in to the web app. */
         post: operations["restore_project_folder_paths"];
         delete?: never;
         options?: never;
@@ -579,7 +579,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, a worker whose turns fail before they reach the model, and a notice target fold turned off, which a person's change of the target or a test send that gets through ends. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable` and `notify.target_changed`, and with the live `worker.output` steps `result` and `result_error`, which end a turn. */
+        /** Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, a worker whose turns fail before they reach the model, and a notice target fold turned off, which a person's change of the target or a test send that gets through ends. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `stash.discarded`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable` and `notify.target_changed`, and with the live `worker.output` steps `result` and `result_error`, which end a turn. */
         get: operations["list_needs_you"];
         put?: never;
         post?: never;
@@ -1336,7 +1336,7 @@ export interface paths {
         put?: never;
         /** Puts the human's changes in the project folder aside, as `fld stash` asks: what the folder holds against the entries fold last wrote there becomes the newest entry of fold's own stash, those paths go back to fold's entries, and the folder follows main. While Git sync is on, the index entries of those paths go back too; no Git stash is made. A conflicted human change from an earlier `fld record` that waits for the main agent is closed with `human_change.withdrawn`, since the entry holds its changes. A project whose branch or HEAD shows a change fold did not make is refused, and so is one whose unstash conflict waits or that holds a file fold tracks and cannot read. Socket only; the human comes from `x-fold-human`. */
         post: operations["stash_project"];
-        /** Drops every entry of the stash, as `fld stash clear` asks: their changes leave the stack for good, their objects stay until `fld gc`, and no file of the project folder changes. Only a named human clears, over the socket or signed in to the web app. A stash whose newest entry's unstash conflict waits in the folder is refused as a whole. */
+        /** Drops every entry of the stash, as `fld stash clear` asks: their changes leave the stack for good, their objects stay until `fld gc`, and no file of the project folder changes. Only a named human clears, over the socket or signed in to the web app. The query names the stack the human saw, its length and its newest entry, so a stack that changed meanwhile drops nothing. A stash whose newest entry's unstash conflict waits in the folder is refused as a whole. */
         delete: operations["clear_project_stash"];
         options?: never;
         head?: never;
@@ -1353,7 +1353,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Drops one entry of the stash, as `fld stash drop` asks: its changes leave the stack for good, its objects stay until `fld gc`, and no file of the project folder changes. Only a named human drops, over the socket or signed in to the web app. An entry whose unstash conflict waits in the folder is refused. */
+        /** Drops one entry of the stash, as `fld stash drop` asks: its changes leave the stack for good, its objects stay until `fld gc`, and no file of the project folder changes. Only a named human drops, over the socket or signed in to the web app. The query names the entry the human saw at that place, so a stack that changed meanwhile drops nothing. An entry whose unstash conflict waits in the folder is refused. */
         delete: operations["drop_project_stash_entry"];
         options?: never;
         head?: never;
@@ -2823,10 +2823,12 @@ export interface components {
             /** @description The paths that conflicted with main, in path order. */
             conflicted: string[];
             /**
-             * @description The main workspace that held its merge, which the reset abandoned; null when the main agent had opened none.
+             * @description The main workspace that holds its merge; null when the main agent had opened none.
              * @example ws-9
              */
             workspace: string | null;
+            /** @description Whether fold abandoned that workspace, as a reset does; after a restore the main agent abandons it. */
+            workspace_abandoned: boolean;
         };
         /** @description A stored event. The related ids are public ids. */
         DurableEvent: {
@@ -5109,6 +5111,12 @@ export interface components {
             created_at: number;
             /** @description The paths of the entry, in path order. */
             files: string[];
+            /**
+             * Format: int64
+             * @description The entry's number, which stays the same while its place on the stack moves and is never reused; a drop names it.
+             * @example 7
+             */
+            number: number;
             /**
              * @description Its name on the stack: `stash@{0}` is the newest.
              * @example stash@{0}
@@ -13362,7 +13370,12 @@ export interface operations {
     };
     clear_project_stash: {
         parameters: {
-            query?: never;
+            query: {
+                /** @description How many entries the human saw. */
+                entries: number;
+                /** @description The `number` of the newest entry the human saw, `stash@{0}`; left out for an empty stash. */
+                newest?: number;
+            };
             header?: never;
             path: {
                 /** @description The project slug */
@@ -13381,7 +13394,7 @@ export interface operations {
                     "application/json": components["schemas"]["StashDropResult"];
                 };
             };
-            /** @description The human name is not valid; the place is not a number (`reason` `invalid_entry`); the stash is empty (`reason` `stash_empty`); no entry has that place (`reason` `stash_entry_missing`, the stack's length in `entries`); the entry's unstash conflict waits in the folder (`reason` `stash_conflicted`, the files in `paths`); or, while an unstash that stopped part-way is finished first, the branch or HEAD shows a change fold did not make (`reason` `head_moved`) or the human's Git commits wait (`reason` `git_commits_wait`) */
+            /** @description The human name is not valid; the query is missing or not valid; the place is not a number (`reason` `invalid_entry`); the stack is no longer the one the human saw, so nothing is dropped (`reason` `stash_changed`, the stack's length in `entries`); the stash is empty (`reason` `stash_empty`); no entry has that place (`reason` `stash_entry_missing`, the stack's length in `entries`); the entry's unstash conflict waits in the folder (`reason` `stash_conflicted`, the files in `paths`); or, while an unstash that stopped part-way is finished first, the branch or HEAD shows a change fold did not make (`reason` `head_moved`) or the human's Git commits wait (`reason` `git_commits_wait`) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -13448,7 +13461,10 @@ export interface operations {
     };
     drop_project_stash_entry: {
         parameters: {
-            query?: never;
+            query: {
+                /** @description The `number` of the entry the human saw at this place; another entry there now refuses the drop with `stash_changed`. */
+                number: number;
+            };
             header?: never;
             path: {
                 /** @description The project slug */
@@ -13469,7 +13485,7 @@ export interface operations {
                     "application/json": components["schemas"]["StashDropResult"];
                 };
             };
-            /** @description The human name is not valid; the place is not a number (`reason` `invalid_entry`); the stash is empty (`reason` `stash_empty`); no entry has that place (`reason` `stash_entry_missing`, the stack's length in `entries`); the entry's unstash conflict waits in the folder (`reason` `stash_conflicted`, the files in `paths`); or, while an unstash that stopped part-way is finished first, the branch or HEAD shows a change fold did not make (`reason` `head_moved`) or the human's Git commits wait (`reason` `git_commits_wait`) */
+            /** @description The human name is not valid; the query is missing or not valid; the place is not a number (`reason` `invalid_entry`); the stack is no longer the one the human saw, so nothing is dropped (`reason` `stash_changed`, the stack's length in `entries`); the stash is empty (`reason` `stash_empty`); no entry has that place (`reason` `stash_entry_missing`, the stack's length in `entries`); the entry's unstash conflict waits in the folder (`reason` `stash_conflicted`, the files in `paths`); or, while an unstash that stopped part-way is finished first, the branch or HEAD shows a change fold did not make (`reason` `head_moved`) or the human's Git commits wait (`reason` `git_commits_wait`) */
             400: {
                 headers: {
                     [name: string]: unknown;
