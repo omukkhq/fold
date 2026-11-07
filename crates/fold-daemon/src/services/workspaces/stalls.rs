@@ -145,7 +145,7 @@ pub(super) async fn decide_stalls(
                             reason,
                             since,
                             at: now,
-                            agents: stall_receivers(starter, &inputs.main_agents),
+                            agents: stall_receivers(agent, starter, &inputs.main_agents),
                         };
                         new_stalls.push((
                             view.workspace,

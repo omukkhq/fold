@@ -333,15 +333,20 @@ pub fn needs_person(now: Timestamp, told_at: Option<Timestamp>, stall_minutes: u
     told_at.is_none_or(|told| crate::tasks::claims::is_stale(told, now, stall_minutes))
 }
 
-/// Who hears of a stall first: the agent that started the worker, which is its lead, or else the main agents, such as for a worker a person started. An empty list means no agent can act.
+/// Who hears of the stall of `worker` first: the agent that started it, which is its lead, or else the main agents, such as for a worker a person started. A worker never hears of its own stall, so a main agent that builds a task itself has nobody to tell. An empty list means no agent can act.
 pub fn stall_receivers(
+    worker: &AgentName,
     starter: Option<&AgentName>,
     main_agents: &BTreeSet<AgentName>,
 ) -> Vec<AgentName> {
-    match starter {
+    let receivers: Vec<AgentName> = match starter {
         Some(starter) => vec![starter.clone()],
         None => main_agents.iter().cloned().collect(),
-    }
+    };
+    receivers
+        .into_iter()
+        .filter(|agent| agent != worker)
+        .collect()
 }
 
 #[cfg(test)]
@@ -1049,13 +1054,22 @@ mod tests {
 
     #[test]
     fn a_stall_goes_to_the_starter_or_else_to_the_main_agents() {
+        let worker = AgentName::parse("web-worker").unwrap();
         let lead = AgentName::parse("web-lead").unwrap();
-        let main: BTreeSet<AgentName> = [AgentName::parse("frontend").unwrap()].into();
-        assert_eq!(stall_receivers(Some(&lead), &main), vec![lead.clone()]);
+        let frontend = AgentName::parse("frontend").unwrap();
+        let main: BTreeSet<AgentName> = [frontend.clone()].into();
         assert_eq!(
-            stall_receivers(None, &main),
-            main.iter().cloned().collect::<Vec<_>>()
+            stall_receivers(&worker, Some(&lead), &main),
+            vec![lead.clone()]
         );
-        assert!(stall_receivers(None, &BTreeSet::new()).is_empty());
+        assert_eq!(
+            stall_receivers(&worker, None, &main),
+            vec![frontend.clone()]
+        );
+        assert!(stall_receivers(&worker, None, &BTreeSet::new()).is_empty());
+        assert!(
+            stall_receivers(&frontend, None, &main).is_empty(),
+            "the main agent never hears of its own stall"
+        );
     }
 }
