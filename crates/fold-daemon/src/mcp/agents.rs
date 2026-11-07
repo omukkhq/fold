@@ -236,7 +236,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             RESTART_WORKER,
-            "As the main agent, and only when the user asks, start a worker of any role again in a new Claude Code session, for example when its session is broken. fold stops a running worker first. The worker keeps its name, claims, tasks, proposals and workers; list_workers shows its newest old session ids in previous_sessions with previous_session_count, and the new session gets the role's first turn. Refused with project_paused while paused and over the worker limits.",
+            "Start a worker again in a new Claude Code session, for example when its session is broken or fold says it stalled: the main agent, only when the user asks, for a worker of any role, and a lead for a worker it started (an area lead's task workers, the review lead's reviewers); any other caller is refused with main_agent_required. fold stops a running worker first. The worker keeps its name, claims, tasks, proposals and workers; list_workers shows its newest old session ids in previous_sessions with previous_session_count, and the new session gets the role's first turn. Refused with project_paused while paused and over the worker limits.",
             schema_for_type::<RestartWorkerInput>(),
         ),
     ]

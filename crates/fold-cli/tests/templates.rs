@@ -571,6 +571,7 @@ fn role_steps(role: Role) -> &'static [&'static str] {
             "submit_request_draft",
             "release_request",
             "mark_answered",
+            "restart_worker",
         ],
         Role::ReviewLead => &[
             "list_proposals",

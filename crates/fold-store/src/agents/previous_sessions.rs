@@ -14,7 +14,7 @@ pub enum SessionEnd {
     Handoff,
     /// Claude Code no longer had the session, so fold started the worker in a new one.
     Lost,
-    /// A human or the main agent asked for a new session.
+    /// A human, the main agent or the worker's lead asked for a new session.
     Requested,
 }
 

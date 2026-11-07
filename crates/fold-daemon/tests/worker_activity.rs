@@ -176,3 +176,40 @@ async fn a_worker_that_waits_for_an_answer_is_not_stalled() {
     assert!(!view.stalled);
     assert!(stalled_events(&harness).await.is_empty());
 }
+
+/// The lead that fold tells of a stall started the worker, so it may restart it with restart_worker, which ends the stall; the lead of another area may not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_lead_that_hears_of_a_stall_restarts_its_task_worker() {
+    let fake = FakeClaude::new("result");
+    let mut harness = task_worker_for(&fake, &["Draw the page"], WorkerState::Idle).await;
+    let work = harness.start_work(TASK_WORKER, "T-1").await;
+    advance(&harness, STALL);
+    let told = state(&harness, &work).await.view.activity.expect("a stall");
+    assert_eq!(told.told, ["web-lead"]);
+
+    crate::common::roles::give_role(
+        &harness.handle.store,
+        "api-lead",
+        fold_core::Role::AreaLead,
+        Some("api"),
+    )
+    .await;
+    harness.connect("api-lead").await;
+    let refused = harness
+        .refused("api-lead", "restart_worker", json!({"name": TASK_WORKER}))
+        .await;
+    assert_eq!(refused["code"], fold_core::codes::MAIN_AGENT_REQUIRED);
+
+    harness
+        .call("web-lead", "restart_worker", json!({"name": TASK_WORKER}))
+        .await;
+    crate::worker_resume::until_runs(&fake, TASK_WORKER, 2).await;
+    eventually(WAIT, async || {
+        match state(&harness, &work).await.view.activity {
+            None => Ok(()),
+            other => Err(other),
+        }
+    })
+    .await;
+    assert!(!state(&harness, &work).await.view.stalled);
+}

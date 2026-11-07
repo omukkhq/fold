@@ -716,7 +716,7 @@ fn model_unreachable_rule(
     Some((agents, text, "list_workers"))
 }
 
-/// A stall reaches the agents the daemon told in `data.told`, the worker's lead or else the main agents, with what fold saw and the next tool that starts the worker again: a message wakes an idle worker and resumes a stopped one in its session, and a stop first ends a process that hangs. Needs you shows the stall only when it lasts one more stall window after this notice.
+/// A stall reaches the agents the daemon told in `data.told`, the worker's lead or else the main agents, with what fold saw and the next tool: `restart_worker` ends the worker's process and starts it again in a new session, which the lead that started the worker may call; a message wakes an idle worker or resumes a stopped one in its own session. Needs you shows the stall only when it lasts one more stall window after this notice.
 fn stall_rule(event: &Event) -> Option<(Vec<AgentName>, String, &'static str)> {
     let data = &event.data;
     let agent = data.get("agent")?.as_str()?;
@@ -731,13 +731,13 @@ fn stall_rule(event: &Event) -> Option<(Vec<AgentName>, String, &'static str)> {
         .iter()
         .filter_map(|name| AgentName::parse(name.as_str()?).ok())
         .collect();
-    let resume = "send_message resumes it in its session";
+    let restart = "restart_worker starts it again in a new session";
     let (text, next) = match data.get("reason")?.as_str()? {
         "silent" => (
             format!(
-                "{agent} shows no activity on {task} for {minutes} min; send_message wakes it, or stop_worker it and then {resume}"
+                "{agent} shows no activity on {task} for {minutes} min; {restart}, or send_message wakes it"
             ),
-            "send_message",
+            "restart_worker",
         ),
         "long_call" => {
             let call = match data.get("call").and_then(serde_json::Value::as_str) {
@@ -746,15 +746,15 @@ fn stall_rule(event: &Event) -> Option<(Vec<AgentName>, String, &'static str)> {
                 _ => "a tool call",
             };
             (
-                format!(
-                    "{call} of {agent} on {task} has run for {minutes} min; stop_worker ends it, then {resume}"
-                ),
-                "stop_worker",
+                format!("{call} of {agent} on {task} has run for {minutes} min; {restart}"),
+                "restart_worker",
             )
         }
         "stopped" => (
-            format!("{agent} stopped on {task} without a report; {resume}"),
-            "send_message",
+            format!(
+                "{agent} stopped on {task} without a report; {restart}, or send_message resumes it in its session"
+            ),
+            "restart_worker",
         ),
         _ => return None,
     };
@@ -1950,8 +1950,8 @@ mod tests {
             sent(&notice_for(&silent, &ctx())),
             vec![row(
                 "web-lead",
-                "fold: web-worker shows no activity on T-12 for 12 min; send_message wakes it, or stop_worker it and then send_message resumes it in its session. Call send_message.",
-                "send_message"
+                "fold: web-worker shows no activity on T-12 for 12 min; restart_worker starts it again in a new session, or send_message wakes it. Call restart_worker.",
+                "restart_worker"
             )]
         );
         let long = stalled(
@@ -1961,8 +1961,8 @@ mod tests {
             sent(&notice_for(&long, &ctx())),
             vec![row(
                 "main",
-                "fold: a command of web-worker on T-12 has run for 25 min; stop_worker ends it, then send_message resumes it in its session. Call stop_worker.",
-                "stop_worker"
+                "fold: a command of web-worker on T-12 has run for 25 min; restart_worker starts it again in a new session. Call restart_worker.",
+                "restart_worker"
             )]
         );
         let subagent = stalled(
@@ -1989,13 +1989,13 @@ mod tests {
             vec![
                 row(
                     "web-lead",
-                    "fold: web-worker stopped on T-12 without a report; send_message resumes it in its session. Call send_message.",
-                    "send_message"
+                    "fold: web-worker stopped on T-12 without a report; restart_worker starts it again in a new session, or send_message resumes it in its session. Call restart_worker.",
+                    "restart_worker"
                 ),
                 row(
                     "main",
-                    "fold: web-worker stopped on T-12 without a report; send_message resumes it in its session. Call send_message.",
-                    "send_message"
+                    "fold: web-worker stopped on T-12 without a report; restart_worker starts it again in a new session, or send_message resumes it in its session. Call restart_worker.",
+                    "restart_worker"
                 ),
             ]
         );

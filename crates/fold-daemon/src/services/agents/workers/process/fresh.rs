@@ -17,7 +17,7 @@ use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
 
 /// What every worker that a human or the main agent started again in a new session is told first.
-const FRESH_START: &str = "A human or the main agent asked fold to start you again in a new session, so you do not remember your earlier session. You keep your name, your claims and your workers.";
+const FRESH_START: &str = "A human, the main agent or your lead asked fold to start you again in a new session, so you do not remember your earlier session. You keep your name, your claims and your workers.";
 
 /// What a task worker is told after [`FRESH_START`].
 const FRESH_TASK_WORKER: &str = "Check your claims, your task workspaces and the proposals you already sent before you go on. Send a new version of an open proposal with update_proposal; do not open a second one.";
