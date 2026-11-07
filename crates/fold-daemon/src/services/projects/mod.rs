@@ -83,7 +83,7 @@ pub use folder_status::{
 pub use gc::{GcReport, gc};
 pub use git_status::{GitStatus, PushFailed, Pushed, RemoteStatus, git_status, public_location};
 pub use pull::{PullOutcome, PulledConflict, pull};
-pub use record::{RecordOutcome, TouchedTask, record};
+pub use record::{RecordOutcome, TouchedTask, folder_sides, record};
 pub(crate) use remote::push_with;
 pub use remote::{PushOutcome, RemoteContext, push};
 pub(crate) use shared_watch::SharedWatch;

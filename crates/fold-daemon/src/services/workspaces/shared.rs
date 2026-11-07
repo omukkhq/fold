@@ -2,7 +2,7 @@ use std::path::Path;
 
 use fold_core::events::types;
 use fold_core::policy::{self, Starter};
-use fold_core::{Actor, FoldError, NewEvent, codes};
+use fold_core::{Actor, FoldError, NewEvent, Timestamp, codes};
 use fold_store::{StoreError, agents};
 use fold_vcs::git_remote::{add_exclude_patterns, remove_exclude_patterns};
 use fold_vcs::ignore::IgnoreRules;
@@ -33,7 +33,48 @@ pub struct SharedState {
     pub unseen_count: usize,
 }
 
+/// What a changed shared path is in the project folder now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SharedFileKind {
+    File,
+    Folder,
+    /// A symbolic link, reported and never followed.
+    Symlink,
+    /// Gone from the project folder, or below a folder that is a symbolic link.
+    Missing,
+}
+
+/// A path of an open change of shared files as the project folder holds it now: ignored files have no history, so its size and change time stand for a diff. Never its content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedFileState {
+    pub path: String,
+    pub kind: SharedFileKind,
+    /// The size in bytes of a file or a link; null for a folder or a missing path.
+    pub size: Option<u64>,
+    /// When the path last changed; null for a missing path.
+    pub modified: Option<Timestamp>,
+}
+
 impl WorkspaceService {
+    /// The paths of the open changes of shared files, each once in path order, with what the project folder holds at each now. The paths come from the stored changes, are checked as relative and normalised again, and a parent folder that is a symbolic link makes a path missing.
+    pub async fn changed_shared_files(&self) -> Result<Vec<SharedFileState>, WorkspaceError> {
+        let open = fold_store::workspaces::open_shared_changes(self.store.read()).await?;
+        let mut paths: Vec<String> = open.into_iter().flat_map(|change| change.paths).collect();
+        paths.sort();
+        paths.dedup();
+        let root = self.paths.root().to_path_buf();
+        blocking(move || {
+            Ok(paths
+                .into_iter()
+                .filter_map(|path| {
+                    let parsed = RepoPath::parse(path.as_bytes()).ok()?;
+                    Some(file_state(&root, path, &parsed))
+                })
+                .collect())
+        })
+        .await
+    }
+
     /// Shares `paths` of the project folder with every workspace, read-only, for a human or the main agent (`policy::can_share_paths`). Each path is relative to the project folder and must be a file or folder there, reached without a symbolic link, that an ignore rule leaves out, so main never tracks it; a path within or around another shared one is refused, so no link lies inside another. A folder that only a folder pattern leaves out gets an anchored line in `.fold/exclude`, so its link, which is no folder, is never recorded either. The list goes to `.fold/shared`, then `shared.paths_changed` names the paths added; each workspace gets its links at its next create or sync. Returns the paths added, in the order given; one the list holds already is left out.
     pub async fn share_paths(
         &self,
@@ -327,4 +368,34 @@ fn io_error(error: std::io::Error) -> FoldError {
         codes::WORKSPACE_IO,
         format!("cannot read or write .fold/shared: {}", error.kind()),
     )
+}
+
+fn file_state(root: &Path, path: String, parsed: &RepoPath) -> SharedFileState {
+    let meta = fold_vcs::paths::resolve(root, parsed)
+        .ok()
+        .and_then(|located| std::fs::symlink_metadata(located).ok());
+    let Some(meta) = meta else {
+        return SharedFileState {
+            path,
+            kind: SharedFileKind::Missing,
+            size: None,
+            modified: None,
+        };
+    };
+    let kind = if meta.file_type().is_symlink() {
+        SharedFileKind::Symlink
+    } else if meta.is_dir() {
+        SharedFileKind::Folder
+    } else {
+        SharedFileKind::File
+    };
+    SharedFileState {
+        path,
+        kind,
+        size: (kind != SharedFileKind::Folder).then_some(meta.len()),
+        modified: meta
+            .modified()
+            .ok()
+            .and_then(|time| Timestamp::from_system_time(time).ok()),
+    }
 }

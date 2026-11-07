@@ -1,17 +1,20 @@
 use axum::Json;
 use fold_core::Timestamp;
 use fold_vcs::git::Git;
-use serde::Serialize;
-use utoipa::ToSchema;
+use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::super::Project;
 use super::super::actor::Human;
+use super::super::diff::{DiffView, comparison_view, file_view};
 use super::super::error::{ApiError, ApiQuery, ErrorEnvelope};
+use super::super::workspaces::ChangeSource;
 use super::{RecordQuery, RecordResult, record_as};
 use crate::daemon::AppState;
 use crate::services::projects;
+use crate::services::workspaces::WorkspaceService;
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -19,6 +22,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(record_agent_changes))
         .routes(routes!(restore_agent_changes))
         .routes(routes!(ignore_agent_changes))
+        .routes(routes!(folder_diff))
 }
 
 /// A path of the project folder that changed during a tool call of a supervised worker.
@@ -159,4 +163,47 @@ pub async fn ignore_agent_changes(
 ) -> Result<Json<AgentChangesIgnored>, ApiError> {
     let files = projects::ignore_agent_changes(&handle, &human.actor()).await?;
     Ok(Json(AgentChangesIgnored { files }))
+}
+
+/// The file of the project folder whose hunks the answer holds.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct FolderDiffQuery {
+    /// One changed file, such as `plan.md`: with it the answer holds that file's hunks; without it, the list of changed files.
+    pub path: Option<String>,
+}
+
+/// Compares the project folder with the revision it holds, calculated on request, so a human sees what a worker's change or a record holds before choosing: the changed files with line counts, or the hunks of one file when `path` is given. The folder is read as `fld record` reads it: ignored and too-large files are left out and a symlink is recorded, not followed. For a human, over the socket or over HTTP with the session cookie.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/folder/diff",
+    operation_id = "get_folder_diff",
+    params(("slug" = String, Path, description = "The project slug"), FolderDiffQuery),
+    responses(
+        (status = 200, description = "The file list, or one file's hunks", body = DiffView),
+        (status = 400, description = "The path is not a relative, normalised path inside the project folder (`invalid_path`)", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "The path is not a change of the folder (`path_not_in_comparison`), or the slug is not registered", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "A file of the folder could not be read (`workspace_io`), or an internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn folder_diff(
+    _human: Human,
+    Project(handle): Project,
+    ApiQuery(query): ApiQuery<FolderDiffQuery>,
+) -> Result<Json<DiffView>, ApiError> {
+    let (from, to) = projects::folder_sides(&handle).await?;
+    let workspaces = WorkspaceService::for_project(&handle);
+    let view = match query.path {
+        Some(path) => DiffView::File(file_view(
+            ChangeSource::Working,
+            workspaces.diff_file(from, to, &path).await?,
+        )),
+        None => DiffView::Files(comparison_view(
+            ChangeSource::Working,
+            workspaces.compare_states(from, to).await?,
+        )),
+    };
+    Ok(Json(view))
 }

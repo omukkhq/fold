@@ -36,7 +36,7 @@ use crate::services::fired;
 use crate::services::reviews::{
     self as review, HumanRecord, RecordAuthor, RecordIntegration, ReviewService,
 };
-use crate::services::workspaces::{WorkspaceError, WorkspaceService};
+use crate::services::workspaces::{StateRef, WorkspaceError, WorkspaceService};
 
 /// How many times a record starts again from reading main when main moved between its own merge and the integration's.
 const ATTEMPTS: usize = 3;
@@ -796,6 +796,16 @@ fn with_skipped(outcome: RecordOutcome, left: Vec<Skipped>) -> RecordOutcome {
         },
         up_to_date => up_to_date,
     }
+}
+
+/// The two sides that compare the project folder with the revision it holds: the checkout record's tree and a snapshot of the folder as `fld record` reads it, ignored and too-large files left out and symlinks recorded, not followed. A read: the snapshot's objects go to the store as a record's do, and no row or event refers to them.
+pub async fn folder_sides(handle: &ProjectHandle) -> Result<(StateRef, StateRef), ProjectError> {
+    let config = load_config(&handle.paths).await?;
+    let record = workspaces::checkout(handle.store.read())
+        .await?
+        .ok_or(StoreError::Corrupt("checkout"))?;
+    let (tree, _) = snapshot_folder(handle, record.tree, config.max_file_bytes).await?;
+    Ok((StateRef::Tree(record.tree), StateRef::Tree(tree)))
 }
 
 /// Reads the project folder as an import does, its objects written under the project's object lock, and returns its tree with the files it leaves out. The paths of `record_tree`, the checkout record, are tracked: they count although an ignore rule matches them, and one the read leaves out, such as a file over the size limit, keeps its recorded entry.

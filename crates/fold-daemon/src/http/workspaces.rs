@@ -20,7 +20,7 @@ use super::{Project, SocketOnly};
 use crate::daemon::AppState;
 use crate::live::WatchMode;
 use crate::services::workspaces::{
-    RepositoryState, RevisionDetail, RevisionOrigin, RevisionPage, RevisionSummary,
+    RepositoryState, RevisionDetail, RevisionOrigin, RevisionPage, RevisionSummary, SharedFileKind,
     WorkspaceChanges, WorkspaceEntry, WorkspaceService,
 };
 
@@ -39,6 +39,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(share))
         .routes(routes!(unshare))
         .routes(routes!(dismiss_shared_changes))
+        .routes(routes!(changed_shared_files))
 }
 
 pub(super) fn service(project: &Project) -> WorkspaceService {
@@ -978,6 +979,75 @@ pub async fn unshare(
         .unshare_paths(&human.actor(), body.paths)
         .await?;
     Ok(Json(SharedRemoved { removed }))
+}
+
+/// What a changed shared path is in the project folder now.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SharedFileKindView {
+    File,
+    Folder,
+    /// A symbolic link, reported and never followed.
+    Symlink,
+    /// Gone from the project folder.
+    Missing,
+}
+
+/// A changed shared path by name, size and change time; ignored files have no history, so these stand for a diff.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SharedFileView {
+    #[schema(example = "design/home.pen")]
+    pub path: String,
+    pub kind: SharedFileKindView,
+    /// Bytes of a file or a link; null for a folder or a missing path.
+    #[schema(required = true)]
+    pub size: Option<u64>,
+    /// UTC milliseconds of the last change; null for a missing path.
+    #[schema(required = true, value_type = Option<i64>)]
+    pub modified: Option<Timestamp>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ChangedSharedFiles {
+    /// Each path of the open changes once, in path order.
+    pub files: Vec<SharedFileView>,
+}
+
+/// The paths of the shared files that changed during a worker's tool call and wait in Needs you, with their size and change time now. Names, sizes and times only, never content. For a human, over the socket or over HTTP with the session cookie.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/shared/changes",
+    operation_id = "changed_shared_files",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The changed shared files", body = ChangedSharedFiles),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn changed_shared_files(
+    _human: Human,
+    project: Project,
+) -> Result<Json<ChangedSharedFiles>, ApiError> {
+    let files = service(&project).changed_shared_files().await?;
+    Ok(Json(ChangedSharedFiles {
+        files: files
+            .into_iter()
+            .map(|file| SharedFileView {
+                path: file.path,
+                kind: match file.kind {
+                    SharedFileKind::File => SharedFileKindView::File,
+                    SharedFileKind::Folder => SharedFileKindView::Folder,
+                    SharedFileKind::Symlink => SharedFileKindView::Symlink,
+                    SharedFileKind::Missing => SharedFileKindView::Missing,
+                },
+                size: file.size,
+                modified: file.modified,
+            })
+            .collect(),
+    }))
 }
 
 #[derive(Debug, Serialize, ToSchema)]

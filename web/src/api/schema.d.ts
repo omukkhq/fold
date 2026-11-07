@@ -536,6 +536,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/folder/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Compares the project folder with the revision it holds, calculated on request, so a human sees what a worker's change or a record holds before choosing: the changed files with line counts, or the hunks of one file when `path` is given. The folder is read as `fld record` reads it: ignored and too-large files are left out and a symlink is recorded, not followed. For a human, over the socket or over HTTP with the session cookie. */
+        get: operations["get_folder_diff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/gc": {
         parameters: {
             query?: never;
@@ -1384,6 +1401,23 @@ export interface paths {
         };
         /** The shared reference paths and the ignored paths workers cannot see. */
         get: operations["list_shared_paths"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/shared/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The paths of the shared files that changed during a worker's tool call and wait in Needs you, with their size and change time now. Names, sizes and times only, never content. For a human, over the socket or over HTTP with the session cookie. */
+        get: operations["changed_shared_files"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2366,6 +2400,10 @@ export interface components {
             previous_path: string | null;
             /** Format: int32 */
             removed_lines: number;
+        };
+        ChangedSharedFiles: {
+            /** @description Each path of the open changes once, in path order. */
+            files: components["schemas"]["SharedFileView"][];
         };
         /**
          * @description What one command did.
@@ -5165,6 +5203,27 @@ export interface components {
              * @description How many Needs you items of changed shared files ended.
              */
             dismissed: number;
+        };
+        /**
+         * @description What a changed shared path is in the project folder now.
+         * @enum {string}
+         */
+        SharedFileKindView: "file" | "folder" | "symlink" | "missing";
+        /** @description A changed shared path by name, size and change time; ignored files have no history, so these stand for a diff. */
+        SharedFileView: {
+            kind: components["schemas"]["SharedFileKindView"];
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the last change; null for a missing path.
+             */
+            modified: number | null;
+            /** @example design/home.pen */
+            path: string;
+            /**
+             * Format: int64
+             * @description Bytes of a file or a link; null for a folder or a missing path.
+             */
+            size: number | null;
         };
         /** @description The paths a share or an unshare names. */
         SharedPathsRequest: {
@@ -8891,6 +8950,86 @@ export interface operations {
                 };
             };
             /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_folder_diff: {
+        parameters: {
+            query?: {
+                /** @description One changed file, such as `plan.md`: with it the answer holds that file's hunks; without it, the list of changed files. */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file list, or one file's hunks */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiffView"];
+                };
+            };
+            /** @description The path is not a relative, normalised path inside the project folder (`invalid_path`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The path is not a change of the folder (`path_not_in_comparison`), or the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A file of the folder could not be read (`workspace_io`), or an internal error */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -13569,6 +13708,74 @@ export interface operations {
                 };
             };
             /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    changed_shared_files: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The changed shared files */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangedSharedFiles"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;

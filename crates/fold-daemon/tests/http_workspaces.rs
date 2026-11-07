@@ -369,3 +369,60 @@ async fn a_signed_in_human_dismisses_the_changed_shared_files_from_the_web_app()
     let (_, needs) = host.get("/needs-you").await;
     assert!(kinds(&needs).is_empty(), "{needs}");
 }
+
+#[tokio::test]
+async fn the_changed_shared_files_route_gives_each_path_its_size_and_time_and_never_follows_a_link()
+{
+    let project = TestProject::new().await;
+    let lead = fold_core::AgentName::parse("web-lead").unwrap();
+    let root = project.paths().root().to_path_buf();
+    std::fs::create_dir_all(root.join("design/sub")).unwrap();
+    std::fs::write(root.join("design/home.pen"), "12345").unwrap();
+    std::os::unix::fs::symlink("/etc/hostname", root.join("design/out")).unwrap();
+    project
+        .store()
+        .write(async |tx| {
+            fold_store::agents::insert_agent(tx, &lead, Timestamp::from_millis(1).unwrap()).await?;
+            let paths = [
+                "design/home.pen",
+                "design/out",
+                "design/sub",
+                "design/gone.pen",
+            ]
+            .map(str::to_owned);
+            workspaces::note_shared_change(tx, &lead, &paths, Timestamp::from_millis(2).unwrap())
+                .await?;
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
+    let host = host(&project).await;
+
+    let (status, changed) = host.get("/shared/changes").await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let files = changed["files"].as_array().unwrap();
+    let kinds: Vec<(&str, &str)> = files
+        .iter()
+        .map(|file| {
+            (
+                file["path"].as_str().unwrap(),
+                file["kind"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("design/gone.pen", "missing"),
+            ("design/home.pen", "file"),
+            ("design/out", "symlink"),
+            ("design/sub", "folder"),
+        ]
+    );
+    assert_eq!(files[0]["size"], Value::Null);
+    assert_eq!(files[0]["modified"], Value::Null);
+    assert_eq!(files[1]["size"], 5);
+    assert!(files[1]["modified"].as_i64().unwrap() > 0);
+    assert_eq!(files[2]["size"], "/etc/hostname".len());
+    assert_eq!(files[3]["size"], Value::Null);
+}
