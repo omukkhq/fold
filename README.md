@@ -115,7 +115,7 @@ flowchart LR
 
 fold keeps its project data in `.fold/`. Agents build in workspaces under `.fold/ws/`; the project folder holds the integrated result. Checkpoints and persistent messages help agents continue work across sessions.
 
-A project's history starts at the genesis revision `r0`: an empty tree, or the commit at `HEAD` of an existing Git repository. The files of a new project are your first change, `r1`.
+A project's history starts at the genesis revision `r0`: an empty tree, or the commit at `HEAD` of an existing Git repository. The files of a new project are your first change, `r1`. In a Git repository, `r1` is fold's section in the instructions file (`AGENTS.md`, or `CLAUDE.md` when the repository has one), with its own commit on the checked-out branch.
 
 ## Change files yourself
 
@@ -135,7 +135,7 @@ Ignored files never reach a workspace, so workers cannot see them. To let worker
 
 `fld init --with-git` turns Git on for a project, and Git stays on after that:
 
-- In a Git repository, the commit at `HEAD` becomes the genesis, and the repository keeps its history.
+- In a Git repository, the commit at `HEAD` becomes the genesis, and the repository keeps its history. init adds fold's section to the instructions file and records that change as `r1`, a commit on the checked-out branch. When Git does not track the instructions file, init does not record it: init names the file, and `fld record` records it.
 - In a fold project or a new folder, fold creates the repository. If your Git configuration has no name and email, fold asks for them and keeps them in the repository's own configuration. `--git-name` and `--git-email` give them without the question.
 
 When Git is on, every revision of main becomes a commit on the checked-out branch, with your Git identity as author and committer. Use fold's commands to connect a remote and exchange changes:
