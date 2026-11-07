@@ -219,7 +219,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The paths that fold placed in a tool call of a supervised worker, which it does not offer as the human's change until a human, or the main agent when the human asks, records, restores or ignores them. A read. */
+        /** The paths that fold placed in a tool call of a supervised worker, which it does not offer as the human's change until a human records, restores or ignores them, or the main agent ignores them when the human asks. A read. */
         get: operations["list_agent_changes"];
         put?: never;
         post?: never;

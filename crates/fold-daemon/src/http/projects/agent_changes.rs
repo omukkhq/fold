@@ -39,7 +39,7 @@ pub struct AgentChangeList {
     pub changes: Vec<AgentChangeView>,
 }
 
-/// The paths that fold placed in a tool call of a supervised worker, which it does not offer as the human's change until a human, or the main agent when the human asks, records, restores or ignores them. A read.
+/// The paths that fold placed in a tool call of a supervised worker, which it does not offer as the human's change until a human records, restores or ignores them, or the main agent ignores them when the human asks. A read.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/agent-changes",
