@@ -10,8 +10,8 @@ use crate::workspaces::tree::{EntryKind, FlatTree};
 /// How many empty files one record may add before it asks for a confirmation. A person adds one or two at a time, such as an `__init__.py` or a `.gitkeep`; a shell command that opens each word of a list as a file, as an unquoted `$(...)` in a zsh redirect does, adds one per word, and the smallest such slip seen made 26.
 pub const MANY_EMPTY_FILES: usize = 10;
 
-/// What Needs you and `fld status` name as the next step for a change that a worker made in the project folder.
-pub const AGENT_CHANGE_NEXT: &str = "run `fld record` to keep it as your change, `fld agent-changes restore` to put it aside in the stash, or `fld agent-changes ignore` to treat it as your own unrecorded change";
+/// What Needs you names as the next step for a change that a worker made in the project folder.
+pub const AGENT_CHANGE_NEXT: &str = "run `fld record --yes` to keep it as your change, or `fld restore <paths>` with its files to put it aside in the stash";
 
 /// How far a file time may lie outside a tool call and still count as made during it: the supervisor reads a tool call's start and end from the worker's output a moment after Claude Code writes them, and some file systems keep times to the second.
 pub const WINDOW_GRACE: Duration = Duration::from_secs(1);

@@ -212,23 +212,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/projects/{slug}/agent-changes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** The paths that fold placed in a tool call of a supervised worker, which it does not offer as the human's change until a human records, restores or ignores them, or the main agent ignores them when the human asks. A read. */
-        get: operations["list_agent_changes"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/projects/{slug}/agent-changes/ignore": {
         parameters: {
             query?: never;
@@ -238,7 +221,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Lets the changes that supervised workers made in the project folder count as the human's own unrecorded changes, as `fld agent-changes ignore` asks; `fld record` then records them as any other. For a human, over the socket or over HTTP with the session cookie. */
+        /** Lets the changes that supervised workers made in the project folder count as the human's own unrecorded changes, as Keep as mine on the web app's Needs you item asks; `fld record` then records them as any other. For a human, over the socket or over HTTP with the session cookie. */
         post: operations["ignore_agent_changes"];
         delete?: never;
         options?: never;
@@ -272,7 +255,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Puts the changes that supervised workers made in the project folder into a new stash entry, `stash@{0}`, and brings those paths back to the checkout record's entries, as `fld agent-changes restore` asks; the human's other changes stay, and `fld unstash` brings the worker's change back. For a human, over the socket or over HTTP with the session cookie. */
+        /** Puts the changes that supervised workers made in the project folder into a new stash entry, `stash@{0}`, and brings those paths back to the checkout record's entries, as Put aside on the web app's Needs you item asks; the human's other changes stay, and `fld unstash` brings the worker's change back. For a human, over the socket or over HTTP with the session cookie. */
         post: operations["restore_agent_changes"];
         delete?: never;
         options?: never;
@@ -2066,26 +2049,6 @@ export interface components {
             kind: components["schemas"]["AttentionKind"];
             /** @example T-12 */
             task: string;
-        };
-        AgentChangeList: {
-            /** @description In path order. */
-            changes: components["schemas"]["AgentChangeView"][];
-        };
-        /** @description A path of the project folder that changed during a tool call of a supervised worker. */
-        AgentChangeView: {
-            /**
-             * @description The agents whose tool calls ran when the path changed, in name order.
-             * @example [
-             *       "reviewer-35"
-             *     ]
-             */
-            agents: string[];
-            path: string;
-            /**
-             * Format: int64
-             * @description UTC milliseconds when fold first saw the change.
-             */
-            since: number;
         };
         AgentChangesIgnored: {
             /** @description The paths that now count as the human's own unrecorded changes, in path order. */
@@ -7417,74 +7380,6 @@ export interface operations {
             };
             /** @description Internal error */
             500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    list_agent_changes: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The project slug */
-                slug: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The changes */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentChangeList"];
-                };
-            };
-            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description The slug is not registered */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Internal error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description The project failed to open */
-            503: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -102,7 +102,7 @@ async fn acceptance_36_a_workers_change_of_the_project_folder_waits_for_the_huma
         item["reason"]
             .as_str()
             .unwrap()
-            .contains("fld agent-changes restore")
+            .contains("fld restore <paths>")
     );
     assert!(
         items(&h)

@@ -157,7 +157,7 @@ pub fn can_restore_agent_changes(starter: &Starter) -> Result<(), PolicyDenied> 
         _ => Err(PolicyDenied {
             code: codes::HUMAN_REQUIRED,
             message: "only a human restores a change a worker made in the project folder",
-            hint: "ask the user to run `fld agent-changes restore`",
+            hint: "ask the user to run `fld restore <paths>` with the files the worker changed",
         }),
     }
 }
