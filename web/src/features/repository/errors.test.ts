@@ -3,6 +3,7 @@ import { ApiError } from "@/api/errors";
 import {
   STASH_CHANGED_TEXT,
   folderErrorText,
+  stashChanged,
   stashChangedError,
 } from "./errors";
 
@@ -70,5 +71,16 @@ describe("folderErrorText", () => {
     ).toBeNull();
     expect(folderErrorText(new ApiError("internal_error", ""))).toBeNull();
     expect(folderErrorText(new Error("network"))).toBeNull();
+  });
+});
+
+describe("stashChanged", () => {
+  it("holds for the screen's own check and the daemon's refusals that mean the stack moved, and for nothing else", () => {
+    expect(stashChanged(stashChangedError())).toBe(true);
+    expect(stashChanged(refused("stash_changed"))).toBe(true);
+    expect(stashChanged(refused("stash_entry_missing"))).toBe(true);
+    expect(stashChanged(refused("stash_conflicted"))).toBe(false);
+    expect(stashChanged(new ApiError("internal_error", ""))).toBe(false);
+    expect(stashChanged(null)).toBe(false);
   });
 });

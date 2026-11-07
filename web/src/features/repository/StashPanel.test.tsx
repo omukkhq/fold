@@ -75,6 +75,10 @@ describe("StashPanel", () => {
       await screen.findByRole("button", { name: "Drop stash@{1}" }),
     );
     expect(screen.getByText("Drop stash@{1}?")).toBeTruthy();
+    // No error yet, so the dialog draws no band between its words and its buttons.
+    expect(
+      screen.getByRole("dialog").querySelector(".overflow-y-auto"),
+    ).toBeNull();
     expect(
       screen.getByText(/2 files in stash@\{1\} are gone for good/),
     ).toBeTruthy();
@@ -177,6 +181,13 @@ describe("StashPanel", () => {
       }),
     ).toBeTruthy();
     expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+    expect(screen.queryByRole("button", { name: "Drop entry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Back to the list" }));
+    await waitFor(() => {
+      expect(screen.queryByText("Drop stash@{0}?")).toBeNull();
+    });
+    expect(screen.getByRole("button", { name: "Drop stash@{1}" })).toBeTruthy();
   });
 
   it("refuses Clear all when the stash grew after the person confirmed it", async () => {
@@ -195,6 +206,10 @@ describe("StashPanel", () => {
       await screen.findByText("The stash changed; check the list again."),
     ).toBeTruthy();
     expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+    expect(screen.queryByRole("button", { name: "Drop all" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Back to the list" }),
+    ).toBeTruthy();
   });
 
   it("says the stash changed when the daemon refuses a drop with stash_changed", async () => {
@@ -220,6 +235,10 @@ describe("StashPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Drop entry" }));
     expect(
       await screen.findByText("The stash changed; check the list again."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Drop entry" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Back to the list" }),
     ).toBeTruthy();
   });
 

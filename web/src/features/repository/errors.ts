@@ -73,3 +73,12 @@ export function folderErrorText(error: unknown): string | null {
   }
   return code === null ? null : (commonText(code) ?? null);
 }
+
+/** Whether a refusal means the stash on screen is not the daemon's any more, so the dialog's question no longer holds and only the way back to the list stays. */
+export function stashChanged(error: unknown): boolean {
+  if (apiErrorCode(error) !== "invalid_request") {
+    return false;
+  }
+  const reason = detailsOf(error).reason;
+  return reason === STASH_CHANGED || reason === "stash_entry_missing";
+}

@@ -25,7 +25,7 @@ import {
   stashStillSeen,
   type StashRow,
 } from "./stash";
-import { stashChangedError } from "./errors";
+import { stashChanged, stashChangedError } from "./errors";
 import { FolderError } from "./FolderError";
 import { STASH_HEADING_ID, focusAfterFolderWrite } from "./focus";
 import { useFolderWrite } from "./useFolderWrite";
@@ -73,6 +73,7 @@ export function StashPanel({ slug, now }: { slug: string; now: number }) {
     return null;
   }
   const rows = stashRows(entries, now);
+  const changed = stashChanged(drop.error);
   const close = () => {
     if (!drop.isPending) {
       setAsking(null);
@@ -179,30 +180,37 @@ export function StashPanel({ slug, now }: { slug: string; now: number }) {
             : clearDescription(asking?.seen.entries ?? 0)
         }
         footer={
-          <div className="flex gap-8">
-            <Button
-              variant="danger"
-              pending={drop.isPending}
-              pendingLabel="Dropping…"
-              onClick={() => {
-                if (asking) {
-                  drop.mutate(asking, {
-                    onSuccess: () => {
-                      setAsking(null);
-                    },
-                  });
-                }
-              }}
-            >
-              {asking?.kind === "all" ? "Drop all" : "Drop entry"}
+          // After a refusal that says the stack moved, the question names an entry that may be gone, so only the way back to the list stays.
+          changed ? (
+            <Button variant="ghost" onClick={close}>
+              Back to the list
             </Button>
-            <Button variant="ghost" disabled={drop.isPending} onClick={close}>
-              Cancel
-            </Button>
-          </div>
+          ) : (
+            <div className="flex gap-8">
+              <Button
+                variant="danger"
+                pending={drop.isPending}
+                pendingLabel="Dropping…"
+                onClick={() => {
+                  if (asking) {
+                    drop.mutate(asking, {
+                      onSuccess: () => {
+                        setAsking(null);
+                      },
+                    });
+                  }
+                }}
+              >
+                {asking?.kind === "all" ? "Drop all" : "Drop entry"}
+              </Button>
+              <Button variant="ghost" disabled={drop.isPending} onClick={close}>
+                Cancel
+              </Button>
+            </div>
+          )
         }
       >
-        <FolderError error={drop.error} />
+        {drop.error === null ? null : <FolderError error={drop.error} />}
       </Dialog>
     </section>
   );
