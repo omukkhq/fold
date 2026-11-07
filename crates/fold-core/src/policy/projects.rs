@@ -112,7 +112,7 @@ pub fn can_add_exclude_patterns(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
-/// A change a worker made in the project folder is the human's to judge: a named human restores it or treats it as their own, and so does the main agent, which talks with the human, when the human asks. No other agent settles it, so the worker that made a change never clears its own trace.
+/// A change a worker made in the project folder is the human's to judge: a named human lists it or treats it as their own, and so does the main agent, which talks with the human, when the human asks. No other agent settles it, so the worker that made a change never clears its own trace. Only a human restores it ([`can_restore_agent_changes`]).
 pub fn can_settle_agent_changes(starter: &Starter) -> Result<(), PolicyDenied> {
     match starter {
         Starter::Human | Starter::MainAgent => Ok(()),
@@ -120,6 +120,18 @@ pub fn can_settle_agent_changes(starter: &Starter) -> Result<(), PolicyDenied> {
             code: codes::MAIN_AGENT_REQUIRED,
             message: "only a human or the main agent settles a change a worker made in the project folder",
             hint: "ask the main agent, which asks the user",
+        }),
+    }
+}
+
+/// A restore of a worker's change takes files of the human's project folder back to main's version, so only a named human runs it, as only a human resets the folder; the stash entry it makes keeps the files.
+pub fn can_restore_agent_changes(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::Human => Ok(()),
+        _ => Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human restores a change a worker made in the project folder",
+            hint: "ask the user to run `fld agent-changes restore`",
         }),
     }
 }
@@ -283,6 +295,23 @@ mod tests {
         ] {
             let denied = can_settle_agent_changes(&starter).unwrap_err();
             assert_eq!(denied.code(), codes::MAIN_AGENT_REQUIRED, "{starter:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_human_restores_a_change_a_worker_made() {
+        use crate::agents::AreaName;
+        assert!(can_restore_agent_changes(&Starter::Human).is_ok());
+        for starter in [
+            Starter::MainAgent,
+            Starter::Unsupervised,
+            Starter::AreaLead(AreaName::parse("web").unwrap()),
+            Starter::ReviewLead,
+            Starter::ShortLived,
+            Starter::System,
+        ] {
+            let denied = can_restore_agent_changes(&starter).unwrap_err();
+            assert_eq!(denied.code(), codes::HUMAN_REQUIRED, "{starter:?}");
         }
     }
 

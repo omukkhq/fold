@@ -172,6 +172,7 @@ define_event_types! {
     FOLDER_AGENT_CHANGE_CLEARED = "folder.agent_change_cleared",
     SHARED_CHANGED = "shared.changed",
     SHARED_CHANGES_DISMISSED = "shared.changes_dismissed",
+    SHARED_PATHS_CHANGED = "shared.paths_changed",
 }
 
 impl EventType {

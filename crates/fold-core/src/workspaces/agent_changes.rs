@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use crate::agents::AgentName;
-use crate::layout::MCP_SERVER_NAME;
+use crate::layout::{FILE_TOOLS, MCP_SERVER_NAME};
 use crate::time::Timestamp;
 use crate::workspaces::object::{ObjectHash, ObjectKind, hash_object};
 use crate::workspaces::tree::{EntryKind, FlatTree};
@@ -32,10 +32,12 @@ const READ_ONLY_TOOLS: [&str; 12] = [
     "ExitPlanMode",
 ];
 
-/// Whether a call of `tool` can write files, so the project folder's changes during it count as the worker's. fold's own tools write only through fold's commands.
+/// Whether a call of `tool` can write files where no guard looks, so the project folder's changes during it count as the worker's: a shell command, a subagent or another server's tool. The file tools of [`FILE_TOOLS`] are left out, because the edit guard refuses their writes outside the workspaces before they run, and so are fold's own tools, which write only through fold's commands. A call fold leaves out never holds a person's edit made meanwhile.
 pub fn may_write_files(tool: &str) -> bool {
     let fold_prefix = format!("mcp__{MCP_SERVER_NAME}__");
-    !READ_ONLY_TOOLS.contains(&tool) && !tool.starts_with(&fold_prefix)
+    !READ_ONLY_TOOLS.contains(&tool)
+        && !FILE_TOOLS.split('|').any(|file_tool| file_tool == tool)
+        && !tool.starts_with(&fold_prefix)
 }
 
 /// One tool call of a supervised worker, by the system clock that file times use; `end` is `None` while the call runs.
@@ -218,17 +220,20 @@ mod tests {
 
     #[test]
     fn only_tools_that_can_write_files_count() {
-        for tool in [
-            "Bash",
-            "Write",
-            "Edit",
-            "NotebookEdit",
-            "Task",
-            "mcp__other__run",
-        ] {
+        for tool in ["Bash", "Monitor", "Task", "Agent", "mcp__other__run"] {
             assert!(may_write_files(tool), "{tool}");
         }
-        for tool in ["Read", "Grep", "AskUserQuestion", "mcp__fold__get_task"] {
+        // The edit guard confines the file tools, and fold's tools write through its commands.
+        for tool in [
+            "Read",
+            "Grep",
+            "AskUserQuestion",
+            "Write",
+            "Edit",
+            "MultiEdit",
+            "NotebookEdit",
+            "mcp__fold__get_task",
+        ] {
             assert!(!may_write_files(tool), "{tool}");
         }
     }

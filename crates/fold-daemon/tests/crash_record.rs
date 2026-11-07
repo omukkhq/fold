@@ -119,3 +119,78 @@ async fn a_crash_while_a_git_commit_is_recorded_records_it_once_after_the_restar
     assert_eq!(rows(&h, "SELECT COUNT(*) FROM human_changes").await, 1);
     scenario.teardown();
 }
+
+/// A confirmed record of a worker's change that stops inside its integration leaves the change marked as the worker's, so the next record asks again; the record that reaches main ends the mark as recorded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_record_that_fails_keeps_a_workers_change_marked() {
+    use fold_core::{Actor, AgentName, HumanName, Timestamp};
+    use fold_daemon::services::projects::{ProjectError, record};
+    use fold_vcs::git::Git;
+
+    let scenario = fail::FailScenario::setup();
+    let h = Harness::start().await;
+    branch_born(&h).await;
+    let root = std::path::PathBuf::from(h.root());
+    std::fs::write(root.join("notes.txt"), "from the worker\n").unwrap();
+    let lead = AgentName::parse("web-lead").unwrap();
+    let at = Timestamp::from_millis(1).unwrap();
+    h.handle
+        .store
+        .write(async |tx| {
+            fold_store::agents::insert_agent(tx, &lead, at).await?;
+            fold_store::workspaces::insert_agent_change(tx, b"notes.txt", &lead, at, at).await?;
+            Ok::<_, fold_store::StoreError>(())
+        })
+        .await
+        .unwrap();
+    let ana = Actor::human(HumanName::parse("ana").unwrap());
+    let asked = |error: ProjectError| match error {
+        ProjectError::Fold(error) => {
+            assert_eq!(error.code(), "record_needs_confirmation");
+            let tree = error.details().unwrap()["tree"].as_str().unwrap();
+            tree.parse::<fold_core::object::ObjectHash>().unwrap()
+        }
+        ProjectError::Store(error) => panic!("{error}"),
+    };
+    let tree = asked(
+        record(&h.handle, &ana, &Git::default(), None)
+            .await
+            .unwrap_err(),
+    );
+
+    fail::cfg("integration_in_transaction", "return").unwrap();
+    let stopped = record(&h.handle, &ana, &Git::default(), Some(tree)).await;
+    fail::remove("integration_in_transaction");
+    assert_eq!(stopped.unwrap_err().code(), Some("failpoint"));
+    assert_eq!(h.head().await.number.to_string(), "r1");
+    assert_eq!(
+        rows(
+            &h,
+            "SELECT COUNT(*) FROM agent_changes WHERE cleared_at IS NULL"
+        )
+        .await,
+        1
+    );
+    let tree = asked(
+        record(&h.handle, &ana, &Git::default(), None)
+            .await
+            .unwrap_err(),
+    );
+
+    let done = record(&h.handle, &ana, &Git::default(), Some(tree))
+        .await
+        .unwrap();
+    let RecordOutcome::Recorded { files, .. } = done.outcome else {
+        panic!("{:?}", done.outcome);
+    };
+    assert_eq!(files, ["notes.txt"]);
+    assert_eq!(
+        rows(
+            &h,
+            "SELECT COUNT(*) FROM agent_changes WHERE cleared_how = 'recorded'"
+        )
+        .await,
+        1
+    );
+    scenario.teardown();
+}

@@ -132,8 +132,23 @@ async fn acceptance_35_a_worker_reads_a_shared_design_file_through_its_workspace
         .collect();
     assert!(!lines.iter().any(|line| line == "/design"), "{lines:?}");
     assert!(lines.iter().any(|line| line == "design/"), "{lines:?}");
-    // A link stays until the workspace's next sync, the point at which fold writes into it.
+    // A link stays until the workspace's next sync, the point at which fold writes into it, and no record takes it meanwhile.
     assert!(fs::symlink_metadata(dir.join("design")).is_ok());
+    assert_eq!(changed(&harness, &ws).await, ["src/home.html"]);
+    let changes: Vec<Value> = harness
+        .events()
+        .await
+        .into_iter()
+        .filter(|event| event.kind == "shared.paths_changed")
+        .map(|event| event.data)
+        .collect();
+    assert_eq!(
+        changes,
+        [
+            json!({"added": ["design"], "removed": []}),
+            json!({"added": [], "removed": ["design"]}),
+        ]
+    );
     harness
         .call(WORKER, "sync_workspace", json!({"ws": ws}))
         .await;
@@ -178,11 +193,11 @@ async fn acceptance_35_a_shared_file_a_worker_changed_waits_in_needs_you() {
     fs::write(&exclude, rules).unwrap();
     fs::create_dir_all(root.join("design")).unwrap();
     fs::write(root.join("design/home.pen"), "home v1").unwrap();
+    // The main agent's file from before the share, made outside any tool call, is only noted. A file written in the second before a worker's call starts would count as the call's.
+    fs::write(root.join("design/notes.md"), "notes").unwrap();
     harness
         .call(WORKER, "share_paths", json!({"paths": ["design"]}))
         .await;
-    // The main agent's edit outside any tool call only moves what fold noted.
-    fs::write(root.join("design/notes.md"), "notes").unwrap();
     fake.set_tool_script(&format!(
         "printf 'v2' >> '{}'\n",
         root.join("design/home.pen").display()

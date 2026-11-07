@@ -140,14 +140,14 @@ pub struct RestoreOutcome {
     pub entries: usize,
 }
 
-/// Puts the changes that supervised workers made in the project folder aside, for a human or for the main agent when the human asks (`policy::can_settle_agent_changes`): the paths fold placed in a worker's tool call, and only those, go into a new stash entry as `fld stash` puts changes there, so `fld unstash` brings them back, and the folder holds the checkout record's entries at those paths again. The human's other changes stay in the folder. The locks, the refusals and the order of writes are those of [`stash`]; the open changes end as `restored` with `folder.agent_change_cleared` once the files are back, so a stop before that leaves them open until the next follow finds the folder holding the record and ends them as `settled`.
+/// Puts the changes that supervised workers made in the project folder aside, for a human only (`policy::can_restore_agent_changes`): the paths fold placed in a worker's tool call, and only those, go into a new stash entry as `fld stash` puts changes there, so `fld unstash` brings them back, and the folder holds the checkout record's entries at those paths again. The human's other changes stay in the folder. The locks, the refusals and the order of writes are those of [`stash`]; the open changes end as `restored` with `folder.agent_change_cleared` once the files are back, so a stop before that leaves them open until the next follow finds the folder holding the record and ends them as `settled`.
 pub async fn restore_agent_changes(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
     git: &Git,
 ) -> Result<RestoreOutcome, ProjectError> {
     let starter = super::agent_changes::starter(handle, actor).await?;
-    policy::can_settle_agent_changes(&starter).map_err(FoldError::from)?;
+    policy::can_restore_agent_changes(&starter).map_err(FoldError::from)?;
     let (handle, actor, git) = (Arc::clone(handle), actor.clone(), git.clone());
     spawned(async move { run_restore(&handle, &actor, &git).await }).await
 }

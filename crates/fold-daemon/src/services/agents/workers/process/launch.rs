@@ -220,6 +220,7 @@ impl Supervisor {
             session: Arc::new(session),
             stderr: StderrTail::read(stderr),
             open_turns: Arc::clone(&open_turns),
+            confined: start.is_some(),
         };
         let start = StartWatch {
             session: sessions,
@@ -472,41 +473,46 @@ pub(in crate::services::agents::workers) fn starts_apart(role: Role) -> bool {
 /// The project's Claude Code settings that a session reads from its working directory, which a worker's start folder holds copies of. The project's `.mcp.json` is never copied: Claude Code connects every server of the folder's `.mcp.json` in a `-p` session, approved or not, so a worker gets the servers the user approved through its MCP configuration instead.
 const START_COPIES: [&str; 2] = [".claude/settings.json", LOCAL_SETTINGS_FILE];
 
-/// Fills the start folder `start` with copies of the project's Claude Code settings of [`START_COPIES`] and of fold's skills, so a worker there reads the same settings and skills as in the project folder. The hook commands of the settings name the project folder where they name `$CLAUDE_PROJECT_DIR`. Copies, never links, because a shell command's write to a link would change the project folder. A file the project folder lacks loses its copy too. Blocking.
+/// Makes the start folder `start` again, a new empty folder, and fills it with copies of the project's Claude Code settings of [`START_COPIES`] and of fold's skills, so a worker there reads the same settings and skills as in the project folder. The hook commands of the settings name the project folder where they name `$CLAUDE_PROJECT_DIR`. Copies, never links, because a shell command's write to a link would change the project folder. The worker's shell can change its start folder, so fold removes whatever it left there, links included, without following any, and writes each copy as a new file: a link the worker planted never takes a write of fold's. The parents of `start` must be real folders (see [`fold_vcs::platform::real_dir_below`]). Blocking.
 fn fill_start_dir(root: &Path, start: &Path) -> std::io::Result<()> {
-    for name in START_COPIES {
-        copy_or_remove(&root.join(name), &start.join(name))?;
-        let copy = start.join(name);
-        if let Ok(text) = std::fs::read_to_string(&copy) {
-            let replaced = project_claude::with_project_dir(&text, root);
-            if replaced != text {
-                std::fs::write(&copy, replaced)?;
-            }
+    use fold_vcs::platform::{real_dir_below, remake_dir, write_new_file};
+    remake_dir(start)?;
+    let copy = |bytes: &[u8], to: &Path| -> std::io::Result<()> {
+        if let Some(parent) = to.parent() {
+            real_dir_below(start, parent)?;
         }
-    }
-    match std::fs::remove_file(start.join(".mcp.json")) {
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
-        _ => {}
+        write_new_file(to, bytes, PRIVATE_FILE_MODE)
+    };
+    for name in START_COPIES {
+        let from = root.join(name);
+        if !from.is_file() {
+            continue;
+        }
+        let bytes = std::fs::read(&from)?;
+        let bytes = match String::from_utf8(bytes) {
+            Ok(text) => project_claude::with_project_dir(&text, root).into_bytes(),
+            Err(error) => error.into_bytes(),
+        };
+        copy(&bytes, &start.join(name))?;
     }
     for skill in fold_skills() {
-        let from = root.join(SKILLS_DIR).join(skill);
-        let to = start.join(SKILLS_DIR).join(skill);
-        if to.is_dir() {
-            std::fs::remove_dir_all(&to)?;
-        }
-        let Ok(entries) = std::fs::read_dir(&from) else {
+        let Ok(entries) = std::fs::read_dir(root.join(SKILLS_DIR).join(skill)) else {
             continue;
         };
-        std::fs::create_dir_all(&to)?;
+        let to = start.join(SKILLS_DIR).join(skill);
+        real_dir_below(start, &to)?;
         for entry in entries {
             let entry = entry?;
             if entry.file_type()?.is_file() {
-                std::fs::copy(entry.path(), to.join(entry.file_name()))?;
+                copy(&std::fs::read(entry.path())?, &to.join(entry.file_name()))?;
             }
         }
     }
     Ok(())
 }
+
+/// The permission bits of the files fold writes for a worker: its MCP configuration can hold the credentials of the user's own servers, and the copies of the settings hold the user's local settings.
+const PRIVATE_FILE_MODE: u32 = 0o600;
 
 /// The permission rule that lets a worker in its start folder read the project folder without a question, as it could when it ran there: the shared paths it reads through the links in its workspace lead there. `None` for a folder whose path holds a character of Claude Code's path patterns.
 fn read_rule(root: &Path) -> Option<String> {
@@ -516,21 +522,6 @@ fn read_rule(root: &Path) -> Option<String> {
         return None;
     }
     Some(format!("Read(/{text}/**)"))
-}
-
-/// Copies the file `from` to `to`, or removes `to` when `from` is no file.
-fn copy_or_remove(from: &Path, to: &Path) -> std::io::Result<()> {
-    if from.is_file() {
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::copy(from, to)?;
-        return Ok(());
-    }
-    match std::fs::remove_file(to) {
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
-        _ => Ok(()),
-    }
 }
 
 /// Writes the worker's MCP configuration, its settings and its prompt under the worker's folder, and fills its start folder when its role starts apart from the project folder. The settings allow the fold tools and run fold's hooks, with the hook of the shell tools for a worker in its start folder, so a worker never depends on the user's own Claude Code settings. The prompt is the role's text, shipped or the project's override, then the shared rules and the practices, then the area's instructions when there are any; the override file itself is never passed, because it lacks them. Returns the three paths Claude Code reads, with the program to run. An fld path that names no file writes nothing.
@@ -556,36 +547,48 @@ async fn write_files(
     let workspaces = paths.root().join(WS_DIR);
     let user = project_claude::UserClaude::of(&launcher.env);
     tokio::task::spawn_blocking(move || {
+        use fold_vcs::platform::write_new_file;
         let Some(fold) = fold.or_else(own_binary).filter(|fold| fold.is_file()) else {
             return Err(FilesError::FldMissing);
         };
         let (program, program_args) = worker_program(&fold_dir, claude, &fold);
-        fold_vcs::platform::create_dir_below(&fold_dir, &dir)?;
-        // A worker in its start folder reads no `.mcp.json`, so it gets the project's servers the user approved here; the supervised main reads them in the project folder.
+        // The worker's shell reaches its own folder, so a link it planted there is replaced, never followed.
+        fold_vcs::platform::real_dir_below(&fold_dir, &dir)?;
+        // A worker in its start folder reads neither the project's `.mcp.json` nor the servers the user added for the project folder, so it gets the servers the user approved or added there; the supervised main reads them in the project folder.
+        let user_project = start
+            .as_ref()
+            .and_then(|_| user.as_ref().map(|user| user.project(&root)));
         let approval = start.as_ref().map(|_| {
-            user.as_ref()
-                .map(|user| user.approval(&root))
+            user_project
+                .as_ref()
+                .map(project_claude::UserProject::approval)
                 .unwrap_or_default()
         });
+        let local = user_project
+            .as_ref()
+            .map(project_claude::UserProject::local_servers);
         let config = mcp_config(
             &fold,
             &agent,
             limit.as_deref(),
             &project_mcp,
             approval.as_ref(),
+            local.as_ref(),
         );
         let mcp = dir.join("mcp.json");
-        std::fs::write(&mcp, config.to_string())?;
+        write_new_file(&mcp, config.to_string().as_bytes(), PRIVATE_FILE_MODE)?;
         let own_settings = dir.join("settings.json");
         let worker_settings = match &start {
             Some(start) => {
-                fold_vcs::platform::create_dir_below(&fold_dir, start)?;
                 fold_vcs::platform::create_dir_below(&fold_dir, &workspaces)?;
                 fill_start_dir(&root, start)?;
                 let mut settings = worker_settings();
                 if let Some(allow) = settings["permissions"]["allow"].as_array_mut() {
                     allow.extend(read_rule(&root).map(Value::String));
-                    if user.as_ref().is_some_and(|user| user.trusts(&root)) {
+                    if user_project
+                        .as_ref()
+                        .is_some_and(project_claude::UserProject::trusts)
+                    {
                         allow.extend(project_claude::trusted_allow_rules(&root));
                     }
                 }
@@ -593,7 +596,11 @@ async fn write_files(
             }
             None => session_settings(),
         };
-        std::fs::write(&own_settings, worker_settings.to_string())?;
+        write_new_file(
+            &own_settings,
+            worker_settings.to_string().as_bytes(),
+            PRIVATE_FILE_MODE,
+        )?;
         let role_prompt = if override_prompt.is_file() {
             role.with_own_text(&std::fs::read_to_string(&override_prompt)?)
         } else {
@@ -602,12 +609,13 @@ async fn write_files(
         let prompt = match area_instructions {
             None => {
                 let prompt = dir.join("prompt.md");
-                std::fs::write(&prompt, role_prompt)?;
+                write_new_file(&prompt, role_prompt.as_bytes(), PRIVATE_FILE_MODE)?;
                 prompt
             }
             Some((area, instructions)) => {
                 let prompt = dir.join("prompt.md");
-                std::fs::write(&prompt, area_prompt(&role_prompt, &area, &instructions))?;
+                let text = area_prompt(&role_prompt, &area, &instructions);
+                write_new_file(&prompt, text.as_bytes(), PRIVATE_FILE_MODE)?;
                 prompt
             }
         };
@@ -648,13 +656,14 @@ fn worker_program(
     (claude, &[])
 }
 
-/// The `fold` server with the worker's agent name, plus servers of the project's `.mcp.json`: when the role limits its servers, each one it names, which the user chose in fold's configuration; else, for a worker with the user's `approval`, each one the user approved for the project folder in Claude Code, so a worker never connects a server the user did not approve. Servers of the user's own configuration are never copied, because their entries can hold credentials; without a limit Claude Code loads them itself.
+/// The `fold` server with the worker's agent name, plus servers of the project's `.mcp.json` and the user's `local` servers of the project folder: when the role limits its servers, each one it names, which the user chose in fold's configuration; else, for a worker with the user's `approval`, each local server and each `.mcp.json` server the user approved for the project folder in Claude Code, so a worker never connects a server the user did not approve. A local server wins over a `.mcp.json` server of the same name, as in Claude Code. The user's servers of every folder are never copied, because their entries can hold credentials; without a limit Claude Code loads them itself. A local server's entry can hold credentials too, so fold writes the configuration readable by the user only.
 fn mcp_config(
     fold: &Path,
     agent: &AgentName,
     limit: Option<&[String]>,
     project_mcp: &Path,
     approval: Option<&project_claude::Approval>,
+    local: Option<&Map<String, Value>>,
 ) -> Value {
     let mut servers = Map::new();
     servers.insert(
@@ -677,11 +686,12 @@ fn mcp_config(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    let local = local.cloned().unwrap_or_default();
     let names: Vec<String> = match (limit, approval) {
         (Some(names), _) => names.to_vec(),
-        (None, Some(approval)) => listed
+        (None, Some(approval)) => local
             .keys()
-            .filter(|name| approval.allows(name))
+            .chain(listed.keys().filter(|name| approval.allows(name)))
             .cloned()
             .collect(),
         (None, None) => Vec::new(),
@@ -690,7 +700,7 @@ fn mcp_config(
         if servers.contains_key(&name) {
             continue;
         }
-        if let Some(entry) = listed.get(&name) {
+        if let Some(entry) = local.get(&name).or_else(|| listed.get(&name)) {
             servers.insert(name, entry.clone());
         }
     }
@@ -749,6 +759,92 @@ async fn give_back_claims(
 mod tests {
     use super::*;
 
+    /// A project folder with Claude Code settings, fold's index skill and a worker whose folder fold made.
+    fn project_with_worker() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().join("app");
+        let skill = root.join(SKILLS_DIR).join(fold_core::layout::INDEX_SKILL);
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "skill").unwrap();
+        std::fs::write(
+            root.join(".claude/settings.json"),
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"$CLAUDE_PROJECT_DIR/x.sh"}]}]}}"#,
+        )
+        .unwrap();
+        std::fs::write(root.join(".mcp.json"), "{}").unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/settings.local.json"), "mine").unwrap();
+        let start = root.join(".fold/workers/web-worker/start");
+        std::fs::create_dir_all(&start).unwrap();
+        (temp, root, start)
+    }
+
+    fn assert_project_untouched(root: &Path) {
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/settings.local.json")).unwrap(),
+            "mine"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(".mcp.json")).unwrap(),
+            "{}"
+        );
+        assert!(root.join(".claude/settings.json").metadata().unwrap().len() > 2);
+        assert!(
+            root.join(SKILLS_DIR)
+                .join(fold_core::layout::INDEX_SKILL)
+                .join("SKILL.md")
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn a_link_the_worker_planted_in_its_start_folder_never_takes_a_write() {
+        let (_temp, root, start) = project_with_worker();
+        // The worker made its `.claude` a link into the project folder.
+        std::fs::create_dir_all(start.join("scratch")).unwrap();
+        std::os::unix::fs::symlink(root.join("src"), start.join(".claude")).unwrap();
+        fill_start_dir(&root, &start).unwrap();
+        assert_project_untouched(&root);
+        assert!(!root.join("src/settings.json").exists());
+        assert!(!root.join("src/skills").exists());
+        let copy = start.join(".claude");
+        assert!(!std::fs::symlink_metadata(&copy).unwrap().is_symlink());
+        let settings = std::fs::read_to_string(copy.join("settings.json")).unwrap();
+        assert!(
+            settings.contains(&format!("'{}'/x.sh", root.display())),
+            "{settings}"
+        );
+        assert!(
+            start
+                .join(SKILLS_DIR)
+                .join(fold_core::layout::INDEX_SKILL)
+                .join("SKILL.md")
+                .is_file()
+        );
+        assert!(!start.join("scratch").exists(), "the folder is made again");
+        use std::os::unix::fs::PermissionsExt;
+        let mode = copy
+            .join("settings.json")
+            .metadata()
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0);
+    }
+
+    #[test]
+    fn a_start_folder_the_worker_swapped_for_a_link_to_the_project_folder_is_made_again() {
+        let (_temp, root, start) = project_with_worker();
+        std::fs::remove_dir(&start).unwrap();
+        std::os::unix::fs::symlink(&root, &start).unwrap();
+        fill_start_dir(&root, &start).unwrap();
+        assert_project_untouched(&root);
+        assert!(!std::fs::symlink_metadata(&start).unwrap().is_symlink());
+        assert!(start.join(".claude/settings.json").is_file());
+        assert!(!start.join(".mcp.json").exists());
+        assert!(!start.join("src").exists());
+    }
+
     #[cfg(feature = "dev-launcher")]
     #[test]
     fn a_project_with_the_stub_folder_runs_the_stub_of_its_fld() {
@@ -789,22 +885,29 @@ mod tests {
         .unwrap();
         let agent = AgentName::parse("web-lead").unwrap();
         let fold = Path::new("/bin/fld");
-        let open = mcp_config(fold, &agent, None, &project, None);
+        let open = mcp_config(fold, &agent, None, &project, None, None);
         assert_eq!(
             open,
             json!({"mcpServers": {"fold": {"command": "/bin/fld", "args": ["mcp"], "env": {"FOLD_AGENT": "web-lead"}}}})
         );
         let names = ["fold".to_owned(), "pencil".to_owned(), "missing".to_owned()];
-        let limited = mcp_config(fold, &agent, Some(&names), &project, None);
+        let limited = mcp_config(fold, &agent, Some(&names), &project, None, None);
         let servers = limited["mcpServers"].as_object().unwrap();
         assert_eq!(servers.keys().collect::<Vec<_>>(), ["fold", "pencil"]);
         assert_eq!(servers["fold"]["command"], "/bin/fld");
-        let none = mcp_config(fold, &agent, Some(&names), &dir.join("absent.json"), None);
+        let none = mcp_config(
+            fold,
+            &agent,
+            Some(&names),
+            &dir.join("absent.json"),
+            None,
+            None,
+        );
         assert_eq!(none["mcpServers"].as_object().unwrap().len(), 1);
     }
 
     #[test]
-    fn a_worker_without_a_limit_gets_only_the_project_servers_the_user_approved() {
+    fn a_worker_without_a_limit_gets_only_the_project_servers_the_user_approved_or_added() {
         let temp = tempfile::TempDir::new().unwrap();
         let project = temp.path().join(".mcp.json");
         std::fs::write(
@@ -816,18 +919,66 @@ mod tests {
         let fold = Path::new("/bin/fld");
         let settings = temp.path().join("settings.json");
         std::fs::write(&settings, r#"{"enabledMcpjsonServers":["pencil","fold"]}"#).unwrap();
+        let root = temp.path().join("app");
+        let key = root.to_str().unwrap();
+        std::fs::write(
+            temp.path().join(".claude.json"),
+            json!({"projects": {(key): {"mcpServers": {
+                "docs": {"command": "docs", "env": {"TOKEN": "t"}},
+                "pencil": {"command": "local-pencil"},
+                "fold": {"command": "other"},
+            }}}})
+            .to_string(),
+        )
+        .unwrap();
         let env = vec![(
             "CLAUDE_CONFIG_DIR".to_owned(),
             temp.path().to_string_lossy().into_owned(),
         )];
-        let approval = project_claude::UserClaude::of(&env)
-            .unwrap()
-            .approval(&temp.path().join("app"));
-        let config = mcp_config(fold, &agent, None, &project, Some(&approval));
+        let user = project_claude::UserClaude::of(&env).unwrap().project(&root);
+        let approval = user.approval();
+        let local = user.local_servers();
+        let config = mcp_config(fold, &agent, None, &project, Some(&approval), Some(&local));
         let servers = config["mcpServers"].as_object().unwrap();
-        assert_eq!(servers.keys().collect::<Vec<_>>(), ["fold", "pencil"]);
+        assert_eq!(
+            servers.keys().collect::<Vec<_>>(),
+            ["docs", "fold", "pencil"]
+        );
         assert_eq!(servers["fold"]["command"], "/bin/fld");
-        let nothing = mcp_config(fold, &agent, None, &project, Some(&Default::default()));
+        // The user's server of the project folder wins, as in Claude Code.
+        assert_eq!(servers["pencil"]["command"], "local-pencil");
+        assert_eq!(servers["docs"]["env"]["TOKEN"], "t");
+        let without = mcp_config(fold, &agent, None, &project, Some(&approval), None);
+        let names: Vec<_> = without["mcpServers"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(names, ["fold", "pencil"]);
+        let nothing = mcp_config(
+            fold,
+            &agent,
+            None,
+            &project,
+            Some(&Default::default()),
+            None,
+        );
         assert_eq!(nothing["mcpServers"].as_object().unwrap().len(), 1);
+        let limited = mcp_config(
+            fold,
+            &agent,
+            Some(&["docs".to_owned()]),
+            &project,
+            None,
+            Some(&local),
+        );
+        let names: Vec<_> = limited["mcpServers"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(names, ["docs", "fold"]);
     }
 }

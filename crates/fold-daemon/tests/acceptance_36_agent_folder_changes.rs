@@ -73,7 +73,7 @@ fn slip(root: &Path) -> String {
     )
 }
 
-/// Acceptance 36, a worker's change of the project folder: a lead's Bash call empties the tracked README.md and adds 26 empty files in the project folder. fold does not offer them as the human's change: Needs you names the agent and the files, the main agent hears of it, `fld status` marks each file, and `fld record` asks first and records nothing. Only a human or the main agent settles it; the human's restore puts exactly those files into a stash entry and brings main's README.md back, and the item ends.
+/// Acceptance 36, a worker's change of the project folder: a lead's Bash call empties the tracked README.md and adds 26 empty files in the project folder. fold does not offer them as the human's change: Needs you names the agent and the files, the main agent hears of it, `fld status` marks each file, and `fld record` asks first and records nothing. Only a human or the main agent lists or ignores it, and only a human restores it; the human's restore puts exactly those files into a stash entry and brings main's README.md back, and the item ends.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acceptance_36_a_workers_change_of_the_project_folder_waits_for_the_human_and_restores() {
     let fake = FakeClaude::new("bash_call").running_tool_scripts();
@@ -154,10 +154,15 @@ async fn acceptance_36_a_workers_change_of_the_project_folder_waits_for_the_huma
         .refused(
             "backend",
             "settle_agent_changes",
-            json!({"choice": "restore"}),
+            json!({"choice": "ignore"}),
         )
         .await;
     assert_eq!(denied["code"], "main_agent_required");
+    // Only a human restores: the main agent's tool lists and ignores.
+    let denied = h
+        .refused(MAIN, "settle_agent_changes", json!({"choice": "restore"}))
+        .await;
+    assert_eq!(denied["code"], "invalid_request", "{denied}");
     assert!(root.join("junk1.txt").exists());
 
     let (status, restored) = h

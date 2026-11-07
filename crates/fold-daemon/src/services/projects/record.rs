@@ -180,16 +180,6 @@ async fn record_folder(
         });
     }
     let from_agents = confirmed(handle, record_tree, human_tree, confirm).await?;
-    if !from_agents.is_empty() {
-        end_agent_changes(
-            handle,
-            actor,
-            AgentChangeEnd::Recorded,
-            Some(&from_agents),
-            false,
-        )
-        .await?;
-    }
     let change = HumanFolderChange {
         human,
         base_tree: record_tree,
@@ -201,6 +191,17 @@ async fn record_folder(
         integrate_change(handle, actor, &change, OnConflict::Wait).await?,
         skipped,
     );
+    // Only a record that holds the worker's files ends their marks: a failed one leaves them waiting, and a stop before this leaves them for the next follow, which finds the folder holding the record and ends them as settled.
+    if !from_agents.is_empty() {
+        end_agent_changes(
+            handle,
+            actor,
+            AgentChangeEnd::Recorded,
+            Some(&from_agents),
+            false,
+        )
+        .await?;
+    }
     let RecordOutcome::Recorded {
         revision,
         files,
@@ -228,7 +229,7 @@ async fn record_folder(
     })
 }
 
-/// Refuses, with `record_needs_confirmation` and the tree to confirm, a change of the folder from `record_tree` to `human_tree` that empties a tracked file, adds [`MANY_EMPTY_FILES`] empty files or more, or holds paths that changed during a worker's tool call, unless `confirm` names `human_tree`: a confirmation holds only for the folder the human saw. Returns the paths of the change that a worker made, which the record then ends as `recorded`.
+/// Refuses, with `record_needs_confirmation` and the tree to confirm, a change of the folder from `record_tree` to `human_tree` that empties a tracked file, adds [`MANY_EMPTY_FILES`] empty files or more, or holds paths that changed during a worker's tool call, unless `confirm` names `human_tree`: a confirmation holds only for the folder the human saw. Returns the paths of the change that a worker made, which the record ends as `recorded` once the change is on main or waits for the main agent.
 async fn confirmed(
     handle: &ProjectHandle,
     record_tree: ObjectHash,

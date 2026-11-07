@@ -191,3 +191,75 @@ fn the_unseen_paths_name_each_ignored_entry_once_apart_from_the_shared_and_folds
     assert_eq!(unseen, [".env", "docs/spec.pen"]);
     assert_eq!(count, 3);
 }
+
+/// What a scan of the workspace `ws` records, as a checkpoint or a proposal would take it.
+fn recorded(ws: &Path) -> Vec<String> {
+    use fold_vcs::index::StatIndex;
+    use fold_vcs::scan::{DEFAULT_MAX_FILE_BYTES, ScanOptions, scan};
+    let rules = IgnoreRules::new(ws);
+    let opts = ScanOptions {
+        rules: &rules,
+        max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+        caps: crate::common::HOST,
+        recorded: None,
+    };
+    let mut index = StatIndex::empty(crate::common::HOST);
+    scan(ws, &mut index, &opts)
+        .unwrap()
+        .entries
+        .keys()
+        .map(|path| String::from_utf8_lossy(path).into_owned())
+        .collect()
+}
+
+#[test]
+fn a_link_stays_out_of_every_record_after_an_unshare_took_its_exclude_line_back() {
+    let (_dir, root, ws) = project();
+    write(&root, ".fold/exclude", "/.fold/\n/design\n");
+    let rules = IgnoreRules::new(&root);
+    link_shared(&root, &rules, &ws, &[path("design")]).unwrap();
+    assert!(
+        fs::symlink_metadata(ws.join("design"))
+            .unwrap()
+            .is_symlink()
+    );
+    // The unshare removes the anchored line at once; the workspace keeps its link until its next sync.
+    write(&root, ".fold/exclude", "/.fold/\n");
+    assert_eq!(recorded(&ws), [".gitignore", "src/lib.rs"]);
+    link_shared(&root, &rules, &ws, &[]).unwrap();
+    assert!(fs::symlink_metadata(ws.join("design")).is_err());
+    assert!(root.join("design/home.pen").is_file());
+    assert_eq!(recorded(&ws), [".gitignore", "src/lib.rs"]);
+}
+
+#[test]
+fn a_shared_path_that_is_no_longer_ignored_loses_its_link_and_is_never_recorded_as_one() {
+    let (_dir, root, ws) = project();
+    write(&root, "notes.pen", "notes");
+    let rules = IgnoreRules::new(&root);
+    let shared = [path("notes.pen")];
+    link_shared(&root, &rules, &ws, &shared).unwrap();
+    assert!(
+        fs::symlink_metadata(ws.join("notes.pen"))
+            .unwrap()
+            .is_symlink()
+    );
+    // A task stops ignoring `*.pen` in its workspace: the link is still fold's, so no record takes it.
+    write(&ws, ".gitignore", "design/\n.env\ntarget/\n");
+    assert_eq!(recorded(&ws), [".gitignore", "src/lib.rs"]);
+    // Main stops ignoring it too: the next sync removes fold's link, and only fold's.
+    write(&root, ".gitignore", "design/\n.env\ntarget/\n");
+    let linked = link_shared(&root, &rules, &ws, &shared).unwrap();
+    assert_eq!((linked.linked, linked.skipped), (0, 0));
+    assert!(fs::symlink_metadata(ws.join("notes.pen")).is_err());
+    assert_eq!(root.join("notes.pen").metadata().unwrap().len(), 5);
+    assert_eq!(
+        fs::read_to_string(ws.join(".fold/shared-links")).unwrap(),
+        ""
+    );
+    // A file of the worker's own at the path is never removed.
+    write(&ws, "notes.pen", "mine");
+    write(&ws, ".fold/shared-links", "notes.pen\n");
+    link_shared(&root, &rules, &ws, &shared).unwrap();
+    assert_eq!(fs::read_to_string(ws.join("notes.pen")).unwrap(), "mine");
+}

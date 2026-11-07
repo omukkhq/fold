@@ -15,8 +15,8 @@ pub const SHARED: &str = "shared";
 /// The comment fold keeps at the top of `.fold/shared`.
 pub const SHARED_NOTE: &str = "# fold writes this file: ignored paths that every workspace links to, read-only. Change it with fld share and fld unshare.";
 
-/// The links fold made in one workspace, in that workspace's own `.fold/`, so a later sync removes the link of a path that is no longer shared and leaves every other link alone.
-const LINKS: &str = "shared-links";
+/// The links fold made in one workspace, in that workspace's own `.fold/`, so a later sync removes the link of a path that is no longer shared and leaves every other link alone, and the workspace's ignore rules never let a scan record one while it is listed (see [`crate::ignore::IgnoreRules`]).
+pub(crate) const LINKS: &str = "shared-links";
 
 /// Every valid path of the list text `text`, in path order. A line that is blank, a comment or no valid tree path is left out, so a hand edit never breaks a create or a sync.
 pub fn parse_shared(text: &str) -> Vec<RepoPath> {
@@ -129,7 +129,7 @@ pub struct Linked {
     pub skipped: usize,
 }
 
-/// Makes the workspace `ws` hold one symbolic link for each of `shared`, at the same path, to the absolute path of that file or folder in the project folder `root`, so a worker reads the project folder's current copy and no copy takes disk space. Missing folders above a link are made; a folder above it that is a link, or anything already at the path that is not fold's link, leaves that path without one. A link fold made at an earlier create or sync for a path no longer in `shared` is removed, only while it still is fold's link. A shared path that `rules` no longer leaves out as a file gets no link: the link would be recorded, and a tracked path is in the workspace's files already. fold calls it only when it creates or syncs a workspace, the points at which it writes into one. Blocking.
+/// Makes the workspace `ws` hold one symbolic link for each of `shared`, at the same path, to the absolute path of that file or folder in the project folder `root`, so a worker reads the project folder's current copy and no copy takes disk space. Missing folders above a link are made; a folder above it that is a link, or anything already at the path that is not fold's link, leaves that path without one. A link fold made at an earlier create or sync for a path no longer in `shared` is removed, only while it still is fold's link. A shared path that `rules` no longer leaves out as a file, or that is gone from the project folder, gets no link and loses the one fold made: once the list no longer names it, the link would be recorded, and a tracked path is in the workspace's files already. fold calls it only when it creates or syncs a workspace, the points at which it writes into one. Blocking.
 pub fn link_shared(
     root: &Path,
     rules: &IgnoreRules,
@@ -143,24 +143,17 @@ pub fn link_shared(
     rules.reload();
     let mut outcome = Linked::default();
     for gone in previous.iter().filter(|path| !shared.contains(path)) {
-        let Some((dir, name)) = parent_of(&workspace, gone, false)? else {
-            continue;
-        };
-        match dir.read_link(name) {
-            Ok(Some(current)) if current == target_of(root, gone).as_bytes() => {
-                dir.remove_file(name)?;
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
+        remove_own_link(&workspace, root, gone)?;
     }
     let mut kept = Vec::new();
     for path in shared {
-        // The link is no folder, so only a rule that leaves out a file at the path keeps it out of every record.
+        // The link is no folder, so only a rule that leaves out a file at the path keeps it out of every record once the list no longer names it.
         if std::fs::symlink_metadata(root.join(os_path(path))).is_err()
             || !rules.is_ignored(path, false)
         {
+            if previous.contains(path) {
+                remove_own_link(&workspace, root, path)?;
+            }
             continue;
         }
         let target = target_of(root, path);
@@ -190,6 +183,19 @@ pub fn link_shared(
     let text: String = kept.iter().map(|path| format!("{path}\n")).collect();
     write_atomic(&own.join(LINKS), text.as_bytes())?;
     Ok(outcome)
+}
+
+/// Removes the link at `path` of the workspace while it is still the link fold made to the project folder `root`, never anything else there.
+fn remove_own_link(workspace: &DirHandle, root: &Path, path: &RepoPath) -> io::Result<()> {
+    let Some((dir, name)) = parent_of(workspace, path, false)? else {
+        return Ok(());
+    };
+    match dir.read_link(name) {
+        Ok(Some(current)) if current == target_of(root, path).as_bytes() => dir.remove_file(name),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 /// The absolute path a link to `path` holds.

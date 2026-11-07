@@ -6,7 +6,7 @@ struct Simple {
     redirects: Vec<(String, bool)>,
 }
 
-/// The paths that `command` names as write targets in the common forms: the targets of `>`, `>>`, `>|`, `&>` and `&>>` redirects, the files of `tee`, `rm`, `touch`, `truncate`, `sed -i`, the destination of `cp`, `mv`, `install` and `ln`, and `of=` of `dd`, each with the folder it is relative to: `None` for the session's folder, or the folder of the last `cd` before it. A word that holds an expansion is left out. This reads the text of the command only; it is a net for the common mistakes, never a boundary, as a script or an interpreter writes where its text does not say.
+/// The paths that `command` names as write targets in the common forms: the targets of `>`, `>>`, `>|`, `&>` and `&>>` redirects, the files of `tee`, `rm`, `touch`, `truncate`, `sed -i`, every operand of `mv`, which removes its sources, the destination of `cp`, `install` and `ln`, and `of=` of `dd`, each with the folder it is relative to: `None` for the session's folder, or the folder of the last `cd` before it. A word that holds an expansion is left out. This reads the text of the command only; it is a net for the common mistakes, never a boundary, as a script or an interpreter writes where its text does not say.
 pub fn write_targets(command: &str) -> Vec<(Option<String>, String)> {
     let mut targets = Vec::new();
     let mut moved: Option<String> = None;
@@ -84,16 +84,16 @@ fn command_targets(program: &str, args: &[&(String, bool)]) -> Vec<String> {
     }
     let plain = |list: Vec<String>| list.into_iter().filter(|word| !word.is_empty()).collect();
     match program {
-        "tee" | "rm" | "rmdir" | "touch" | "truncate" | "shred" | "unlink" => plain(operands),
-        "cp" | "mv" | "install" | "ln" => {
-            if let Some(at) = options.iter().position(|option| option == "-t") {
-                return plain(options.get(at + 1).cloned().into_iter().collect());
-            }
-            if let Some(dir) = options
-                .iter()
-                .find_map(|option| option.strip_prefix("--target-directory="))
-            {
-                return vec![dir.to_owned()];
+        // `mv` removes each source as it moves it, so every operand is changed.
+        "tee" | "rm" | "rmdir" | "touch" | "truncate" | "shred" | "unlink" | "mv" => plain(
+            operands
+                .into_iter()
+                .chain(options_value(&options, "-t"))
+                .collect(),
+        ),
+        "cp" | "install" | "ln" => {
+            if let Some(dir) = options_value(&options, "-t") {
+                return plain(vec![dir]);
             }
             if operands.len() >= 2 {
                 plain(operands.last().cloned().into_iter().collect())
@@ -122,6 +122,20 @@ fn command_targets(program: &str, args: &[&(String, bool)]) -> Vec<String> {
         ),
         _ => Vec::new(),
     }
+}
+
+/// The value that follows the option `name` among `options`, as [`command_targets`] collected them, or the value of its `--target-directory=` form.
+fn options_value(options: &[String], name: &str) -> Option<String> {
+    options
+        .iter()
+        .position(|option| option == name)
+        .and_then(|at| options.get(at + 1).cloned())
+        .or_else(|| {
+            options
+                .iter()
+                .find_map(|option| option.strip_prefix("--target-directory="))
+                .map(str::to_owned)
+        })
 }
 
 /// The simple commands of `command`, split at `;`, `&`, `|`, newlines and parentheses outside quotes.
@@ -331,7 +345,13 @@ mod tests {
         assert_eq!(targets("touch a b"), ["a", "b"]);
         assert_eq!(targets("truncate -s 0 design/a.md"), ["design/a.md"]);
         assert_eq!(targets("cp -r src/a design/"), ["design/"]);
-        assert_eq!(targets("mv a.md b.md"), ["b.md"]);
+        assert_eq!(targets("mv a.md b.md"), ["a.md", "b.md"]);
+        // Moving a shared file away removes it from the project folder.
+        assert_eq!(
+            targets("mv -f design/a.md design/b.md src/"),
+            ["design/a.md", "design/b.md", "src/"]
+        );
+        assert_eq!(targets("mv -t src design/a.md"), ["design/a.md", "src"]);
         assert_eq!(targets("cp -t design a b"), ["design"]);
         assert_eq!(targets("install --target-directory=design a"), ["design"]);
         assert_eq!(targets("ln -sf ../x design/x"), ["design/x"]);

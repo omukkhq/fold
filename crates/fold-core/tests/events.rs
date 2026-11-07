@@ -143,6 +143,7 @@ fn all_equals_the_plans_event_types() {
         "folder.agent_change_cleared",
         "shared.changed",
         "shared.changes_dismissed",
+        "shared.paths_changed",
     ]);
     assert_eq!(declared, expected);
 }

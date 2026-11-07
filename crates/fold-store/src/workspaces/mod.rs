@@ -57,7 +57,7 @@ pub use revisions::{
     initial_revision, insert_revision, list_after, list_recent,
 };
 pub use shared_changes::{
-    SharedChangeRow, dismiss_shared_changes, insert_shared_change, open_shared_changes,
+    SharedChangeRow, dismiss_shared_changes, note_shared_change, open_shared_changes,
 };
 pub use stashes::{
     NewStash, NewUnstash, StashRow, StashState, UnstashEnd, UnstashRow, apply_stash, close_unstash,

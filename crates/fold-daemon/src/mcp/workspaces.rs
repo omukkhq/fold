@@ -148,8 +148,6 @@ pub struct AddExcludePatternsInput {
 pub enum SettleChoice {
     /// Only show the files and the agents.
     List,
-    /// Put the files into a new stash entry and bring them back to main's version; the user's own changes stay.
-    Restore,
     /// Let the files count as the user's own unrecorded changes, which `fld record` records.
     Ignore,
 }
@@ -157,7 +155,7 @@ pub enum SettleChoice {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct SettleAgentChangesInput {
-    /// list, restore or ignore. Restore or ignore only when the user chose it; recording the files is the user's own `fld record`.
+    /// list or ignore. Ignore only when the user chose it; recording the files is the user's own `fld record`, and putting them aside is the user's own `fld agent-changes restore`.
     pub choice: SettleChoice,
 }
 
@@ -242,7 +240,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             SETTLE_AGENT_CHANGES,
-            "Main agent only. The files a supervised worker changed in the project folder during one of its tool calls, which fold does not offer as the user's change: list them with their agents, or, when the user chose it, restore them (into a new stash entry, so fld unstash brings them back) or ignore them (they count as the user's own unrecorded change). The user records them with fld record.",
+            "Main agent only. The files a supervised worker changed in the project folder during one of its tool calls, which fold does not offer as the user's change: list them with their agents, or, when the user chose it, ignore them (they count as the user's own unrecorded change). The user records them with fld record, or puts them into a new stash entry and brings main's version back with fld agent-changes restore.",
             schema_for_type::<SettleAgentChangesInput>(),
         ),
         Tool::new(
@@ -676,20 +674,6 @@ pub async fn call(
                         })
                         .collect();
                     json!({"files": files})
-                }
-                SettleChoice::Restore => {
-                    let restored = crate::services::projects::restore_agent_changes(
-                        &handle,
-                        &actor,
-                        &fold_vcs::git::Git::default(),
-                    )
-                    .await
-                    .map_err(project_error)?;
-                    json!({
-                        "restored": restored.files,
-                        "stash": (!restored.files.is_empty()).then_some("stash@{0}"),
-                        "revision": restored.revision.to_string(),
-                    })
                 }
                 SettleChoice::Ignore => {
                     let files = crate::services::projects::ignore_agent_changes(&handle, &actor)

@@ -3,7 +3,8 @@
 use fold_core::{AgentName, Timestamp};
 use fold_store::agents::insert_agent;
 use fold_store::workspaces::{
-    AgentChangeEnd, clear_agent_change, insert_agent_change, open_agent_changes,
+    AgentChangeEnd, clear_agent_change, dismiss_shared_changes, insert_agent_change,
+    note_shared_change, open_agent_changes, open_shared_changes,
 };
 
 use crate::common::{exec, open};
@@ -81,5 +82,67 @@ async fn a_path_waits_once_per_agent_and_a_settled_change_never_opens_again() {
         )
         .await
         .is_err()
+    );
+}
+
+#[tokio::test]
+async fn an_agent_has_one_open_shared_change_that_gains_each_new_path() {
+    let (_dir, _paths, store) = open().await;
+    let lead = AgentName::parse("web-lead").unwrap();
+    let ghost = AgentName::parse("ghost").unwrap();
+    let paths = |list: &[&str]| {
+        list.iter()
+            .map(|path| (*path).to_owned())
+            .collect::<Vec<_>>()
+    };
+    let noted = store
+        .write(async |tx| {
+            insert_agent(tx, &lead, at(1)).await?;
+            let mut noted = Vec::new();
+            for (list, now) in [
+                (&["design/b.pen"][..], 10),
+                (&["design/a.pen", "design/b.pen"][..], 11),
+                (&["design/b.pen"][..], 12),
+            ] {
+                noted.push(note_shared_change(tx, &lead, &paths(list), at(now)).await?);
+            }
+            noted.push(note_shared_change(tx, &ghost, &paths(&["x"]), at(13)).await?);
+            Ok::<_, fold_store::StoreError>(noted)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        noted,
+        [
+            Some(paths(&["design/b.pen"])),
+            Some(paths(&["design/a.pen"])),
+            None,
+            None
+        ]
+    );
+    let open_rows = open_shared_changes(store.read()).await.unwrap();
+    assert_eq!(open_rows.len(), 1);
+    assert_eq!(open_rows[0].paths, paths(&["design/a.pen", "design/b.pen"]));
+    assert_eq!(open_rows[0].created_at, at(10));
+    assert!(
+        exec(
+            &store,
+            "INSERT INTO shared_changes (agent_id, paths, created_at) SELECT id, '[]', 20 FROM agents WHERE name = 'web-lead'"
+        )
+        .await
+        .is_err(),
+        "one open change per agent"
+    );
+    let again = store
+        .write(async |tx| {
+            dismiss_shared_changes(tx, "human:ana", at(30)).await?;
+            note_shared_change(tx, &lead, &paths(&["design/b.pen"]), at(31)).await
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        again,
+        Some(paths(&["design/b.pen"])),
+        "a dismissed change never takes a new path"
     );
 }
