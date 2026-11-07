@@ -179,7 +179,7 @@ fn cleared_event(
         .map_err(|error| FoldError::new(codes::INTERNAL_ERROR, error.to_string()))
 }
 
-/// Notes, after a follow of the project folder read what `followed` holds, the paths that changed during a tool call of a supervised worker as that worker's, with `folder.agent_changed`, and ends as `settled`, with `folder.agent_change_cleared`, those whose path the folder holds as its checkout record again, among the marks placed before the follow read the folder ([`settled_by_follow`]): a mark placed meanwhile, for a file the read may not show, stays open. One transaction holds both. The caller holds the folder lock. A failure is logged and changes nothing, so the follow and the commits it leads to go on: the change then shows as the human's, as it would without the note.
+/// Notes, after a follow of the project folder read what `followed` holds, the paths that changed during a tool call of a supervised worker as that worker's, with `folder.agent_changed`, and ends as `settled`, with `folder.agent_change_cleared`, those whose path the folder holds as its checkout record again, among the marks placed before the follow read the folder ([`settled_by_follow`]): a mark placed meanwhile, for a file the read may not show, stays open, and so does a mark of a path the read left out, such as a file over the size limit. One transaction holds both. The caller holds the folder lock. A failure is logged and changes nothing, so the follow and the commits it leads to go on: the change then shows as the human's, as it would without the note.
 pub(crate) async fn note_agent_changes(
     store: &Store,
     bus: &EventBus,
@@ -190,7 +190,8 @@ pub(crate) async fn note_agent_changes(
     #[cfg(feature = "failpoints")]
     fail::fail_point!("folder_before_note");
     let (seen, marks_before_read) = (&followed.seen, followed.marks_before_read);
-    if let Err(error) = note(store, bus, windows, seen, marks_before_read, now).await {
+    let unread: Vec<&[u8]> = followed.unread.iter().map(Vec::as_slice).collect();
+    if let Err(error) = note(store, bus, windows, seen, &unread, marks_before_read, now).await {
         tracing::warn!(
             code = error.code().unwrap_or(codes::INTERNAL_ERROR),
             "the changes of workers in the project folder were not noted"
@@ -203,6 +204,7 @@ async fn note(
     bus: &EventBus,
     windows: &ToolWindows,
     seen: &[SeenChange],
+    unread: &[&[u8]],
     marks_before_read: i64,
     now: Timestamp,
 ) -> Result<(), ProjectError> {
@@ -215,6 +217,7 @@ async fn note(
     let settled = settled_by_follow(
         open.iter().map(|row| (row.id, row.path.as_slice())),
         &present,
+        unread,
         marks_before_read,
     );
     let known: BTreeSet<(&[u8], &AgentName)> = open

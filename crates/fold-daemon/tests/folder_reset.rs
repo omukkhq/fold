@@ -421,3 +421,52 @@ async fn a_restore_of_a_workers_changes_puts_back_only_its_paths_through_the_res
     assert_eq!(open_agent_paths(&h).await, ["junk2.txt"]);
     assert_eq!(entries(&h).await.len(), 2);
 }
+
+/// A worker's tracked file that grew past `max_file_bytes` is one the follow's read leaves out, keeping its recorded entry without seeing it: the follow keeps the worker's mark, Needs you keeps the item, and the restore still finds it and refuses the file it cannot stash, so the mark stays open until the file is readable again and goes back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follow_keeps_the_mark_of_a_workers_file_over_the_size_limit() {
+    let mut h = Harness::start_plain().await;
+    h.connect_tagged("main", &["main"]).await;
+    let dir = PathBuf::from(h.root());
+    let config = dir.join(".fold/config.toml");
+    let kept = std::fs::read_to_string(&config).unwrap_or_default();
+    write(&dir, "README.md", &"x".repeat(100));
+    write(&dir, "junk.txt", "");
+    place_agent_change(&h, "README.md").await;
+    place_agent_change(&h, "junk.txt").await;
+    std::fs::write(&config, format!("max_file_bytes = 32\n{kept}")).unwrap();
+
+    fold_daemon::services::projects::sync_folder(
+        &fold_daemon::services::projects::RemoteContext::of(&h.handle),
+        &Git::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(open_agent_paths(&h).await, ["README.md", "junk.txt"]);
+    let waiting = needs_you(&h.handle.store).await.unwrap();
+    assert!(
+        waiting
+            .iter()
+            .any(|item| item.kind == NeedsYouKind::AgentChange),
+        "{waiting:?}"
+    );
+
+    let (reason, paths) = refusal(
+        restore_agent_changes(&h.handle, &ana(), &Git::default())
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(reason, "skipped_tracked");
+    assert_eq!(paths, json!(["README.md"]));
+    assert!(entries(&h).await.is_empty());
+    assert_eq!(read(&dir, "junk.txt").as_deref(), Some(""));
+    assert_eq!(open_agent_paths(&h).await, ["README.md", "junk.txt"]);
+
+    std::fs::write(&config, kept).unwrap();
+    let done = restore_agent_changes(&h.handle, &ana(), &Git::default())
+        .await
+        .unwrap();
+    assert_eq!(done.files, ["README.md", "junk.txt"]);
+    assert_eq!(read(&dir, "README.md").as_deref(), Some("# demo\n"));
+    assert!(open_agent_paths(&h).await.is_empty());
+}

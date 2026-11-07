@@ -70,16 +70,27 @@ pub fn agents_at(windows: &[ToolWindow], at: Timestamp) -> Vec<AgentName> {
         .collect()
 }
 
-/// The paths of the open marks of workers' changes that a follow of the project folder settles: those its read no longer shows changed, among the marks placed before that read began. Each mark of `open` comes with its number, which grows in the order the marks were placed, and `placed_before_read` is the newest number when the follow began to read the folder; a mark placed while the follow read, for a file its read may not show, stays open, so a worker's change never passes as the human's for a stale read.
+/// The paths of the open marks of workers' changes that a follow of the project folder settles: those its read no longer shows changed, among the marks placed before that read began. Each mark of `open` comes with its number, which grows in the order the marks were placed, and `placed_before_read` is the newest number when the follow began to read the folder; a mark placed while the follow read, for a file its read may not show, stays open, so a worker's change never passes as the human's for a stale read. A path at or below one of `unread`, which the read left out, such as a file over the size limit, an unreadable one or one that kept changing, stays open too: the read keeps its recorded entry without seeing the file, so it says nothing about what the worker left there.
 pub fn settled_by_follow<'a>(
     open: impl IntoIterator<Item = (i64, &'a [u8])>,
     still_changed: &BTreeSet<&[u8]>,
+    unread: &[&[u8]],
     placed_before_read: i64,
 ) -> BTreeSet<Vec<u8>> {
     open.into_iter()
-        .filter(|(number, path)| *number <= placed_before_read && !still_changed.contains(path))
+        .filter(|(number, path)| {
+            *number <= placed_before_read
+                && !still_changed.contains(path)
+                && !unread.iter().any(|left_out| at_or_below(path, left_out))
+        })
         .map(|(_, path)| path.to_vec())
         .collect()
+}
+
+/// Whether `path` is `ancestor` or a path below it.
+fn at_or_below(path: &[u8], ancestor: &[u8]) -> bool {
+    path.strip_prefix(ancestor)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(b"/"))
 }
 
 /// The parts of a change of the project folder that make a record ask first, each in path order: tracked files it empties and empty files it adds.
@@ -238,10 +249,33 @@ mod tests {
             (2, b"back.md".as_slice()),
             (3, b"new.md".as_slice()),
         ];
-        let settled = settled_by_follow(open, &changed, 2);
+        let settled = settled_by_follow(open, &changed, &[], 2);
         assert_eq!(settled, [b"back.md".to_vec()].into());
-        assert!(settled_by_follow(open, &changed, 0).is_empty());
-        assert_eq!(settled_by_follow(open, &BTreeSet::new(), 3).len(), 3);
+        assert!(settled_by_follow(open, &changed, &[], 0).is_empty());
+        assert_eq!(settled_by_follow(open, &BTreeSet::new(), &[], 3).len(), 3);
+    }
+
+    #[test]
+    fn a_follow_never_settles_a_path_its_read_left_out() {
+        let open = [
+            (1, b"big.bin".as_slice()),
+            (2, b"docs/huge.pdf".as_slice()),
+            (3, b"docs2/a.md".as_slice()),
+            (4, b"back.md".as_slice()),
+        ];
+        let settled = settled_by_follow(
+            open,
+            &BTreeSet::new(),
+            &[b"big.bin".as_slice(), b"docs".as_slice()],
+            4,
+        );
+        assert_eq!(
+            settled,
+            [b"back.md".to_vec(), b"docs2/a.md".to_vec()].into()
+        );
+        assert!(at_or_below(b"docs/huge.pdf", b"docs"));
+        assert!(at_or_below(b"docs", b"docs"));
+        assert!(!at_or_below(b"docs2/a.md", b"docs"));
     }
 
     #[test]
