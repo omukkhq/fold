@@ -38,6 +38,8 @@ export function Dialog({
   footer,
   onCloseAutoFocus,
 }: DialogProps) {
+  const body =
+    children !== undefined && children !== null && children !== false;
   return (
     <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
       {trigger ? (
@@ -54,7 +56,12 @@ export function Dialog({
               wide ? cn("w-dialog", dialogFill) : "w-max",
             )}
           >
-            <div className="flex shrink-0 items-start justify-between gap-12 px-20 pt-20 pb-8">
+            <div
+              className={cn(
+                "flex shrink-0 items-start justify-between gap-12 px-20 pt-20",
+                body || footer ? "pb-8" : "pb-20",
+              )}
+            >
               <div className="flex min-w-0 flex-col gap-4">
                 <RadixDialog.Title className="text-16 font-semibold text-text">
                   {title}
@@ -71,16 +78,19 @@ export function Dialog({
                 </IconButton>
               </RadixDialog.Close>
             </div>
-            <div className={dialogBody}>
-              <div
-                className={cn(
-                  "flex flex-col gap-12 px-20 pt-4",
-                  footer ? "pb-8" : "pb-20",
-                )}
-              >
-                {children}
+            {/* A body whose parts all render nothing, such as an error that has not happened, takes no space. */}
+            {body ? (
+              <div className={dialogBody}>
+                <div
+                  className={cn(
+                    "flex flex-col gap-12 px-20 pt-4 empty:hidden",
+                    footer ? "pb-8" : "pb-20",
+                  )}
+                >
+                  {children}
+                </div>
               </div>
-            </div>
+            ) : null}
             {footer ? (
               <div className="shrink-0 px-20 pt-8 pb-20">{footer}</div>
             ) : null}
