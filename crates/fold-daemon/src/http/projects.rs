@@ -1487,9 +1487,11 @@ pub struct DroppedChangeView {
     pub commit: Option<String>,
     /// The paths that conflicted with main, in path order.
     pub conflicted: Vec<String>,
-    /// The main workspace that held its merge, which the reset abandoned; null when the main agent had opened none.
+    /// The main workspace that holds its merge; null when the main agent had opened none.
     #[schema(required = true, example = "ws-9")]
     pub workspace: Option<String>,
+    /// Whether fold abandoned that workspace, as a reset does; after a restore the main agent abandons it.
+    pub workspace_abandoned: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1509,7 +1511,7 @@ pub struct ResetResult {
     pub unchanged: Vec<String>,
     /// The conflicted paths of the stash entry whose unstash conflict waited in the folder, which the reset dropped; the safety entry holds those files with their markers.
     pub dropped_unstash: Vec<String>,
-    /// The conflicted human change that waited for the main agent, which the reset dropped; null when none waited or a restore left changes of it.
+    /// The conflicted human change that waited for the main agent, which the command withdrew; null when none waited or a restore left changes of it.
     #[schema(required = true)]
     pub dropped_change: Option<DroppedChangeView>,
     /// New files the read left out, which stay in the folder.
@@ -1533,6 +1535,7 @@ impl From<ResetOutcome> for ResetResult {
                 commit: change.commit,
                 conflicted: change.conflicted,
                 workspace: change.workspace.map(|workspace| workspace.to_string()),
+                workspace_abandoned: change.workspace_abandoned,
             }),
             skipped: outcome
                 .skipped
@@ -1583,7 +1586,7 @@ pub struct RestoreRequest {
     pub paths: Vec<String>,
 }
 
-/// Puts the named files and directories of the project folder back to the files fold last wrote there, as `fld restore` asks: their changes that no revision records are first stashed as `stash@{0}`, which `fld unstash` brings back. The conflicted human change that waits for the main agent is dropped as `fld reset` drops it only when the named paths held every unrecorded change. Only a named human restores, over the socket or signed in to the web app.
+/// Puts the named files and directories of the project folder back to the files fold last wrote there, as `fld restore` asks: their changes that no revision records are first stashed as `stash@{0}`, which `fld unstash` brings back. The conflicted human change that waits for the main agent is withdrawn with `human_change.withdrawn` only when the named paths held every unrecorded change; the main workspace that holds its merge stays open, and the main agent's notice asks it to abandon the workspace. Only a named human restores, over the socket or signed in to the web app.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/folder/restore",

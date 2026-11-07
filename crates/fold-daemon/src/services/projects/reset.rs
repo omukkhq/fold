@@ -41,8 +41,10 @@ pub struct DroppedChange {
     pub commit: Option<String>,
     /// The paths that conflicted with main, in path order.
     pub conflicted: Vec<String>,
-    /// The main workspace that held its merge, which the reset abandoned.
+    /// The main workspace that holds its merge, when the main agent had opened one.
     pub workspace: Option<WorkspaceId>,
+    /// Whether the command abandoned that workspace: `fld reset` does, while after `fld restore` the main agent's notice asks it to abandon the workspace itself.
+    pub workspace_abandoned: bool,
 }
 
 /// What `fld reset` or `fld restore` did.
@@ -72,7 +74,7 @@ pub struct ResetOutcome {
 
 /// Makes the project folder match the checkout record again for the named human who runs `fld reset` or `fld restore <path>...`, discarding the changes that no revision records, so the folder follows main. Nothing is lost: the discarded changes are first stashed as `stash@{0}`, which `fld unstash` brings back, and `fld stash drop` drops for good.
 ///
-/// Under the remote lock and folder lock the folder first follows main, with the refusals of `fld stash`: a Git branch or `HEAD` that shows a change fold did not make, and the human's Git commits that wait for the main agent, are refused with the command that undoes them, since a reset never moves Git. An unstash that a stop left part-way is finished first. `fld reset` drops a stash entry whose unstash conflict waits in the folder (`stash.discarded`), because the safety entry takes the folder with its markers; `fld restore` refuses it. A tracked file the read cannot take, too large or unreadable, is refused as `fld stash` refuses it. The safety entry is pushed with `stash.pushed` in one transaction, then the paths go back to the record's entries as `fld stash` puts them back, each only while it still holds what fold read. Then the conflicted human change that waits for the main agent is dropped when the folder holds none of it any more: always for `fld reset`, and for `fld restore` when the named paths held every unrecorded change. One transaction closes it with `human_change.withdrawn` and abandons the main workspace its merge made with `workspace.abandoned`. The folder then follows main. Each step can stop on its own: the next reset finds the entry pushed already, the files back or the change still waiting, and finishes the rest.
+/// Under the remote lock and folder lock the folder first follows main, with the refusals of `fld stash`: a Git branch or `HEAD` that shows a change fold did not make, and the human's Git commits that wait for the main agent, are refused with the command that undoes them, since a reset never moves Git. An unstash that a stop left part-way is finished first. A tracked file the read cannot take, too large or unreadable, is refused as `fld stash` refuses it. `fld restore` refuses a stash entry whose unstash conflict waits in the folder; `fld reset` drops it with `stash.discarded` in the transaction that pushes the safety entry with `stash.pushed`, because the safety entry takes the folder with its markers, so a refusal or a stop leaves the entry waiting. Then the paths go back to the record's entries as `fld stash` puts them back, each only while it still holds what fold read. Then the conflicted human change that waits for the main agent is withdrawn with `human_change.withdrawn` when the folder holds none of it any more: always for `fld reset`, and for `fld restore` when the named paths held every unrecorded change. Only `fld reset` abandons the main workspace its merge made, with `workspace.abandoned` in the same transaction; after `fld restore` the main agent's notice asks it to abandon the workspace, as after `fld stash`. The folder then follows main. Each step can stop on its own: the next reset finds the entry pushed already, the files back or the change still waiting, and finishes the rest.
 pub async fn reset(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
@@ -133,21 +135,22 @@ async fn run_reset(
             Finish::Finished(outcome) => unstash = Some(outcome),
         }
     }
-    let mut stack = stack(handle).await?;
-    let mut dropped_unstash = Vec::new();
-    if let Some(entry) = stack
+    let stack = stack(handle).await?;
+    // The entry is dropped only in the transaction that pushes the safety entry, after every refusal, so a refused or stopped reset leaves it and its markers waiting as they were.
+    let conflicted = stack
         .first()
-        .filter(|entry| entry.state == StashState::Conflicted)
+        .filter(|entry| entry.state == StashState::Conflicted);
+    if let Some(entry) = conflicted
+        && paths.is_some()
     {
-        if paths.is_some() {
-            return Err(markers_wait(&entry.conflicts)
-                .with_hint("fix the conflict markers in these files and run `fld record`, or run `fld reset` to put the whole project folder back")
-                .into());
-        }
-        dropped_unstash = paths_of(&entry.conflicts);
-        drop_conflicted(handle, actor, entry, stack.len()).await?;
-        stack.remove(0);
+        return Err(markers_wait(&entry.conflicts)
+            .with_hint("fix the conflict markers in these files and run `fld record`, or run `fld reset` to put the whole project folder back")
+            .into());
     }
+    let dropped_unstash = conflicted
+        .map(|entry| paths_of(&entry.conflicts))
+        .unwrap_or_default();
+    let below = &stack[usize::from(conflicted.is_some())..];
     let record = workspaces::checkout(handle.store.read())
         .await?
         .ok_or(StoreError::Corrupt("checkout"))?;
@@ -180,22 +183,32 @@ async fn run_reset(
     refuse_unstashable(handle, record.tree, tree, &considered, None).await?;
     let files = changed(handle, record.tree, tree).await?;
     let mut stashed = false;
+    let drop = match conflicted {
+        Some(entry) => Some(dropped_entry(handle, actor, entry, stack.len()).await?),
+        None => None,
+    };
+    if tree == record.tree
+        && let Some(drop) = &drop
+    {
+        // The folder holds none of the entry's changes and no markers any more, so only the entry goes.
+        write_entries(handle, Some(drop), None).await?;
+    }
     if tree != record.tree {
         // A stop after the row and before the files left this very entry; it is not pushed twice.
-        let pushed = stack
-            .first()
-            .is_some_and(|entry| entry.base_tree == record.tree && entry.tree == tree);
+        let pushed = drop.is_none()
+            && below
+                .first()
+                .is_some_and(|entry| entry.base_tree == record.tree && entry.tree == tree);
         if !pushed {
-            push_entry(
-                handle,
+            let push = pushed_entry(
                 actor,
                 record.revision,
                 record.tree,
                 tree,
                 &files,
-                stack.len(),
-            )
-            .await?;
+                below.len(),
+            )?;
+            write_entries(handle, drop.as_ref(), Some(&push)).await?;
         }
         stashed = true;
         #[cfg(feature = "failpoints")]
@@ -217,7 +230,7 @@ async fn run_reset(
     ));
     // The folder holds none of the human's changes when the reset took them all, so the change that waits holds nothing to merge.
     let dropped_change = if tree == folder_tree {
-        drop_waiting_change(handle, actor).await?
+        drop_waiting_change(handle, actor, paths.is_none()).await?
     } else {
         None
     };
@@ -250,17 +263,23 @@ async fn run_reset(
     })
 }
 
-/// Pushes the safety entry of a reset, from the record's tree `base` to `tree`, with `stash.pushed` in one transaction.
-async fn push_entry(
-    handle: &ProjectHandle,
+/// The safety entry of a reset, from the record's tree `base` to `tree`, with its `stash.pushed`.
+struct Push {
+    base: ObjectHash,
+    tree: ObjectHash,
+    revision: RevisionId,
+    actor: String,
+    event: NewEvent,
+}
+
+fn pushed_entry(
     actor: &Actor,
     revision: RevisionId,
     base: ObjectHash,
     tree: ObjectHash,
     files: &[String],
     entries: usize,
-) -> Result<(), ProjectError> {
-    let label = actor.event_actor().to_string();
+) -> Result<Push, ProjectError> {
     let event = stash_event(
         types::STASH_PUSHED,
         actor,
@@ -268,34 +287,27 @@ async fn push_entry(
         files,
         json!({"stash": "stash@{0}", "entries": entries + 1, "reset": true}),
     )?;
-    let now = handle.clock.now();
-    let new = NewStash {
-        base_tree: base,
+    Ok(Push {
+        base,
         tree,
         revision,
-        actor: &label,
-        now,
-    };
-    let buffer = handle
-        .store
-        .write(async |tx| -> Result<EventBuffer, ProjectError> {
-            let mut buffer = EventBuffer::new();
-            insert_stash(tx, &new).await?;
-            buffer.append(tx, &event, now).await?;
-            Ok(buffer)
-        })
-        .await?;
-    handle.bus.publish(buffer);
-    Ok(())
+        actor: actor.event_actor().to_string(),
+        event,
+    })
 }
 
-/// Drops the newest entry, whose unstash conflict waits in the folder, with `stash.discarded`: the safety entry of the reset takes the folder as it is, markers and all.
-async fn drop_conflicted(
+/// The newest entry, whose unstash conflict waits in the folder, as the reset drops it, with its `stash.discarded`: the safety entry of the reset takes the folder as it is, markers and all.
+struct ConflictDrop {
+    id: i64,
+    event: NewEvent,
+}
+
+async fn dropped_entry(
     handle: &ProjectHandle,
     actor: &Actor,
     entry: &fold_store::workspaces::StashRow,
     entries: usize,
-) -> Result<(), ProjectError> {
+) -> Result<ConflictDrop, ProjectError> {
     let files = changed(handle, entry.base_tree, entry.tree).await?;
     let conflicted = paths_of(&entry.conflicts);
     let event = stash_event(
@@ -312,15 +324,40 @@ async fn drop_conflicted(
             "reset": true,
         }),
     )?;
-    let (id, now) = (entry.id, handle.clock.now());
+    Ok(ConflictDrop {
+        id: entry.id,
+        event,
+    })
+}
+
+/// Drops the conflicted entry and pushes the safety entry in one transaction, with their events, so a stop leaves both or neither.
+async fn write_entries(
+    handle: &ProjectHandle,
+    drop: Option<&ConflictDrop>,
+    push: Option<&Push>,
+) -> Result<(), ProjectError> {
+    let now = handle.clock.now();
     let buffer = handle
         .store
         .write(async |tx| -> Result<EventBuffer, ProjectError> {
             let mut buffer = EventBuffer::new();
-            if !drop_stash(tx, id, now).await? {
-                return Err(StoreError::Corrupt("folder_stashes.state").into());
+            if let Some(drop) = drop {
+                if !drop_stash(tx, drop.id, now).await? {
+                    return Err(StoreError::Corrupt("folder_stashes.state").into());
+                }
+                buffer.append(tx, &drop.event, now).await?;
             }
-            buffer.append(tx, &event, now).await?;
+            if let Some(push) = push {
+                let new = NewStash {
+                    base_tree: push.base,
+                    tree: push.tree,
+                    revision: push.revision,
+                    actor: &push.actor,
+                    now,
+                };
+                insert_stash(tx, &new).await?;
+                buffer.append(tx, &push.event, now).await?;
+            }
             Ok(buffer)
         })
         .await?;
@@ -328,10 +365,11 @@ async fn drop_conflicted(
     Ok(())
 }
 
-/// Closes the conflicted human change that waits for the main agent, when one does, as `superseded` with `human_change.withdrawn`, and abandons the main workspace that its merge made, with `workspace.abandoned`, in one transaction under the integration mutex and the workspace's operation lock, so neither an integration nor a command of the main agent's worker runs meanwhile. The main agent's notice says fold abandoned the workspace.
+/// Closes the conflicted human change that waits for the main agent, when one does, as `superseded` with `human_change.withdrawn`, under the integration mutex, so no integration resolves it meanwhile. With `abandon`, as for `fld reset`, the same transaction abandons the main workspace that its merge made, with `workspace.abandoned`, under the workspace's operation lock too, so no command of the main agent's worker runs meanwhile, and the main agent's notice says fold abandoned it. Without, as for `fld restore`, the workspace stays as `fld stash` leaves it, and the notice asks the main agent to abandon it.
 async fn drop_waiting_change(
     handle: &ProjectHandle,
     actor: &Actor,
+    abandon: bool,
 ) -> Result<Option<DroppedChange>, ProjectError> {
     let _serial = handle.integration.clone().lock_owned().await;
     let waiting = {
@@ -346,7 +384,9 @@ async fn drop_waiting_change(
     let Some(waiting) = waiting else {
         return Ok(None);
     };
-    let _op = match waiting.workspace {
+    let workspace = waiting.workspace;
+    let abandoned_workspace = workspace.filter(|_| abandon);
+    let _op = match abandoned_workspace {
         Some(workspace) => Some(handle.workspace_locks.lock(workspace).await),
         None => None,
     };
@@ -354,6 +394,7 @@ async fn drop_waiting_change(
     let internal = |error: fold_core::events::EventError| {
         FoldError::new(codes::INTERNAL_ERROR, error.to_string())
     };
+    let command = if abandon { "reset" } else { "restore" };
     let withdrawn = |abandoned: bool| {
         NewEvent::new(types::HUMAN_CHANGE_WITHDRAWN, actor.event_actor())
             .and_then(|event| {
@@ -362,14 +403,14 @@ async fn drop_waiting_change(
                     "commit": waiting.commit,
                     "conflicted": conflicted.iter().take(LISTED_PATHS).collect::<Vec<_>>(),
                     "conflicted_count": conflicted.len(),
-                    "workspace": waiting.workspace.map(|workspace| workspace.to_string()),
+                    "workspace": workspace.map(|workspace| workspace.to_string()),
                     "workspace_abandoned": abandoned,
-                    "reset": true,
+                    command: true,
                 }))
             })
             .map_err(internal)
     };
-    let abandoned = match waiting.workspace {
+    let abandoned = match abandoned_workspace {
         Some(workspace) => Some(
             NewEvent::new(types::WORKSPACE_ABANDONED, actor.event_actor())
                 .and_then(|event| {
@@ -382,38 +423,43 @@ async fn drop_waiting_change(
         None => None,
     };
     let now = handle.clock.now();
-    let workspace = waiting.workspace;
-    let (buffer, closed) = handle
+    let written = handle
         .store
-        .write(async |tx| -> Result<(EventBuffer, bool), ProjectError> {
-            let mut buffer = EventBuffer::new();
-            if !workspaces::supersede_conflicted(tx, now).await? {
-                return Ok((buffer, false));
-            }
-            let closed = match workspace {
-                Some(workspace) => {
-                    workspaces::close(tx, workspace, ClosedState::Abandoned, now).await?
+        .write(
+            async |tx| -> Result<Option<(EventBuffer, bool)>, ProjectError> {
+                let mut buffer = EventBuffer::new();
+                if !workspaces::supersede_conflicted(tx, now).await? {
+                    return Ok(None);
                 }
-                None => false,
-            };
-            buffer.append(tx, &withdrawn(closed)?, now).await?;
-            if closed && let Some(event) = &abandoned {
-                buffer.append(tx, event, now).await?;
-            }
-            Ok((buffer, closed))
-        })
+                let closed = match abandoned_workspace {
+                    Some(workspace) => {
+                        workspaces::close(tx, workspace, ClosedState::Abandoned, now).await?
+                    }
+                    None => false,
+                };
+                buffer.append(tx, &withdrawn(closed)?, now).await?;
+                if closed && let Some(event) = &abandoned {
+                    buffer.append(tx, event, now).await?;
+                }
+                Ok(Some((buffer, closed)))
+            },
+        )
         .await?;
+    let Some((buffer, closed)) = written else {
+        return Ok(None);
+    };
     handle.bus.publish(buffer);
-    if closed && let Some(workspace) = workspace {
+    if closed && let Some(workspace) = abandoned_workspace {
         handle.live.detach(workspace).await;
     }
     tracing::info!(
         conflicted = conflicted.len(),
-        "the reset dropped the human change that waited for the main agent"
+        "the reset or restore dropped the human change that waited for the main agent"
     );
     Ok(Some(DroppedChange {
         commit: waiting.commit,
         conflicted,
-        workspace: workspace.filter(|_| closed),
+        workspace,
+        workspace_abandoned: closed,
     }))
 }
