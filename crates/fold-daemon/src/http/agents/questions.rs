@@ -215,7 +215,7 @@ pub struct NeedsYouEntry {
     pub header: Option<String>,
     /// How many questions a `question` asks as one set, which a human answers together in one reply; 0 for every other kind.
     pub questions: usize,
-    /// The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`; Claude Code's error of a `worker_model_unreachable`.
+    /// The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`; Claude Code's error of a `worker_model_unreachable`; what fold saw of a `worker_stalled` at the read, such as `No activity from @web-worker for 12 min`, in the words of the board's chip.
     #[schema(required = true, example = "Database schema for reports")]
     pub title: Option<String>,
     /// The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again; what to check for a `worker_model_unreachable`.

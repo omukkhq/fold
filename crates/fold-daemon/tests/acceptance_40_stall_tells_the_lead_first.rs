@@ -146,6 +146,10 @@ async fn acceptance_40_a_stall_goes_to_the_lead_first_and_to_a_person_only_when_
     assert_eq!(item["agent"], TASK_WORKER);
     assert_eq!(item["task"], "T-1");
     assert_eq!(item["screen"], "task");
+    assert_eq!(
+        item["title"], "A command of @web-worker has run for 25 min",
+        "the chip's words"
+    );
     assert_eq!(item["activity"]["state"], "long_call");
     assert_eq!(item["activity"]["call"], "command");
     assert_eq!(item["activity"]["supervised"], true);

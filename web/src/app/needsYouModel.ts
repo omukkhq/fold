@@ -5,6 +5,7 @@ import { asksText } from "@/features/workers/permission";
 import { agentsText, type AgentChange } from "./agentChanges";
 import { codeData, codeParts } from "@/format/codeText";
 import { projectPath, withQuery } from "@/routes/paths";
+import { activityText } from "@/live/workerActivity";
 
 /** A line of the list: a person who asks, or an item chip, then the words and the screen it opens, if any. */
 export interface NeedsYouLine {
@@ -182,21 +183,22 @@ export function questionText(
   return item.choices.length > 0 ? "asks you to choose" : "asks a question";
 }
 
-/** What fold saw of a stalled worker, after its name; the line names its task. */
-function stalledText(item: NeedsYouItem): string {
-  switch (item.activity?.state) {
-    case "long_call":
-      return item.activity.call === "command"
-        ? "has a command that ran long and did not start again"
-        : "has a call that ran long and did not start again";
-    case "stopped":
-      return "stopped without a report and did not start again";
-    default:
-      return "shows no activity and did not start again";
-  }
+/** What fold saw of a stalled worker, in the words of its card's chip; the line names its task after it. */
+function stalledText(item: NeedsYouItem, now: number): string {
+  const agent = item.agent ?? "a worker";
+  return codeData(
+    item.activity === null
+      ? `@${agent} stalled`
+      : activityText(item.activity, agent, now),
+  );
 }
 
-function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
+function lineOf(
+  slug: string,
+  item: NeedsYouItem,
+  index: number,
+  now: number,
+): NeedsYouLine {
   const base = {
     key: `${item.kind}:${item.message ?? item.question ?? item.proposal ?? item.request ?? item.task ?? item.commit ?? String(index)}`,
     kind: item.kind,
@@ -378,10 +380,10 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
     case "worker_stalled":
       return {
         ...base,
-        person: item.agent,
+        person: null,
         chip: null,
         title: markedText(item.reason),
-        text: stalledText(item),
+        text: stalledText(item, now),
         href: taskPath(slug, item.task ?? ""),
         restart:
           item.activity?.supervised === true ? (item.agent ?? null) : null,
@@ -409,10 +411,11 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
 export function needsYouGroups(
   slug: string,
   items: readonly NeedsYouItem[],
+  now = 0,
 ): NeedsYouGroup[] {
   const shared = items.filter((item) => item.kind === "shared_changed").length;
   const lines = items
-    .map((item, index) => lineOf(slug, item, index))
+    .map((item, index) => lineOf(slug, item, index, now))
     .map((line) =>
       line.kind === "shared_changed" ? { ...line, dismiss: shared } : line,
     )

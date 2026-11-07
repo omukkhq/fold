@@ -464,7 +464,7 @@ describe("needsYouGroups", () => {
     });
   });
 
-  it("shows a stalled worker with what fold saw, the restart command and Restart worker for a worker fold runs", () => {
+  it("shows a stalled worker with what fold saw in the words of its chip, the restart command and Restart worker for a worker fold runs", () => {
     const activity = {
       state: "long_call" as const,
       call: "command" as const,
@@ -472,63 +472,72 @@ describe("needsYouGroups", () => {
       supervised: true,
       told: ["web-lead"],
     };
-    const groups = needsYouGroups("demo", [
-      needsItem({
-        kind: "worker_stalled",
-        screen: "task",
-        agent: "web-worker",
-        task: "T-12",
-        reason: "restart it in a new session: `fld worker restart web-worker`",
-        activity,
-      }),
-      needsItem({
-        kind: "worker_stalled",
-        screen: "task",
-        agent: "frontend",
-        task: "T-13",
-        reason:
-          "fold does not run its session; check the session where it runs",
-        activity: {
-          ...activity,
-          state: "silent",
-          call: null,
-          supervised: false,
-        },
-      }),
-      needsItem({
-        kind: "worker_stalled",
-        screen: "task",
-        agent: "api-worker",
-        task: "T-14",
-        activity: { ...activity, state: "stopped", call: null },
-      }),
-      needsItem({
-        kind: "worker_stalled",
-        screen: "task",
-        agent: "db-worker",
-        task: "T-15",
-        activity: { ...activity, call: "tool" },
-      }),
-    ]);
+    const groups = needsYouGroups(
+      "demo",
+      [
+        needsItem({
+          kind: "worker_stalled",
+          screen: "task",
+          agent: "web-worker",
+          task: "T-12",
+          reason:
+            "restart it in a new session: `fld worker restart web-worker`",
+          activity,
+        }),
+        needsItem({
+          kind: "worker_stalled",
+          screen: "task",
+          agent: "frontend",
+          task: "T-13",
+          reason:
+            "fold does not run its session; check the session where it runs",
+          activity: {
+            ...activity,
+            state: "silent",
+            call: null,
+            supervised: false,
+          },
+        }),
+        needsItem({
+          kind: "worker_stalled",
+          screen: "task",
+          agent: "api-worker",
+          task: "T-14",
+          activity: { ...activity, state: "stopped", call: null },
+        }),
+        needsItem({
+          kind: "worker_stalled",
+          screen: "task",
+          agent: "db-worker",
+          task: "T-15",
+          activity: { ...activity, call: "tool" },
+        }),
+        needsItem({
+          kind: "worker_stalled",
+          agent: "old-worker",
+          activity: null,
+        }),
+      ],
+      1_760_000_000_000 + 25 * 60_000,
+    );
     expect(groups.map((g) => g.title)).toEqual(["Waiting for you"]);
-    const [command, silent, stopped, tool] = allLines(groups);
+    const [command, silent, stopped, tool, unknown] = allLines(groups);
     expect(command).toMatchObject({
       kind: "worker_stalled",
-      person: "web-worker",
+      person: null,
       task: "T-12",
       title: "restart it in a new session: `fld worker restart web-worker`",
-      text: "has a command that ran long and did not start again",
+      text: "A command of @web-worker has run for 25 min",
       href: "/p/demo/t/T-12",
       restart: "web-worker",
     });
     expect(silent).toMatchObject({
-      text: "shows no activity and did not start again",
+      text: "No activity from @frontend for 25 min",
       restart: null,
     });
-    expect(stopped?.text).toBe(
-      "stopped without a report and did not start again",
-    );
-    expect(tool?.text).toBe("has a call that ran long and did not start again");
+    expect(stopped?.text).toBe("@api-worker stopped");
+    expect(tool?.text).toBe("A tool call of @db-worker has run for 25 min");
+    expect(unknown?.text).toBe("@old-worker stalled");
   });
 
   it("shows a worker that cannot reach the model with Claude Code's error and what to check, after the workers that cannot reach fold", () => {

@@ -94,7 +94,9 @@ fn title(item: &NeedsYouItem) -> String {
             format!("The project folder changed while {agent} worked")
         }
         NeedsYouKind::SharedChanged => format!("A shared file changed while {agent} worked"),
-        NeedsYouKind::WorkerStalled => format!("{agent} stalled{on_task}"),
+        NeedsYouKind::WorkerStalled => {
+            format!("{}{on_task}", own(&item.title, &format!("{agent} stalled")))
+        }
     }
 }
 
@@ -228,10 +230,17 @@ mod tests {
                 supervised: true,
                 told: vec!["web-lead".to_owned()],
             },
+            Timestamp::from_millis(9 + 12 * 60_000).unwrap(),
         );
         assert_eq!(item_key(&stalled), "worker_stalled:T-12");
         let shown = notice_item(&stalled);
-        assert_eq!(shown.title, "@web-worker stalled on T-12");
+        assert_eq!(
+            shown.title,
+            "No activity from @web-worker for 12 min on T-12"
+        );
+        let mut untitled = stalled.clone();
+        untitled.title = None;
+        assert_eq!(notice_item(&untitled).title, "@web-worker stalled on T-12");
         assert_eq!(shown.path, "t/T-12");
         assert_eq!(
             stalled.reason.as_deref(),

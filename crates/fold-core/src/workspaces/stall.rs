@@ -328,6 +328,48 @@ pub fn activity(
     }
 }
 
+/// What fold saw of the worker `worker`, in the words that the board's chip, the task, Activity, Needs you and the notices all use: `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min` or `@web-worker stopped`. The time is the span from the activity's start to `now`, rounded down, in seconds, minutes, hours or days. `None` for [`Activity::Quiet`].
+pub fn activity_text(activity: Activity, worker: &str, now: Timestamp) -> Option<String> {
+    let span = |since: Timestamp| {
+        let seconds = now
+            .duration_since(since)
+            .map_or(0, |elapsed| elapsed.as_secs());
+        match seconds {
+            0..60 => format!("{seconds} s"),
+            60..3600 => format!("{} min", seconds / 60),
+            3600..86_400 => format!("{} h", seconds / 3600),
+            _ => format!("{} d", seconds / 86_400),
+        }
+    };
+    let working = |call: CallKind| match call {
+        CallKind::Command => "Running a command",
+        CallKind::Fold => "Waiting on fold",
+        CallKind::Subagent => "Running a subagent",
+        CallKind::Question => "Waiting for an answer",
+        CallKind::Tool => "Running a tool",
+    };
+    let long = |call: CallKind| match call {
+        CallKind::Command => "A command",
+        CallKind::Fold => "A fold call",
+        CallKind::Subagent => "A subagent",
+        CallKind::Question => "A question",
+        CallKind::Tool => "A tool call",
+    };
+    match activity {
+        Activity::Quiet => None,
+        Activity::Working { call, since } => Some(format!("{} for {}", working(call), span(since))),
+        Activity::Silent { since } => {
+            Some(format!("No activity from @{worker} for {}", span(since)))
+        }
+        Activity::LongCall { call, since } => Some(format!(
+            "{} of @{worker} has run for {}",
+            long(call),
+            span(since)
+        )),
+        Activity::Stopped { .. } => Some(format!("@{worker} stopped")),
+    }
+}
+
 /// Whether a stall needs a person: nobody was told because no agent can act on it (`told_at` is `None`), or the agent told at `told_at` let one more stall window pass without fixing it.
 pub fn needs_person(now: Timestamp, told_at: Option<Timestamp>, stall_minutes: u64) -> bool {
     told_at.is_none_or(|told| crate::tasks::claims::is_stale(told, now, stall_minutes))
@@ -1070,6 +1112,83 @@ mod tests {
         assert!(
             stall_receivers(&frontend, None, &main).is_empty(),
             "the main agent never hears of its own stall"
+        );
+    }
+
+    #[test]
+    fn every_view_says_what_fold_saw_in_the_same_words() {
+        let now = at(25 * MINUTE + 30_000);
+        let text = |activity| activity_text(activity, "web-worker", now);
+        assert_eq!(
+            text(Activity::Working {
+                call: CallKind::Command,
+                since: at(17 * MINUTE + 30_000)
+            })
+            .as_deref(),
+            Some("Running a command for 8 min")
+        );
+        assert_eq!(
+            text(Activity::Working {
+                call: CallKind::Fold,
+                since: at(25 * MINUTE)
+            })
+            .as_deref(),
+            Some("Waiting on fold for 30 s")
+        );
+        assert_eq!(
+            text(Activity::Silent {
+                since: at(13 * MINUTE)
+            })
+            .as_deref(),
+            Some("No activity from @web-worker for 12 min")
+        );
+        assert_eq!(
+            text(Activity::LongCall {
+                call: CallKind::Command,
+                since: at(0)
+            })
+            .as_deref(),
+            Some("A command of @web-worker has run for 25 min")
+        );
+        for (call, words) in [
+            (CallKind::Subagent, "A subagent"),
+            (CallKind::Tool, "A tool call"),
+            (CallKind::Fold, "A fold call"),
+            (CallKind::Question, "A question"),
+        ] {
+            assert_eq!(
+                text(Activity::LongCall { call, since: at(0) }),
+                Some(format!("{words} of @web-worker has run for 25 min"))
+            );
+        }
+        for (call, words) in [
+            (CallKind::Subagent, "Running a subagent"),
+            (CallKind::Tool, "Running a tool"),
+            (CallKind::Question, "Waiting for an answer"),
+        ] {
+            assert_eq!(
+                text(Activity::Working { call, since: at(0) }),
+                Some(format!("{words} for 25 min"))
+            );
+        }
+        assert_eq!(
+            text(Activity::Stopped { since: at(0) }).as_deref(),
+            Some("@web-worker stopped")
+        );
+        assert_eq!(text(Activity::Quiet), None);
+        let later = |millis: i64| activity_text(Activity::Silent { since: at(0) }, "w", at(millis));
+        assert_eq!(
+            later(2 * 60 * MINUTE).as_deref(),
+            Some("No activity from @w for 2 h")
+        );
+        assert_eq!(
+            later(3 * 24 * 60 * MINUTE).as_deref(),
+            Some("No activity from @w for 3 d")
+        );
+        assert_eq!(
+            activity_text(Activity::Silent { since: at(10) }, "w", at(0)).as_deref(),
+            Some("No activity from @w for 0 s"),
+            "a start after now counts as none"
         );
     }
 }

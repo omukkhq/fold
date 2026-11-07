@@ -204,6 +204,24 @@ impl LiveActivity {
         })
     }
 
+    /// The rule's activity this view shows.
+    pub fn activity(&self) -> Activity {
+        let call = match self.call {
+            Some(LiveCall::Command) => CallKind::Command,
+            Some(LiveCall::Fold) => CallKind::Fold,
+            Some(LiveCall::Subagent) => CallKind::Subagent,
+            Some(LiveCall::Question) => CallKind::Question,
+            Some(LiveCall::Tool) | None => CallKind::Tool,
+        };
+        let since = self.since;
+        match self.state {
+            ActivityState::Working => Activity::Working { call, since },
+            ActivityState::Silent => Activity::Silent { since },
+            ActivityState::LongCall => Activity::LongCall { call, since },
+            ActivityState::Stopped => Activity::Stopped { since },
+        }
+    }
+
     /// A stall rather than work.
     pub fn is_stall(&self) -> bool {
         self.state != ActivityState::Working
@@ -864,6 +882,11 @@ impl LiveState {
 
     pub(crate) fn bus(&self) -> &EventBus {
         &self.shared.bus
+    }
+
+    /// The project's time now.
+    pub fn now(&self) -> Timestamp {
+        self.shared.clock.now()
     }
 
     /// When the daemon opened the project.

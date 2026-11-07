@@ -336,7 +336,7 @@ export function Inbox({ slug }: { slug: string }) {
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
   const agentChange = useAgentChangeChoices(slug);
   const items = itemsFor(needs.data ?? [], session.data?.human ?? null);
-  const groups = needsYouGroups(slug, items);
+  const groups = needsYouGroups(slug, items, now);
   const note = listNote(listState(needs), groups.length, {
     loading: "Loading what waits for you",
     failed: "Needs you could not load.",

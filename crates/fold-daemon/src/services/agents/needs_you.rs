@@ -147,7 +147,7 @@ pub struct NeedsYouItem {
     pub header: Option<String>,
     /// How many questions a `Question` asks as one set; 0 for every other kind.
     pub questions: usize,
-    /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft; the task title of a `HumanTask` or a `Blocker`; Claude Code's error of a `WorkerModelUnreachable`.
+    /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft; the task title of a `HumanTask` or a `Blocker`; Claude Code's error of a `WorkerModelUnreachable`; what fold saw of a `WorkerStalled` at the read, in the words of the board's chip.
     pub title: Option<String>,
     /// The reason of a `Blocker`; the command that brings the branch back for `HeadMoved`, records the folder's changes for `FolderHeld`, ends the conflict for `UnstashConflicted`, or lets a `WorkerUnreachable` worker reach fold again; what to check for a `WorkerModelUnreachable`.
     pub reason: Option<String>,
@@ -209,9 +209,15 @@ impl NeedsYouItem {
         }
     }
 
-    /// The `WorkerStalled` item of the worker `agent` on `task`, whose stall `activity` shows, with the command that starts it again in a new session.
-    pub fn worker_stalled(agent: AgentName, task: Option<TaskId>, activity: LiveActivity) -> Self {
+    /// The `WorkerStalled` item of the worker `agent` on `task`, whose stall `activity` shows, titled with what fold saw at `now` and with the command that starts it again in a new session.
+    pub fn worker_stalled(
+        agent: AgentName,
+        task: Option<TaskId>,
+        activity: LiveActivity,
+        now: Timestamp,
+    ) -> Self {
         let mut item = Self::new(NeedsYouKind::WorkerStalled, activity.since);
+        item.title = fold_core::stall::activity_text(activity.activity(), agent.as_str(), now);
         item.reason = Some(if activity.supervised {
             format!("restart it in a new session: `fld worker restart {agent}`")
         } else {
@@ -482,10 +488,12 @@ pub fn with_stalls(mut items: Vec<NeedsYouItem>, live: Option<&LiveState>) -> Ve
         ) else {
             continue;
         };
+        let now = live.map_or(activity.since, LiveState::now);
         items.push(NeedsYouItem::worker_stalled(
             worker.agent(),
             state.view.task,
             activity,
+            now,
         ));
         added = true;
     }
