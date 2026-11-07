@@ -1179,6 +1179,18 @@ async fn a_claim_stays_alive_while_its_holders_check_run_goes_and_lapses_a_full_
         panic!("expected a refusal, got {refused:?}");
     };
     assert_eq!(refused.code(), fold_core::codes::CLAIM_NOT_STALE);
+    // The refusal of a claim agrees with the takeover: the lease has not run out while the run goes.
+    let busy = fx
+        .handle
+        .tasks
+        .claim_task(&by(&main), t(1))
+        .await
+        .unwrap_err();
+    let fold_daemon::services::tasks::TaskError::Fold(busy) = busy else {
+        panic!("expected a refusal, got {busy:?}");
+    };
+    assert_eq!(busy.code(), fold_core::codes::ALREADY_CLAIMED);
+    assert_eq!(busy.details().unwrap()["stale"], false);
     assert!(
         !fx.attention("T-1")
             .await
@@ -1214,6 +1226,16 @@ async fn a_claim_stays_alive_while_its_holders_check_run_goes_and_lapses_a_full_
             .await
             .contains(&"stale_claim".to_owned())
     );
+    let lapsed = fx
+        .handle
+        .tasks
+        .claim_task(&by(&main), t(1))
+        .await
+        .unwrap_err();
+    let fold_daemon::services::tasks::TaskError::Fold(lapsed) = lapsed else {
+        panic!("expected a refusal, got {lapsed:?}");
+    };
+    assert_eq!(lapsed.details().unwrap()["stale"], true);
     let claimed = fx
         .handle
         .tasks

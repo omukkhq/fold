@@ -242,7 +242,7 @@ pub(crate) async fn claim_in_tx(
                 };
                 return Ok(claim_view_of(renewed, now, lease_minutes));
             }
-            return Err(already_claimed(&holder, now, lease_minutes));
+            return Err(already_claimed(tx.conn(), &holder, now, lease_minutes).await?);
         }
         Err(error) => return Err(error.into()),
     }
@@ -333,7 +333,7 @@ pub(crate) async fn assign_in_tx(
             || holder_lapsed(tx.conn(), &holder, now, lease_minutes).await?
             || holder_has_ended(tx.conn(), &holder.worker).await?;
         if !movable {
-            return Err(match already_claimed(&holder, now, lease_minutes) {
+            return Err(match already_claimed(tx.conn(), &holder, now, lease_minutes).await? {
                 TaskError::Fold(error) => error
                     .with_hint("the holder is running with a valid lease: send_message to the holder, or start the worker again once it ends or its lease runs out")
                     .into(),
@@ -415,10 +415,15 @@ async fn holder_lapsed(
     Ok(is_lapsed(holder.renewed_at, runs, now, lease_minutes))
 }
 
-/// `already_claimed` naming the other worker that holds `holder`, with the staleness of its lease at `now`.
-pub(crate) fn already_claimed(holder: &ClaimRow, now: Timestamp, lease_minutes: u64) -> TaskError {
-    let stale = is_stale(holder.renewed_at, now, lease_minutes);
-    FoldError::new(
+/// `already_claimed` naming the other worker that holds `holder`, with whether its lease ran out at `now` as `takeover_claim` decides it, so `stale` is never true while the holder's own check run keeps the claim.
+pub(crate) async fn already_claimed(
+    conn: &mut SqliteConnection,
+    holder: &ClaimRow,
+    now: Timestamp,
+    lease_minutes: u64,
+) -> Result<TaskError, StoreError> {
+    let stale = holder_lapsed(conn, holder, now, lease_minutes).await?;
+    Ok(FoldError::new(
         codes::ALREADY_CLAIMED,
         format!("{} is claimed by {}", holder.task, holder.worker),
     )
@@ -429,7 +434,7 @@ pub(crate) fn already_claimed(holder: &ClaimRow, now: Timestamp, lease_minutes: 
     .with_hint(
         "call takeover_claim when the holder's lease is stale, or call get_ready_tasks for other work",
     )
-    .into()
+    .into())
 }
 
 /// The inputs of a takeover's transaction. `workspace` is the live workspace whose operation lock the command holds. With `stale_only`, as for `takeover_claim`, a claim whose lease has not run out is refused; a start decides by itself which claims it takes over.

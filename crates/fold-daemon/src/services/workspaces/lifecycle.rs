@@ -365,7 +365,10 @@ impl WorkspaceService {
         if let Some(holder) = &holder
             && holder.worker != claimant.worker
         {
-            return Err(already_claimed(holder, now, lease_minutes).into());
+            let mut conn = read.acquire().await.map_err(StoreError::from)?;
+            return Err(already_claimed(&mut conn, holder, now, lease_minutes)
+                .await?
+                .into());
         }
         if let Some(live) = workspaces::live_task_workspace(read, task).await? {
             let held = holder.is_some_and(|holder| live.worker_id == Some(holder.worker_id));
