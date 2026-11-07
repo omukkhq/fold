@@ -108,7 +108,7 @@ pub struct AgentChangesRestored {
     pub entries: usize,
 }
 
-/// Puts the changes that supervised workers made in the project folder into a new stash entry, `stash@{0}`, and brings those paths back to the checkout record's entries, as `fld agent-changes restore` asks; the human's other changes stay, and `fld unstash` brings the worker's change back. For a human, over the socket or over HTTP with the session cookie.
+/// Puts the changes that supervised workers made in the project folder into a new stash entry, `stash@{0}`, and brings those paths back to the checkout record's entries, as Put aside on the web app's Needs you item asks; the human's other changes stay, and `fld unstash` brings the worker's change back. For a human, over the socket or over HTTP with the session cookie.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/agent-changes/restore",
@@ -143,7 +143,7 @@ pub struct AgentChangesIgnored {
     pub files: Vec<String>,
 }
 
-/// Lets the changes that supervised workers made in the project folder count as the human's own unrecorded changes, as `fld agent-changes ignore` asks; `fld record` then records them as any other. For a human, over the socket or over HTTP with the session cookie.
+/// Lets the changes that supervised workers made in the project folder count as the human's own unrecorded changes, as Keep as mine on the web app's Needs you item asks; `fld record` then records them as any other. For a human, over the socket or over HTTP with the session cookie.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/agent-changes/ignore",

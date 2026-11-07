@@ -371,7 +371,7 @@ pub async fn open_agent_paths(h: &Harness) -> Vec<String> {
         .collect()
 }
 
-/// `fld agent-changes restore` goes through the reset of named paths: the safety entry holds exactly the files the worker changed, they go back to main's version, the human's own change stays, and the marks end only once the files are back, so a refusal, here an unstash conflict that waits in the folder, keeps them open and stashes nothing.
+/// The restore of a worker's changes goes through the reset of named paths: the safety entry holds exactly the files the worker changed, they go back to main's version, the human's own change stays, and the marks end only once the files are back, so a refusal, here an unstash conflict that waits in the folder, keeps them open and stashes nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_restore_of_a_workers_changes_puts_back_only_its_paths_through_the_reset() {
     let mut h = Harness::start_plain().await;

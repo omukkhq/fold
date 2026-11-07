@@ -155,7 +155,7 @@ pub enum SettleChoice {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct SettleAgentChangesInput {
-    /// list or ignore. Ignore only when the user chose it; recording the files is the user's own `fld record`, and putting them aside is the user's own `fld agent-changes restore`.
+    /// list or ignore. Ignore only when the user chose it; recording the files is the user's own `fld record`, and putting them aside is the user's own `fld restore <paths>`.
     pub choice: SettleChoice,
 }
 
@@ -240,7 +240,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             SETTLE_AGENT_CHANGES,
-            "Main agent only. The files a supervised worker changed in the project folder during one of its tool calls, which fold does not offer as the user's change: list them with their agents, or, when the user chose it, ignore them (they count as the user's own unrecorded change). The user records them with fld record, or puts them into a new stash entry and brings main's version back with fld agent-changes restore.",
+            "Main agent only. The files a supervised worker changed in the project folder during one of its tool calls, which fold does not offer as the user's change: list them with their agents, or, when the user chose it, ignore them (they count as the user's own unrecorded change). The user records them with fld record, or puts them into a new stash entry and brings main's version back with fld restore and the paths.",
             schema_for_type::<SettleAgentChangesInput>(),
         ),
         Tool::new(
