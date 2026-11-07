@@ -1449,6 +1449,25 @@ async fn a_request_that_nobody_drafts_wakes_a_lead_and_a_claimed_or_own_one_neve
     let other = fx.connect("backend").await;
     let store = fx.store();
     crate::common::roles::give_role(store, "frontend", fold_core::Role::AreaLead, None).await;
+    fx.tasks
+        .create_request(&by(lead.main()), "its own", Vec::new())
+        .await
+        .unwrap();
+    let alone = call(
+        &lead,
+        "wait_for_events",
+        json!({"types": ["task.status_changed"], "timeout_s": 1}),
+    )
+    .await;
+    assert_eq!(
+        alone,
+        json!({"timed_out": true}),
+        "a page of only the lead's own request does not wake it"
+    );
+    assert_eq!(
+        fx.cursor(&lead).await,
+        events::head_seq(store.read()).await.unwrap()
+    );
     crate::common::roles::give_role(store, "backend", fold_core::Role::AreaLead, Some("api")).await;
     fx.tasks
         .create_request(&ana(), "one", Vec::new())
@@ -1457,7 +1476,7 @@ async fn a_request_that_nobody_drafts_wakes_a_lead_and_a_claimed_or_own_one_neve
     fx.tasks
         .claim_request(
             &by(other.main()),
-            rq(1),
+            rq(2),
             fold_core::requests::RequestKind::Bug,
             "First",
         )
@@ -1492,10 +1511,10 @@ async fn a_request_that_nobody_drafts_wakes_a_lead_and_a_claimed_or_own_one_neve
     );
     subscribed(&fx.bus, 1).await;
     fx.tasks
-        .release_request(&by(other.main()), rq(1))
+        .release_request(&by(other.main()), rq(2))
         .await
         .unwrap();
     let woken = body(&tokio::time::timeout(WAIT, woken).await.unwrap().unwrap());
     assert_eq!(woken["events"][0]["type"], "request.released", "{woken}");
-    assert_eq!(woken["requests"], json!(["RQ-1"]));
+    assert_eq!(woken["requests"], json!(["RQ-2"]));
 }

@@ -210,18 +210,26 @@ impl EventService {
             DRAFTER_WANTED.contains(&event.event_type)
                 && event.actor.agent() != Some(agent.as_str())
         };
-        if !page.events.iter().any(named) {
+        if !page
+            .events
+            .iter()
+            .any(|event| DRAFTER_WANTED.contains(&event.event_type))
+        {
             return Ok((page, Vec::new()));
         }
         let own = Requester::Agent(agent.clone());
-        let waiting: BTreeSet<RequestId> = requests::unfinished(self.store().read())
-            .await?
-            .into_iter()
-            .filter(|request| {
-                request.state.waits_for_drafter(request.has_drafter) && request.requester != own
-            })
-            .map(|request| request.id)
-            .collect();
+        let waiting: BTreeSet<RequestId> = if page.events.iter().any(named) {
+            requests::unfinished(self.store().read())
+                .await?
+                .into_iter()
+                .filter(|request| {
+                    request.state.waits_for_drafter(request.has_drafter) && request.requester != own
+                })
+                .map(|request| request.id)
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
         let mut requests = Vec::new();
         let events = page
             .events
