@@ -5237,7 +5237,7 @@ export interface components {
         /** @description The ignored files and folders that every workspace links to, read-only, and those no worker sees. Names and counts only. */
         SharedView: {
             /**
-             * @description The shared paths, relative to the project folder, in path order.
+             * @description The shared paths, relative to the project folder, in path order; a folder ends with `/`, read without following a link.
              * @example [
              *       "design/",
              *       "docs/spec.pdf"

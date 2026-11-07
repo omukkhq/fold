@@ -25,7 +25,7 @@ pub const LISTED_UNSEEN: usize = 10;
 /// The shared reference paths and the ignored paths that no worker sees.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharedState {
-    /// The shared paths, in path order.
+    /// The shared paths, in path order; a folder ends with `/`, as in `unseen`.
     pub shared: Vec<String>,
     /// The first [`LISTED_UNSEEN`] ignored files and folders of the project folder that no workspace holds or links to, in path order; a folder ends with `/`.
     pub unseen: Vec<String>,
@@ -177,7 +177,10 @@ impl WorkspaceService {
             let (unseen, unseen_count) =
                 unshared_ignored(paths.root(), &rules, &shared, LISTED_UNSEEN).map_err(io_error)?;
             Ok(SharedState {
-                shared: shared.iter().map(ToString::to_string).collect(),
+                shared: shared
+                    .iter()
+                    .map(|path| shared_name(paths.root(), path))
+                    .collect(),
                 unseen,
                 unseen_count,
             })
@@ -397,5 +400,18 @@ fn file_state(root: &Path, path: String, parsed: &RepoPath) -> SharedFileState {
             .modified()
             .ok()
             .and_then(|time| Timestamp::from_system_time(time).ok()),
+    }
+}
+
+/// A shared path by name, with a trailing `/` for a folder, read without following a link, so a link to a folder stays a plain name.
+fn shared_name(root: &Path, path: &RepoPath) -> String {
+    let folder = fold_vcs::paths::resolve(root, path)
+        .ok()
+        .and_then(|located| std::fs::symlink_metadata(located).ok())
+        .is_some_and(|meta| meta.is_dir());
+    if folder {
+        format!("{path}/")
+    } else {
+        path.to_string()
     }
 }

@@ -426,3 +426,23 @@ async fn the_changed_shared_files_route_gives_each_path_its_size_and_time_and_ne
     assert_eq!(files[2]["size"], "/etc/hostname".len());
     assert_eq!(files[3]["size"], Value::Null);
 }
+
+#[tokio::test]
+async fn the_shared_route_ends_a_shared_folder_with_a_slash_and_never_follows_a_link() {
+    let project = TestProject::new().await;
+    let root = project.paths().root().to_path_buf();
+    std::fs::create_dir_all(root.join("design")).unwrap();
+    std::fs::write(root.join("spec.pdf"), "pdf").unwrap();
+    std::os::unix::fs::symlink("design", root.join("styles")).unwrap();
+    let listed = ["design", "spec.pdf", "styles", "gone"]
+        .map(|path| fold_vcs::paths::RepoPath::parse(path.as_bytes()).unwrap());
+    fold_vcs::shared::write_shared(&project.paths().fold_dir(), &listed).unwrap();
+    let host = host(&project).await;
+
+    let (status, state) = host.get("/shared").await;
+    assert_eq!(status, StatusCode::OK, "{state}");
+    assert_eq!(
+        state["shared"],
+        json!(["design/", "gone", "spec.pdf", "styles"])
+    );
+}

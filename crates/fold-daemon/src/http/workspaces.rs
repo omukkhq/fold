@@ -874,7 +874,7 @@ mod tests {
 /// The ignored files and folders that every workspace links to, read-only, and those no worker sees. Names and counts only.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SharedView {
-    /// The shared paths, relative to the project folder, in path order.
+    /// The shared paths, relative to the project folder, in path order; a folder ends with `/`, read without following a link.
     #[schema(example = json!(["design/", "docs/spec.pdf"]))]
     pub shared: Vec<String>,
     /// The first ignored files and folders of the project folder that no workspace holds or links to, in path order; a folder ends with `/`. fold's own data, Git's folder, fold's skills and the local Claude Code settings are left out.
