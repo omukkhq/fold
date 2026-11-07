@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
+use fold_core::layout::MCP_SERVERS_KEY;
+use serde_json::{Map, Value};
 
 use crate::services::agents::claude::env_value;
 
@@ -33,30 +34,54 @@ impl UserClaude {
         })
     }
 
-    /// The entry of `root` in `~/.claude.json`, under the project folder's path as given or as its real path.
-    fn project_entry(&self, root: &Path) -> Value {
+    /// What the user's own files say of the project folder `root`, read once: its entry in `~/.claude.json`, under the folder's path as given or as its real path, and the user settings.
+    pub(super) fn project(&self, root: &Path) -> UserProject {
         let config = read_json(&self.config);
         let real = root.canonicalize().unwrap_or_else(|_| root.to_owned());
-        [root, real.as_path()]
+        let entry = [root, real.as_path()]
             .into_iter()
             .filter_map(Path::to_str)
             .find_map(|key| config["projects"].get(key).cloned())
-            .unwrap_or(Value::Null)
+            .unwrap_or(Value::Null);
+        UserProject {
+            entry,
+            settings: read_json(&self.settings),
+            local: read_json(&root.join(fold_core::layout::LOCAL_SETTINGS_FILE)),
+        }
+    }
+}
+
+/// The user's own Claude Code state of one project folder.
+pub(super) struct UserProject {
+    /// The folder's entry in `~/.claude.json`.
+    entry: Value,
+    /// `~/.claude/settings.json`.
+    settings: Value,
+    /// The folder's `.claude/settings.local.json`.
+    local: Value,
+}
+
+impl UserProject {
+    /// Whether the user accepted Claude Code's trust dialog for the project folder.
+    pub(super) fn trusts(&self) -> bool {
+        self.entry["hasTrustDialogAccepted"].as_bool() == Some(true)
     }
 
-    /// Whether the user accepted Claude Code's trust dialog for the project folder `root`.
-    pub(super) fn trusts(&self, root: &Path) -> bool {
-        self.project_entry(root)["hasTrustDialogAccepted"].as_bool() == Some(true)
+    /// The user's approval of the project's `.mcp.json` servers, from the user's own files only: the project's entry in `~/.claude.json`, the user settings and the project folder's `.claude/settings.local.json`. The repository's shared `.claude/settings.json` never approves its own servers.
+    pub(super) fn approval(&self) -> Approval {
+        Approval::of(&[
+            self.entry.clone(),
+            self.settings.clone(),
+            self.local.clone(),
+        ])
     }
 
-    /// The user's approval of the project's `.mcp.json` servers for `root`, from the user's own files only: the project's entry in `~/.claude.json`, the user settings and the project folder's `.claude/settings.local.json`. The repository's shared `.claude/settings.json` never approves its own servers.
-    pub(super) fn approval(&self, root: &Path) -> Approval {
-        let sources = [
-            self.project_entry(root),
-            read_json(&self.settings),
-            read_json(&root.join(fold_core::layout::LOCAL_SETTINGS_FILE)),
-        ];
-        Approval::of(&sources)
+    /// The servers the user added for the project folder alone, `claude mcp add`'s default scope, which `~/.claude.json` keeps in the folder's entry: Claude Code connects them only in that folder, so a worker in its start folder gets them through its MCP configuration.
+    pub(super) fn local_servers(&self) -> Map<String, Value> {
+        self.entry[MCP_SERVERS_KEY]
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -181,11 +206,27 @@ fn replace_project_dir(command: &str, root: &str) -> String {
     }
 }
 
+/// The largest of the user's Claude Code files that fold reads; `~/.claude.json` grows with each project the user opens.
+const MAX_READ: u64 = 64 << 20;
+
+/// The JSON of the file at `path`, or `null` when it is missing, larger than [`MAX_READ`] or no JSON. Nothing of the file is logged: it can hold credentials.
 fn read_json(path: &Path) -> Value {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or(Value::Null)
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(path) else {
+        return Value::Null;
+    };
+    let mut text = Vec::new();
+    if file.take(MAX_READ + 1).read_to_end(&mut text).is_err() {
+        return Value::Null;
+    }
+    if text.len() as u64 > MAX_READ {
+        tracing::warn!(
+            limit = MAX_READ,
+            "a Claude Code file of the user is larger than fold reads, so workers get none of its settings"
+        );
+        return Value::Null;
+    }
+    serde_json::from_slice(&text).unwrap_or(Value::Null)
 }
 
 #[cfg(test)]
@@ -239,12 +280,26 @@ mod tests {
             home.path().to_string_lossy().into_owned(),
         )];
         let user = UserClaude::of(&env).unwrap();
-        let approval = user.approval(&root);
+        let project = user.project(&root);
+        let approval = project.approval();
         assert!(approval.allows("pencil") && approval.allows("docs"));
         assert!(!approval.allows("other"));
-        assert!(user.trusts(&root));
-        assert!(!user.trusts(&home.path().join("elsewhere")));
+        assert!(project.trusts());
+        assert!(project.local_servers().is_empty());
+        assert!(!user.project(&home.path().join("elsewhere")).trusts());
         assert!(UserClaude::of(&[("HOME".to_owned(), "relative".to_owned())]).is_none());
+    }
+
+    #[test]
+    fn a_file_larger_than_fold_reads_counts_as_none() {
+        let home = tempfile::TempDir::new().unwrap();
+        let path = home.path().join(".claude.json");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_READ + 1).unwrap();
+        assert_eq!(read_json(&path), Value::Null);
+        std::fs::write(&path, r#"{"projects":{}}"#).unwrap();
+        assert_eq!(read_json(&path), json!({"projects": {}}));
+        assert_eq!(read_json(&home.path().join("absent")), Value::Null);
     }
 
     #[test]

@@ -363,6 +363,60 @@ pub fn create_dir_below(base: &Path, dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// [`create_dir_below`] for a folder of fold's own that a worker's shell can reach, such as the folder of one worker: each folder between `base` and `dir`, `dir` included, is read without following a symbolic link, and a symbolic link or other entry that is no folder is removed and replaced by a new empty folder, so nothing fold writes there later goes through a link a worker planted. Blocking.
+pub fn real_dir_below(base: &Path, dir: &Path) -> io::Result<()> {
+    let relative = dir.strip_prefix(base).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the directory is outside its base",
+        )
+    })?;
+    if !fs::metadata(base)?.is_dir() {
+        return Err(io::Error::from(io::ErrorKind::NotADirectory));
+    }
+    let mut at = base.to_path_buf();
+    for component in relative.components() {
+        at.push(component);
+        match fs::symlink_metadata(&at) {
+            Ok(meta) if meta.is_dir() => continue,
+            Ok(_) => fs::remove_file(&at)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        fs::create_dir(&at)?;
+    }
+    Ok(())
+}
+
+/// Makes `dir`, whose parents [`real_dir_below`] made real folders, a new empty folder: what was there is removed first without following a symbolic link, neither a link at `dir` itself nor one below it. Blocking.
+pub fn remake_dir(dir: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(dir) {
+        // `remove_dir_all` removes a link it finds inside, never what the link leads to.
+        Ok(meta) if meta.is_dir() => fs::remove_dir_all(dir)?,
+        Ok(_) => fs::remove_file(dir)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fs::create_dir(dir)
+}
+
+/// Writes `bytes` to `path` as a new file with the permission bits `mode`, less the umask: whatever entry is at `path` is removed first without following it, and the file is created only where nothing is, so a symbolic link planted at the path is replaced, never written through. A folder at the path is an error. Blocking.
+pub fn write_new_file(path: &Path, bytes: &[u8], mode: u32) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => return Err(io::Error::from(io::ErrorKind::IsADirectory)),
+        Ok(_) => fs::remove_file(path)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .open(path)?;
+    file.write_all(bytes)
+}
+
 /// `Unsupported` and `PermissionDenied` mean the platform has no directory sync; every other kind is a real failure.
 pub fn tolerate_sync_error(error: io::Error) -> io::Result<()> {
     match error.kind() {
@@ -426,6 +480,50 @@ mod tests {
         assert_eq!(outside.kind(), io::ErrorKind::InvalidInput);
         let not_dir = create_dir_below(&base.join("file"), &base.join("file/x")).unwrap_err();
         assert_eq!(not_dir.kind(), io::ErrorKind::NotADirectory);
+    }
+
+    #[test]
+    fn fold_s_own_folders_and_files_replace_a_planted_link_and_never_follow_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join(".fold");
+        let project = dir.path().join("src");
+        fs::create_dir_all(base.join("workers")).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("lib.rs"), b"kept").unwrap();
+        // A worker swapped its own folder for a link into the project folder.
+        let worker = base.join("workers/web-worker");
+        std::os::unix::fs::symlink(&project, &worker).unwrap();
+        real_dir_below(&base, &worker.join("start")).unwrap();
+        assert!(!fs::symlink_metadata(&worker).unwrap().is_symlink());
+        assert!(worker.join("start").is_dir());
+        assert_eq!(fs::read(project.join("lib.rs")).unwrap(), b"kept");
+
+        // A link planted where fold writes a file is replaced, not written through.
+        std::os::unix::fs::symlink(project.join("lib.rs"), worker.join("mcp.json")).unwrap();
+        write_new_file(&worker.join("mcp.json"), b"{}", 0o600).unwrap();
+        assert_eq!(fs::read(project.join("lib.rs")).unwrap(), b"kept");
+        let meta = fs::symlink_metadata(worker.join("mcp.json")).unwrap();
+        assert!(meta.is_file());
+        assert_eq!(meta.permissions().mode() & 0o077, 0);
+        assert_eq!(
+            write_new_file(&worker.join("start"), b"x", 0o600)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::IsADirectory
+        );
+
+        // A start folder that is a link, or holds one, becomes a new empty folder.
+        let start = worker.join("start");
+        std::os::unix::fs::symlink(&project, start.join("inside")).unwrap();
+        remake_dir(&start).unwrap();
+        assert_eq!(fs::read_dir(&start).unwrap().count(), 0);
+        fs::remove_dir(&start).unwrap();
+        std::os::unix::fs::symlink(&project, &start).unwrap();
+        remake_dir(&start).unwrap();
+        assert!(!fs::symlink_metadata(&start).unwrap().is_symlink());
+        assert_eq!(fs::read(project.join("lib.rs")).unwrap(), b"kept");
+        let outside = real_dir_below(&base, dir.path()).unwrap_err();
+        assert_eq!(outside.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
