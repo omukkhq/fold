@@ -794,9 +794,7 @@ mod tests {
         assert!(prompt.contains("names the folders the area owns"));
         assert!(prompt.contains("`pause_project` or `resume_project` only when the user asks"));
         assert!(prompt.contains("`start_worker` fails with `project_paused`"));
-        assert!(prompt.contains(
-            "Call `restart_worker` (new session) or `set_worker_limits` only when the user asks"
-        ));
+        assert!(prompt.contains("Restart stalled workers with `restart_worker`; otherwise call it or `set_worker_limits` only when the user asks"));
         assert!(prompt.contains("only when the user tells you in this conversation"));
         assert!(
             prompt.contains(

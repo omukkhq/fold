@@ -175,7 +175,7 @@ pub fn can_publish_task_plan(
     }
 }
 
-/// A worker that starts again in a new session forgets what its old session knew, so a named human or the main agent, on the user's word, asks for it for a worker of any role, and a lead for a worker it started (`started_it`), which is the lead fold tells of that worker's stall: an area lead for its task workers, the review lead for its reviewers.
+/// A worker that starts again in a new session forgets what its old session knew, so only a named human, the main agent and the lead that started the worker (`started_it`) ask for it. The main agent restarts a worker of any role, a stalled one on fold's notice and any other on the user's word; an area lead restarts the task workers it started, which are the workers fold tells it of when they stall, and the review lead the reviewers it started.
 pub fn can_restart_worker(starter: &Starter, started_it: bool) -> Result<(), PolicyDenied> {
     match starter {
         Starter::Human | Starter::MainAgent => Ok(()),

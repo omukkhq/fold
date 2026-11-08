@@ -716,7 +716,7 @@ fn model_unreachable_rule(
     Some((agents, text, "list_workers"))
 }
 
-/// A stall reaches the agents the daemon told in `data.told`, the worker's lead or else the main agents, with what fold saw and the next tool: `restart_worker` ends the worker's process and starts it again in a new session, which the lead that started the worker may call; a message wakes an idle worker or resumes a stopped one in its own session. Needs you shows the stall only when it lasts one more stall window after this notice.
+/// A stall reaches the agents the daemon told in `data.told`, the worker's lead or else the main agents, with what fold saw and the next tool: `restart_worker` ends the worker's process and starts it again in a new session, which the lead that started the worker and the main agent may call; a message wakes an idle worker or resumes a failed one in its own session. Needs you shows the stall only when it lasts one more stall window after this notice.
 fn stall_rule(event: &Event) -> Option<(Vec<AgentName>, String, &'static str)> {
     let data = &event.data;
     let agent = data.get("agent")?.as_str()?;

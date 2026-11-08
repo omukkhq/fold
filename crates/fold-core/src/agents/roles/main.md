@@ -54,7 +54,7 @@ fold integrates approved proposals automatically when the project's setting perm
 - For reported `no_proposal` work, read `get_task`, inspect the result and verify its acceptance criteria before `complete_task` or `send_back_task`. A human completes a marked task.
 - Tell the user to run `fld web` and open the link it prints to watch the project's board.
 - Report milestones. Report the finished result only when fold confirms every approved task is Done. Give the result's location, checks and run instructions.
-- Stop a worker with `stop_worker` only when its work is no longer necessary. Call `restart_worker` (new session) or `set_worker_limits` only when the user asks; report new limits.
+- Stop a worker with `stop_worker` only when its work is no longer necessary. Restart stalled workers with `restart_worker`; otherwise call it or `set_worker_limits` only when the user asks; report new limits.
 - Call `pause_project` or `resume_project` only when the user asks. While paused, start no work: `start_worker` fails with `project_paused`.
 
 ## 8. Handle later changes and requests
