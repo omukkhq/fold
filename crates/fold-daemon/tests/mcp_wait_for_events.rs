@@ -1518,3 +1518,58 @@ async fn a_request_that_nobody_drafts_wakes_a_lead_and_a_claimed_or_own_one_neve
     assert_eq!(woken["events"][0]["type"], "request.released", "{woken}");
     assert_eq!(woken["requests"], json!(["RQ-2"]));
 }
+
+#[tokio::test]
+async fn a_stall_that_fold_tells_an_agent_ends_its_wait_whatever_it_waits_for_and_no_other_wait() {
+    let fx = Fixture::new().await;
+    let lead = fx.connect("frontend").await;
+    let other = fx.connect("backend").await;
+    let woken = wait_in_background(
+        &lead,
+        json!({"types": ["task.status_changed"], "timeout_s": 600}),
+    );
+    let unwoken = wait_in_background(
+        &other,
+        json!({"types": ["task.status_changed"], "timeout_s": 2}),
+    );
+    subscribed(&fx.bus, 2).await;
+    let stalled = |told: Value| {
+        new_event(types::WORKER_STALLED, "fold")
+            .data(json!({"agent": "web-worker", "reason": "silent", "call": null, "minutes": 5, "told": told}))
+            .unwrap()
+    };
+    fx.commit(vec![stalled(json!(["frontend"]))]).await;
+
+    let woken = body(&tokio::time::timeout(WAIT, woken).await.unwrap().unwrap());
+    assert_eq!(woken["events"].as_array().unwrap().len(), 1, "{woken}");
+    assert_eq!(woken["events"][0]["type"], "worker.stalled");
+    assert_eq!(
+        woken["hint"],
+        json!(fold_daemon::mcp::events::STALL_HINT),
+        "{woken}"
+    );
+    assert!(woken.get("requests").is_none(), "no new field: {woken}");
+    let unwoken = body(&tokio::time::timeout(WAIT, unwoken).await.unwrap().unwrap());
+    assert_eq!(
+        unwoken,
+        json!({"timed_out": true}),
+        "fold did not tell this agent"
+    );
+
+    fx.commit(vec![stalled(json!(["backend"]))]).await;
+    let passed = call(
+        &lead,
+        "wait_for_events",
+        json!({"types": ["task.status_changed"], "timeout_s": 1}),
+    )
+    .await;
+    assert_eq!(
+        passed,
+        json!({"timed_out": true}),
+        "a stall told to another agent does not end it"
+    );
+    assert_eq!(
+        fx.cursor(&lead).await,
+        events::head_seq(fx.store().read()).await.unwrap()
+    );
+}
