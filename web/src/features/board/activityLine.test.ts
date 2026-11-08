@@ -91,7 +91,12 @@ describe("activityLine", () => {
     const flagged = { ...silent, stalled: true };
     const line = activityLine(card(null), flagged, NOW);
     expect(line?.stalled).toBe(true);
-    expect(liveFilesText(line)).toBeNull();
+    expect(line?.since).toBeNull();
+    // A stall shows the same rows whether fold told the lead or it waits for a person.
+    expect(liveFilesText(line)).toBe("2 files");
+    expect(liveFilesText(activityLine(card(null), silent, NOW))).toBe(
+      "2 files",
+    );
     expect(
       activityLine(
         card(null, [{ kind: "stalled", closable: false }]),
@@ -99,6 +104,32 @@ describe("activityLine", () => {
         NOW,
       )?.stalled,
     ).toBe(false);
+  });
+
+  it("says when a worker stopped, failed or began to wait for a slot, since its text names no time", () => {
+    const ended = (state: "stopped" | "failed" | "waits_for_slot") => ({
+      ...live(NOW - 30 * MINUTE, 3),
+      worker: "web-worker",
+      activity: {
+        state,
+        slot: state === "waits_for_slot" ? ("task_worker" as const) : null,
+        call: null,
+        since: NOW - 3 * MINUTE,
+        supervised: true,
+        told: [],
+      },
+    });
+    expect(activityLine(card(null), ended("stopped"), NOW)).toMatchObject({
+      text: "@web-worker stopped",
+      since: "3 min ago",
+    });
+    expect(activityLine(card(null), ended("failed"), NOW)).toMatchObject({
+      text: "@web-worker failed",
+      since: "3 min ago",
+    });
+    expect(activityLine(card(null), ended("waits_for_slot"), NOW)?.since).toBe(
+      "3 min ago",
+    );
   });
 
   it("is null with no activity and no live workspace", () => {
@@ -374,10 +405,10 @@ describe("liveFilesText", () => {
     expect(liveFilesText({ ...base, files: 1 })).toBe("1 file");
   });
 
-  it("is null without a line, a count, any file, or while stalled", () => {
+  it("is null without a line, a count or any file, and counts a stall's files too", () => {
     expect(liveFilesText(null)).toBeNull();
     expect(liveFilesText({ ...base, files: null })).toBeNull();
     expect(liveFilesText({ ...base, files: 0 })).toBeNull();
-    expect(liveFilesText({ ...base, files: 3, stalled: true })).toBeNull();
+    expect(liveFilesText({ ...base, files: 3, stalled: true })).toBe("3 files");
   });
 });
