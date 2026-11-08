@@ -28,7 +28,7 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 | `task_outside_area` | Start task workers or publish plans only for your area's tasks. A plan's existing parents must also belong to your area. Call `get_task` to see the labels. |
 | `worker_claim_denied` | A worker that fold started gets its claims from its lead's `start_worker` and never claims a task or a review itself. Work on the tasks or proposals of your first turn, and send other work to your lead with `send_message`. |
 | `area_has_lead` | The area's lead runs already. Send it a message instead. |
-| `worker_limit_reached` | Call `list_workers`. Wait until a worker stops, or stop one with `stop_worker`. |
+| `worker_limit_reached` | Call `list_workers`. Wait until a worker stops, or stop one with `stop_worker`. With `details.reason` `owed_resume_waits`, fold resumes the worker that `details.agent` names first: wait until it started and one more worker stopped. |
 | `task_kind_mismatch` | The task's kind does not fit the call. Call `get_task`: a `no_proposal` task ends with `report_task`, any other task with `create_proposal`. |
 | `task_kind_denied` | Only the main agent, a human or the lead of the task's area creates a `no_proposal` task. Create it with the default kind, or ask the main agent. |
 | `task_check_denied` | Only the lead of the task's area, the main agent or a human completes or sends back a `no_proposal` task. Ask that lead. |
