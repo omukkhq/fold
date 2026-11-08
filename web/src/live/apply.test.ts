@@ -292,6 +292,39 @@ describe("patch rules", () => {
     expect(hit(keys.needsYou(slug))).toBe(false);
   });
 
+  it("reads Needs you again when a waiting stall changes what fold saw, and leaves it alone for a stall nobody waits on", () => {
+    const seen = (state: "silent" | "long_call") => ({
+      state,
+      call: state === "long_call" ? ("command" as const) : null,
+      slot: null,
+      since: 1,
+      supervised: true,
+      told: [],
+    });
+    const frame = (state: "silent" | "long_call", stalled: boolean) =>
+      guarded({
+        kind: "workspace_changed",
+        ...live("ws-1", "x"),
+        stalled,
+        activity: seen(state),
+      });
+    client.setQueryData(keys.workspaceLive(slug, "ws-1"), {
+      ...live("ws-1", "x"),
+      stalled: true,
+      activity: seen("silent"),
+    });
+    applyEvent(client, slug, frame("long_call", true));
+    expect(hit(keys.needsYou(slug))).toBe(true);
+    expect(hit(keys.board(slug))).toBe(false);
+    invalidated = [];
+    client.setQueryData(keys.workspaceLive(slug, "ws-1"), {
+      ...live("ws-1", "x"),
+      activity: seen("silent"),
+    });
+    applyEvent(client, slug, frame("long_call", false));
+    expect(hit(keys.needsYou(slug))).toBe(false);
+  });
+
   it("reads the directory listings of a workspace again when it changes", () => {
     const tree = [slug, "workspace", "ws-1", "tree", "src"];
     const other = [slug, "workspace", "ws-2", "tree", "src"];

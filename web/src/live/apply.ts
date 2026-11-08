@@ -287,6 +287,13 @@ function applyWorkspaceChanged(
     void queryClient.invalidateQueries({ queryKey: keys.needsYou(slug) });
     void queryClient.invalidateQueries({ queryKey: keys.board(slug) });
     void queryClient.invalidateQueries({ queryKey: keys.agents(slug) });
+  } else if (
+    before !== undefined &&
+    live.stalled &&
+    before.activity?.state !== live.activity?.state
+  ) {
+    // Needs you words a waiting stall in what fold saw, such as a silence that became a failure.
+    void queryClient.invalidateQueries({ queryKey: keys.needsYou(slug) });
   }
   invalidateWorkspaceDiffs(queryClient, slug, live.workspace);
   void queryClient.invalidateQueries({
