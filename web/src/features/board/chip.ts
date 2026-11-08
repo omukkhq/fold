@@ -1,5 +1,6 @@
 import {
   Activity,
+  CircleStop,
   ClipboardCheck,
   Clock,
   GitPullRequest,
@@ -77,7 +78,13 @@ export function cardChip(
   if (activity !== null) {
     return {
       tone: activity.needsYou ? "warn" : "neutral",
-      icon: activity.needsYou ? Hand : activity.stall ? Clock : Activity,
+      icon: activity.needsYou
+        ? Hand
+        : activity.stall
+          ? Clock
+          : activity.state === "stopped"
+            ? CircleStop
+            : Activity,
       text: activity.text,
     };
   }

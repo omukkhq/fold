@@ -505,7 +505,7 @@ describe("needsYouGroups", () => {
           screen: "task",
           agent: "api-worker",
           task: "T-14",
-          activity: { ...activity, state: "stopped", call: null },
+          activity: { ...activity, state: "failed", call: null },
         }),
         needsItem({
           kind: "worker_stalled",
@@ -523,7 +523,7 @@ describe("needsYouGroups", () => {
       1_760_000_000_000 + 25 * 60_000,
     );
     expect(groups.map((g) => g.title)).toEqual(["Waiting for you"]);
-    const [command, silent, stopped, tool, unknown] = allLines(groups);
+    const [command, silent, failed, tool, unknown] = allLines(groups);
     expect(command).toMatchObject({
       kind: "worker_stalled",
       person: null,
@@ -538,7 +538,7 @@ describe("needsYouGroups", () => {
       title: "fold does not run its session; check the session where it runs",
       restart: null,
     });
-    expect(stopped?.text).toBe("@api-worker stopped");
+    expect(failed?.text).toBe("@api-worker failed");
     expect(tool?.text).toBe("A tool call of @db-worker has run for 25 min");
     expect(unknown?.text).toBe("@old-worker stalled");
   });

@@ -111,6 +111,7 @@ const ACTIVITY_STATES: readonly unknown[] = [
   "silent",
   "long_call",
   "stopped",
+  "failed",
   "waits_for_slot",
 ] satisfies components["schemas"]["ActivityState"][];
 

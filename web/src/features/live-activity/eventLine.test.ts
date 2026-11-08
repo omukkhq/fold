@@ -384,6 +384,13 @@ describe("eventLine", () => {
         told: ["web-lead"],
       }),
     ).toBe("saw web-worker stopped without a report and told web-lead");
+    expect(
+      line("worker.stalled", {
+        agent: "web-worker",
+        reason: "failed",
+        told: ["web-lead"],
+      }),
+    ).toBe("saw web-worker failed without a report and told web-lead");
     expect(line("worker.refreshed", { agent: "web-lead", handoff: true })).toBe(
       "gave web-lead a fresh context with its hand-off note",
     );

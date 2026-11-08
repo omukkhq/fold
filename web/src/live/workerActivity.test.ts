@@ -58,8 +58,8 @@ describe("activityText", () => {
       "A tool call of @web-worker has run for 25 min",
     );
     expect(
-      activityText(seen({ state: "stopped", call: null }), "web-worker", NOW),
-    ).toBe("@web-worker stopped");
+      activityText(seen({ state: "failed", call: null }), "web-worker", NOW),
+    ).toBe("@web-worker failed");
   });
 
   it("says it after the worker's name in the task strip", () => {
@@ -73,6 +73,52 @@ describe("activityText", () => {
     expect(activityVerb(seen({ state: "stopped", call: null }), NOW)).toBe(
       "stopped",
     );
+    expect(activityVerb(seen({ state: "failed", call: null }), NOW)).toBe(
+      "failed",
+    );
+  });
+});
+
+describe("a process that ended", () => {
+  it("is neutral when someone stopped it on purpose: no stall, no person, no restart", () => {
+    const stopped = seen({ state: "stopped", call: null });
+    expect(activityText(stopped, "web-worker", NOW)).toBe(
+      "@web-worker stopped",
+    );
+    expect(isStall("stopped")).toBe(false);
+    const view = workerActivity(
+      { activity: stopped, stalled: true, worker: "web-worker" },
+      NOW,
+    );
+    expect(view).toMatchObject({
+      state: "stopped",
+      stall: false,
+      needsYou: false,
+      restart: null,
+    });
+    expect(view === null ? "" : toldText(view)).toBeNull();
+  });
+
+  it("is a stall when it failed, which a person restarts once the stall waits for one", () => {
+    const failed = seen({ state: "failed", call: null, told: ["web-lead"] });
+    expect(isStall("failed")).toBe(true);
+    expect(
+      workerActivity(
+        { activity: failed, stalled: false, worker: "web-worker" },
+        NOW,
+      ),
+    ).toMatchObject({
+      text: "@web-worker failed",
+      stall: true,
+      needsYou: false,
+      restart: null,
+    });
+    expect(
+      workerActivity(
+        { activity: failed, stalled: true, worker: "web-worker" },
+        NOW,
+      ),
+    ).toMatchObject({ stall: true, needsYou: true, restart: "web-worker" });
   });
 });
 
@@ -166,6 +212,7 @@ describe("workerActivity", () => {
 
 describe("toldText", () => {
   const base = {
+    state: "silent" as const,
     text: "",
     stall: true,
     needsYou: false,

@@ -242,6 +242,9 @@ function stalledText(e: DurableEvent): string {
     case "stopped":
       saw = `${who} stopped without a report`;
       break;
+    case "failed":
+      saw = `${who} failed without a report`;
+      break;
     default:
       saw = `no activity from ${who}${time}`;
   }
