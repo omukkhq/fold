@@ -37,13 +37,62 @@ export function markdownBoxClass(clamp: ClampLines | null): string {
     : `min-w-0 [&>*+*]:mt-6 ${clampClass(clamp, false)}`;
 }
 
+/** How a link goes: `app` to a screen of the app through the router, `away` to another site, `page` to an address relative to the page, and `none` when the renderer emptied an unsafe address, which shows as text. */
+export type LinkKind = "app" | "away" | "page" | "none";
+
+/** A browser reads `//host` and `/\host` as another site, so only a `/` with neither after it stays in the app. */
+export function linkKind(href: string | undefined): LinkKind {
+  if (href === undefined || href === "") return "none";
+  if (/^(https?:|mailto:|[/\\]{2})/i.test(href)) return "away";
+  if (href.startsWith("/")) return "app";
+  return "page";
+}
+
 /** A link that leaves the app opens in a new tab and tells the other site nothing of the page it came from. */
 export function linkTarget(
   href: string | undefined,
 ): { target: "_blank"; rel: "noopener noreferrer" } | null {
-  return href !== undefined && /^(https?:|mailto:)/i.test(href)
+  return linkKind(href) === "away"
     ? { target: "_blank", rel: "noopener noreferrer" }
     : null;
+}
+
+/** Longer text shows as plain text: Markdown would take too long to parse and draw it. */
+export const MAX_MARKDOWN_CHARS = 100_000;
+/** Deeper quotes and lists show as plain text: each level is one more element, and a deep enough tree overflows the renderer's stack. */
+export const MAX_MARKDOWN_DEPTH = 100;
+
+const CONTAINER_MARK = /(?:>|[-*+](?=\s)|\d{1,9}[.)](?=\s)|[ \t]+)/y;
+
+/** How deep the blocks at the start of a line nest: each quote mark and list mark is a level, and two columns of indent are one. */
+function lineDepth(line: string): number {
+  let depth = 0;
+  let indent = 0;
+  CONTAINER_MARK.lastIndex = 0;
+  for (;;) {
+    const mark = CONTAINER_MARK.exec(line)?.[0];
+    if (mark === undefined) break;
+    if (mark.trim() === "") {
+      indent += mark.replace(/\t/g, "    ").length;
+    } else {
+      depth += 1;
+    }
+  }
+  return depth + Math.floor(indent / 2);
+}
+
+/** Whether `source` shows as plain text instead of Markdown: it is too long, or its quotes and lists nest too deep. Lines inside a code fence do not count. */
+export function rendersAsPlain(source: string): boolean {
+  if (source.length > MAX_MARKDOWN_CHARS) return true;
+  let fenced = false;
+  for (const line of source.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (!fenced && lineDepth(line) > MAX_MARKDOWN_DEPTH) return true;
+  }
+  return false;
 }
 
 /** The part of an mdast node the break plugin reads and writes. */

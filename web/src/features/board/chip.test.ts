@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CircleStop, Clock, Hand } from "lucide-react";
 import type { BoardCard, BoardProposal } from "@/api/board";
 import { boardCard } from "@/test/payloads";
 import { cardChip, integratedText, metaFact } from "./chip";
@@ -248,6 +249,7 @@ describe("metaFact", () => {
   it("shows what fold saw of the worker: work in the neutral tone, a stall in gold only once it waits for a person", () => {
     const card = boardCard("T-1", { status: "in_progress" });
     const working = {
+      state: "working" as const,
       text: "Running a command for 8 min",
       stall: false,
       needsYou: false,
@@ -261,6 +263,7 @@ describe("metaFact", () => {
     });
     const silent = {
       ...working,
+      state: "silent" as const,
       text: "No activity from @web-worker for 12 min",
       stall: true,
       restart: "web-worker",
@@ -281,11 +284,46 @@ describe("metaFact", () => {
     expect(cardChip(stalled)?.text).toBe("Stalled · needs you");
     const waits = {
       ...working,
+      state: "waits_for_slot" as const,
       text: "Waits for a free task worker slot",
     };
     expect(cardChip(card, null, waits)).toMatchObject({
       tone: "neutral",
       text: "Waits for a free task worker slot",
+    });
+  });
+
+  it("shows a worker stopped on purpose in the neutral tone with the stop icon, and a failed one as a stall", () => {
+    const card = boardCard("T-1", { status: "in_progress" });
+    const stopped = {
+      state: "stopped" as const,
+      text: "@web-worker stopped",
+      stall: false,
+      needsYou: false,
+      restart: null,
+      told: [],
+      since: 0,
+    };
+    expect(cardChip(card, null, stopped)).toEqual({
+      tone: "neutral",
+      icon: CircleStop,
+      text: "@web-worker stopped",
+    });
+    const failed = {
+      ...stopped,
+      state: "failed" as const,
+      text: "@web-worker failed",
+      stall: true,
+    };
+    expect(cardChip(card, null, failed)).toEqual({
+      tone: "neutral",
+      icon: Clock,
+      text: "@web-worker failed",
+    });
+    expect(cardChip(card, null, { ...failed, needsYou: true })).toEqual({
+      tone: "warn",
+      icon: Hand,
+      text: "@web-worker failed",
     });
   });
 });

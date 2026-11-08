@@ -1,6 +1,9 @@
 /** The characters a one-line preview of a message keeps: more than a list row ever shows, so the row's own cut ends it. */
 export const PREVIEW_CHARS = 160;
 
+/** How many previews' length of the source a preview reads at most. */
+const LINE_READ = 8;
+
 /** A code span: a run of backticks, its text, and the same run again. */
 const CODE_SPAN = /(`+)([\s\S]*?[^`])\1(?!`)/g;
 
@@ -44,13 +47,9 @@ function plainLine(line: string): string {
   return out + plainInline(text.slice(at));
 }
 
-/**
- * Markdown as the plain words a reader sees, on one line: emphasis, code backticks, link syntax (its text stays),
- * heading, quote and list marks and code fences go; mentions and ids such as T-14 stay as written.
- */
-export function plainText(markdown: string): string {
-  return markdown
-    .split("\n")
+/** Markdown lines without their fences, marks and line ends, as plain words. */
+function plainLines(lines: readonly string[]): string {
+  return lines
     .filter((line) => !FENCE.test(line))
     .map(plainLine)
     .join(" ")
@@ -58,11 +57,39 @@ export function plainText(markdown: string): string {
     .trim();
 }
 
-/** The plain text cut to `max` characters at a word when one is near, with an ellipsis; the cut comes after the marks are gone, so it never splits one. */
+/**
+ * Markdown as the plain words a reader sees, on one line: emphasis, code backticks, link syntax (its text stays),
+ * heading, quote and list marks and code fences go; mentions and ids such as T-14 stay as written.
+ */
+export function plainText(markdown: string): string {
+  return plainLines(markdown.split("\n"));
+}
+
+/**
+ * The plain text cut to `max` characters at a word when one is near, with an ellipsis; the cut comes after the marks are
+ * gone, so it never splits one. Only the start of the text is read: the lines until their words fill the preview, each
+ * cut to a few previews' length, because taking off the marks of one very long line would take time that grows with the
+ * square of its length.
+ */
 export function plainPreview(markdown: string, max = PREVIEW_CHARS): string {
-  const text = plainText(markdown);
-  if (text.length <= max) return text;
+  const all = markdown.split("\n");
+  const lines: string[] = [];
+  let length = 0;
+  let unread = false;
+  for (const [index, line] of all.entries()) {
+    const head = line.slice(0, LINE_READ * max);
+    lines.push(head);
+    length += head.length;
+    if (head.length < line.length || length > LINE_READ * max) {
+      unread =
+        head.length < line.length ||
+        all.slice(index + 1).some((rest) => rest.trim() !== "");
+      break;
+    }
+  }
+  const text = plainLines(lines);
+  if (text.length <= max && !unread) return text;
+  if (text.length <= max) return `${text}…`;
   const space = text.lastIndexOf(" ", max);
-  const cut = text.slice(0, space > max / 2 ? space : max).trimEnd();
-  return `${cut}…`;
+  return `${text.slice(0, space > max / 2 ? space : max).trimEnd()}…`;
 }

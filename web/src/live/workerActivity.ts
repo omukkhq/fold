@@ -8,13 +8,15 @@ type LiveSlot = components["schemas"]["LiveSlot"];
 
 /** What the board, the task, Activity and Needs you show of a workspace's worker, from the daemon's live state alone. */
 export interface WorkerActivity {
-  /** `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped` or `Waits for a free task worker slot`. */
+  /** The state the daemon decided, which the chip draws its icon from. */
+  state: LiveActivity["state"];
+  /** `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed` or `Waits for a free task worker slot`. */
   text: string;
-  /** Silent, a call that ran long, or a process that ended: someone must act. Work in progress and a resume that waits for a free slot are never a stall. */
+  /** Silent, a call that ran long, or a process that failed: someone must act. Work in progress, a process that was stopped on purpose and a resume that waits for a free slot are never a stall. */
   stall: boolean;
   /** The stall waits for a person: fold told the lead and it lasted one more window, or no agent can act. */
   needsYou: boolean;
-  /** The agent that Restart worker starts again in a new session; null while it works or when fold does not run its session. */
+  /** The agent that Restart worker starts again in a new session, once the stall waits for a person; null before that, while it works, or when fold does not run its session. */
   restart: string | null;
   /** The agents fold told of the stall. */
   told: readonly string[];
@@ -65,12 +67,14 @@ export function activityText(
       return `${LONG[activity.call ?? "tool"]} of ${who} has run for ${time}`;
     case "stopped":
       return `${who} stopped`;
+    case "failed":
+      return `${who} failed`;
     case "waits_for_slot":
       return `Waits for a free ${SLOT[activity.slot ?? "task_worker"]} slot`;
   }
 }
 
-/** What fold saw, after the worker's name: `running a command for 8 min`, `no activity for 12 min`, `a command has run for 25 min`, `stopped` or `waits for a free task worker slot`. */
+/** What fold saw, after the worker's name: `running a command for 8 min`, `no activity for 12 min`, `a command has run for 25 min`, `stopped`, `failed` or `waits for a free task worker slot`. */
 export function activityVerb(activity: LiveActivity, now: number): string {
   const time = formatAge(now, activity.since);
   switch (activity.state) {
@@ -86,14 +90,18 @@ export function activityVerb(activity: LiveActivity, now: number): string {
     }
     case "stopped":
       return "stopped";
+    case "failed":
+      return "failed";
     case "waits_for_slot":
       return `waits for a free ${SLOT[activity.slot ?? "task_worker"]} slot`;
   }
 }
 
-/** Whether `state` needs someone to act: work and a wait for a free slot never do. */
+/** Whether `state` needs someone to act: work, a stop that someone asked for, such as a person's Stop or a pause, and a wait for a free slot never do. */
 export function isStall(state: LiveActivity["state"]): boolean {
-  return state !== "working" && state !== "waits_for_slot";
+  return (
+    state !== "working" && state !== "stopped" && state !== "waits_for_slot"
+  );
 }
 
 /** The worker's activity in `live`, or null while there is nothing to say. */
@@ -109,11 +117,14 @@ export function workerActivity(
     return null;
   }
   const stall = isStall(activity.state);
+  const needsYou = stall && live.stalled;
   return {
+    state: activity.state,
     text: activityText(activity, live.worker, now),
     stall,
-    needsYou: stall && live.stalled,
-    restart: stall && activity.supervised ? agentOf(live.worker) : null,
+    needsYou,
+    // The lead fold told gets one stall window to restart the worker itself; only then does a person get the button.
+    restart: needsYou && activity.supervised ? agentOf(live.worker) : null,
     told: activity.told,
     since: activity.since,
   };

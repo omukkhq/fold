@@ -22,14 +22,16 @@ import { languageForFence } from "@/syntax/languages";
 import type { ClampLines } from "./clamp";
 import {
   headingSizeClass,
+  linkKind,
   linkTarget,
   markdownBoxClass,
   markdownSizeClass,
   remarkHtmlAsText,
   remarkLineBreaks,
+  rendersAsPlain,
   type MarkdownSize,
 } from "./markdownStyle";
-import { CODE_BOX } from "./textFlow";
+import { CODE_BOX, textFlow } from "./textFlow";
 
 export type MarkdownPlugins = NonNullable<
   ComponentProps<typeof ReactMarkdown>["remarkPlugins"]
@@ -154,12 +156,20 @@ function components(size: MarkdownSize): Components {
           </HrefLink>
         );
       }
+      const kind = linkKind(href);
+      if (href === undefined || kind === "none") {
+        return <span>{children}</span>;
+      }
+      const look = cn("text-accent underline underline-offset-2", focusRing);
+      if (kind === "app") {
+        return (
+          <HrefLink href={href} className={look}>
+            {children}
+          </HrefLink>
+        );
+      }
       return (
-        <a
-          href={href}
-          {...linkTarget(href)}
-          className={cn("text-accent underline underline-offset-2", focusRing)}
-        >
+        <a href={href} {...linkTarget(href)} className={look}>
           {children}
         </a>
       );
@@ -234,7 +244,7 @@ export interface MarkdownProps {
 /**
  * Text that an agent or a person wrote, rendered as Markdown. GFM adds tables and task lists, and each line end is a
  * line break, except in a `document`. Raw HTML never becomes an element, because the text is shown to everyone: it
- * shows as typed, or in a `document` not at all. A link keeps only a safe address. Images show their alt text: the bundle loads nothing remote. A long word or path wraps anywhere.
+ * shows as typed, or in a `document` not at all. A link keeps only a safe address, and one whose address was unsafe shows as text. Images show their alt text: the bundle loads nothing remote. A long word or path wraps anywhere. A text too long or nested too deep to render shows as plain text.
  */
 export function Markdown({
   children,
@@ -333,13 +343,17 @@ const Body = memo(function Body({
         className,
       )}
     >
-      <ReactMarkdown
-        remarkPlugins={plugins}
-        skipHtml
-        components={COMPONENTS[size]}
-      >
-        {children}
-      </ReactMarkdown>
+      {rendersAsPlain(children) ? (
+        <p className={textFlow("prose")}>{children}</p>
+      ) : (
+        <ReactMarkdown
+          remarkPlugins={plugins}
+          skipHtml
+          components={COMPONENTS[size]}
+        >
+          {children}
+        </ReactMarkdown>
+      )}
     </div>
   );
 });

@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   headingSizeClass,
+  MAX_MARKDOWN_CHARS,
+  MAX_MARKDOWN_DEPTH,
+  linkKind,
   linkTarget,
   markdownBoxClass,
   markdownSizeClass,
   remarkHtmlAsText,
   remarkLineBreaks,
+  rendersAsPlain,
 } from "./markdownStyle";
 
 interface Node {
@@ -61,6 +65,49 @@ describe("linkTarget", () => {
     expect(linkTarget("/p/demo/board")).toBeNull();
     expect(linkTarget("")).toBeNull();
     expect(linkTarget(undefined)).toBeNull();
+  });
+
+  it("opens an address that a browser reads as another site in a new tab", () => {
+    const external = { target: "_blank", rel: "noopener noreferrer" };
+    expect(linkTarget(SITE)).toEqual(external);
+    expect(linkTarget("/\\example.com")).toEqual(external);
+    expect(linkTarget("\\\\example.com")).toEqual(external);
+  });
+});
+
+describe("linkKind", () => {
+  it("sends a path to the router, another site away, a relative address to the page, and an emptied one to text", () => {
+    expect(linkKind("/p/demo/board")).toBe("app");
+    expect(linkKind(`https:${SITE}`)).toBe("away");
+    expect(linkKind(`${SITE}/x`)).toBe("away");
+    expect(linkKind("/\\example.com")).toBe("away");
+    expect(linkKind("#part")).toBe("page");
+    expect(linkKind("notes.md")).toBe("page");
+    expect(linkKind("")).toBe("none");
+    expect(linkKind(undefined)).toBe("none");
+  });
+});
+
+describe("rendersAsPlain", () => {
+  it("renders ordinary text, deep code and a deep fence as Markdown", () => {
+    expect(rendersAsPlain("> a\n>> b\n- c\n  - d")).toBe(false);
+    const deep = " ".repeat(2 * MAX_MARKDOWN_DEPTH + 10);
+    expect(rendersAsPlain(`\`\`\`\n${deep}x\n\`\`\``)).toBe(false);
+    expect(rendersAsPlain(`${">".repeat(MAX_MARKDOWN_DEPTH)} x`)).toBe(false);
+  });
+
+  it("shows text as plain once it is too long or its quotes, lists or indents nest too deep", () => {
+    expect(rendersAsPlain("a".repeat(MAX_MARKDOWN_CHARS + 1))).toBe(true);
+    expect(rendersAsPlain(`${">".repeat(MAX_MARKDOWN_DEPTH + 1)} x`)).toBe(
+      true,
+    );
+    expect(rendersAsPlain(`${"- ".repeat(MAX_MARKDOWN_DEPTH + 1)}x`)).toBe(
+      true,
+    );
+    expect(rendersAsPlain(`${"1. ".repeat(MAX_MARKDOWN_DEPTH + 1)}x`)).toBe(
+      true,
+    );
+    expect(rendersAsPlain(`${"\t".repeat(MAX_MARKDOWN_DEPTH)}- x`)).toBe(true);
   });
 });
 

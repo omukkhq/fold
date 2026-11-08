@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useNow } from "./useNow";
+import { ACTIVITY_TICK_MS, useActivityClock, useNow } from "./useNow";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -41,5 +41,27 @@ describe("useNow", () => {
       vi.advanceTimersByTime(0);
     });
     expect(result.current).toBe(9000);
+  });
+});
+
+describe("useActivityClock", () => {
+  it("keeps the screen's time while nothing ticks, and moves each minute while an activity shows", () => {
+    const { result, rerender } = renderHook(
+      ({ base, on }: { base: number; on: boolean }) =>
+        useActivityClock(base, on),
+      { initialProps: { base: 500, on: false } },
+    );
+    expect(result.current).toBe(500);
+    rerender({ base: 500, on: true });
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(result.current).toBe(1000);
+    act(() => {
+      vi.advanceTimersByTime(ACTIVITY_TICK_MS);
+    });
+    expect(result.current).toBe(1000 + ACTIVITY_TICK_MS);
+    rerender({ base: 10 * ACTIVITY_TICK_MS, on: true });
+    expect(result.current).toBe(10 * ACTIVITY_TICK_MS);
   });
 });

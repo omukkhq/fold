@@ -330,7 +330,11 @@ export function Inbox({ slug }: { slug: string }) {
   const session = useQuery(sessionQuery());
   const feed = useFeed(slug);
   const status = useLiveStatus();
-  const now = useNow(status.state === "reconnecting", MINUTE_MS);
+  // A stalled worker's line says for how long fold saw nothing, so the time moves each minute while one shows.
+  const stalls = (needs.data ?? []).some(
+    (item) => item.kind === "worker_stalled",
+  );
+  const now = useNow(status.state === "reconnecting" || stalls, MINUTE_MS);
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<InboxTab>("needs");
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());

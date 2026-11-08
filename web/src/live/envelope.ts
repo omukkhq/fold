@@ -111,7 +111,9 @@ const ACTIVITY_STATES: readonly unknown[] = [
   "silent",
   "long_call",
   "stopped",
-];
+  "failed",
+  "waits_for_slot",
+] satisfies components["schemas"]["ActivityState"][];
 
 const CALLS: readonly unknown[] = [
   "command",
@@ -119,13 +121,19 @@ const CALLS: readonly unknown[] = [
   "subagent",
   "question",
   "tool",
-];
+] satisfies components["schemas"]["LiveCall"][];
+
+const SLOTS: readonly unknown[] = [
+  "task_worker",
+  "reviewer",
+] satisfies components["schemas"]["LiveSlot"][];
 
 function isActivity(value: unknown): boolean {
   return (
     isRecord(value) &&
     ACTIVITY_STATES.includes(value.state) &&
     (value.call === null || CALLS.includes(value.call)) &&
+    (value.slot === null || SLOTS.includes(value.slot)) &&
     typeof value.since === "number" &&
     typeof value.supervised === "boolean" &&
     Array.isArray(value.told) &&

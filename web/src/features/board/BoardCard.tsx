@@ -16,6 +16,7 @@ import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { PersonName } from "@/people/PersonName";
 import type { LiveWorkspace } from "@/live/envelope";
+import { useActivityClock } from "@/live/useNow";
 import {
   toldText,
   workerActivity,
@@ -291,7 +292,7 @@ function usePeek(): [boolean, HoverPeek] {
 export function BoardCard({
   slug,
   card,
-  now,
+  now: screenNow,
   peek: withPeek = true,
 }: {
   slug: string;
@@ -306,6 +307,10 @@ export function BoardCard({
   });
   const filters = useRouterState({ select: (s) => s.location.searchStr });
   const streamed = card.workspace ? live : undefined;
+  const now = useActivityClock(
+    screenNow,
+    streamed?.activity != null && card.status !== "done",
+  );
   const line = activityLine(card, streamed, now);
   const run = currentCheckRun(card.check_run, streamed);
   const activity =

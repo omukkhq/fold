@@ -119,12 +119,12 @@ describe("liveStrip", () => {
       stalled: false,
     });
     expect(told?.activity).toMatchObject({
-      restart: "frontend",
+      restart: null,
       told: ["web-lead"],
     });
-    expect(
-      liveStrip(task(), live({ activity, stalled: true }), NOW)?.stalled,
-    ).toBe(true);
+    const flagged = liveStrip(task(), live({ activity, stalled: true }), NOW);
+    expect(flagged?.stalled).toBe(true);
+    expect(flagged?.activity?.restart).toBe("frontend");
   });
 
   it("says who edits which file, the files, the latest checkpoint and the base against main", () => {

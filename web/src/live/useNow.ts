@@ -23,3 +23,16 @@ export function useNow(enabled: boolean, everyMs = 1000): number {
   }, [enabled, everyMs]);
   return now;
 }
+
+/** What fold saw of a worker counts in whole minutes, such as `Running a command for 8 min`. */
+export const ACTIVITY_TICK_MS = 60_000;
+
+/**
+ * The screen's time, renewed each minute while `ticking`, such as while a worker's activity text shows: the daemon sends
+ * a new frame only when the activity changes, so without the tick `for 1 min` would stay until the next event. It only
+ * reads the clock and never goes back before `base`.
+ */
+export function useActivityClock(base: number, ticking: boolean): number {
+  const tick = useNow(ticking, ACTIVITY_TICK_MS);
+  return ticking ? Math.max(base, tick) : base;
+}
