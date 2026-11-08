@@ -367,3 +367,74 @@ async fn a_stall_told_before_a_daemon_start_is_not_told_again() {
     assert!(state(&harness, &work).await.view.stalled);
     assert_eq!(stalled_events(&harness).await.len(), 1);
 }
+
+/// An owed resume that fold did not serve while a place is free, such as one whose resume failed for another reason than the limits, holds the agents' starts back only until it stalls: one window later its lead hears of it, and its restart takes the place.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owed_resume_that_fold_does_not_serve_stalls_and_its_restart_frees_the_starts() {
+    let fake = FakeClaude::new("result");
+    let (harness, work) = proposed_by_a_task_worker(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
+    std::fs::write(&config, "[workers]\ntask_worker = 1\n").unwrap();
+    for title in ["Draw the menu", "Draw the footer"] {
+        harness
+            .call(
+                MAIN,
+                "create_task",
+                json!({"title": title, "labels": ["ui"]}),
+            )
+            .await;
+    }
+    let other = harness
+        .call(
+            "web-lead",
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-2"]}),
+        )
+        .await;
+    let other = other["worker"]["name"].as_str().unwrap().to_owned();
+    until_state(&harness, &other, WorkerState::Idle).await;
+    advance(&harness, Duration::from_secs(1));
+    request_changes(&harness, "P-1", "Split the page.").await;
+    assert_eq!(
+        state(&harness, &work)
+            .await
+            .view
+            .activity
+            .map(|seen| seen.state),
+        Some(ActivityState::WaitsForSlot)
+    );
+
+    // A raised limit that no event announces frees a place without serving the owed resume.
+    std::fs::write(&config, "[workers]\ntask_worker = 2\n").unwrap();
+    let refused = harness
+        .refused(
+            "web-lead",
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-3"]}),
+        )
+        .await;
+    assert_eq!(refused["details"]["reason"], "owed_resume_waits");
+    assert_eq!(refused["details"]["agent"], TASK_WORKER);
+
+    advance(&harness, STALL);
+    let seen = state(&harness, &work)
+        .await
+        .view
+        .activity
+        .expect("the owed resume stalls");
+    assert_eq!(seen.state, ActivityState::Silent);
+    assert_eq!(seen.told, ["web-lead"]);
+    assert_eq!(stalled_events(&harness).await.len(), 1);
+
+    harness
+        .call("web-lead", "restart_worker", json!({"name": TASK_WORKER}))
+        .await;
+    until_runs(&fake, TASK_WORKER, 2).await;
+    eventually(WAIT, async || {
+        match state(&harness, &work).await.view.activity {
+            None => Ok(()),
+            other => Err(other),
+        }
+    })
+    .await;
+}
