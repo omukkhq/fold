@@ -91,7 +91,8 @@ describe("Markdown safety", () => {
     expect(container.textContent).not.toContain("block");
     expect(
       [...container.querySelectorAll("a")].map((a) => a.getAttribute("href")),
-    ).toEqual(["", "/p/demo/board"]);
+    ).toEqual(["/p/demo/board"]);
+    expect(screen.getByText("run").tagName).toBe("SPAN");
   });
 
   it("shows raw HTML as typed by default and makes no element of it", () => {
@@ -114,6 +115,31 @@ describe("Markdown safety", () => {
     expect(
       screen.getByRole("link", { name: "board" }).getAttribute("target"),
     ).toBeNull();
+  });
+
+  it("opens an address without a scheme that leads to another site in a new tab", () => {
+    render(<Markdown>{"[away](//example.com/x)"}</Markdown>);
+    const away = screen.getByRole("link", { name: "away" });
+    expect(away.getAttribute("target")).toBe("_blank");
+    expect(away.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  it("shows a link whose address was unsafe as its text, never as a link to the page", () => {
+    render(
+      <Markdown>
+        {"[a](javascript:alert(1)) [b](vbscript:x) [c][r]\n\n[r]: javascript:x"}
+      </Markdown>,
+    );
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+    expect(screen.getByText("a").tagName).toBe("SPAN");
+    expect(screen.getByText("c").tagName).toBe("SPAN");
+  });
+
+  it("shows a text that nests too deep as plain text", () => {
+    const deep = `${">".repeat(500)} deep`;
+    const { container } = render(<Markdown>{deep}</Markdown>);
+    expect(container.querySelector("blockquote")).toBeNull();
+    expect(container.querySelector("p")?.textContent).toBe(deep);
   });
 });
 
