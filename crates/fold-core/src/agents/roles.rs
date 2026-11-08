@@ -7,6 +7,7 @@ use crate::tasks::{LabelName, define_names};
 
 mod answers;
 mod handoff;
+mod owed;
 mod profile;
 mod update;
 
@@ -17,6 +18,7 @@ pub use handoff::{
     SummaryProposal, SummaryTask, check_handoff, default_handoff_percent, handoff_due,
     handoff_overdue, handoff_reask_due, refresh_turn,
 };
+pub use owed::{OWED_RESUME_WAITS, OwedResume, check_owed_first, owed_ahead, waits_for_place};
 pub use profile::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, FieldChange, MAX_AREA_INSTRUCTIONS_CHARS,
     area_prompt,
@@ -792,9 +794,7 @@ mod tests {
         assert!(prompt.contains("names the folders the area owns"));
         assert!(prompt.contains("`pause_project` or `resume_project` only when the user asks"));
         assert!(prompt.contains("`start_worker` fails with `project_paused`"));
-        assert!(prompt.contains(
-            "Call `restart_worker` (new session) or `set_worker_limits` only when the user asks"
-        ));
+        assert!(prompt.contains("Restart stalled workers with `restart_worker`; otherwise call it or `set_worker_limits` only when the user asks"));
         assert!(prompt.contains("only when the user tells you in this conversation"));
         assert!(
             prompt.contains(

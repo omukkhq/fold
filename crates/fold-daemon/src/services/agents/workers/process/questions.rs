@@ -737,7 +737,11 @@ impl AgentService {
     pub async fn needs_you(
         &self,
     ) -> Result<Vec<crate::services::agents::NeedsYouItem>, AgentError> {
-        Ok(crate::services::agents::needs_you(&self.store).await?)
+        let items = crate::services::agents::needs_you(&self.store).await?;
+        Ok(crate::services::agents::needs_you::with_stalls(
+            items,
+            self.live.as_ref(),
+        ))
     }
 
     /// The open permission questions of every worker, oldest first. `AskUserQuestion` calls are not among them: they are question messages.

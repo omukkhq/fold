@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CLOSE_DELAY_MS, OPEN_DELAY_MS, hoverPeek } from "./hoverPeek";
+import {
+  CLOSE_DELAY_MS,
+  OPEN_DELAY_MS,
+  hoverPeek,
+  panelBoundary,
+} from "./hoverPeek";
 
 function setup() {
   const changes: boolean[] = [];
@@ -134,5 +139,24 @@ describe("hoverPeek", () => {
     vi.advanceTimersByTime(OPEN_DELAY_MS);
     expect(changes).toEqual([]);
     peek.stop();
+  });
+});
+
+describe("panelBoundary", () => {
+  it("keeps the panel inside the page's main area, below the top bar", () => {
+    const main = { tagName: "MAIN" };
+    const asked: string[] = [];
+    const card = {
+      closest: (selector: string) => {
+        asked.push(selector);
+        return main;
+      },
+    };
+    expect(panelBoundary(card)).toBe(main);
+    expect(asked).toEqual(["main"]);
+  });
+
+  it("takes the window for a card outside a main area", () => {
+    expect(panelBoundary({ closest: () => null })).toBeNull();
   });
 });

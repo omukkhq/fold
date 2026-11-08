@@ -246,3 +246,21 @@ pub async fn owed_send_backs(
         })
         .collect()
 }
+
+/// The tasks with an open report, which waits for a lead check, in number order.
+pub async fn tasks_with_open_reports(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<TaskId>, StoreError> {
+    let numbers = sqlx::query_scalar!(
+        r#"SELECT t.number AS "task!: i64"
+           FROM task_reports r JOIN tasks t ON t.id = r.task_id
+           WHERE r.resolution IS NULL
+           ORDER BY t.number"#
+    )
+    .fetch_all(executor)
+    .await?;
+    numbers
+        .into_iter()
+        .map(|number| TaskId::try_from_db(number).ok_or(StoreError::Corrupt("tasks.number")))
+        .collect()
+}

@@ -13,6 +13,7 @@ use super::super::actor::Human;
 use super::super::error::{ApiError, ApiJson, ErrorEnvelope};
 use super::super::messages::MessageChoice;
 use crate::daemon::AppState;
+use crate::live::LiveActivity;
 use crate::services::agents::{NeedsYouItem, NeedsYouKind, Screen, with_folder_attention};
 use crate::services::projects::notify;
 
@@ -155,6 +156,8 @@ pub enum NeedsYouItemKind {
     AgentChange,
     /// Shared reference files changed during a tool call of the supervised worker `agent`: `paths` names the files and `reason` what the human does, check the files and run `fld share --dismiss`, which ends the item. Workers read shared files through links into the project folder, where a write has no history to undo it.
     SharedChanged,
+    /// The worker `agent` on `task` stalled, fold told its lead, or else the main agent, and one more stall window passed without a fix, or no agent can act on it: `activity` says what fold saw and `reason` what the human does. The web's Restart worker calls `restart_worker`. The item ends when the worker works again. fold keeps it in memory, so after a daemon start it counts from that start.
+    WorkerStalled,
 }
 
 /// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task, `repository` the history of main and `settings` the project's notice targets.
@@ -212,7 +215,7 @@ pub struct NeedsYouEntry {
     pub header: Option<String>,
     /// How many questions a `question` asks as one set, which a human answers together in one reply; 0 for every other kind.
     pub questions: usize,
-    /// The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`; Claude Code's error of a `worker_model_unreachable`.
+    /// The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`; Claude Code's error of a `worker_model_unreachable`; what fold saw of a `worker_stalled` at the read, such as `No activity from @web-worker for 12 min`, in the words of the board's chip.
     #[schema(required = true, example = "Database schema for reports")]
     pub title: Option<String>,
     /// The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again; what to check for a `worker_model_unreachable`.
@@ -229,6 +232,9 @@ pub struct NeedsYouEntry {
     /// The agents of an `agent_change`, in name order; empty for every other kind.
     #[schema(example = json!(["reviewer-35"]))]
     pub agents: Vec<String>,
+    /// What fold saw of the worker of a `worker_stalled`; null for every other kind.
+    #[schema(required = true)]
+    pub activity: Option<LiveActivity>,
 }
 
 impl From<NeedsYouItem> for NeedsYouEntry {
@@ -251,6 +257,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::NotifyTargetOff => NeedsYouItemKind::NotifyTargetOff,
             NeedsYouKind::AgentChange => NeedsYouItemKind::AgentChange,
             NeedsYouKind::SharedChanged => NeedsYouItemKind::SharedChanged,
+            NeedsYouKind::WorkerStalled => NeedsYouItemKind::WorkerStalled,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,
@@ -284,6 +291,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             paths: item.paths,
             target: item.target.map(|target| target.to_string()),
             agents: item.agents.iter().map(ToString::to_string).collect(),
+            activity: item.activity,
         }
     }
 }
@@ -351,7 +359,7 @@ pub async fn answer_worker_question(
     Ok(Json(answered.into()))
 }
 
-/// Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, a worker whose turns fail before they reach the model, a notice target fold turned off, which a person's change of the target or a test send that gets through ends, and the files that changed in the project folder during supervised workers' tool calls, whose paths leave the waiting folder's item. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `stash.discarded`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, `notify.target_changed`, `folder.agent_changed` and `folder.agent_change_cleared`, and with the live `worker.output` steps `result` and `result_error`, which end a turn.
+/// Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, a worker whose turns fail before they reach the model, a notice target fold turned off, which a person's change of the target or a test send that gets through ends, and the files that changed in the project folder during supervised workers' tool calls, whose paths leave the waiting folder's item. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `stash.discarded`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, `notify.target_changed`, `folder.agent_changed` and `folder.agent_change_cleared`, and with the live `worker.output` steps `result` and `result_error`, which end a turn, and with the live `workspace.changed` whose `stalled` changed, which starts or ends a `worker_stalled` item.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/needs-you",

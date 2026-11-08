@@ -5,6 +5,7 @@ import { asksText } from "@/features/workers/permission";
 import { agentsText, type AgentChange } from "./agentChanges";
 import { codeData, codeParts } from "@/format/codeText";
 import { projectPath, withQuery } from "@/routes/paths";
+import { activityText } from "@/live/workerActivity";
 
 /** A line of the list: a person who asks, or an item chip, then the words and the screen it opens, if any. */
 export interface NeedsYouLine {
@@ -29,6 +30,8 @@ export interface NeedsYouLine {
   files: FilesSummary | null;
   /** How many items of changed shared files the line's Dismiss ends, which is every one of them; null for every other line. */
   dismiss: number | null;
+  /** The stalled worker that the line's Restart worker starts again in a new session; null for every other line, and for a worker whose session fold does not run. */
+  restart: string | null;
 }
 
 /** The files of an item as the second line names them: how many, the first path and the count of the rest. */
@@ -65,6 +68,7 @@ const KIND_ORDER: readonly NeedsYouKind[] = [
   "notify_target_off",
   "agent_change",
   "shared_changed",
+  "worker_stalled",
 ];
 
 /** Agents that ask, things that wait for the human's decision, and the project's own state, which includes workers fold cannot run. */
@@ -86,6 +90,7 @@ export const GROUP_OF: Readonly<Record<NeedsYouKind, NeedsYouGroupId>> = {
   notify_target_off: "project",
   agent_change: "project",
   shared_changed: "project",
+  worker_stalled: "wait",
 };
 
 /** The kinds whose title is the item's own name, which the sentence ends with. */
@@ -178,7 +183,30 @@ export function questionText(
   return item.choices.length > 0 ? "asks you to choose" : "asks a question";
 }
 
-function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
+/** `text` as a sentence of its own, with a capital first letter, except fold's name, which is always written in lower case; null stays null. */
+function sentence(text: string | null): string | null {
+  if (text === null || text.startsWith("fold ")) {
+    return text;
+  }
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
+/** What fold saw of a stalled worker, in the words of its card's chip; the line names its task after it. */
+function stalledText(item: NeedsYouItem, now: number): string {
+  const agent = item.agent ?? "a worker";
+  return codeData(
+    item.activity === null
+      ? `@${agent} stalled`
+      : activityText(item.activity, agent, now),
+  );
+}
+
+function lineOf(
+  slug: string,
+  item: NeedsYouItem,
+  index: number,
+  now: number,
+): NeedsYouLine {
   const base = {
     key: `${item.kind}:${item.message ?? item.question ?? item.proposal ?? item.request ?? item.task ?? item.commit ?? String(index)}`,
     kind: item.kind,
@@ -192,6 +220,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
     settle: null,
     files: null,
     dismiss: null,
+    restart: null,
   };
   switch (item.kind) {
     case "human_task":
@@ -356,6 +385,17 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
             : "changed shared files while it worked. Check the files, then dismiss this",
         href: null,
       };
+    case "worker_stalled":
+      return {
+        ...base,
+        person: null,
+        chip: null,
+        title: sentence(markedText(item.reason)),
+        text: stalledText(item, now),
+        href: taskPath(slug, item.task ?? ""),
+        restart:
+          item.activity?.supervised === true ? (item.agent ?? null) : null,
+      };
     case "human_review":
       return {
         ...base,
@@ -379,10 +419,11 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
 export function needsYouGroups(
   slug: string,
   items: readonly NeedsYouItem[],
+  now = 0,
 ): NeedsYouGroup[] {
   const shared = items.filter((item) => item.kind === "shared_changed").length;
   const lines = items
-    .map((item, index) => lineOf(slug, item, index))
+    .map((item, index) => lineOf(slug, item, index, now))
     .map((line) =>
       line.kind === "shared_changed" ? { ...line, dismiss: shared } : line,
     )

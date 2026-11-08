@@ -562,6 +562,84 @@ async fn a_resume_the_worker_limits_refuse_runs_once_a_worker_stops() {
     assert_eq!(resumed[0].1["resumed"], true);
 }
 
+/// With one task worker place, a lead's start of a new task worker while fold owes a resume is refused with the reason `owed_resume_waits`, which names the waiting worker, and the stop of the running worker resumes the owed one first.
+#[tokio::test]
+async fn an_owed_resume_goes_before_a_leads_new_start() {
+    let fake = FakeClaude::new("result");
+    let (harness, _work) =
+        proposed_by_a_task_worker(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    std::fs::write(
+        std::path::Path::new(harness.root()).join(".fold/config.toml"),
+        "[workers]\ntask_worker = 1\n",
+    )
+    .unwrap();
+    for title in ["Draw the menu", "Draw the footer"] {
+        harness
+            .call(
+                MAIN,
+                "create_task",
+                json!({"title": title, "labels": ["ui"]}),
+            )
+            .await;
+    }
+    let other = harness
+        .call(
+            "web-lead",
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-2"]}),
+        )
+        .await;
+    let other = other["worker"]["name"].as_str().unwrap().to_owned();
+    until_state(&harness, &other, WorkerState::Idle).await;
+    harness
+        .project
+        .clock()
+        .advance(Duration::from_secs(1))
+        .unwrap();
+    request_changes(&harness, "P-1", "Split the page.").await;
+    assert_eq!(
+        worker(&harness, TASK_WORKER).await.state,
+        WorkerState::Stopped,
+        "the other task worker holds the only place"
+    );
+
+    let refused = harness
+        .refused(
+            "web-lead",
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-3"]}),
+        )
+        .await;
+    assert_eq!(refused["code"], codes::WORKER_LIMIT_REACHED, "{refused}");
+    assert_eq!(refused["details"]["reason"], "owed_resume_waits");
+    assert_eq!(refused["details"]["agent"], TASK_WORKER);
+    assert_eq!(refused["details"]["proposal"], "P-1");
+    let message = refused["message"].as_str().unwrap();
+    assert!(message.contains("@web-worker"), "{message}");
+    let hint = refused["hint"].as_str().unwrap();
+    assert!(hint.contains("wait_for_events"), "{hint}");
+    assert!(hint.contains("start_worker"), "{hint}");
+
+    harness
+        .call("web-lead", "stop_worker", json!({"name": other}))
+        .await;
+    let runs = until_runs(&fake, TASK_WORKER, 2).await;
+    assert!(runs[1].has("--resume"));
+    assert!(runs[1].stdin[1].contains("Split the page."));
+    let full = harness
+        .refused(
+            "web-lead",
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-3"]}),
+        )
+        .await;
+    assert_eq!(full["code"], codes::WORKER_LIMIT_REACHED);
+    assert!(
+        full["details"].get("reason").is_none(),
+        "the resumed worker holds the place: {full}"
+    );
+}
+
 #[tokio::test]
 async fn a_daemon_start_serves_a_resume_the_worker_limits_refused() {
     let fake = FakeClaude::new("result");

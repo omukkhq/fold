@@ -4,7 +4,7 @@ use crate::agents::{Tag, WorkerName};
 use crate::error::codes;
 use crate::tasks::requests::Requester;
 
-use super::PolicyDenied;
+use super::{AgentStanding, PolicyDenied};
 
 /// Anyone who acts for themselves creates a request: any worker of an agent, or a named human. The system never asks for work. It returns the requester to record.
 pub fn can_create_request(actor: &Actor) -> Result<Requester, PolicyDenied> {
@@ -19,7 +19,11 @@ pub fn can_create_request(actor: &Actor) -> Result<Requester, PolicyDenied> {
 pub fn can_claim_request(actor: &Actor, role: Option<Role>) -> Result<&AgentActor, PolicyDenied> {
     match actor {
         Actor::Agent(agent)
-            if agent.tags.iter().any(Tag::is_main) || role == Some(Role::AreaLead) =>
+            if AgentStanding {
+                holds_main: agent.tags.iter().any(Tag::is_main),
+                role,
+            }
+            .claims_requests() =>
         {
             Ok(agent)
         }

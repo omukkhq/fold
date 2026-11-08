@@ -271,6 +271,45 @@ describe("Inbox, Needs you", () => {
     expect(within(project).getByText("a`b`.md").tagName).toBe("SPAN");
   });
 
+  it("shows a stalled worker with its whole restart command and Restart worker", async () => {
+    await renderInbox(
+      [
+        needsItem({
+          kind: "worker_stalled",
+          screen: "task",
+          agent: "a-worker-with-a-long-name",
+          task: "T-12",
+          reason:
+            "restart it in a new session: `fld worker restart a-worker-with-a-long-name`",
+          activity: {
+            state: "silent",
+            slot: null,
+            call: null,
+            since: 1_760_000_000_000,
+            supervised: true,
+            told: ["web-lead"],
+          },
+        }),
+      ],
+      null,
+    );
+    const inbox = await openInbox();
+    const waiting = within(inbox).getByRole("region", {
+      name: "Waiting for you",
+    });
+    const command = within(waiting).getByText(
+      "fld worker restart a-worker-with-a-long-name",
+    );
+    const title = command.closest(".basis-full");
+    expect(title?.className).toContain("wrap-anywhere");
+    expect(title?.className).not.toContain("truncate");
+    expect(
+      within(waiting).getByRole("button", {
+        name: "Restart a-worker-with-a-long-name in a new session",
+      }),
+    ).toBeTruthy();
+  });
+
   it("shows main's invalid checks file as a line that opens nothing and counts it", async () => {
     await renderInbox(
       [

@@ -28,12 +28,14 @@ mod limits;
 mod output;
 mod pause;
 mod process;
+mod streams;
 
 pub use limits::WorkerLimitsChanged;
 pub use pause::PauseState;
 #[cfg(feature = "dev-launcher")]
 pub use process::{DEV_STUB_COMMAND, DEV_STUB_DIR};
 pub use process::{Launcher, MCP_RETRY_TURN, PAUSE_TURN, RESTART_TURN, StopTimeouts, Supervisor};
+pub use streams::{StreamFacts, WorkerStreams};
 
 /// The most default names tried for one start before the start gives up.
 const MAX_NAME_ATTEMPTS: u32 = 100;
@@ -392,7 +394,7 @@ impl AgentService {
         Ok(held)
     }
 
-    /// Starts a worker agent: the agent and its main worker, its process row in state `starting`, its binding and its claims, in one transaction with `worker.started`; then its Claude Code process with its first turn. Only a lead claims, so the start gives the new worker its work: a task worker the implementation claim on each of its tasks (see [`assign_in_tx`]), a reviewer the review claim on its one proposal or a batch of its two or more (see [`assign_reviews_in_tx`]); a reviewer started for a review plan gets the plan's open proposals, the plan's waiting tasks leave it, and the plan records the reviewer and the batch with `review.plan_started`. A claim that cannot be given refuses the whole start, so no worker runs without its claims. A task worker is refused for a human task (`task_needs_human`) and for a task on hold (`task_on_hold`). A lead whose area or role already has a stopped or failed lead resumes that lead instead, under its own name whatever name the start asked for, and starts it in a new session when its old one is gone; [`StartedWorker`] says so.
+    /// Starts a worker agent: the agent and its main worker, its process row in state `starting`, its binding and its claims, in one transaction with `worker.started`; then its Claude Code process with its first turn. Only a lead claims, so the start gives the new worker its work: a task worker the implementation claim on each of its tasks (see [`assign_in_tx`]), a reviewer the review claim on its one proposal or a batch of its two or more (see [`assign_reviews_in_tx`]); a reviewer started for a review plan gets the plan's open proposals, the plan's waiting tasks leave it, and the plan records the reviewer and the batch with `review.plan_started`. A claim that cannot be given refuses the whole start, so no worker runs without its claims. A task worker is refused for a human task (`task_needs_human`) and for a task on hold (`task_on_hold`). An agent's start of a task worker or a reviewer that would take a place a resume fold owes waits for is refused with `worker_limit_reached` and the reason `owed_resume_waits`, so the owed resumes go first; a person's start obeys only the limits. A lead whose area or role already has a stopped or failed lead resumes that lead instead, under its own name whatever name the start asked for, and starts it in a new session when its old one is gone; [`StartedWorker`] says so.
     pub async fn start_worker(
         &self,
         actor: &Actor,
@@ -496,6 +498,7 @@ impl AgentService {
                     limits,
                     role,
                     area_row.as_ref().map(|area| (area.id, &area.name)),
+                    limits::Turn::of(actor, "start_worker"),
                 )
                 .await?;
                 let name = match &request.name {
@@ -679,7 +682,10 @@ impl AgentService {
             }
             Started::Resume(agent) => {
                 let text = turn(&agent);
-                if let Some(watch) = supervisor.resume(&agent, text, &[]).await? {
+                let resumed = supervisor
+                    .resume_as(&agent, text, &[], "start_worker", actor.is_human())
+                    .await?;
+                if let Some(watch) = resumed {
                     tokio::spawn(supervisor.clone().restart_lost(
                         agent.clone(),
                         watch,
@@ -713,7 +719,7 @@ impl AgentService {
         self.get_worker(agent).await
     }
 
-    /// Starts a stopped or failed worker again in the same agent and session with `--resume`, and sends it `turn`. Whoever may stop the worker may resume it. The worker counts against the limits again. A running worker is refused with `worker_exists`.
+    /// Starts a stopped or failed worker again in the same agent and session with `--resume`, and sends it `turn`. Whoever may stop the worker may resume it. The worker counts against the limits again, and an agent's resume lets the resumes fold owes other workers of the role go first; a person's obeys only the limits. A running worker is refused with `worker_exists`.
     pub async fn resume_worker(
         &self,
         actor: &Actor,
@@ -724,7 +730,9 @@ impl AgentService {
         let row = self.get_worker(agent).await?;
         let starter = self.starter(actor).await?;
         policy::can_stop_worker(&starter, row.role, row.area.as_ref()).map_err(FoldError::from)?;
-        supervisor.resume(agent, turn, &[]).await?;
+        supervisor
+            .resume_as(agent, turn, &[], "resume_worker", actor.is_human())
+            .await?;
         self.get_worker(agent).await
     }
 }

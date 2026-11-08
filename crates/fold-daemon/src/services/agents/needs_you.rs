@@ -14,6 +14,7 @@ use fold_store::tasks;
 use fold_store::tasks::requests::{self, RequestFilter};
 use fold_store::{Store, StoreError, messages};
 
+use crate::live::{LiveActivity, LiveState};
 use crate::services::reviews::awaiting_human_review;
 
 /// What waits for a human.
@@ -53,6 +54,8 @@ pub enum NeedsYouKind {
     AgentChange,
     /// Shared reference files changed during a supervised worker's tool call.
     SharedChanged,
+    /// A worker's stall that fold told its lead, or else the main agent, of and that lasted one more stall window, or that no agent can act on: `agent` names the worker, `task` its task, `activity` what fold saw and `reason` what the human does. It lives in memory, as the stall does, and ends when the worker works again.
+    WorkerStalled,
 }
 
 /// The screen on which a human answers an item.
@@ -88,6 +91,7 @@ impl NeedsYouKind {
             NeedsYouKind::NotifyTargetOff => "notify_target_off",
             NeedsYouKind::AgentChange => "agent_change",
             NeedsYouKind::SharedChanged => "shared_changed",
+            NeedsYouKind::WorkerStalled => "worker_stalled",
         }
     }
 
@@ -97,7 +101,9 @@ impl NeedsYouKind {
             NeedsYouKind::Permission => Screen::Worker,
             NeedsYouKind::HumanReview => Screen::Proposal,
             NeedsYouKind::RequestDraft => Screen::Request,
-            NeedsYouKind::HumanTask | NeedsYouKind::Blocker => Screen::Task,
+            NeedsYouKind::HumanTask | NeedsYouKind::Blocker | NeedsYouKind::WorkerStalled => {
+                Screen::Task
+            }
             NeedsYouKind::HumanChange
             | NeedsYouKind::HeadMoved
             | NeedsYouKind::FolderHeld
@@ -141,7 +147,7 @@ pub struct NeedsYouItem {
     pub header: Option<String>,
     /// How many questions a `Question` asks as one set; 0 for every other kind.
     pub questions: usize,
-    /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft; the task title of a `HumanTask` or a `Blocker`; Claude Code's error of a `WorkerModelUnreachable`.
+    /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft; the task title of a `HumanTask` or a `Blocker`; Claude Code's error of a `WorkerModelUnreachable`; what fold saw of a `WorkerStalled` at the read, in the words of the board's chip.
     pub title: Option<String>,
     /// The reason of a `Blocker`; the command that brings the branch back for `HeadMoved`, records the folder's changes for `FolderHeld`, ends the conflict for `UnstashConflicted`, or lets a `WorkerUnreachable` worker reach fold again; what to check for a `WorkerModelUnreachable`.
     pub reason: Option<String>,
@@ -155,6 +161,8 @@ pub struct NeedsYouItem {
     pub target: Option<fold_core::NotifyTargetId>,
     /// The agents of an `AgentChange`, in name order.
     pub agents: Vec<AgentName>,
+    /// What fold saw of the worker of a `WorkerStalled`.
+    pub activity: Option<LiveActivity>,
 }
 
 impl NeedsYouItem {
@@ -197,7 +205,28 @@ impl NeedsYouItem {
             about: None,
             target: None,
             agents: Vec::new(),
+            activity: None,
         }
+    }
+
+    /// The `WorkerStalled` item of the worker `agent` on `task`, whose stall `activity` shows, titled with what fold saw at `now` and with the command that starts it again in a new session.
+    pub fn worker_stalled(
+        agent: AgentName,
+        task: Option<TaskId>,
+        activity: LiveActivity,
+        now: Timestamp,
+    ) -> Self {
+        let mut item = Self::new(NeedsYouKind::WorkerStalled, activity.since);
+        item.title = fold_core::stall::activity_text(activity.activity(), agent.as_str(), now);
+        item.reason = Some(if activity.supervised {
+            format!("restart it in a new session: `fld worker restart {agent}`")
+        } else {
+            "fold does not run its session; check the session where it runs".to_owned()
+        });
+        item.agent = Some(agent);
+        item.task = task;
+        item.activity = Some(activity);
+        item
     }
 
     /// The item of a notice target fold turned off at `since`, with what the human does about it.
@@ -446,6 +475,32 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
     }
     items.sort_by_key(|item| item.since);
     Ok(items)
+}
+
+/// `items` with a `WorkerStalled` item for each live workspace whose stall needs a person, oldest first.
+pub fn with_stalls(mut items: Vec<NeedsYouItem>, live: Option<&LiveState>) -> Vec<NeedsYouItem> {
+    let stalls = live.map(LiveState::all).unwrap_or_default();
+    let mut added = false;
+    for state in stalls.iter().filter(|state| state.view.stalled) {
+        let (Some(activity), Ok(worker)) = (
+            state.view.activity.clone(),
+            fold_core::WorkerName::parse(&state.view.worker),
+        ) else {
+            continue;
+        };
+        let now = live.map_or(activity.since, LiveState::now);
+        items.push(NeedsYouItem::worker_stalled(
+            worker.agent(),
+            state.view.task,
+            activity,
+            now,
+        ));
+        added = true;
+    }
+    if added {
+        items.sort_by_key(|item| item.since);
+    }
+    items
 }
 
 #[cfg(test)]

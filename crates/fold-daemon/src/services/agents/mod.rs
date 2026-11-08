@@ -49,7 +49,7 @@ pub use presence::SeenPresence;
 pub use workers::{DEV_STUB_COMMAND, DEV_STUB_DIR};
 pub use workers::{
     Launcher, MCP_RETRY_TURN, PAUSE_TURN, PauseState, RESTART_TURN, StartWorker, StartedWorker,
-    StopTimeouts, Supervisor, WorkerLimitsChanged, new_session_id,
+    StopTimeouts, StreamFacts, Supervisor, WorkerLimitsChanged, WorkerStreams, new_session_id,
 };
 pub(crate) use workers::{code_of, starter_of};
 

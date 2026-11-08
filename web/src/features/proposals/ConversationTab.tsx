@@ -27,6 +27,7 @@ import { failureText } from "@/format/failure";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { Markdown } from "@/components/text/Markdown";
 import { MentionText } from "@/mentions/MentionText";
 import { MessageComposer } from "@/mentions/MessageComposer";
 import { PersonList, PersonName } from "@/people/PersonName";
@@ -528,11 +529,9 @@ function ThreadCard({
                   {commentNote(source.thread, entry)} ·{" "}
                   {formatAsOfMinute(now, entry.comment.created_at)}
                 </p>
-                <MentionText
-                  text={entry.comment.body}
-                  slug={slug}
-                  className="max-w-measure text-15 leading-normal"
-                />
+                <Markdown mentions={{ slug }} className="max-w-measure">
+                  {entry.comment.body}
+                </Markdown>
               </li>
             ))}
           </ol>

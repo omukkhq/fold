@@ -11,6 +11,7 @@ use fold_store::Store;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+use super::WorkerStreams;
 use crate::push::PushTargets;
 use crate::services::agents::claude::{LOCATION_ENV, env_value, transcript_path};
 use crate::services::events::EventBus;
@@ -201,6 +202,8 @@ struct Inner {
     cleanup_due: Mutex<Option<Arc<tokio::sync::Notify>>>,
     /// The workers' tool calls that can write files, which place a change of the project folder in a worker's call.
     tool_windows: Arc<ToolWindows>,
+    /// What each running process wrote last and which of its calls are open, for the stall rule.
+    streams: Arc<WorkerStreams>,
 }
 
 impl Drop for Inner {
@@ -268,6 +271,7 @@ impl Supervisor {
                 main_waking: Mutex::new(None),
                 cleanup_due: Mutex::new(None),
                 tool_windows: Arc::default(),
+                streams: Arc::default(),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();
@@ -288,6 +292,11 @@ impl Supervisor {
     /// The tool calls of the project's workers that can write files, as their output tells them.
     pub fn tool_windows(&self) -> Arc<ToolWindows> {
         self.inner.tool_windows.clone()
+    }
+
+    /// The output of the project's running worker processes, as the stall rule reads it.
+    pub fn worker_streams(&self) -> Arc<WorkerStreams> {
+        self.inner.streams.clone()
     }
 
     /// The notifier of the project's removal of closed workspace directories, which the end of each turn of the supervised main wakes.

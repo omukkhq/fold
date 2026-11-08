@@ -211,10 +211,74 @@ async fn a_claim_held_through_a_long_pause_stays_fresh_and_gets_a_full_lease_at_
     check_stalls(&harness.handle, harness.project.now())
         .await
         .unwrap();
-    assert!(harness.handle.live.get(workspace).unwrap().view.stalled);
+    let view = harness.handle.live.get(workspace).unwrap().view.clone();
+    let seen = view
+        .activity
+        .expect("the worker is silent since the resume");
+    assert_eq!(seen.state, fold_daemon::live::ActivityState::Silent);
+    assert_eq!(seen.told, [MAIN], "the main agent hears of it first");
+    assert!(!view.stalled, "a person sees it one window later");
     clock.advance(Duration::from_secs(60)).unwrap();
     let read = harness.call(MAIN, "get_task", json!({"id": task})).await;
     assert_eq!(read["claim"]["stale"], true, "{read}");
+}
+
+/// A stall shown before a pause goes with the pause: while the agents are paused no worker is stalled and fold tells nobody, and after the resume a new full window of silence brings the stall back.
+#[tokio::test]
+async fn a_pause_clears_a_stall_and_no_worker_stalls_while_paused() {
+    let mut harness = Harness::start_without_leads().await;
+    harness.lead_area("backend").await;
+    harness.make_main(MAIN).await;
+    let task = harness.create_task(MAIN, "Draw the page").await;
+    let work = harness.start_work("backend", &task).await;
+    let workspace = work.workspace.parse().unwrap();
+    let clock = harness.project.clock();
+    let view = async || {
+        check_stalls(&harness.handle, harness.project.now())
+            .await
+            .unwrap();
+        harness.handle.live.get(workspace).unwrap().view.clone()
+    };
+    let stalled_events = async || {
+        harness
+            .events()
+            .await
+            .into_iter()
+            .filter(|event| event.kind == "worker.stalled")
+            .count()
+    };
+    clock.advance(Duration::from_secs(5 * 60)).unwrap();
+    assert!(
+        view().await.activity.is_some(),
+        "silent; the main agent hears first"
+    );
+    clock.advance(Duration::from_secs(5 * 60)).unwrap();
+    let before = view().await;
+    assert!(before.stalled, "{before:?}");
+    assert_eq!(stalled_events().await, 1);
+
+    http_post(&harness, PAUSE).await;
+    let paused = view().await;
+    assert_eq!(paused.activity, None);
+    assert!(!paused.stalled);
+    clock.advance(Duration::from_secs(60 * 60)).unwrap();
+    let paused = view().await;
+    assert_eq!(paused.activity, None, "no stall while paused");
+    assert!(!paused.stalled);
+    assert_eq!(stalled_events().await, 1, "fold tells nobody while paused");
+
+    http_post(&harness, RESUME).await;
+    assert_eq!(
+        view().await.activity,
+        None,
+        "the window starts at the resume"
+    );
+    clock.advance(Duration::from_secs(5 * 60)).unwrap();
+    let again = view().await;
+    let seen = again.activity.expect("silent one window after the resume");
+    assert_eq!(seen.state, fold_daemon::live::ActivityState::Silent);
+    assert!(!again.stalled);
+    assert_eq!(stalled_events().await, 2);
 }
 
 #[tokio::test]

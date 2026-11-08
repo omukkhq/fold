@@ -44,6 +44,7 @@ function live(extra: Partial<LiveWorkspace> = {}): LiveWorkspace {
     stalled: false,
     edits_after_version: null,
     check_run: null,
+    activity: null,
     ...extra,
   };
 }
@@ -102,6 +103,30 @@ function task(extra: Partial<StripTask> = {}): StripTask {
 }
 
 describe("liveStrip", () => {
+  it("says what fold saw of the worker after its name, and keeps the stall for a person only once the daemon flags it", () => {
+    const activity = {
+      state: "silent" as const,
+      slot: null,
+      call: null,
+      since: NOW - 12 * MINUTE,
+      supervised: true,
+      told: ["web-lead"],
+    };
+    const told = liveStrip(task(), live({ activity }), NOW);
+    expect(told).toMatchObject({
+      verb: "no activity for 12 min",
+      file: null,
+      stalled: false,
+    });
+    expect(told?.activity).toMatchObject({
+      restart: null,
+      told: ["web-lead"],
+    });
+    const flagged = liveStrip(task(), live({ activity, stalled: true }), NOW);
+    expect(flagged?.stalled).toBe(true);
+    expect(flagged?.activity?.restart).toBe("frontend");
+  });
+
   it("says who edits which file, the files, the latest checkpoint and the base against main", () => {
     expect(liveStrip(task(), live(), NOW)).toEqual({
       worker: "frontend/ui",
@@ -110,6 +135,7 @@ describe("liveStrip", () => {
       wait: null,
       details: "1 file · ck-31 3 min ago · base r7 (main r8)",
       stalled: false,
+      activity: null,
     });
   });
 
@@ -180,6 +206,7 @@ describe("liveStrip", () => {
       wait: "waits for review",
       details: "ck-31 3 min ago · base r7 (main r8)",
       stalled: false,
+      activity: null,
     });
     const frame = live({ proposal: "P-1", edits_after_version: true });
     expect(liveStrip(sent, frame, NOW)).toMatchObject({
@@ -305,6 +332,7 @@ describe("liveStrip without the task details", () => {
       wait: null,
       details: "1 file · base r7",
       stalled: false,
+      activity: null,
     });
     expect(liveStrip(bare, null, NOW)?.details).toBeNull();
   });

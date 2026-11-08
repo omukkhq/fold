@@ -33,7 +33,7 @@ import { Button, IconButton } from "@/components/button/Button";
 import { Textarea, TextField } from "@/components/form/controls";
 import { CommitId } from "@/components/mono/CommitId";
 import { Mono } from "@/components/mono/Mono";
-import { textFlow } from "@/components/text/textFlow";
+import { Markdown } from "@/components/text/Markdown";
 import { taskPath } from "@/features/board/card";
 import { TaskCostSection } from "@/features/cost/TaskCostSection";
 import { formatAge } from "@/format/time";
@@ -585,18 +585,18 @@ function LeadCheck({
           <SideNote>
             <ActorText segments={reportedText(report, now)} />
           </SideNote>
-          <p className={cn("leading-normal", textFlow("prose"))}>
+          <Markdown mentions={{ slug }} size={14}>
             {report.note}
-          </p>
+          </Markdown>
           {resolved ? (
             <SideNote>
               <ActorText segments={resolved} />
             </SideNote>
           ) : null}
           {report.send_back_note === null ? null : (
-            <p className={cn("leading-normal", textFlow("prose"))}>
+            <Markdown mentions={{ slug }} size={14}>
               {report.send_back_note}
-            </p>
+            </Markdown>
           )}
         </>
       )}
@@ -761,7 +761,9 @@ function Blocker({
         <Hand aria-hidden="true" size={14} />
         No agent takes this task
       </p>
-      <p className={cn("leading-normal", textFlow("prose"))}>{view.reason}</p>
+      <Markdown mentions={{ slug }} size={14}>
+        {view.reason}
+      </Markdown>
       <SideNote>
         <ActorText segments={view.setBy} />
       </SideNote>

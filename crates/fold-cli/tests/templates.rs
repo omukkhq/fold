@@ -383,7 +383,7 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 68] = [
+const NON_TOOL_NAMES: [&str; 69] = [
     "file_count",
     "human_review",
     "fold_failed",
@@ -452,6 +452,7 @@ const NON_TOOL_NAMES: [&str; 68] = [
     "empty_added",
     "agent_changed",
     "shared_changed",
+    "owed_resume_waits",
 ];
 
 /// The sections of the index before the shared ones.
@@ -571,6 +572,7 @@ fn role_steps(role: Role) -> &'static [&'static str] {
             "submit_request_draft",
             "release_request",
             "mark_answered",
+            "restart_worker",
         ],
         Role::ReviewLead => &[
             "list_proposals",

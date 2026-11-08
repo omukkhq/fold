@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"task!: i64\"\n           FROM task_reports r JOIN tasks t ON t.id = r.task_id\n           WHERE r.resolution IS NULL\n           ORDER BY t.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "task!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d01ae49709daeb11a7cda8d332375c6fb42fc6d537e2aa76c8dd283fb53175a2"
+}

@@ -13,6 +13,16 @@ import {
 
 export type DetailRow =
   | { kind: "text"; name: string; text: string }
+  | {
+      kind: "prose";
+      name: string;
+      /** Markdown that a person or an agent wrote. */
+      text: string;
+      /** The rendered lines the panel shows of a long text; null shows it whole. */
+      clamp: typeof PREVIEW_LINES | null;
+      /** The note under a clamped text that sends the person to the task, where the text shows in full. */
+      more: string | null;
+    }
   | { kind: "person"; name: string; person: string }
   | { kind: "proposal"; name: string; text: string; look: ProposalLook }
   | { kind: "labels"; name: string };
@@ -25,6 +35,31 @@ export interface CardDetails {
   why: string | null;
   /** What a proposal in a review plan waits for. */
   notes: string[];
+}
+
+/** A long free text shows this many rendered lines in the panel, so the panel stays short. */
+export const PREVIEW_LINES = 4;
+/** About the characters that fill those lines at the panel's width; a longer text is clamped. */
+export const PREVIEW_CHARS = 160;
+
+/** A text row that a person or an agent wrote: whole when it is short, cut to its first lines with a note when it is long. */
+export function proseRow(
+  name: string,
+  text: string,
+  what: string,
+): Extract<DetailRow, { kind: "prose" }> {
+  const lines = text
+    .trim()
+    .split("\n")
+    .filter((line) => line.trim() !== "").length;
+  const long = lines > PREVIEW_LINES || text.trim().length > PREVIEW_CHARS;
+  return {
+    kind: "prose",
+    name,
+    text,
+    clamp: long ? PREVIEW_LINES : null,
+    more: long ? `Open the task to read the full ${what}` : null,
+  };
 }
 
 function plural(count: number, noun: string): string {
@@ -50,7 +85,7 @@ export function cardDetails(
     rows.push({ kind: "text", name: "Kind", text: kind });
   }
   if (card.blocker !== null) {
-    rows.push({ kind: "text", name: "Blocker", text: card.blocker.reason });
+    rows.push(proseRow("Blocker", card.blocker.reason, "reason"));
   }
   if (card.blocked_by.length > 0) {
     rows.push({
@@ -79,7 +114,7 @@ export function cardDetails(
     }
   }
   if (card.report !== null && card.kind === "no_proposal") {
-    rows.push({ kind: "text", name: "Report", text: card.report });
+    rows.push(proseRow("Report", card.report, "report"));
   }
   if (line?.run) {
     rows.push({ kind: "text", name: "Checks", text: `${line.run} running` });
@@ -110,7 +145,10 @@ export function cardDetails(
     rows.push({ kind: "labels", name: "Labels" });
   }
   const column = COLUMNS.find((c) => c.status === card.status);
-  const mark = attentionMark(card.attention);
+  // The stall note under the activity line says who was told and what waits, so the stall needs no sentence of its own here.
+  const mark = attentionMark(
+    card.attention.filter((item) => item.kind !== "stalled"),
+  );
   return {
     head: `${card.task} · ${column?.name ?? card.status}`,
     rows,

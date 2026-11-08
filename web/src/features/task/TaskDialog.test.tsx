@@ -41,7 +41,6 @@ import { mentionRoutes } from "@/test/mentionRoutes";
 import { boardCard, boardView, liveWorkspace, taskView } from "@/test/payloads";
 import { routeTree } from "@/routeTree.gen";
 import { ThemeProvider } from "@/theme/ThemeProvider";
-import { Markdown } from "./Markdown";
 
 vi.mock("@/api/client", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/api/client")>();
@@ -2211,43 +2210,4 @@ describe("archiving from the dialog head", () => {
     });
     expect(daemon.made(`POST ${P}/demo/tasks/T-2/archive`)).toHaveLength(0);
   }, 15_000);
-});
-
-describe("Markdown", () => {
-  it("renders tables and task lists and drops raw HTML", () => {
-    const { container } = render(
-      <Markdown>
-        {[
-          "| Code | Message |",
-          "| --- | --- |",
-          "| `rate_limited` | Try later. |",
-          "",
-          "- [x] Agree the copy",
-          "- [ ] Check it",
-          "",
-          "Some <b>bold</b> words",
-          "",
-          "<script>alert(1)</script>",
-          "",
-          '<div class="x">block</div>',
-          "",
-          "[run](javascript:alert(2)) and [board](/p/demo/board)",
-        ].join("\n")}
-      </Markdown>,
-    );
-    expect(screen.getByRole("table")).toBeTruthy();
-    expect(
-      screen.getAllByRole("columnheader").map((h) => h.textContent),
-    ).toEqual(["Code", "Message"]);
-    const boxes = screen.getAllByRole<HTMLInputElement>("checkbox");
-    expect(boxes.map((b) => b.checked)).toEqual([true, false]);
-    expect(boxes.every((b) => b.disabled)).toBe(true);
-    expect(container.querySelector("b, script, div.x")).toBeNull();
-    expect(container.textContent).not.toContain("<b>");
-    expect(container.textContent).not.toContain("alert(1)");
-    expect(container.textContent).not.toContain("block");
-    expect(
-      [...container.querySelectorAll("a")].map((a) => a.getAttribute("href")),
-    ).toEqual(["", "/p/demo/board"]);
-  });
 });

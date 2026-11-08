@@ -2,11 +2,14 @@ import type { AttentionItem } from "../../api/workspaces";
 import type { LiveWorkspace } from "../../live/envelope";
 import { revisionsAhead } from "../../format/revisions";
 import { formatQuiet } from "../../format/time";
+import { workerActivity } from "../../live/workerActivity";
 
 export interface AttentionView {
   /** `running checks` while a check run goes in the workspace. */
   checks: string | null;
-  /** `no edits for 7 min` when the daemon reports the workspace stalled and no check run goes. */
+  /** What fold saw of the worker, `Running a command for 8 min`, in the neutral pill: work in progress or a stall that fold told an agent of; null while no check run goes and fold has nothing to say, or when the stall waits for a person. */
+  activity: string | null;
+  /** The stall that waits for a person, `No activity from @web-worker for 12 min`, or `no edits for 7 min` when only the daemon's item tells of it; null while no check run goes. */
   stalled: string | null;
   staleClaim: boolean;
 }
@@ -15,21 +18,39 @@ export interface AttentionView {
  * Shows the daemon's `stalled` and `stale_claim` items and ignores the kinds this screen does not draw; the web decides nothing.
  * `lastActivityAt` is the workspace's last edit, which is what a stalled workspace has been quiet since. `live` is the
  * workspace's live state, which is newer than the list's items: while it names a check run, the worker waits for its
- * result and the stall does not show.
+ * result and the stall does not show. What fold saw of the worker comes from the live state too.
  */
 export function attentionView(
   items: readonly AttentionItem[],
   lastActivityAt: number,
   now: number,
-  live: Pick<LiveWorkspace, "check_run"> | null = null,
+  live:
+    | (Pick<LiveWorkspace, "check_run"> &
+        Partial<Pick<LiveWorkspace, "activity" | "stalled" | "worker">>)
+    | null = null,
 ): AttentionView {
   const checking = (live?.check_run ?? null) !== null;
+  const seen =
+    checking || live?.activity == null
+      ? null
+      : workerActivity(
+          {
+            activity: live.activity,
+            stalled: live.stalled ?? false,
+            worker: live.worker ?? "",
+          },
+          now,
+        );
+  const flagged = !checking && items.some((item) => item.kind === "stalled");
   return {
     checks: checking ? "running checks" : null,
+    activity: seen !== null && !seen.needsYou ? seen.text : null,
     stalled:
-      !checking && items.some((item) => item.kind === "stalled")
-        ? formatQuiet(now, lastActivityAt)
-        : null,
+      seen?.needsYou === true
+        ? seen.text
+        : seen === null && flagged
+          ? formatQuiet(now, lastActivityAt)
+          : null,
     staleClaim: items.some((item) => item.kind === "stale_claim"),
   };
 }

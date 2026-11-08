@@ -19,7 +19,7 @@ use tokio::sync::watch;
 use super::{Input, Supervisor, lock, reviewer_batch};
 use crate::services::agents::AgentError;
 use crate::services::agents::claude::{ClaudeMessage, SystemMessage};
-use crate::services::agents::workers::limits::check_running;
+use crate::services::agents::workers::limits::{Turn, check_running};
 use crate::services::agents::workers::{
     is_paused_refusal, new_session, not_supervised, refuse_while_paused,
 };
@@ -212,12 +212,25 @@ enum Section {
 }
 
 impl Supervisor {
-    /// Starts a stopped or failed worker again in the same agent and session with `--resume`, binds it to `bind` as well, and sends it `turn`. The worker counts against the limits again. A running worker is refused with `worker_exists`, and any start while the project's agents are paused with `project_paused`. A last process that fold let go of is waited for first.
+    /// Starts a stopped or failed worker again in the same agent and session with `--resume`, binds it to `bind` as well, and sends it `turn`. The worker counts against the limits again, and the resumes fold owes other workers of its role that became owed before its own, or all of them for a worker that fold owes nothing, take the free places first. A running worker is refused with `worker_exists`, and any start while the project's agents are paused with `project_paused`. A last process that fold let go of is waited for first.
     pub(in crate::services::agents::workers) async fn resume(
         &self,
         agent: &AgentName,
         turn: String,
         bind: &[TaskId],
+    ) -> Result<Option<StartWatch>, AgentError> {
+        self.resume_as(agent, turn, bind, "resume_worker", false)
+            .await
+    }
+
+    /// [`Supervisor::resume`] for a caller: `tool` is the call a refusal names, and `person` is true for a person's own resume, which only the limits refuse.
+    pub(in crate::services::agents::workers) async fn resume_as(
+        &self,
+        agent: &AgentName,
+        turn: String,
+        bind: &[TaskId],
+        tool: &'static str,
+        person: bool,
     ) -> Result<Option<StartWatch>, AgentError> {
         self.until_let_go_exited(agent, "resume_worker").await?;
         let config = load_config(&self.inner.paths).await?;
@@ -255,7 +268,22 @@ impl Supervisor {
                     .into());
                 }
                 refuse_while_paused(tx).await?;
-                check_running(tx, limits, row.role, row.area_id.zip(row.area.as_ref())).await?;
+                let queue = if person {
+                    Turn::Limits
+                } else {
+                    Turn::Owed {
+                        agent: Some(agent),
+                        tool,
+                    }
+                };
+                check_running(
+                    tx,
+                    limits,
+                    row.role,
+                    row.area_id.zip(row.area.as_ref()),
+                    queue,
+                )
+                .await?;
                 agents::restart_worker_process(tx, row.id, now).await?;
                 for task in bind {
                     agents::bind_task(tx, row.id, *task).await?;
@@ -623,8 +651,8 @@ impl Supervisor {
         let turn = resume_turn(&found);
         let watch = match self.resume(agent, turn.clone(), &tasks).await {
             Ok(watch) => watch,
-            // The task worker's row is left as it was, so the work stays owed and the resume serves it.
-            Err(error) if is_paused_refusal(&error) => return Ok(()),
+            // The task worker's row is left as it was, so the work stays owed and the resume of the pause or the next free place serves it.
+            Err(error) if is_paused_refusal(&error) || is_limit_refusal(&error) => return Ok(()),
             // A start outside this path, such as `resume_worker`, came first; the task worker takes this turn as its next one.
             Err(AgentError::Fold(error)) if error.code() == codes::WORKER_EXISTS => {
                 if let Some(run) = lock(&self.inner.running).get(agent) {
@@ -920,11 +948,13 @@ impl Supervisor {
                     return Ok(None);
                 }
                 refuse_while_paused(tx).await?;
+                // The resume this session continues was served already, so only the limits apply.
                 check_running(
                     tx,
                     limits,
                     row.role,
                     row.area_id.zip(row.area.as_ref()),
+                    Turn::Limits,
                 )
                 .await?;
                 agents::record_previous_session(tx, row.id, agents::SessionEnd::Lost, now)
@@ -975,7 +1005,7 @@ impl Supervisor {
 }
 
 /// A start that the worker limits refused.
-fn is_limit_refusal(error: &AgentError) -> bool {
+pub(super) fn is_limit_refusal(error: &AgentError) -> bool {
     matches!(error, AgentError::Fold(error) if error.code() == codes::WORKER_LIMIT_REACHED)
 }
 

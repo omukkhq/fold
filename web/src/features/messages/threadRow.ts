@@ -1,4 +1,5 @@
 import type { MessageView } from "@/api/messages";
+import { plainPreview } from "@/components/text/plainText";
 import { isYou } from "@/people/names";
 import { actorSegment, seg, type Segment } from "@/people/segments";
 import {
@@ -9,15 +10,16 @@ import {
 } from "./chats";
 import { chatSets } from "./sets";
 
-/** The newest message in one line: `You: …`, the body alone when the row already names its sender, else `@sender: …`. */
+/** The newest message in one line of plain text: `You: …`, the body alone when the row already names its sender, else `@sender: …`. */
 export function rowPreview(
   message: MessageView,
   you: string | null,
   named: string | null,
 ): Segment[] {
-  if (isYou(message.sender, you)) return seg`You: ${message.body}`;
-  if (message.sender === named) return [message.body];
-  return seg`${actorSegment(message.sender)}: ${message.body}`;
+  const body = plainPreview(message.body);
+  if (isYou(message.sender, you)) return seg`You: ${body}`;
+  if (message.sender === named) return [body];
+  return seg`${actorSegment(message.sender)}: ${body}`;
 }
 
 /** A chat row: its title, the newest message, and how many question sets and other messages wait for the signed-in human. */

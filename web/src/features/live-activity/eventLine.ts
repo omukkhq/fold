@@ -226,6 +226,36 @@ function integrationText(event: DurableEvent): string {
 }
 
 /** A worker's agent name. */
+/** What fold saw of a stalled worker, and whom it told. */
+function stalledText(e: DurableEvent): string {
+  const who = workerOf(e);
+  const minutes = count(e.data.minutes);
+  const time = minutes === null ? "" : ` for ${String(minutes)} min`;
+  let saw: string;
+  switch (e.data.reason) {
+    case "long_call":
+      saw =
+        e.data.call === "command"
+          ? `a command of ${who} that has run${time}`
+          : `a call of ${who} that has run${time}`;
+      break;
+    case "stopped":
+      saw = `${who} stopped without a report`;
+      break;
+    case "failed":
+      saw = `${who} failed without a report`;
+      break;
+    default:
+      saw = `no activity from ${who}${time}`;
+  }
+  const told = Array.isArray(e.data.told)
+    ? e.data.told.filter((name): name is string => typeof name === "string")
+    : [];
+  return told.length === 0
+    ? `saw ${saw}; no agent can act, so it waits for a person`
+    : `saw ${saw} and told ${told.join(", ")}`;
+}
+
 function workerOf(event: DurableEvent): string {
   return text(event.data.agent) ?? "a worker";
 }
@@ -962,6 +992,7 @@ const SPECS: Record<EventType, Spec> = {
     icon: TriangleAlert,
     text: (e) => `${workerOf(e)} cannot reach the model`,
   },
+  "worker.stalled": { icon: Hand, text: stalledText },
   "review.plan_created": { icon: Hourglass, text: planCreatedText },
   "review.plan_changed": {
     icon: Hourglass,

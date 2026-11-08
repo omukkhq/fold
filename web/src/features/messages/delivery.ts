@@ -1,4 +1,5 @@
 import { formatAsOfMinute } from "@/format/time";
+import { plainPreview } from "@/components/text/plainText";
 import type { MessageView, RecipientView } from "@/api/messages";
 import { atName, humanActor, isHumanName } from "@/people/names";
 import { actorSegment, seg, type Segment } from "@/people/segments";
@@ -115,9 +116,9 @@ export function routeLine(message: MessageView): Segment[] {
   return seg`${actorSegment(message.sender)} → ${joinRecipients(message)}`;
 }
 
-/** The last message of a thread as `@frontend/ui: Using the short versions now.` */
+/** The last message of a thread in plain text, as `@frontend/ui: Using the short versions now.` */
 export function previewLine(message: MessageView): Segment[] {
-  return seg`${actorSegment(message.sender)}: ${message.body}`;
+  return seg`${actorSegment(message.sender)}: ${plainPreview(message.body)}`;
 }
 
 /** The newest message of the thread that waits for `human` to read it, the key of one mark-read call; null when nothing waits or no human is signed in. */

@@ -130,6 +130,7 @@ export function liveWorkspace(
     stalled: false,
     edits_after_version: null,
     check_run: null,
+    activity: null,
     ...over,
   };
 }

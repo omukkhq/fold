@@ -4,7 +4,7 @@ import type { Intent } from "@/api/proposals";
 import { HrefLink } from "@/app/HrefLink";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
-import { MentionText } from "@/mentions/MentionText";
+import { Markdown } from "@/components/text/Markdown";
 import { PART_COVERS, intentSections, partSize } from "./intent";
 import { detailHref } from "./view";
 
@@ -27,7 +27,7 @@ function Entries({
         {entries.map((entry, index) => (
           // Entries may repeat, so their place keeps them apart.
           <li key={index}>
-            <MentionText text={entry} slug={slug} className="inline" />
+            <Markdown mentions={{ slug }}>{entry}</Markdown>
           </li>
         ))}
       </ul>
@@ -79,11 +79,9 @@ export function IntentBody({
                   {part.name}
                   <span className="sr-only">{PART_COVERS}</span>
                 </span>
-                <MentionText
-                  text={part.does}
-                  slug={slug}
-                  className="max-w-measure"
-                />
+                <Markdown mentions={{ slug }} className="max-w-measure">
+                  {part.does}
+                </Markdown>
                 <div className="mt-6 flex flex-wrap items-center gap-6">
                   {part.files.map((path) => (
                     <HrefLink
@@ -124,11 +122,9 @@ export function IntentBody({
                   <ul className="flex flex-col gap-2">
                     {line.entries.map((entry, index) => (
                       <li key={index}>
-                        <MentionText
-                          text={entry}
-                          slug={slug}
-                          className="text-14"
-                        />
+                        <Markdown mentions={{ slug }} size={14}>
+                          {entry}
+                        </Markdown>
                       </li>
                     ))}
                   </ul>
