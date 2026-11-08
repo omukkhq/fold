@@ -69,7 +69,6 @@ impl Supervisor {
         self.inner
             .tool_windows
             .close_all(&process.agent, file_clock_now());
-        self.inner.streams.ended(&process.agent, process.generation);
         let code = status.ok().and_then(exit_code);
         if let Err(error) = self
             .on_exit(&process, code, detached.load(Ordering::SeqCst))
@@ -77,6 +76,8 @@ impl Supervisor {
         {
             tracing::warn!(agent = %process.agent, code = code_of(&error), "could not record a worker's exit");
         }
+        // Only once the row says the process ended, so no stall decision reads a running row without its stream.
+        self.inner.streams.ended(&process.agent, process.generation);
         // A newer process of the agent owns the replays from here on.
         let newer = lock(&self.inner.running)
             .get(&process.agent)
