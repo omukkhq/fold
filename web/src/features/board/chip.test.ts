@@ -279,5 +279,13 @@ describe("metaFact", () => {
       "Running a command for 8 min",
     );
     expect(cardChip(stalled)?.text).toBe("Stalled · needs you");
+    const waits = {
+      ...working,
+      text: "Waits for a free task worker slot",
+    };
+    expect(cardChip(card, null, waits)).toMatchObject({
+      tone: "neutral",
+      text: "Waits for a free task worker slot",
+    });
   });
 });

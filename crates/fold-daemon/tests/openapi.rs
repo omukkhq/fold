@@ -89,6 +89,7 @@ fn sample_workspace() -> LiveWorkspace {
         activity: Some(LiveActivity {
             state: ActivityState::LongCall,
             call: Some(LiveCall::Command),
+            slot: None,
             since: Timestamp::from_millis(1_760_000_000_200).unwrap(),
             supervised: true,
             told: vec!["web-lead".to_owned()],

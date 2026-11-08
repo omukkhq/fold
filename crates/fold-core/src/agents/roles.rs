@@ -7,6 +7,7 @@ use crate::tasks::{LabelName, define_names};
 
 mod answers;
 mod handoff;
+mod owed;
 mod profile;
 mod update;
 
@@ -17,6 +18,7 @@ pub use handoff::{
     SummaryProposal, SummaryTask, check_handoff, default_handoff_percent, handoff_due,
     handoff_overdue, handoff_reask_due, refresh_turn,
 };
+pub use owed::{OWED_RESUME_WAITS, OwedResume, check_owed_first, owed_ahead, waits_for_place};
 pub use profile::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, FieldChange, MAX_AREA_INSTRUCTIONS_CHARS,
     area_prompt,

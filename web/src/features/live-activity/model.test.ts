@@ -105,6 +105,7 @@ describe("attention", () => {
   it("shows what fold saw of the worker from the live state, and a stall as the badge only once it waits for a person", () => {
     const activity = {
       state: "silent" as const,
+      slot: null,
       call: null,
       since: 0,
       supervised: true,

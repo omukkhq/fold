@@ -7,7 +7,7 @@ use std::time::Duration;
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
 use fold_core::reviews::checks::Purpose;
-use fold_core::stall::{self, Activity, CallKind, ProposalTurn, WorkspaceFact};
+use fold_core::stall::{self, Activity, CallKind, ProposalTurn, Slot, WorkspaceFact};
 use fold_core::tree::{ChangeKind as FileChangeKind, ChangeTally, FlatTree};
 use fold_core::{
     AgentName, CheckRunId, CheckpointId, Clock, EventActor, FoldError, LiveEvent, NewEvent,
@@ -140,10 +140,13 @@ pub struct LiveWorkspace {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct LiveActivity {
     pub state: ActivityState,
-    /// The kind of the open call of `working` and `long_call`; null for `silent` and `stopped`.
+    /// The kind of the open call of `working` and `long_call`; null for the other states.
     #[schema(required = true)]
     pub call: Option<LiveCall>,
-    /// UTC milliseconds: the start of the open call, the last activity of a silent worker, or the end of a stopped worker's process.
+    /// The role whose free place a `waits_for_slot` worker waits for; null for the other states.
+    #[schema(required = true)]
+    pub slot: Option<LiveSlot>,
+    /// UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped worker's process, or the time the work came that fold owes a `waits_for_slot` worker.
     #[schema(value_type = i64)]
     pub since: Timestamp,
     /// fold runs the worker's process, so `restart_worker` can start it again in a new session.
@@ -152,7 +155,7 @@ pub struct LiveActivity {
     pub told: Vec<String>,
 }
 
-/// What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), and `stopped` once its process ended without a report.
+/// What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended without a report, and `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free. `working` and `waits_for_slot` are never stalls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityState {
@@ -160,6 +163,24 @@ pub enum ActivityState {
     Silent,
     LongCall,
     Stopped,
+    WaitsForSlot,
+}
+
+/// The role of a place under the worker limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveSlot {
+    TaskWorker,
+    Reviewer,
+}
+
+impl From<Slot> for LiveSlot {
+    fn from(slot: Slot) -> Self {
+        match slot {
+            Slot::TaskWorker => Self::TaskWorker,
+            Slot::Reviewer => Self::Reviewer,
+        }
+    }
 }
 
 /// The kind of an open call.
@@ -188,16 +209,22 @@ impl From<CallKind> for LiveCall {
 impl LiveActivity {
     /// The view of `activity`; `None` for [`Activity::Quiet`].
     pub fn of(activity: Activity, supervised: bool, told: &[AgentName]) -> Option<Self> {
+        let mut slot = None;
         let (state, call, since) = match activity {
             Activity::Quiet => return None,
             Activity::Working { call, since } => (ActivityState::Working, Some(call), since),
             Activity::Silent { since } => (ActivityState::Silent, None, since),
             Activity::LongCall { call, since } => (ActivityState::LongCall, Some(call), since),
             Activity::Stopped { since } => (ActivityState::Stopped, None, since),
+            Activity::WaitsForSlot { slot: waits, since } => {
+                slot = Some(LiveSlot::from(waits));
+                (ActivityState::WaitsForSlot, None, since)
+            }
         };
         Some(Self {
             state,
             call: call.map(LiveCall::from),
+            slot,
             since,
             supervised,
             told: told.iter().map(ToString::to_string).collect(),
@@ -219,12 +246,22 @@ impl LiveActivity {
             ActivityState::Silent => Activity::Silent { since },
             ActivityState::LongCall => Activity::LongCall { call, since },
             ActivityState::Stopped => Activity::Stopped { since },
+            ActivityState::WaitsForSlot => Activity::WaitsForSlot {
+                slot: match self.slot {
+                    Some(LiveSlot::Reviewer) => Slot::Reviewer,
+                    Some(LiveSlot::TaskWorker) | None => Slot::TaskWorker,
+                },
+                since,
+            },
         }
     }
 
-    /// A stall rather than work.
+    /// A stall rather than work or a wait for a free place.
     pub fn is_stall(&self) -> bool {
-        self.state != ActivityState::Working
+        !matches!(
+            self.state,
+            ActivityState::Working | ActivityState::WaitsForSlot
+        )
     }
 }
 

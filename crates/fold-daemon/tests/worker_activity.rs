@@ -3,13 +3,16 @@
 use std::time::Duration;
 
 use fold_core::WorkerState;
-use fold_daemon::live::{ActivityState, LiveActivity, LiveCall, WorkspaceLive};
+use fold_daemon::live::{ActivityState, LiveActivity, LiveCall, LiveSlot, WorkspaceLive};
 use fold_daemon::services::workspaces::check_stalls;
 use fold_store::testing::eventually;
 use serde_json::json;
 
 use crate::common::acceptance::{HUMAN, Harness, WAIT, Work};
-use crate::worker_resume::{TASK_WORKER, task_worker_for, until_state};
+use crate::worker_resume::{
+    MAIN, TASK_WORKER, proposed_by_a_task_worker, request_changes, task_worker_for, until_runs,
+    until_state, worker,
+};
 use crate::workers_support::FakeClaude;
 
 const MINUTE: Duration = Duration::from_secs(60);
@@ -212,4 +215,83 @@ async fn the_lead_that_hears_of_a_stall_restarts_its_task_worker() {
     })
     .await;
     assert!(!state(&harness, &work).await.view.stalled);
+}
+
+/// With one task worker place held by another worker, a task worker whose proposal comes back waits for a free slot: the neutral activity says so however long it waits, fold tells nobody and no person is needed, a lead's start of a new task worker is refused for it, and the stop of the other worker resumes it first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_resume_the_limits_hold_waits_for_a_slot_and_is_never_a_stall() {
+    let fake = FakeClaude::new("result");
+    let (harness, work) = proposed_by_a_task_worker(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    std::fs::write(
+        std::path::Path::new(harness.root()).join(".fold/config.toml"),
+        "[workers]\ntask_worker = 1\n",
+    )
+    .unwrap();
+    for title in ["Draw the menu", "Draw the footer"] {
+        harness
+            .call(
+                MAIN,
+                "create_task",
+                json!({"title": title, "labels": ["ui"]}),
+            )
+            .await;
+    }
+    let other = harness
+        .call(
+            "web-lead",
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-2"]}),
+        )
+        .await;
+    let other = other["worker"]["name"].as_str().unwrap().to_owned();
+    until_state(&harness, &other, WorkerState::Idle).await;
+    advance(&harness, Duration::from_secs(1));
+    request_changes(&harness, "P-1", "Split the page.").await;
+    assert_eq!(
+        worker(&harness, TASK_WORKER).await.state,
+        WorkerState::Stopped
+    );
+
+    for _ in 0..3 {
+        let view = state(&harness, &work).await.view;
+        let seen = view.activity.expect("the owed resume waits for a slot");
+        assert_eq!(seen.state, ActivityState::WaitsForSlot);
+        assert_eq!(seen.slot, Some(LiveSlot::TaskWorker));
+        assert!(seen.told.is_empty());
+        assert!(!seen.is_stall());
+        assert!(!view.stalled, "no person is needed");
+        assert_eq!(
+            fold_core::stall::activity_text(seen.activity(), TASK_WORKER, harness.project.now())
+                .as_deref(),
+            Some("Waits for a free task worker slot")
+        );
+        advance(&harness, STALL);
+    }
+    assert!(
+        stalled_events(&harness).await.is_empty(),
+        "fold tells nobody"
+    );
+
+    let refused = harness
+        .refused(
+            "web-lead",
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-3"]}),
+        )
+        .await;
+    assert_eq!(refused["details"]["reason"], "owed_resume_waits");
+    assert_eq!(refused["details"]["agent"], TASK_WORKER);
+
+    harness
+        .call("web-lead", "stop_worker", json!({"name": other}))
+        .await;
+    let runs = until_runs(&fake, TASK_WORKER, 2).await;
+    assert!(runs[1].stdin[1].contains("Split the page."));
+    let after = state(&harness, &work).await.view;
+    assert_ne!(
+        after.activity.map(|seen| seen.state),
+        Some(ActivityState::WaitsForSlot),
+        "the resume took the place"
+    );
+    assert!(stalled_events(&harness).await.is_empty());
 }

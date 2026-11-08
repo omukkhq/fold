@@ -61,6 +61,7 @@ describe("activityLine", () => {
       ...live(NOW - 30 * MINUTE, 2),
       activity: {
         state: "working" as const,
+        slot: null,
         call: "command" as const,
         since: NOW - 8 * MINUTE,
         supervised: true,
@@ -78,6 +79,7 @@ describe("activityLine", () => {
       activity: {
         ...frame.activity,
         state: "silent" as const,
+        slot: null,
         call: null,
         told: ["web-lead"],
       },

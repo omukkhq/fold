@@ -47,8 +47,8 @@ pub use workers::{
     tasks_awaiting_proposal, worker_held,
 };
 pub use workers::{
-    OwedReview, PendingResume, pending_resumes, reviews_owed_to_ended_reviewers,
-    unreviewed_claims_of_ended_reviewer,
+    OwedReview, OwedStart, PendingResume, owed_starts, pending_resumes,
+    reviews_owed_to_ended_reviewers, unreviewed_claims_of_ended_reviewer,
 };
 pub use workers::{
     clear_turn_error, forget_made_up_model, process_starts, record_turn_error, set_exit_error,

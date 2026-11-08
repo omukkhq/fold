@@ -283,6 +283,7 @@ describe("Inbox, Needs you", () => {
             "restart it in a new session: `fld worker restart a-worker-with-a-long-name`",
           activity: {
             state: "silent",
+            slot: null,
             call: null,
             since: 1_760_000_000_000,
             supervised: true,

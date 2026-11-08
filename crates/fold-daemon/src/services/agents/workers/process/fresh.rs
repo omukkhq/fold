@@ -11,7 +11,7 @@ use serde_json::json;
 use super::stop::stopped_event;
 use super::{Supervisor, lock, resume, reviewer_batch};
 use crate::services::agents::AgentError;
-use crate::services::agents::workers::limits::check_running;
+use crate::services::agents::workers::limits::{Turn, check_running};
 use crate::services::agents::workers::{new_session, not_supervised, refuse_while_paused};
 use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
@@ -44,7 +44,7 @@ fn changed(agent: &AgentName) -> AgentError {
 }
 
 impl Supervisor {
-    /// Starts the worker again in a new Claude Code session, for a worker of any role whose session a human or the main agent wants to leave. The steps run on a task of their own, so a caller that goes away never leaves a process ended under a row that still runs, and one new session of an agent is under way at a time, a hand-off refresh included. A paused project refuses with `project_paused`, and a stopped or failed short-lived worker over the worker limits with `worker_limit_reached`.
+    /// Starts the worker again in a new Claude Code session, for a worker of any role whose session a human or the main agent wants to leave. The steps run on a task of their own, so a caller that goes away never leaves a process ended under a row that still runs, and one new session of an agent is under way at a time, a hand-off refresh included. A paused project refuses with `project_paused`, and a stopped or failed short-lived worker over the worker limits with `worker_limit_reached`, as does a lead's restart of one whose place goes to a resume fold owes first; a person's restart obeys only the limits.
     pub(in crate::services::agents::workers) async fn restart_fresh(
         &self,
         agent: &AgentName,
@@ -159,11 +159,20 @@ impl Supervisor {
                         return Err(changed(agent));
                     }
                     refuse_while_paused(tx).await?;
+                    let queue = if by.is_human() {
+                        Turn::Limits
+                    } else {
+                        Turn::Owed {
+                            agent: Some(agent),
+                            tool: RESTART_WORKER,
+                        }
+                    };
                     check_running(
                         tx,
                         limits,
                         current.role,
                         current.area_id.zip(current.area.as_ref()),
+                        queue,
                     )
                     .await?;
                 }

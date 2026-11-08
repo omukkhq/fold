@@ -596,7 +596,7 @@ pub struct RestartWorkerBody {
     pub instructions: Option<String>,
 }
 
-/// A named human starts a worker of any role again in a new Claude Code session, for example when its session is broken. A running worker's process ends first, and the worker keeps its place under the worker limits. The worker keeps its name, claims, bound tasks and proposals and the workers it started; its old session id stays in `previous_sessions`, and the new session gets the role's first turn.
+/// A named human starts a worker of any role again in a new Claude Code session, for example when its session is broken. A running worker's process ends first, and the worker keeps its place under the worker limits. A stopped or failed task worker or reviewer starts only within the worker limits, but a human's restart never waits for the resumes that fold owes other workers. The worker keeps its name, claims, bound tasks and proposals and the workers it started; its old session id stays in `previous_sessions`, and the new session gets the role's first turn.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/workers/{name}/restart",
