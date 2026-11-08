@@ -1869,7 +1869,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** A named human starts a worker of any role again in a new Claude Code session, for example when its session is broken. A running worker's process ends first, and the worker keeps its place under the worker limits. The worker keeps its name, claims, bound tasks and proposals and the workers it started; its old session id stays in `previous_sessions`, and the new session gets the role's first turn. */
+        /** A named human starts a worker of any role again in a new Claude Code session, for example when its session is broken. A running worker's process ends first, and the worker keeps its place under the worker limits. A stopped or failed task worker or reviewer starts only within the worker limits, but a human's restart never waits for the resumes that fold owes other workers. The worker keeps its name, claims, bound tasks and proposals and the workers it started; its old session id stays in `previous_sessions`, and the new session gets the role's first turn. */
         post: operations["restart_worker"];
         delete?: never;
         options?: never;
@@ -2037,10 +2037,10 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @description What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), and `stopped` once its process ended without a report.
+         * @description What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended without a report, and `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free. `working` and `waits_for_slot` are never stalls.
          * @enum {string}
          */
-        ActivityState: "working" | "silent" | "long_call" | "stopped";
+        ActivityState: "working" | "silent" | "long_call" | "stopped" | "waits_for_slot";
         /** @description One comment on the version the human read, as its own `comment` review. */
         AddCommentBody: components["schemas"]["CommentBody"] & {
             /**
@@ -3568,9 +3568,10 @@ export interface components {
             call: components["schemas"]["LiveCall"] | null;
             /**
              * Format: int64
-             * @description UTC milliseconds: the start of the open call, the last activity of a silent worker, or the end of a stopped worker's process.
+             * @description UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped worker's process, or the time the work came that fold owes a `waits_for_slot` worker.
              */
             since: number;
+            slot: components["schemas"]["LiveSlot"] | null;
             state: components["schemas"]["ActivityState"];
             /** @description fold runs the worker's process, so `restart_worker` can start it again in a new session. */
             supervised: boolean;
@@ -3598,6 +3599,11 @@ export interface components {
              */
             started_at: number;
         };
+        /**
+         * @description The role of a place under the worker limits.
+         * @enum {string}
+         */
+        LiveSlot: "task_worker" | "reviewer";
         /** @description What an active workspace holds right now. These are working changes, never history. */
         LiveWorkspace: {
             activity: components["schemas"]["LiveActivity"] | null;

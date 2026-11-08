@@ -467,6 +467,7 @@ describe("needsYouGroups", () => {
   it("shows a stalled worker with what fold saw in the words of its chip, the restart command and Restart worker for a worker fold runs", () => {
     const activity = {
       state: "long_call" as const,
+      slot: null,
       call: "command" as const,
       since: 1_760_000_000_000,
       supervised: true,
@@ -494,6 +495,7 @@ describe("needsYouGroups", () => {
           activity: {
             ...activity,
             state: "silent",
+            slot: null,
             call: null,
             supervised: false,
           },

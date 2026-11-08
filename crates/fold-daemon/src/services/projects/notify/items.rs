@@ -226,6 +226,7 @@ mod tests {
             crate::live::LiveActivity {
                 state: crate::live::ActivityState::Silent,
                 call: None,
+                slot: None,
                 since: Timestamp::from_millis(9).unwrap(),
                 supervised: true,
                 told: vec!["web-lead".to_owned()],

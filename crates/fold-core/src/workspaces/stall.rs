@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use crate::agents::AgentName;
+use crate::agents::roles::Role;
 use crate::layout::MCP_SERVER_NAME;
 use crate::time::Timestamp;
 
@@ -204,6 +205,33 @@ pub enum WorkerStream {
     Ended { at: Timestamp },
 }
 
+/// The kind of place a worker waits for: the roles that the worker limits count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    TaskWorker,
+    Reviewer,
+}
+
+impl Slot {
+    /// The place of `role`; `None` for a lead or the supervised main, which no limit counts.
+    pub fn of(role: Role) -> Option<Self> {
+        match role {
+            Role::TaskWorker => Some(Self::TaskWorker),
+            Role::Reviewer => Some(Self::Reviewer),
+            Role::AreaLead | Role::ReviewLead | Role::Main => None,
+        }
+    }
+}
+
+/// A resume that fold owes the worker, such as for requested changes or a send-back, as the stall rule sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwedTurn {
+    /// The worker limits refuse its start now, or an older owed resume of its role takes the free place first; `since` is when the owed work came.
+    WaitsForPlace { slot: Slot, since: Timestamp },
+    /// A place is free for it since `since`: the later of the time the owed work came and the time a worker of its role stopped or a limit changed.
+    PlaceFree { since: Timestamp },
+}
+
 /// The facts of the claim, the workspace and the worker that the stall rule reads beside the worker's stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StallFacts {
@@ -217,6 +245,8 @@ pub struct StallFacts {
     pub explained: bool,
     /// The project's agents are paused: no worker may work, so none stalls, and the resumes fold owes wait for the resume of the pause.
     pub paused: bool,
+    /// The resume that fold owes the worker; `None` when it owes none.
+    pub owed: Option<OwedTurn>,
 }
 
 impl Default for StallFacts {
@@ -229,6 +259,7 @@ impl Default for StallFacts {
             reported: false,
             explained: false,
             paused: false,
+            owed: None,
         }
     }
 }
@@ -246,6 +277,8 @@ pub enum Activity {
     LongCall { call: CallKind, since: Timestamp },
     /// The worker's process ended at `since` and the task has no report.
     Stopped { since: Timestamp },
+    /// fold owes the worker a resume since `since`, and the worker limits hold it until a place of `slot` is free for it: fold starts it then, so nobody must act.
+    WaitsForSlot { slot: Slot, since: Timestamp },
 }
 
 impl Activity {
@@ -257,18 +290,18 @@ impl Activity {
         )
     }
 
-    /// The name of a stall, as events and the live state write it; `None` for `Quiet` and `Working`.
+    /// The name of a stall, as events and the live state write it; `None` for `Quiet`, `Working` and `WaitsForSlot`.
     pub fn reason(self) -> Option<&'static str> {
         match self {
             Self::Silent { .. } => Some("silent"),
             Self::LongCall { .. } => Some("long_call"),
             Self::Stopped { .. } => Some("stopped"),
-            Self::Quiet | Self::Working { .. } => None,
+            Self::Quiet | Self::Working { .. } | Self::WaitsForSlot { .. } => None,
         }
     }
 }
 
-/// Decides what the worker of a workspace does at `now`. Nothing is said while the project's agents are paused, nor of a worker without the implementation claim, a workspace that is not active, a check run that goes, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A process that ended is `Stopped` at once, unless the worker was given the turn after it ended, such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
+/// Decides what the worker of a workspace does at `now`. Nothing is said while the project's agents are paused, nor of a worker without the implementation claim, a workspace that is not active, a check run that goes, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A worker whose resume fold owes while the worker limits hold it is `WaitsForSlot`, never a stall; once a place is free for it, it is `Silent` when a stall window from that time, and from `start`, passed without a run. A process that ended is `Stopped` at once, unless the worker was given the turn after it ended, such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
 pub fn activity(
     now: Timestamp,
     facts: &StallFacts,
@@ -296,6 +329,18 @@ pub fn activity(
     let lasted = |since: Timestamp, span: Duration| {
         now.duration_since(since)
             .is_some_and(|elapsed| elapsed >= span)
+    };
+    let start = match facts.owed {
+        Some(OwedTurn::WaitsForPlace { slot, since }) => {
+            return Activity::WaitsForSlot { slot, since };
+        }
+        Some(OwedTurn::PlaceFree { since }) => {
+            if let WorkerStream::Ended { .. } = stream {
+                return silent(start.max(since));
+            }
+            start.max(since)
+        }
+        None => start,
     };
     match stream {
         WorkerStream::Unread => silent(start),
@@ -332,7 +377,7 @@ pub fn activity(
     }
 }
 
-/// What fold saw of the worker `worker`, in the words that the board's chip, the task, Activity, Needs you and the notices all use: `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min` or `@web-worker stopped`. The time is the span from the activity's start to `now`, rounded down, in seconds, minutes, hours or days. `None` for [`Activity::Quiet`].
+/// What fold saw of the worker `worker`, in the words that the board's chip, the task, Activity, Needs you and the notices all use: `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped` or `Waits for a free task worker slot`. The time is the span from the activity's start to `now`, rounded down, in seconds, minutes, hours or days. `None` for [`Activity::Quiet`].
 pub fn activity_text(activity: Activity, worker: &str, now: Timestamp) -> Option<String> {
     let span = |since: Timestamp| {
         let seconds = now
@@ -371,6 +416,13 @@ pub fn activity_text(activity: Activity, worker: &str, now: Timestamp) -> Option
             span(since)
         )),
         Activity::Stopped { .. } => Some(format!("@{worker} stopped")),
+        Activity::WaitsForSlot { slot, .. } => Some(
+            match slot {
+                Slot::TaskWorker => "Waits for a free task worker slot",
+                Slot::Reviewer => "Waits for a free reviewer slot",
+            }
+            .to_owned(),
+        ),
     }
 }
 
@@ -826,6 +878,7 @@ mod tests {
         reported: false,
         explained: false,
         paused: false,
+        owed: None,
     };
 
     fn running(last_output: i64, call: Option<(CallKind, i64)>) -> WorkerStream {
@@ -1093,6 +1146,92 @@ mod tests {
     }
 
     #[test]
+    fn an_owed_resume_that_the_limits_hold_waits_for_a_slot_and_is_never_a_stall() {
+        let came = at(12 * MINUTE);
+        let waiting = StallFacts {
+            owed: Some(OwedTurn::WaitsForPlace {
+                slot: Slot::TaskWorker,
+                since: came,
+            }),
+            ..CLAIMED
+        };
+        let ended = WorkerStream::Ended {
+            at: at(10 * MINUTE),
+        };
+        for minutes in [12, 17, 60, 24 * 60] {
+            let seen = activity(at(minutes * MINUTE), &waiting, ended, came, 5);
+            assert_eq!(
+                seen,
+                Activity::WaitsForSlot {
+                    slot: Slot::TaskWorker,
+                    since: came
+                },
+                "{minutes} min"
+            );
+            assert!(!seen.is_stall());
+            assert_eq!(seen.reason(), None);
+        }
+        let sent_back_after_the_end = WorkerStream::Ended {
+            at: at(20 * MINUTE),
+        };
+        assert!(
+            matches!(
+                activity(at(20 * MINUTE), &waiting, sent_back_after_the_end, at(0), 5),
+                Activity::WaitsForSlot { .. }
+            ),
+            "never stopped while fold owes the resume"
+        );
+        assert_eq!(
+            activity(
+                at(60 * MINUTE),
+                &StallFacts {
+                    paused: true,
+                    ..waiting
+                },
+                ended,
+                came,
+                5
+            ),
+            Activity::Quiet,
+            "a pause says nothing"
+        );
+    }
+
+    #[test]
+    fn an_owed_resume_with_a_free_slot_is_silent_one_window_after_the_slot_freed() {
+        let ended = WorkerStream::Ended {
+            at: at(10 * MINUTE),
+        };
+        let freed = at(40 * MINUTE);
+        let free = StallFacts {
+            owed: Some(OwedTurn::PlaceFree { since: freed }),
+            ..CLAIMED
+        };
+        let back = at(12 * MINUTE);
+        assert_eq!(
+            activity(at(45 * MINUTE - 1), &free, ended, back, 5),
+            Activity::Quiet,
+            "the resume gets a whole window from the free place"
+        );
+        assert_eq!(
+            activity(at(45 * MINUTE), &free, ended, back, 5),
+            Activity::Silent { since: freed }
+        );
+        let sent_back = WorkerStream::Ended {
+            at: at(41 * MINUTE),
+        };
+        assert_eq!(
+            activity(at(45 * MINUTE), &free, sent_back, back, 5),
+            Activity::Silent { since: freed },
+            "an owed resume is never stopped"
+        );
+        assert_eq!(Slot::of(Role::TaskWorker), Some(Slot::TaskWorker));
+        assert_eq!(Slot::of(Role::Reviewer), Some(Slot::Reviewer));
+        assert_eq!(Slot::of(Role::AreaLead), None);
+        assert_eq!(StallFacts::default().owed, None);
+    }
+
+    #[test]
     fn a_paused_project_never_stalls_a_worker() {
         let paused = StallFacts {
             paused: true,
@@ -1204,6 +1343,22 @@ mod tests {
             Some("@web-worker stopped")
         );
         assert_eq!(text(Activity::Quiet), None);
+        assert_eq!(
+            text(Activity::WaitsForSlot {
+                slot: Slot::TaskWorker,
+                since: at(0)
+            })
+            .as_deref(),
+            Some("Waits for a free task worker slot")
+        );
+        assert_eq!(
+            text(Activity::WaitsForSlot {
+                slot: Slot::Reviewer,
+                since: at(0)
+            })
+            .as_deref(),
+            Some("Waits for a free reviewer slot")
+        );
         let later = |millis: i64| activity_text(Activity::Silent { since: at(0) }, "w", at(millis));
         assert_eq!(
             later(2 * 60 * MINUTE).as_deref(),

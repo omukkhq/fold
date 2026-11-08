@@ -1,15 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use fold_core::reviews::checks::Stage;
+use fold_core::roles::{OwedResume, Role, WorkerLimits, waits_for_place};
 use fold_core::stall::{
-    Activity, ProposalTurn, StallFacts, WorkerStream, WorkerTurn, WorkspaceChecks, WorkspaceFact,
-    activity, needs_person, present_workspace, stall_receivers, stall_start,
+    Activity, OwedTurn, ProposalTurn, Slot, StallFacts, WorkerStream, WorkerTurn, WorkspaceChecks,
+    WorkspaceFact, activity, needs_person, present_workspace, stall_receivers, stall_start,
 };
 use fold_core::{AgentName, ProjectPaths, ProposalId, TaskId, Timestamp, WorkerName, WorkspaceId};
-use fold_store::agents::{self, ClaimKind};
+use fold_store::agents::{self, ClaimKind, OwedStart};
 use fold_store::reviews::checks;
 use fold_store::tasks::reports;
-use fold_store::{Store, StoreError, messages, reviews};
+use fold_store::{Store, StoreError, events, messages, reviews};
 
 use fold_core::events::types;
 use fold_core::roles::needs_restart;
@@ -25,7 +26,7 @@ use crate::push::starter_agent;
 use crate::services::events::{BusMessage, EventBuffer, EventBus};
 use crate::services::projects::load_config;
 
-/// Decides what fold saw of the worker of every live workspace of `project` at `now`, with the project's `stall_minutes`, sets it in the live state with the check run that goes in each workspace, and tells the worker's lead of each new stall. A workspace whose files are its open proposal's newest version never stalls while the proposal waits on others; once it comes back to its author, the stall time counts from that moment at the earliest. A workspace whose checks run never stalls, and the stall time counts from the end of its newest run at the earliest, so the worker gets the whole window to act on the result. A worker never stalls while an ask about its task or one of its permission questions waits for a person, and the stall time counts from a person's newest answer and the start of its current process at the earliest. A worker whose process fold supervises counts from its newest output too: an open call is work, a call that runs long, a silence of `stall_minutes` and a process that ended without a report are stalls. Each new stall appends `worker.stalled`, which tells the worker's lead, or else the main agents; the stall needs a person once one more `stall_minutes` passed after that, or at once when no agent can act. A change publishes `workspace.changed`. Returns how many workspaces changed, the ones a starting run cleared included. While the project's agents are paused no worker stalls: the pause clears every activity and stalled flag and appends no `worker.stalled`, and after a resume the stall time counts from the resume at the earliest, so the paused time never stalls a worker.
+/// Decides what fold saw of the worker of every live workspace of `project` at `now`, with the project's `stall_minutes`, sets it in the live state with the check run that goes in each workspace, and tells the worker's lead of each new stall. A workspace whose files are its open proposal's newest version never stalls while the proposal waits on others; once it comes back to its author, the stall time counts from that moment at the earliest. A workspace whose checks run never stalls, and the stall time counts from the end of its newest run at the earliest, so the worker gets the whole window to act on the result. A worker never stalls while an ask about its task or one of its permission questions waits for a person, and the stall time counts from a person's newest answer and the start of its current process at the earliest. A worker whose process fold supervises counts from its newest output too: an open call is work, a call that runs long, a silence of `stall_minutes` and a process that ended without a report are stalls. A worker whose resume fold owes while the worker limits hold it waits for a slot, which is never a stall; once a place is free for it, the stall time counts from the newest stop of a worker of its role or change of the limits at the earliest. Each new stall appends `worker.stalled`, which tells the worker's lead, or else the main agents; the stall needs a person once one more `stall_minutes` passed after that, or at once when no agent can act. A change publishes `workspace.changed`. Returns how many workspaces changed, the ones a starting run cleared included. While the project's agents are paused no worker stalls: the pause clears every activity and stalled flag and appends no `worker.stalled`, and after a resume the stall time counts from the resume at the earliest, so the paused time never stalls a worker.
 pub async fn check_stalls(
     project: &ProjectHandle,
     now: Timestamp,
@@ -40,7 +41,9 @@ pub(super) async fn decide_stalls(
     live: &LiveState,
     now: Timestamp,
 ) -> Result<usize, WorkspaceError> {
-    let stall_minutes = load_config(paths).await?.stall_minutes;
+    let config = load_config(paths).await?;
+    let stall_minutes = config.stall_minutes;
+    let limits = config.workers.limits();
     let _turn = live.stall_turn().await;
     let states = live.all();
     if states.is_empty() {
@@ -117,6 +120,9 @@ pub(super) async fn decide_stalls(
                 .is_some_and(|task| inputs.reported.contains(&task)),
             explained: process.is_some_and(|process| process.explained),
             paused: inputs.paused,
+            owed: agent
+                .as_ref()
+                .and_then(|agent| inputs.owed_turn(agent, limits)),
         };
         let verdict = activity(now, &facts, stream, start, stall_minutes);
         let (told, stalled) = match (verdict.reason(), verdict_since(verdict), &agent) {
@@ -174,7 +180,7 @@ fn verdict_since(verdict: Activity) -> Option<Timestamp> {
         Activity::Silent { since }
         | Activity::LongCall { since, .. }
         | Activity::Stopped { since } => Some(since),
-        Activity::Quiet | Activity::Working { .. } => None,
+        Activity::Quiet | Activity::Working { .. } | Activity::WaitsForSlot { .. } => None,
     }
 }
 
@@ -275,7 +281,7 @@ pub async fn follow_stall_turns(
     }
 }
 
-/// A message of a person or an agent, which can be an answer or an ask, the closure of an ask, a permission question or its answer, a verdict, a start of a worker process, the end of a process or a session, which shows the worker stopped at once, and a pause or its resume, which clears or restarts every stall time. fold's own messages, such as check results, give no turn.
+/// A message of a person or an agent, which can be an answer or an ask, the closure of an ask, a permission question or its answer, a verdict, a start of a worker process, the end of a process or a session, which shows the worker stopped at once or frees a place for an owed resume, a send-back, which owes its task worker a resume, a change of the worker limits, and a pause or its resume, which clears or restarts every stall time. fold's own messages, such as check results, give no turn.
 fn gives_a_turn(event: &Event) -> bool {
     if event.event_type == types::MESSAGE_SENT {
         return event.actor != EventActor::fold();
@@ -294,6 +300,8 @@ fn gives_a_turn(event: &Event) -> bool {
         types::SESSION_ENDED,
         types::PROJECT_PAUSED,
         types::PROJECT_RESUMED,
+        types::TASK_SENT_BACK,
+        types::WORKERS_LIMITS_CHANGED,
     ]
     .contains(&event.event_type)
 }
@@ -330,10 +338,15 @@ struct StallInputs {
     known: HashSet<AgentName>,
     /// The agents with an open session.
     sessions: HashSet<AgentName>,
+    /// The resumes fold owes stopped or failed workers, oldest first.
+    owed: Vec<OwedStart>,
+    /// The newest change of the worker limits.
+    limits_changed_at: Option<Timestamp>,
 }
 
 /// A supervised agent's process as the stall rule reads it.
 struct ProcessFacts {
+    role: Role,
     running: bool,
     started_at: Timestamp,
     /// When the process ended; its start for a row that has no end.
@@ -345,6 +358,42 @@ struct ProcessFacts {
 }
 
 impl StallInputs {
+    /// The resume fold owes `agent` as the stall rule sees it: it waits for a place while the `limits` refuse its start or an older owed resume of its role takes the free place, and else counts from the later of the time its work came and the newest stop of a worker of its role or change of the limits.
+    fn owed_turn(&self, agent: &AgentName, limits: WorkerLimits) -> Option<OwedTurn> {
+        let start = self.owed.iter().find(|owed| owed.resume.agent == *agent)?;
+        let role = start.role;
+        let slot = Slot::of(role)?;
+        let same: Vec<OwedResume> = self
+            .owed
+            .iter()
+            .filter(|owed| owed.role == role)
+            .map(|owed| owed.resume.clone())
+            .collect();
+        let of_role = || {
+            self.processes
+                .values()
+                .filter(move |process| process.role == role)
+        };
+        let running = of_role().filter(|process| process.running).count() as u64;
+        let in_area = start
+            .resume
+            .area
+            .as_ref()
+            .map(|(name, count)| (name, *count));
+        let since = start.resume.since;
+        if waits_for_place(limits, role, running, in_area, &same, agent) {
+            return Some(OwedTurn::WaitsForPlace { slot, since });
+        }
+        let freed = of_role()
+            .filter(|process| !process.running)
+            .map(|process| process.ended_at)
+            .chain(self.limits_changed_at)
+            .max();
+        Some(OwedTurn::PlaceFree {
+            since: freed.map_or(since, |freed| since.max(freed)),
+        })
+    }
+
     /// What `worker`, which works on `task`, waits for and when it was last given the turn.
     fn worker_turn(&self, task: TaskId, worker: &WorkerName) -> WorkerTurn {
         let agent = worker.agent();
@@ -432,6 +481,7 @@ async fn stall_inputs(store: &Store) -> Result<StallInputs, StoreError> {
             let explained = row.failed_reason.as_deref().is_some_and(needs_restart)
                 || model_unreachable(row.failed_turns, row.state);
             let facts = ProcessFacts {
+                role: row.role,
                 running: row.state.is_running(),
                 started_at: row.started_at,
                 ended_at: row.stopped_at.unwrap_or(row.started_at),
@@ -463,6 +513,9 @@ async fn stall_inputs(store: &Store) -> Result<StallInputs, StoreError> {
         .into_iter()
         .map(|session| session.agent)
         .collect();
+    let owed = agents::owed_starts(&mut *tx).await?;
+    let limits_changed_at =
+        events::newest_at_of_type(&mut *tx, types::WORKERS_LIMITS_CHANGED).await?;
     tx.commit().await?;
     Ok(StallInputs {
         paused: pause.is_paused(),
@@ -482,5 +535,7 @@ async fn stall_inputs(store: &Store) -> Result<StallInputs, StoreError> {
         main_agents,
         known,
         sessions,
+        owed,
+        limits_changed_at,
     })
 }

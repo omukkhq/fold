@@ -3,6 +3,7 @@ import {
   activityText,
   activityVerb,
   agentOf,
+  isStall,
   toldText,
   workerActivity,
   type LiveActivity,
@@ -14,6 +15,7 @@ const MINUTE = 60_000;
 function seen(over: Partial<LiveActivity> = {}): LiveActivity {
   return {
     state: "working",
+    slot: null,
     call: "command",
     since: NOW - 8 * MINUTE,
     supervised: true,
@@ -41,6 +43,7 @@ describe("activityText", () => {
   it("says what fold saw of a stall", () => {
     const quiet = seen({
       state: "silent",
+      slot: null,
       call: null,
       since: NOW - 12 * MINUTE,
     });
@@ -70,6 +73,42 @@ describe("activityText", () => {
     expect(activityVerb(seen({ state: "stopped", call: null }), NOW)).toBe(
       "stopped",
     );
+  });
+});
+
+describe("a resume that waits for a free slot", () => {
+  const waits = seen({
+    state: "waits_for_slot",
+    call: null,
+    slot: "task_worker",
+    since: NOW - 30 * MINUTE,
+  });
+
+  it("says which slot it waits for, with no time", () => {
+    expect(activityText(waits, "web-worker", NOW)).toBe(
+      "Waits for a free task worker slot",
+    );
+    expect(activityText({ ...waits, slot: "reviewer" }, "review", NOW)).toBe(
+      "Waits for a free reviewer slot",
+    );
+    expect(activityVerb(waits, NOW)).toBe("waits for a free task worker slot");
+  });
+
+  it("is neutral: never a stall, never a person's, never a restart", () => {
+    expect(isStall("waits_for_slot")).toBe(false);
+    expect(isStall("working")).toBe(false);
+    expect(isStall("silent")).toBe(true);
+    const view = workerActivity(
+      { activity: waits, stalled: true, worker: "web-worker" },
+      NOW,
+    );
+    expect(view).toMatchObject({
+      text: "Waits for a free task worker slot",
+      stall: false,
+      needsYou: false,
+      restart: null,
+    });
+    expect(view === null ? "" : toldText(view)).toBeNull();
   });
 });
 

@@ -106,6 +106,7 @@ describe("liveStrip", () => {
   it("says what fold saw of the worker after its name, and keeps the stall for a person only once the daemon flags it", () => {
     const activity = {
       state: "silent" as const,
+      slot: null,
       call: null,
       since: NOW - 12 * MINUTE,
       supervised: true,
