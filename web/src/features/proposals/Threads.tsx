@@ -4,7 +4,7 @@ import { MessageSquarePlus, TextSelect } from "lucide-react";
 import { Controller, useForm } from "react-hook-form";
 import { Button } from "@/components/button/Button";
 import type { DiffSelection } from "@/features/diff/selection";
-import { MentionText } from "@/mentions/MentionText";
+import { Markdown } from "@/components/text/Markdown";
 import { MentionTextarea } from "@/mentions/MentionTextarea";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
@@ -39,11 +39,9 @@ export function ThreadBox({
               <span>{commentNote(thread, entry)}</span> ·{" "}
               {formatAsOfMinute(now, entry.comment.created_at)}
             </p>
-            <MentionText
-              text={entry.comment.body}
-              slug={slug}
-              className="max-w-measure text-15 leading-normal"
-            />
+            <Markdown mentions={{ slug }} className="max-w-measure">
+              {entry.comment.body}
+            </Markdown>
           </article>
         </li>
       ))}

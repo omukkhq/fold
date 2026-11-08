@@ -236,6 +236,9 @@ impl Supervisor {
             open_turns,
         };
         lock(&self.inner.running).insert(row.agent.clone(), run.clone());
+        self.inner
+            .streams
+            .started(&row.agent, generation, self.inner.clock.now());
         // A stop or a pause that came after the start committed but before the process was in `running` found no process to end. The row is read only now that the process is there, so either that stop or pause sees the process or this check sees it.
         let idle = turn.is_none();
         let now = self.inner.clock.now();

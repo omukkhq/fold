@@ -175,16 +175,17 @@ pub fn can_publish_task_plan(
     }
 }
 
-/// A worker that starts again in a new session forgets what its old session knew, so only a named human or the main agent, on the user's word, asks for it, for a worker of any role.
-pub fn can_restart_worker(starter: &Starter) -> Result<(), PolicyDenied> {
+/// A worker that starts again in a new session forgets what its old session knew, so only a named human, the main agent and the lead that started the worker (`started_it`) ask for it. The main agent restarts a worker of any role, a stalled one on fold's notice and any other on the user's word; an area lead restarts the task workers it started, which are the workers fold tells it of when they stall, and the review lead the reviewers it started.
+pub fn can_restart_worker(starter: &Starter, started_it: bool) -> Result<(), PolicyDenied> {
     match starter {
         Starter::Human | Starter::MainAgent => Ok(()),
+        Starter::AreaLead(_) | Starter::ReviewLead if started_it => Ok(()),
         Starter::Unsupervised => Err(not_the_main_agent(
             "ask the main agent to call restart_worker",
         )),
         _ => Err(PolicyDenied {
             code: codes::MAIN_AGENT_REQUIRED,
-            message: "only the main agent or a human can start a worker again in a new session",
+            message: "only the main agent, a human or the lead that started the worker can start it again in a new session",
             hint: "ask the user; the main agent calls restart_worker",
         }),
     }
@@ -389,26 +390,36 @@ mod tests {
     }
 
     #[test]
-    fn only_a_human_or_the_main_agent_restarts_a_worker_in_a_new_session() {
+    fn a_human_the_main_agent_or_the_lead_that_started_it_restarts_a_worker_in_a_new_session() {
         for starter in [Starter::Human, Starter::MainAgent] {
-            assert!(can_restart_worker(&starter).is_ok());
+            assert!(can_restart_worker(&starter, false).is_ok());
+            assert!(can_restart_worker(&starter, true).is_ok());
+        }
+        for lead in [Starter::AreaLead(area("web")), Starter::ReviewLead] {
+            assert!(
+                can_restart_worker(&lead, true).is_ok(),
+                "{lead:?} started it"
+            );
+            assert_eq!(
+                can_restart_worker(&lead, false).unwrap_err().code(),
+                codes::MAIN_AGENT_REQUIRED,
+                "{lead:?} of another area or another lead's worker"
+            );
         }
         assert_eq!(
-            can_restart_worker(&Starter::Unsupervised)
+            can_restart_worker(&Starter::Unsupervised, false)
                 .unwrap_err()
                 .code(),
             codes::ORCHESTRATOR_REQUIRED
         );
-        for starter in [
-            Starter::AreaLead(area("web")),
-            Starter::ReviewLead,
-            Starter::ShortLived,
-            Starter::System,
-        ] {
-            assert_eq!(
-                can_restart_worker(&starter).unwrap_err().code(),
-                codes::MAIN_AGENT_REQUIRED
-            );
+        for starter in [Starter::ShortLived, Starter::System] {
+            for started_it in [false, true] {
+                assert_eq!(
+                    can_restart_worker(&starter, started_it).unwrap_err().code(),
+                    codes::MAIN_AGENT_REQUIRED,
+                    "a task worker or a reviewer never restarts one"
+                );
+            }
         }
     }
 

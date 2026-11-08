@@ -320,6 +320,46 @@ describe("BoardScreen", () => {
     expect(rowText(panel, "Needs")).toBe(ids.join(", "));
   });
 
+  it("keeps the panel of a long report inside the board area: it is at most as tall as the room, scrolls, and clamps the rendered report with a link to the task", async () => {
+    const report = Array.from(
+      { length: 30 },
+      (_, index) =>
+        `- Line ${String(index + 1)} changed \`design/export/copy-${String(index)}.svg\``,
+    ).join("\n");
+    setup(
+      boardView([
+        boardCard("T-283", {
+          title: "Correct the approved copy lines",
+          status: "review",
+          kind: "no_proposal",
+          report,
+          human_review: { reviewer: null, reason: "Copy", set_by: "lead" },
+        }),
+      ]),
+    );
+    await screen.findByRole("region", { name: "Review" });
+    const panel = await openPanel("Correct the approved copy lines");
+    const content = screen.getByRole("dialog", { name: "T-283 details" });
+    expect(content.className).toContain(
+      "max-h-(--radix-popover-content-available-height)",
+    );
+    expect(content.className).toContain("overflow-y-auto");
+    const text = within(panel)
+      .getByText("Report", { selector: "dt" })
+      .nextElementSibling?.querySelector("div");
+    expect(text?.className).toContain("line-clamp-4");
+    expect(text?.querySelectorAll("li")).toHaveLength(30);
+    expect(text?.querySelector("code")?.textContent).toBe(
+      "design/export/copy-0.svg",
+    );
+    expect(
+      within(panel)
+        .getByRole("link", { name: "Open the task to read the full report" })
+        .getAttribute("href"),
+    ).toBe("/p/demo/t/T-283");
+    expect(rowText(panel, "Human review")).toBe("any human");
+  });
+
   it("says a proposal is being reviewed while a reviewer holds its claim, and waits for review otherwise", async () => {
     const open = {
       state: "open" as const,
@@ -402,9 +442,7 @@ describe("BoardScreen", () => {
     expect(screen.queryByText("Stale claim · needs you")).toBeNull();
     const quiet = await openPanel("Quiet worker");
     expect(
-      within(quiet).getByText(
-        "Stalled: its worker made no edits for a while · Stale claim: the worker's lease ran out.",
-      ),
+      within(quiet).getByText("Stale claim: the worker's lease ran out."),
     ).toBeTruthy();
     const review = await openPanel("Needs a person");
     expect(rowText(review, "Human review")).toBe("@tanim");

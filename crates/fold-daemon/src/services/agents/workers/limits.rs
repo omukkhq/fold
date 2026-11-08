@@ -1,9 +1,12 @@
 use std::path::Path;
 
 use fold_core::events::types;
-use fold_core::roles::{AreaLimitChange, WorkerLimits, WorkerLimitsChange, check_limits};
+use fold_core::roles::{
+    AreaLimitChange, OwedResume, WorkerLimits, WorkerLimitsChange, check_limits, check_owed_first,
+};
 use fold_core::{
-    Actor, AreaName, FoldError, NewEvent, ProjectConfig, ProjectPaths, Role, codes, policy,
+    Actor, AgentName, AreaName, FoldError, NewEvent, ProjectConfig, ProjectPaths, Role, codes,
+    policy,
 };
 use fold_store::{WriteTx, agents};
 use fold_vcs::atomic::{EditLock, write_atomic};
@@ -21,16 +24,52 @@ pub struct WorkerLimitsChanged {
     pub new: WorkerLimits,
 }
 
-/// Refuses one more worker of `role` in `area`, with its row id and name, when the running workers already fill a limit. Read on the writer inside the start, so two starts cannot both take the last place.
+/// Whether a start lets the resumes that fold owes go first.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Turn<'a> {
+    /// Only the limits apply: a person's own start or restart, which is a person's choice, or the new session of a resume fold already served.
+    Limits,
+    /// fold's or an agent's start: the owed resumes of the role take the free places first, in the order they became owed. `agent` is the worker that starts again, `None` for a new agent; `tool` is the call that a refusal tells the caller to make again.
+    Owed {
+        agent: Option<&'a AgentName>,
+        tool: &'static str,
+    },
+}
+
+impl Turn<'_> {
+    /// [`Turn::Limits`] for a person, else a new agent's [`Turn::Owed`] retried with `tool`.
+    pub(super) fn of(actor: &Actor, tool: &'static str) -> Self {
+        if actor.is_human() {
+            Self::Limits
+        } else {
+            Self::Owed { agent: None, tool }
+        }
+    }
+}
+
+/// Refuses one more worker of `role` in `area`, with its row id and name, when the running workers already fill a limit, or, for a [`Turn::Owed`] start, when the place it would take goes to an owed resume first. Read on the writer inside the start, so two starts cannot both take the last place.
 pub(super) async fn check_running(
     tx: &mut WriteTx,
     limits: WorkerLimits,
     role: Role,
     area: Option<(i64, &AreaName)>,
+    turn: Turn<'_>,
 ) -> Result<(), AgentError> {
     let (running, in_area) =
         agents::running_counts(tx.conn(), role, area.map(|(id, _)| id)).await?;
-    check_limits(limits, role, running, area.map(|(_, name)| (name, in_area)))?;
+    let area = area.map(|(_, name)| (name, in_area));
+    if let Turn::Owed { agent, tool } = turn
+        && limits.of(role).is_some()
+    {
+        let owed: Vec<OwedResume> = agents::owed_starts(tx.conn())
+            .await?
+            .into_iter()
+            .filter(|owed| owed.role == role)
+            .map(|owed| owed.resume)
+            .collect();
+        check_owed_first(limits, role, running, area, &owed, agent, tool)?;
+    }
+    check_limits(limits, role, running, area)?;
     Ok(())
 }
 

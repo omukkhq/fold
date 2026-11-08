@@ -7,13 +7,22 @@ import type { BoardCard as BoardCardData } from "@/api/board";
 import { keys } from "@/api/keys";
 import { HrefLink } from "@/app/HrefLink";
 import { IdText } from "@/components/text/IdText";
+import { Markdown } from "@/components/text/Markdown";
 import { Chip } from "@/components/badge/Chip";
 import { Card } from "@/components/card/Card";
 import { Id } from "@/components/id/Id";
 import { Label } from "@/components/label/Label";
 import { cn } from "@/lib/cn";
+import { focusRing } from "@/lib/focus";
 import { PersonName } from "@/people/PersonName";
 import type { LiveWorkspace } from "@/live/envelope";
+import { useActivityClock } from "@/live/useNow";
+import {
+  toldText,
+  workerActivity,
+  type WorkerActivity,
+} from "@/live/workerActivity";
+import { RestartStalled } from "@/features/workers/RestartStalled";
 import { MarkAnswered } from "@/features/messages/MarkAnswered";
 import { taskCanMarkAnswered } from "@/features/messages/answered";
 import { activityLine, type ActivityLine } from "./activityLine";
@@ -21,7 +30,7 @@ import { currentCheckRun } from "./checkRun";
 import { taskPath } from "./card";
 import { cardChip, metaFact } from "./chip";
 import { cardDetails, type DetailRow } from "./details";
-import { hoverPeek, type HoverPeek } from "./hoverPeek";
+import { hoverPeek, panelBoundary, type HoverPeek } from "./hoverPeek";
 
 const PROPOSAL_TONE = {
   attention: "text-bad",
@@ -47,12 +56,24 @@ function Activity({ line }: { line: ActivityLine }) {
       <span className="min-w-0 flex-1 font-medium wrap-anywhere">
         {line.text}
       </span>
-      <span className="shrink-0 text-13 text-text-2">{line.since}</span>
+      {line.since === null ? null : (
+        <span className="shrink-0 text-13 text-text-2">{line.since}</span>
+      )}
     </p>
   );
 }
 
-function RowValue({ row, card }: { row: DetailRow; card: BoardCardData }) {
+function RowValue({
+  slug,
+  row,
+  card,
+  taskHref,
+}: {
+  slug: string;
+  row: DetailRow;
+  card: BoardCardData;
+  taskHref: string;
+}) {
   switch (row.kind) {
     case "person":
       return <PersonName name={row.person} />;
@@ -81,36 +102,109 @@ function RowValue({ row, card }: { row: DetailRow; card: BoardCardData }) {
     }
     case "text":
       return <span className="wrap-anywhere">{row.text}</span>;
+    case "prose":
+      return (
+        <>
+          <Markdown
+            mentions={{ slug }}
+            size={14}
+            clamp={row.clamp ?? undefined}
+            className="w-full"
+          >
+            {row.text}
+          </Markdown>
+          {row.more === null ? null : (
+            <HrefLink
+              href={taskHref}
+              className={cn(
+                "rounded-s text-13 font-semibold text-accent hover:underline",
+                focusRing,
+              )}
+            >
+              {row.more}
+            </HrefLink>
+          )}
+        </>
+      );
   }
 }
 
-/** The facts a card leaves out, shown on hover or keyboard focus. Mark answered is its one button. */
+/** Who fold told of the worker's stall, and Restart worker for a worker whose process fold runs. */
+function StallNote({
+  slug,
+  activity,
+}: {
+  slug: string;
+  activity: WorkerActivity;
+}) {
+  const told = toldText(activity);
+  if (told === null) {
+    return null;
+  }
+  return (
+    <div className="flex flex-col gap-8">
+      <p className="text-13 wrap-anywhere text-text-2">{told}</p>
+      {activity.restart === null ? null : (
+        <RestartStalled slug={slug} name={activity.restart} />
+      )}
+    </div>
+  );
+}
+
+/** The facts a card leaves out, shown on hover or keyboard focus. Mark answered and, for a stalled worker, Restart worker are its buttons. */
 function CardPanel({
   slug,
   card,
   line,
+  activity,
   now,
+  taskHref,
 }: {
   slug: string;
   card: BoardCardData;
   line: ActivityLine | null;
+  activity: WorkerActivity | null;
   now: number;
+  taskHref: string;
 }) {
   const details = cardDetails(card, line, now);
   return (
     <div className="flex flex-col gap-10">
       <p className="text-13 text-text-2">{details.head}</p>
       {line ? <Activity line={line} /> : null}
+      {activity ? <StallNote slug={slug} activity={activity} /> : null}
       {details.rows.length > 0 ? (
         <dl className="grid grid-cols-[var(--width-fact-label)_minmax(0,1fr)] gap-x-10 gap-y-5">
-          {details.rows.map((row) => (
-            <Fragment key={row.name}>
-              <dt className="pt-2 text-13 text-text-2">{row.name}</dt>
-              <dd className="flex min-w-0 flex-wrap items-center gap-6 tabular-nums">
-                <RowValue row={row} card={card} />
-              </dd>
-            </Fragment>
-          ))}
+          {details.rows.map((row) =>
+            row.kind === "prose" ? (
+              // A free text takes the panel's whole width under its name, so it reads as lines, not as a narrow column.
+              <Fragment key={row.name}>
+                <dt className="col-span-2 pt-2 text-13 text-text-2">
+                  {row.name}
+                </dt>
+                <dd className="col-span-2 flex min-w-0 flex-col items-start gap-4">
+                  <RowValue
+                    slug={slug}
+                    row={row}
+                    card={card}
+                    taskHref={taskHref}
+                  />
+                </dd>
+              </Fragment>
+            ) : (
+              <Fragment key={row.name}>
+                <dt className="pt-2 text-13 text-text-2">{row.name}</dt>
+                <dd className="flex min-w-0 flex-wrap items-center gap-6 tabular-nums">
+                  <RowValue
+                    slug={slug}
+                    row={row}
+                    card={card}
+                    taskHref={taskHref}
+                  />
+                </dd>
+              </Fragment>
+            ),
+          )}
         </dl>
       ) : null}
       {details.notes.map((note) => (
@@ -198,7 +292,7 @@ function usePeek(): [boolean, HoverPeek] {
 export function BoardCard({
   slug,
   card,
-  now,
+  now: screenNow,
   peek: withPeek = true,
 }: {
   slug: string;
@@ -213,10 +307,21 @@ export function BoardCard({
   });
   const filters = useRouterState({ select: (s) => s.location.searchStr });
   const streamed = card.workspace ? live : undefined;
+  const now = useActivityClock(
+    screenNow,
+    streamed?.activity != null && card.status !== "done",
+  );
   const line = activityLine(card, streamed, now);
-  const chip = cardChip(card, currentCheckRun(card.check_run, streamed));
+  const run = currentCheckRun(card.check_run, streamed);
+  const activity =
+    run === null && card.status !== "done"
+      ? workerActivity(streamed, now)
+      : null;
+  const chip = cardChip(card, run, activity);
   const [open, peek] = usePeek();
   const box = useRef<HTMLDivElement>(null);
+  const [boundary, setBoundary] = useState<Element | null>(null);
+  const href = taskPath(slug, card.task, filters);
   const inside = (target: EventTarget | null) =>
     target instanceof Node && box.current?.contains(target) === true;
   const shown = withPeek && open;
@@ -237,7 +342,9 @@ export function BoardCard({
             shown && "outline-2 outline-offset-2 outline-accent",
           )}
           onPointerEnter={(event) => {
-            if (withPeek) peek.pointerEnter(event.pointerType);
+            if (!withPeek) return;
+            setBoundary(panelBoundary(event.currentTarget));
+            peek.pointerEnter(event.pointerType);
           }}
           onPointerLeave={() => {
             if (withPeek) peek.pointerLeave();
@@ -249,15 +356,17 @@ export function BoardCard({
               event.target.closest("[data-peek-panel]") !== null;
             if (withPeek && !inPanel) peek.cardPress();
           }}
-          onFocus={() => {
-            if (withPeek) peek.focusIn();
+          onFocus={(event) => {
+            if (!withPeek) return;
+            setBoundary(panelBoundary(event.currentTarget));
+            peek.focusIn();
           }}
           onBlur={(event) => {
             if (withPeek) peek.focusOut(inside(event.relatedTarget));
           }}
         >
           <HrefLink
-            href={taskPath(slug, card.task, filters)}
+            href={href}
             draggable={false}
             className="font-title text-16 leading-tight font-semibold wrap-anywhere text-text outline-none after:absolute after:inset-0 after:rounded-m"
           >
@@ -283,6 +392,8 @@ export function BoardCard({
               align="start"
               sideOffset={12}
               collisionPadding={12}
+              collisionBoundary={boundary}
+              sticky="always"
               onOpenAutoFocus={(event) => {
                 event.preventDefault();
               }}
@@ -300,9 +411,17 @@ export function BoardCard({
               onPointerDown={() => {
                 peek.press();
               }}
-              className="z-pop w-side-panel rounded-m bg-surface px-16 py-14 text-14 text-text shadow-pop outline-none"
+              // The panel is at most as tall as the board area leaves it, and its rows scroll inside it.
+              className="z-pop max-h-(--radix-popover-content-available-height) w-side-panel overflow-y-auto overscroll-contain rounded-m bg-surface px-16 py-14 text-14 text-text shadow-pop outline-none"
             >
-              <CardPanel slug={slug} card={card} line={line} now={now} />
+              <CardPanel
+                slug={slug}
+                card={card}
+                line={line}
+                activity={activity}
+                now={now}
+                taskHref={href}
+              />
             </RadixPopover.Content>
           ) : null}
         </Card>

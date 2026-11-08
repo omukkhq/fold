@@ -98,7 +98,46 @@ export function isLiveWorkspace(value: unknown): value is LiveWorkspace {
     isNullableString(value.proposal) &&
     typeof value.stalled === "boolean" &&
     isNullableBoolean(value.edits_after_version) &&
-    (value.check_run === null || isCheckRun(value.check_run))
+    (value.check_run === null || isCheckRun(value.check_run)) &&
+    // A recorded frame or an older daemon sends no `activity`, which reads as nothing to say.
+    (value.activity === undefined ||
+      value.activity === null ||
+      isActivity(value.activity))
+  );
+}
+
+const ACTIVITY_STATES: readonly unknown[] = [
+  "working",
+  "silent",
+  "long_call",
+  "stopped",
+  "failed",
+  "waits_for_slot",
+] satisfies components["schemas"]["ActivityState"][];
+
+const CALLS: readonly unknown[] = [
+  "command",
+  "fold",
+  "subagent",
+  "question",
+  "tool",
+] satisfies components["schemas"]["LiveCall"][];
+
+const SLOTS: readonly unknown[] = [
+  "task_worker",
+  "reviewer",
+] satisfies components["schemas"]["LiveSlot"][];
+
+function isActivity(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    ACTIVITY_STATES.includes(value.state) &&
+    (value.call === null || CALLS.includes(value.call)) &&
+    (value.slot === null || SLOTS.includes(value.slot)) &&
+    typeof value.since === "number" &&
+    typeof value.supervised === "boolean" &&
+    Array.isArray(value.told) &&
+    value.told.every((name) => typeof name === "string")
   );
 }
 
@@ -176,5 +215,6 @@ export function liveWorkspaceOf(frame: WorkspaceChanged): LiveWorkspace {
     stalled: frame.stalled,
     edits_after_version: frame.edits_after_version,
     check_run: frame.check_run,
+    activity: frame.activity,
   };
 }

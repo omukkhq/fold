@@ -194,6 +194,7 @@ impl ProjectHandle {
         let shared: Arc<std::sync::OnceLock<std::sync::Weak<ProjectHandle>>> = Arc::default();
         let git_attention = Arc::new(GitAttention::default());
         let tool_windows = workers.tool_windows();
+        live.read_streams(workers.worker_streams());
         let auto_commit = jobs::auto_commit(
             RemoteContext {
                 slug: row.slug.clone(),

@@ -117,6 +117,7 @@ export function needsItem(fields: Partial<NeedsYouItem> = {}): NeedsYouItem {
     paths: [],
     target: null,
     agents: [],
+    activity: null,
     ...fields,
   };
 }

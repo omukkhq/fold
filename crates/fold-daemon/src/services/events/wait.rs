@@ -1,11 +1,15 @@
 use std::time::Duration;
 
-use fold_core::MessageId;
+use std::collections::BTreeSet;
+
 use fold_core::events::types;
+use fold_core::push::request_of;
+use fold_core::requests::{DRAFTER_WANTED, Requester};
 use fold_core::roles::CacheTtl;
-use fold_core::{EventFilter, Timestamp};
-use fold_store::agents::WorkerRow;
+use fold_core::{AgentName, Event, EventFilter, EventType, MessageId, RequestId, Timestamp};
+use fold_store::agents::{self, WorkerRow};
 use fold_store::events::{self, MessageWake};
+use fold_store::tasks::requests;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::watch;
 use tokio::time::{Instant, Interval, MissedTickBehavior};
@@ -65,6 +69,11 @@ pub struct Waiter {
     worker: WorkerRow,
     filter: EventFilter,
     wake: Option<MessageWake>,
+    wakes: Wakes,
+    /// The requests of the page that [`Waiter::next`] returned last that wait for a drafter.
+    requests: Vec<RequestId>,
+    /// The page that [`Waiter::next`] returned last holds a `worker.stalled` that fold told the waiting agent.
+    stalled: bool,
     receiver: broadcast::Receiver<BusMessage>,
     closing: watch::Receiver<bool>,
     /// The page the first read found, returned by the first [`Waiter::next`].
@@ -78,17 +87,26 @@ pub struct Waiter {
 impl EventService {
     /// Starts a wait for `worker` and reads the first page after its cursor. The deadline and the ticks run on `tokio::time`, so tests drive them with a paused clock.
     pub async fn wait(&self, worker: &WorkerRow, query: &WaitQuery) -> Result<Waiter, EventsError> {
-        self.start_wait(worker, None, query).await
+        self.start_wait(worker, None, Wakes::default(), query).await
     }
 
-    /// [`EventService::wait`] for `worker`, which a new message it receives and did not send itself also ends, whatever the filter says: a notice that fold pushes into a session waits there until the tool call returns.
+    /// [`EventService::wait`] for `worker`, which a new message it receives and did not send itself also ends, whatever the filter says: a notice that fold pushes into a session waits there until the tool call returns. For the main agent and an area lead, a request that another agent created or released and that waits for a drafter ends it too: the push of `request.created` reaches a session only once its tool call returns, so a lead that waits for something else would see the request only at the end of its wait. A `worker.stalled` that names the agent among those fold told ends it for the same reason, so the lead hears of a stall before a person does.
     pub async fn wait_as(
         &self,
         worker: &WorkerRow,
         query: &WaitQuery,
         started: Timestamp,
     ) -> Result<Waiter, EventsError> {
-        self.start_wait(worker, Some(wake_of(worker, started)), query)
+        let agent = worker.name.agent();
+        let claimant = agents::standing(self.store().read(), &agent)
+            .await?
+            .claims_requests()
+            .then(|| agent.clone());
+        let wakes = Wakes {
+            claimant,
+            told: Some(agent),
+        };
+        self.start_wait(worker, Some(wake_of(worker, started)), wakes, query)
             .await
     }
 
@@ -115,6 +133,7 @@ impl EventService {
         &self,
         worker: &WorkerRow,
         wake: Option<MessageWake>,
+        wakes: Wakes,
         query: &WaitQuery,
     ) -> Result<Waiter, EventsError> {
         let filter = parse_filter(
@@ -128,7 +147,7 @@ impl EventService {
             .clamp(1, MAX_TIMEOUT_S);
         let receiver = self.bus().subscribe();
         let closing = self.bus().closing();
-        let first = self.page(worker, &filter, wake).await?;
+        let first = self.page(worker, &filter, wake, &wakes).await?;
         let now = Instant::now();
         let mut ticks = tokio::time::interval_at(now + TICK, TICK);
         ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -137,9 +156,12 @@ impl EventService {
             worker: worker.clone(),
             filter,
             wake,
+            wakes,
+            requests: first.requests,
+            stalled: first.stalled,
             receiver,
             closing,
-            ready: (!first.events.is_empty()).then_some(first),
+            ready: (!first.page.events.is_empty()).then_some(first.page),
             deadline: now + Duration::from_secs(timeout_s),
             ticks,
             tick_count: 0,
@@ -147,20 +169,161 @@ impl EventService {
         })
     }
 
+    /// The next page of the wait, the requests in it that wait for a drafter and whether it holds a stall told to the waiting agent. An event that only a wake of [`Wakes`] selected stays in the page only while it concerns the waiting agent: a request while it waits for a drafter, a stall while fold told the agent of it. The cursor has moved past it either way, so a page that loses every event is read again from there at once.
     async fn page(
         &self,
         worker: &WorkerRow,
         filter: &EventFilter,
         wake: Option<MessageWake>,
-    ) -> Result<EventPage, EventsError> {
-        cursor_page(
-            self.store(),
-            worker,
-            filter,
-            DEFAULT_LIMIT as usize,
-            Some(wake),
-        )
-        .await
+        wakes: &Wakes,
+    ) -> Result<WaitPage, EventsError> {
+        let wake_types = wakes.types();
+        loop {
+            let page = cursor_page(
+                self.store(),
+                worker,
+                filter,
+                DEFAULT_LIMIT as usize,
+                Some(wake),
+                &wake_types,
+            )
+            .await?;
+            if page.events.is_empty() || wake_types.is_empty() {
+                return Ok(WaitPage::plain(page));
+            }
+            let kept = self.keep_woken(page, filter, wakes).await?;
+            if !kept.page.events.is_empty() {
+                return Ok(kept);
+            }
+        }
+    }
+
+    /// Drops the events of `page` that only a wake of `wakes` selected and that do not concern the waiting agent: a request it cannot claim now, a stall fold did not tell it of. An agent never wakes for what its own workers did, nor for a request it made itself.
+    async fn keep_woken(
+        &self,
+        page: EventPage,
+        filter: &EventFilter,
+        wakes: &Wakes,
+    ) -> Result<WaitPage, EventsError> {
+        let named = |event: &Event| {
+            wakes.claimant.as_ref().is_some_and(|agent| {
+                DRAFTER_WANTED.contains(&event.event_type)
+                    && event.actor.agent() != Some(agent.as_str())
+            })
+        };
+        let waiting: BTreeSet<RequestId> = match &wakes.claimant {
+            Some(agent) if page.events.iter().any(named) => {
+                let own = Requester::Agent(agent.clone());
+                requests::unfinished(self.store().read())
+                    .await?
+                    .into_iter()
+                    .filter(|request| {
+                        request.state.waits_for_drafter(request.has_drafter)
+                            && request.requester != own
+                    })
+                    .map(|request| request.id)
+                    .collect()
+            }
+            _ => BTreeSet::new(),
+        };
+        let told = |event: &Event| {
+            wakes
+                .told
+                .as_ref()
+                .is_some_and(|agent| tells_of_stall(event, agent))
+        };
+        let mut requests = Vec::new();
+        let mut stalled = false;
+        let events = page
+            .events
+            .into_iter()
+            .filter(|event| {
+                let claimable = named(event)
+                    && request_of(event).is_some_and(|request| waiting.contains(&request));
+                if claimable
+                    && let Some(request) = request_of(event)
+                    && !requests.contains(&request)
+                {
+                    requests.push(request);
+                }
+                let stall = told(event);
+                stalled |= stall;
+                claimable
+                    || stall
+                    || filter.matches(event)
+                    || !(DRAFTER_WANTED.contains(&event.event_type)
+                        || event.event_type == types::WORKER_STALLED)
+            })
+            .collect();
+        Ok(WaitPage {
+            page: EventPage {
+                events,
+                next: page.next,
+            },
+            requests,
+            stalled,
+        })
+    }
+}
+
+/// The events that end an agent's wait whatever its filter says, besides its new messages.
+#[derive(Debug, Clone, Default)]
+struct Wakes {
+    /// The agent of an orchestrator's wait, which a request it could claim also ends.
+    claimant: Option<AgentName>,
+    /// The agent of an agent's wait, which a stall that fold told it of also ends.
+    told: Option<AgentName>,
+}
+
+impl Wakes {
+    fn types(&self) -> Vec<EventType> {
+        let mut woken = Vec::new();
+        if self.claimant.is_some() {
+            woken.extend(DRAFTER_WANTED);
+        }
+        if self.told.is_some() {
+            woken.push(types::WORKER_STALLED);
+        }
+        woken
+    }
+
+    /// Whether `event`, which came on the bus, can end the wait past its filter.
+    fn may_wake(&self, event: &Event) -> bool {
+        (self.claimant.is_some() && DRAFTER_WANTED.contains(&event.event_type))
+            || self
+                .told
+                .as_ref()
+                .is_some_and(|agent| tells_of_stall(event, agent))
+    }
+}
+
+/// `event` is a `worker.stalled` whose `told` names `agent`.
+fn tells_of_stall(event: &Event, agent: &AgentName) -> bool {
+    event.event_type == types::WORKER_STALLED
+        && event
+            .data
+            .get("told")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|told| {
+                told.iter()
+                    .any(|name| name.as_str() == Some(agent.as_str()))
+            })
+}
+
+/// A page of a wait with what its wakes found in it.
+struct WaitPage {
+    page: EventPage,
+    requests: Vec<RequestId>,
+    stalled: bool,
+}
+
+impl WaitPage {
+    fn plain(page: EventPage) -> Self {
+        Self {
+            page,
+            requests: Vec::new(),
+            stalled: false,
+        }
     }
 }
 
@@ -186,6 +349,7 @@ impl Waiter {
                     Ok(BusMessage::Durable(event)) => {
                         self.filter.matches(&event)
                             || self.wake.is_some_and(|wake| wake.event_type == event.event_type)
+                            || self.wakes.may_wake(&event)
                     }
                     Ok(BusMessage::Live(_)) => false,
                     // The table holds whatever the bus dropped.
@@ -201,14 +365,26 @@ impl Waiter {
             if !read {
                 continue;
             }
-            let page = self
+            let found = self
                 .service
-                .page(&self.worker, &self.filter, self.wake)
+                .page(&self.worker, &self.filter, self.wake, &self.wakes)
                 .await?;
-            if !page.events.is_empty() {
-                return Ok(WaitStep::Events(page));
+            if !found.page.events.is_empty() {
+                self.requests = found.requests;
+                self.stalled = found.stalled;
+                return Ok(WaitStep::Events(found.page));
             }
         }
+    }
+
+    /// The requests of the page that [`Waiter::next`] returned last that wait for a drafter and that the waiting orchestrator may claim; always empty for any other agent.
+    pub fn requests(&self) -> &[RequestId] {
+        &self.requests
+    }
+
+    /// Whether the page that [`Waiter::next`] returned last holds a `worker.stalled` that fold told the waiting agent.
+    pub fn stalled(&self) -> bool {
+        self.stalled
     }
 
     /// How many events the waiter holds in memory: at most the one page its first read found.

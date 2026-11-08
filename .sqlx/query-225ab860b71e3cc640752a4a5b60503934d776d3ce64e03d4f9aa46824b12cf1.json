@@ -1,0 +1,88 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH latest AS (\n               SELECT p.id AS proposal_id, v.id AS version_id, v.created_at AS created_at\n               FROM proposals p JOIN proposal_versions v ON v.proposal_id = p.id\n               WHERE p.state = 'open'\n                 AND v.version = (SELECT MAX(x.version) FROM proposal_versions x WHERE x.proposal_id = p.id)\n           ),\n           authored AS (\n               SELECT w.id AS worker, w.started_at AS started_at, p.id AS proposal_id, p.number AS proposal,\n                      t.number AS task, l.version_id AS version_id, p.conflicted AS conflicted,\n                      p.checks_failed AS checks_failed,\n                      COALESCE((SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id), '') AS verdict\n               FROM worker_processes w\n               JOIN worker_tasks b ON b.worker_process_id = w.id\n               JOIN proposals p ON p.task_id = b.task_id AND p.state = 'open'\n               JOIN tasks t ON t.id = p.task_id\n               JOIN workers k ON k.id = p.author_worker_id AND k.agent_id = w.agent_id\n               JOIN latest l ON l.proposal_id = p.id\n               WHERE w.role = 'task_worker' AND w.state IN ('stopped', 'failed')\n           ),\n           items(worker, since, task, proposal) AS (\n               SELECT a.worker,\n                      (SELECT MIN(r.created_at) FROM reviews r\n                       WHERE r.version_id = a.version_id AND r.verdict = 'request_changes' AND r.created_at > a.started_at),\n                      a.task, a.proposal\n               FROM authored a WHERE a.verdict = 'request_changes'\n               UNION ALL\n               SELECT a.worker,\n                      (SELECT MIN(i.created_at) FROM integrations i\n                       WHERE i.version_id = a.version_id AND i.result = 'conflicted' AND i.created_at > a.started_at),\n                      a.task, a.proposal\n               FROM authored a WHERE a.conflicted\n               UNION ALL\n               SELECT a.worker,\n                      (SELECT MIN(r.finished_at) FROM check_runs r\n                       WHERE r.version_id = a.version_id AND r.stage = 'integration' AND r.state = 'failed'\n                         AND r.finished_at > a.started_at),\n                      a.task, a.proposal\n               FROM authored a WHERE a.checks_failed\n               UNION ALL\n               SELECT w.id, r.resolved_at, t.number, NULL\n               FROM task_reports r\n               JOIN tasks t ON t.id = r.task_id\n               JOIN workers k ON k.id = r.worker_id\n               JOIN worker_processes w ON w.agent_id = k.agent_id\n               WHERE r.resolution = 'sent_back' AND r.resolved_at > w.started_at\n                 AND w.role = 'task_worker' AND w.state IN ('stopped', 'failed')\n                 AND t.archived_at IS NULL\n                 AND r.id = (SELECT MAX(x.id) FROM task_reports x WHERE x.task_id = r.task_id)\n               UNION ALL\n               SELECT w.id, c.finished_at, t.number, NULL\n               FROM check_runs c\n               JOIN tasks t ON t.id = c.task_id\n               JOIN workers k ON k.id = c.worker_id\n               JOIN worker_processes w ON w.agent_id = k.agent_id\n               WHERE c.stage = 'proposal' AND c.purpose IN ('create_proposal', 'update_proposal')\n                 AND c.state IN ('failed', 'stopped') AND c.finished_at > w.started_at\n                 AND w.role = 'task_worker' AND w.state IN ('stopped', 'failed')\n                 AND c.id = (\n                     SELECT MAX(x.id) FROM check_runs x\n                     WHERE x.workspace_id = c.workspace_id AND x.state <> 'running'\n                 )\n               UNION ALL\n               SELECT w.id,\n                      CASE WHEN l.created_at > w.started_at THEN l.created_at\n                           ELSE (SELECT MIN(q.created_at) FROM review_again_requests q\n                                 WHERE q.version_id = l.version_id AND q.created_at > w.started_at) END,\n                      t.number, p.number\n               FROM worker_processes w\n               JOIN worker_proposals b ON b.worker_process_id = w.id\n               JOIN proposals p ON p.id = b.proposal_id AND p.state = 'open'\n               JOIN tasks t ON t.id = p.task_id\n               JOIN latest l ON l.proposal_id = p.id\n               JOIN claims c ON c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL\n               JOIN workers k ON k.id = c.worker_id AND k.agent_id = w.agent_id\n               WHERE w.role = 'reviewer' AND w.state IN ('stopped', 'failed')\n                 AND (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) IS NULL\n           )\n           SELECT g.name AS \"agent!: String\", w.role AS \"role!: String\", ar.name AS \"area?: String\",\n                  (SELECT COUNT(*) FROM worker_processes y\n                   WHERE y.role = w.role AND y.area_id IS w.area_id AND y.state NOT IN ('stopped', 'failed'))\n                      AS \"area_running!: i64\",\n                  i.since AS \"since!: i64\", i.task AS \"task?: i64\", i.proposal AS \"proposal?: i64\"\n           FROM items i\n           JOIN worker_processes w ON w.id = i.worker\n           JOIN agents g ON g.id = w.agent_id\n           LEFT JOIN areas ar ON ar.id = w.area_id\n           WHERE i.since IS NOT NULL\n           ORDER BY i.since, g.name, i.task, i.proposal",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "role!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "name": "area?: String",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "areas",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "area_running!: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "since!: i64",
+        "ordinal": 4,
+        "type_info": "Null",
+        "origin": "Expression"
+      },
+      {
+        "name": "task?: i64",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "proposal?: i64",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "225ab860b71e3cc640752a4a5b60503934d776d3ce64e03d4f9aa46824b12cf1"
+}

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { Activity, CircleStop, Clock, Hand, Hourglass } from "lucide-react";
 import type { BoardCard, BoardProposal } from "@/api/board";
 import { boardCard } from "@/test/payloads";
-import { cardChip, integratedText, metaFact } from "./chip";
+import { SLOT_CHIP_TEXT, cardChip, integratedText, metaFact } from "./chip";
 
 const proposal = (
   state: BoardProposal["state"],
@@ -243,5 +244,88 @@ describe("metaFact", () => {
       }),
     ).toBe("checklist 1/2");
     expect(fact({})).toBeNull();
+  });
+
+  it("shows what fold saw of the worker: work in the neutral tone, a stall in gold only once it waits for a person", () => {
+    const card = boardCard("T-1", { status: "in_progress" });
+    const working = {
+      state: "working" as const,
+      text: "Running a command for 8 min",
+      stall: false,
+      needsYou: false,
+      restart: null,
+      told: [],
+      since: 0,
+    };
+    expect(cardChip(card, null, working)).toMatchObject({
+      tone: "neutral",
+      text: "Running a command for 8 min",
+    });
+    const silent = {
+      ...working,
+      state: "silent" as const,
+      text: "No activity from @web-worker for 12 min",
+      stall: true,
+      restart: "web-worker",
+      told: ["web-lead"],
+    };
+    expect(cardChip(card, null, silent)?.tone).toBe("neutral");
+    expect(cardChip(card, null, { ...silent, needsYou: true })).toMatchObject({
+      tone: "warn",
+      text: "No activity from @web-worker for 12 min",
+    });
+    const stalled = boardCard("T-1", {
+      status: "in_progress",
+      attention: [{ kind: "stalled", closable: false }],
+    });
+    expect(cardChip(stalled, null, working)?.text).toBe(
+      "Running a command for 8 min",
+    );
+    expect(cardChip(stalled)?.text).toBe("Stalled · needs you");
+    const waits = {
+      ...working,
+      state: "waits_for_slot" as const,
+      text: "Waiting for a free slot",
+    };
+    expect(cardChip(card, null, waits)).toEqual({
+      tone: "neutral",
+      icon: Hourglass,
+      text: SLOT_CHIP_TEXT,
+    });
+    expect(cardChip(card, null, working)?.icon).toBe(Activity);
+  });
+
+  it("shows a worker stopped on purpose in the neutral tone with the stop icon, and a failed one as a stall", () => {
+    const card = boardCard("T-1", { status: "in_progress" });
+    const stopped = {
+      state: "stopped" as const,
+      text: "@web-worker stopped",
+      stall: false,
+      needsYou: false,
+      restart: null,
+      told: [],
+      since: 0,
+    };
+    expect(cardChip(card, null, stopped)).toEqual({
+      tone: "neutral",
+      icon: CircleStop,
+      text: "@web-worker stopped",
+    });
+    const failed = {
+      ...stopped,
+      state: "failed" as const,
+      text: "@web-worker failed",
+      stall: true,
+    };
+    expect(cardChip(card, null, failed)).toEqual({
+      tone: "neutral",
+      icon: Clock,
+      text: "@web-worker failed",
+    });
+    expect(cardChip(card, null, { ...failed, needsYou: true })).toEqual({
+      tone: "warn",
+      icon: Hand,
+      text: "@web-worker failed",
+    });
   });
 });

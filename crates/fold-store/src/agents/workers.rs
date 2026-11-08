@@ -1084,6 +1084,145 @@ pub async fn reviews_owed_to_ended_reviewers(
         .collect()
 }
 
+/// A resume that fold owes a stopped or failed task worker or reviewer, with the role it starts as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwedStart {
+    pub role: Role,
+    pub resume: fold_core::roles::OwedResume,
+}
+
+/// Every resume that fold owes a stopped or failed task worker or reviewer, one per worker, oldest first: the requested changes, conflicts and failed integration checks of [`pending_resumes`], the send-backs of `reports::owed_send_backs`, the failed proposal checks of `checks::owed_gate_runs` and the reviews of [`reviews_owed_to_ended_reviewers`], each dated by the time its work came after the worker last started. A worker owed several is dated by its oldest. Each comes with the running workers of its role in its area, so the limits can say whether it can take a place.
+pub async fn owed_starts(executor: impl SqliteExecutor<'_>) -> Result<Vec<OwedStart>, StoreError> {
+    let rows = sqlx::query!(
+        r#"WITH latest AS (
+               SELECT p.id AS proposal_id, v.id AS version_id, v.created_at AS created_at
+               FROM proposals p JOIN proposal_versions v ON v.proposal_id = p.id
+               WHERE p.state = 'open'
+                 AND v.version = (SELECT MAX(x.version) FROM proposal_versions x WHERE x.proposal_id = p.id)
+           ),
+           authored AS (
+               SELECT w.id AS worker, w.started_at AS started_at, p.id AS proposal_id, p.number AS proposal,
+                      t.number AS task, l.version_id AS version_id, p.conflicted AS conflicted,
+                      p.checks_failed AS checks_failed,
+                      COALESCE((SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id), '') AS verdict
+               FROM worker_processes w
+               JOIN worker_tasks b ON b.worker_process_id = w.id
+               JOIN proposals p ON p.task_id = b.task_id AND p.state = 'open'
+               JOIN tasks t ON t.id = p.task_id
+               JOIN workers k ON k.id = p.author_worker_id AND k.agent_id = w.agent_id
+               JOIN latest l ON l.proposal_id = p.id
+               WHERE w.role = 'task_worker' AND w.state IN ('stopped', 'failed')
+           ),
+           items(worker, since, task, proposal) AS (
+               SELECT a.worker,
+                      (SELECT MIN(r.created_at) FROM reviews r
+                       WHERE r.version_id = a.version_id AND r.verdict = 'request_changes' AND r.created_at > a.started_at),
+                      a.task, a.proposal
+               FROM authored a WHERE a.verdict = 'request_changes'
+               UNION ALL
+               SELECT a.worker,
+                      (SELECT MIN(i.created_at) FROM integrations i
+                       WHERE i.version_id = a.version_id AND i.result = 'conflicted' AND i.created_at > a.started_at),
+                      a.task, a.proposal
+               FROM authored a WHERE a.conflicted
+               UNION ALL
+               SELECT a.worker,
+                      (SELECT MIN(r.finished_at) FROM check_runs r
+                       WHERE r.version_id = a.version_id AND r.stage = 'integration' AND r.state = 'failed'
+                         AND r.finished_at > a.started_at),
+                      a.task, a.proposal
+               FROM authored a WHERE a.checks_failed
+               UNION ALL
+               SELECT w.id, r.resolved_at, t.number, NULL
+               FROM task_reports r
+               JOIN tasks t ON t.id = r.task_id
+               JOIN workers k ON k.id = r.worker_id
+               JOIN worker_processes w ON w.agent_id = k.agent_id
+               WHERE r.resolution = 'sent_back' AND r.resolved_at > w.started_at
+                 AND w.role = 'task_worker' AND w.state IN ('stopped', 'failed')
+                 AND t.archived_at IS NULL
+                 AND r.id = (SELECT MAX(x.id) FROM task_reports x WHERE x.task_id = r.task_id)
+               UNION ALL
+               SELECT w.id, c.finished_at, t.number, NULL
+               FROM check_runs c
+               JOIN tasks t ON t.id = c.task_id
+               JOIN workers k ON k.id = c.worker_id
+               JOIN worker_processes w ON w.agent_id = k.agent_id
+               WHERE c.stage = 'proposal' AND c.purpose IN ('create_proposal', 'update_proposal')
+                 AND c.state IN ('failed', 'stopped') AND c.finished_at > w.started_at
+                 AND w.role = 'task_worker' AND w.state IN ('stopped', 'failed')
+                 AND c.id = (
+                     SELECT MAX(x.id) FROM check_runs x
+                     WHERE x.workspace_id = c.workspace_id AND x.state <> 'running'
+                 )
+               UNION ALL
+               SELECT w.id,
+                      CASE WHEN l.created_at > w.started_at THEN l.created_at
+                           ELSE (SELECT MIN(q.created_at) FROM review_again_requests q
+                                 WHERE q.version_id = l.version_id AND q.created_at > w.started_at) END,
+                      t.number, p.number
+               FROM worker_processes w
+               JOIN worker_proposals b ON b.worker_process_id = w.id
+               JOIN proposals p ON p.id = b.proposal_id AND p.state = 'open'
+               JOIN tasks t ON t.id = p.task_id
+               JOIN latest l ON l.proposal_id = p.id
+               JOIN claims c ON c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL
+               JOIN workers k ON k.id = c.worker_id AND k.agent_id = w.agent_id
+               WHERE w.role = 'reviewer' AND w.state IN ('stopped', 'failed')
+                 AND (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) IS NULL
+           )
+           SELECT g.name AS "agent!: String", w.role AS "role!: String", ar.name AS "area?: String",
+                  (SELECT COUNT(*) FROM worker_processes y
+                   WHERE y.role = w.role AND y.area_id IS w.area_id AND y.state NOT IN ('stopped', 'failed'))
+                      AS "area_running!: i64",
+                  i.since AS "since!: i64", i.task AS "task?: i64", i.proposal AS "proposal?: i64"
+           FROM items i
+           JOIN worker_processes w ON w.id = i.worker
+           JOIN agents g ON g.id = w.agent_id
+           LEFT JOIN areas ar ON ar.id = w.area_id
+           WHERE i.since IS NOT NULL
+           ORDER BY i.since, g.name, i.task, i.proposal"#
+    )
+    .fetch_all(executor)
+    .await?;
+    let mut owed: Vec<OwedStart> = Vec::new();
+    for row in rows {
+        let agent = AgentName::parse(&row.agent).map_err(|_| StoreError::Corrupt("agents.name"))?;
+        if owed.iter().any(|seen| seen.resume.agent == agent) {
+            continue;
+        }
+        let area = match row.area {
+            Some(name) => Some((
+                AreaName::parse(&name).map_err(|_| StoreError::Corrupt("areas.name"))?,
+                count(row.area_running, "worker_processes")?,
+            )),
+            None => None,
+        };
+        owed.push(OwedStart {
+            role: Role::parse(&row.role).ok_or(StoreError::Corrupt("worker_processes.role"))?,
+            resume: fold_core::roles::OwedResume {
+                agent,
+                area,
+                since: time(row.since, "owed resume time")?,
+                task: row
+                    .task
+                    .map(|task| {
+                        TaskId::try_from_db(task).ok_or(StoreError::Corrupt("tasks.number"))
+                    })
+                    .transpose()?,
+                proposal: row
+                    .proposal
+                    .map(|number| {
+                        ProposalId::try_from_db(number)
+                            .ok_or(StoreError::Corrupt("proposals.number"))
+                    })
+                    .transpose()?,
+            },
+        });
+    }
+    Ok(owed)
+}
+
 /// The open proposals, in number order, whose unreleased review claim a worker of `agent` holds while its reviewer process has ended, and whose newest version has no verdict. A comment is not a verdict.
 pub async fn unreviewed_claims_of_ended_reviewer(
     executor: impl SqliteExecutor<'_>,

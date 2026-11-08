@@ -12,7 +12,8 @@ use crate::worker_resume::{
 use crate::workers_support::{FakeClaude, Run};
 
 const LEAD: &str = "web-lead";
-const FRESH: &str = "A human or the main agent asked fold to start you again in a new session";
+const FRESH: &str =
+    "A human, the main agent or your lead asked fold to start you again in a new session";
 
 fn restart_path(agent: &str) -> String {
     format!("/api/v1/projects/demo/workers/{agent}/restart")
@@ -138,10 +139,14 @@ async fn the_main_agent_restarts_a_stopped_task_worker_that_keeps_its_claim_with
         .call(MAIN, "stop_worker", json!({"name": TASK_WORKER}))
         .await;
     let before = until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
-    let lead = harness
-        .refused(LEAD, "restart_worker", json!({"name": TASK_WORKER}))
+    let review = harness
+        .refused("review", "restart_worker", json!({"name": TASK_WORKER}))
         .await;
-    assert_eq!(lead["code"], codes::MAIN_AGENT_REQUIRED);
+    assert_eq!(
+        review["code"],
+        codes::MAIN_AGENT_REQUIRED,
+        "a reviewer did not start it"
+    );
     harness
         .call(MAIN, "set_worker_limits", json!({"task_worker": 0}))
         .await;
@@ -269,7 +274,8 @@ async fn a_running_task_worker_with_requested_changes_starts_fresh_with_them_and
 }
 
 #[tokio::test]
-async fn a_reviewer_starts_fresh_with_its_proposals_and_the_review_lead_cannot_ask_for_it() {
+async fn a_reviewer_starts_fresh_with_its_proposals_and_only_the_review_lead_that_started_it_or_the_main_agent_asks_for_it()
+ {
     let fake = FakeClaude::new("init");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
@@ -291,12 +297,24 @@ async fn a_reviewer_starts_fresh_with_its_proposals_and_the_review_lead_cannot_a
     let reviewer = "reviewer";
     until_runs(&fake, reviewer, 1).await;
     until_state(&harness, reviewer, WorkerState::Working).await;
+    crate::common::roles::give_role(
+        &harness.handle.store,
+        "web-lead",
+        fold_core::Role::AreaLead,
+        Some("web"),
+    )
+    .await;
+    harness.connect("web-lead").await;
     let refused = harness
-        .refused("review-lead", "restart_worker", json!({"name": reviewer}))
+        .refused("web-lead", "restart_worker", json!({"name": reviewer}))
         .await;
-    assert_eq!(refused["code"], codes::MAIN_AGENT_REQUIRED);
+    assert_eq!(
+        refused["code"],
+        codes::MAIN_AGENT_REQUIRED,
+        "an agent that did not start it"
+    );
     harness
-        .call(MAIN, "restart_worker", json!({"name": reviewer}))
+        .call("review-lead", "restart_worker", json!({"name": reviewer}))
         .await;
     let runs = until_runs(&fake, reviewer, 2).await;
     assert!(!runs[1].has("--resume"));

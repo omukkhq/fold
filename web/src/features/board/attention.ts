@@ -23,7 +23,8 @@ const SPECS: Record<AttentionKind, AttentionSpec> = {
   stalled: {
     icon: Hand,
     mark: "Stalled · needs you",
-    describe: "Stalled: its worker made no edits for a while",
+    describe:
+      "Stalled: fold told the worker's lead and it did not start again, or no agent can act",
   },
   stale_claim: {
     icon: Hand,

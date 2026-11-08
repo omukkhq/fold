@@ -5,7 +5,7 @@ use fold_store::reviews::checks::{self, CheckRunRow};
 use fold_store::{StoreError, agents};
 use serde_json::{Value, json};
 
-use super::resume::SessionStart;
+use super::resume::{self, SessionStart};
 use super::{Input, Supervisor, lock};
 use crate::services::agents::AgentError;
 use crate::services::agents::workers::is_paused_refusal;
@@ -97,8 +97,10 @@ impl Supervisor {
         let turn = gate_turn(&row, &failed);
         let watch = match self.resume(&agent, turn.clone(), &[row.task]).await {
             Ok(watch) => watch,
-            // The run stays owed, and the resume of the pause serves it.
-            Err(error) if is_paused_refusal(&error) => return Ok(()),
+            // The run stays owed, and the resume of the pause or the next free place serves it.
+            Err(error) if is_paused_refusal(&error) || resume::is_limit_refusal(&error) => {
+                return Ok(());
+            }
             // A start outside this path came first; the task worker takes this turn as its next one.
             Err(AgentError::Fold(error)) if error.code() == codes::WORKER_EXISTS => {
                 if let Some(running) = lock(&self.inner.running).get(&agent) {

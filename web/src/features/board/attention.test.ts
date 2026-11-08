@@ -43,7 +43,8 @@ describe("attentionMark", () => {
     expect(attentionMark(items("stalled"))).toEqual({
       icon: Hand,
       text: "Stalled · needs you",
-      tooltip: "Stalled: its worker made no edits for a while",
+      tooltip:
+        "Stalled: fold told the worker's lead and it did not start again, or no agent can act",
     });
   });
 

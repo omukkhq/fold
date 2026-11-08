@@ -6,8 +6,8 @@ use fold_core::{
     Timestamp, WorkspaceId,
 };
 use fold_daemon::http::events::{
-    ChangeKind, ChangedFile, CheckpointSummary, EventEnvelope, LiveCheckRun, LiveWorkspace,
-    PresenceChange, Snapshot,
+    ActivityState, ChangeKind, ChangedFile, CheckpointSummary, EventEnvelope, LiveActivity,
+    LiveCall, LiveCheckRun, LiveWorkspace, PresenceChange, Snapshot,
 };
 use fold_daemon::http::openapi::{base, check_operations, to_json};
 use fold_daemon::http::reviews::checks::CheckPurpose;
@@ -85,6 +85,14 @@ fn sample_workspace() -> LiveWorkspace {
             purpose: CheckPurpose::UpdateProposal,
             proposal: ProposalId::from_number(3),
             started_at: Timestamp::from_millis(1_760_000_000_600).unwrap(),
+        }),
+        activity: Some(LiveActivity {
+            state: ActivityState::LongCall,
+            call: Some(LiveCall::Command),
+            slot: None,
+            since: Timestamp::from_millis(1_760_000_000_200).unwrap(),
+            supervised: true,
+            told: vec!["web-lead".to_owned()],
         }),
     }
 }

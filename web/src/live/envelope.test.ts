@@ -38,6 +38,7 @@ function workspace(): LiveWorkspace {
     stalled: false,
     edits_after_version: null,
     check_run: null,
+    activity: null,
   };
 }
 
@@ -182,6 +183,54 @@ describe("isEventEnvelope", () => {
     expect(isLiveWorkspace({ ...workspace(), check_run: future })).toBe(true);
   });
 
+  it("accepts a workspace with what fold saw of its worker, and one without it, and refuses a malformed one", () => {
+    const activity = {
+      state: "long_call",
+      call: "command",
+      slot: null,
+      since: 1,
+      supervised: true,
+      told: ["web-lead"],
+    };
+    expect(isLiveWorkspace({ ...workspace(), activity })).toBe(true);
+    expect(isEventEnvelope({ ...changed(), activity })).toBe(true);
+    expect(isLiveWorkspace(without(workspace(), "activity"))).toBe(true);
+    expect(
+      isLiveWorkspace({
+        ...workspace(),
+        activity: { ...activity, state: "dozing" },
+      }),
+    ).toBe(false);
+    expect(
+      isLiveWorkspace({ ...workspace(), activity: { ...activity, told: [3] } }),
+    ).toBe(false);
+    expect(
+      isLiveWorkspace({
+        ...workspace(),
+        activity: { ...activity, slot: "everyone" },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts a worker that waits for a free slot, alone and in a snapshot", () => {
+    const waits = {
+      state: "waits_for_slot",
+      call: null,
+      slot: "reviewer",
+      since: 1,
+      supervised: true,
+      told: [],
+    };
+    expect(isEventEnvelope({ ...changed(), activity: waits })).toBe(true);
+    expect(
+      isEventEnvelope({
+        kind: "snapshot",
+        seq: 3,
+        workspaces: [workspace(), { ...workspace(), activity: waits }],
+      }),
+    ).toBe(true);
+  });
+
   it("accepts a stored event of a type this build does not know", () => {
     expect(isEventEnvelope({ ...stored(), type: "future.thing" })).toBe(true);
   });
@@ -230,7 +279,9 @@ describe("isEventEnvelope", () => {
   });
 
   it("refuses a live workspace with any field missing or wrong", () => {
-    for (const key of Object.keys(workspace())) {
+    for (const key of Object.keys(workspace()).filter(
+      (key) => key !== "activity",
+    )) {
       expect(isEventEnvelope(without(changed(), key)), key).toBe(false);
     }
     for (const [key, value] of [
@@ -247,6 +298,7 @@ describe("isEventEnvelope", () => {
       ["edits_after_version", "no"],
       ["check_run", "cr-1"],
       ["check_run", { run: "cr-1", purpose: "check", proposal: null }],
+      ["activity", "working"],
     ] as const) {
       expect(isEventEnvelope({ ...changed(), [key]: value }), key).toBe(false);
     }

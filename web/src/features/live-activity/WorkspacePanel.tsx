@@ -4,6 +4,7 @@ import { repositoryQuery } from "@/api/repositoryQueries";
 import { Badge } from "../../components/badge/Badge";
 import { Chip } from "../../components/badge/Chip";
 import { formatSince } from "../../format/time";
+import { useActivityClock } from "../../live/useNow";
 import { PersonName } from "../../people/PersonName";
 import { attentionView, behindTag } from "./attention";
 import { IdLink } from "@/components/id/IdLink";
@@ -23,8 +24,13 @@ function Dot() {
   return <span aria-hidden="true">·</span>;
 }
 
-export function WorkspacePanel({ slug, panel, now }: WorkspacePanelProps) {
+export function WorkspacePanel({
+  slug,
+  panel,
+  now: screenNow,
+}: WorkspacePanelProps) {
   const { entry, live } = panel;
+  const now = useActivityClock(screenNow, live?.activity != null);
   const activity = lastActivity(panel);
   const attention = attentionView(entry.attention, activity, now, live);
   const worker = workerOf(panel);
@@ -54,6 +60,8 @@ export function WorkspacePanel({ slug, panel, now }: WorkspacePanelProps) {
               <MissingBadge />
             ) : attention.checks !== null ? (
               <EditingPill text={attention.checks} />
+            ) : attention.activity !== null ? (
+              <EditingPill text={attention.activity} />
             ) : attention.stalled === null ? (
               <EditingPill text="active" />
             ) : (

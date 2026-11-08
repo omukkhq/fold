@@ -26,11 +26,10 @@ import { Id } from "@/components/id/Id";
 import { IdText } from "@/components/text/IdText";
 import { recipientActors } from "@/features/messages/delivery";
 import { LineQuote } from "@/features/messages/QuotedLines";
-import { Markdown } from "@/features/task/Markdown";
+import { Markdown } from "@/components/text/Markdown";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
-import { MentionText } from "@/mentions/MentionText";
 import { MessageComposer } from "@/mentions/MessageComposer";
 import type { Known } from "@/mentions/parse";
 import { messageSchema, type MessageValues } from "./compose";
@@ -177,7 +176,9 @@ export function BodySection({
   const id = detail.request.id;
   return (
     <Section title="Request">
-      <Markdown mentions={{ slug, known }}>{detail.body}</Markdown>
+      <Markdown mentions={{ slug, known }} document>
+        {detail.body}
+      </Markdown>
       {detail.request.code === null ? null : (
         <div className="flex flex-col gap-6">
           <h3 className={OVERLINE}>Made on</h3>
@@ -308,7 +309,9 @@ export function DraftView({
                   {card.title}
                 </span>
               </p>
-              <Markdown mentions={{ slug, known }}>{card.description}</Markdown>
+              <Markdown mentions={{ slug, known }} document>
+                {card.description}
+              </Markdown>
             </li>
           ))}
         </ol>
@@ -358,7 +361,7 @@ function CommentCard({
           {formatAsOfMinute(now, comment.created_at)}
         </span>
       </p>
-      <MentionText text={comment.body} slug={slug} known={known} />
+      <Markdown mentions={{ slug, known }}>{comment.body}</Markdown>
     </li>
   );
 }
@@ -422,7 +425,7 @@ function MessageCard({
           {formatAsOfMinute(now, message.sent_at)}
         </span>
       </p>
-      <MentionText text={message.body} slug={slug} known={known} />
+      <Markdown mentions={{ slug, known }}>{message.body}</Markdown>
     </li>
   );
 }

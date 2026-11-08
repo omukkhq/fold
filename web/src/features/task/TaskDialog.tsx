@@ -13,6 +13,7 @@ import { failureText } from "@/format/failure";
 import { PHONE_LAYOUT } from "@/features/board/view";
 import { useLiveStatus } from "@/live/status";
 import { useDataClock } from "@/live/useDataClock";
+import { useActivityClock } from "@/live/useNow";
 import { cn } from "@/lib/cn";
 import { useMediaQuery } from "@/lib/pageState";
 import { insetFocusRing } from "@/lib/focus";
@@ -82,12 +83,16 @@ function Loaded({
     queryFn: skipToken,
   });
   const status = useLiveStatus();
-  const now = useDataClock([
+  const dataNow = useDataClock([
     readAt,
     status.lastEventAt,
     streamed?.last_activity_at,
   ]);
   const live = task.workspace === null ? null : (streamed ?? null);
+  const now = useActivityClock(
+    dataNow,
+    live?.activity != null && task.status !== "done",
+  );
   const phone = useMediaQuery(PHONE_LAYOUT);
   return (
     <div className="flex flex-col md:min-h-0 md:flex-row">

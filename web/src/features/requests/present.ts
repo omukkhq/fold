@@ -1,3 +1,4 @@
+import { plainPreview } from "@/components/text/plainText";
 import type {
   DraftCard,
   DraftEdge,
@@ -68,10 +69,10 @@ export interface Heading {
   excerpt: boolean;
 }
 
-/** A list row's title: the title, or the start of the message while the request has none. */
+/** A list row's title: the title, or the start of the message in plain text while the request has none. */
 export function headingOf(request: RequestSummary): Heading {
   return request.title === null
-    ? { text: request.excerpt, excerpt: true }
+    ? { text: plainPreview(request.excerpt), excerpt: true }
     : { text: request.title, excerpt: false };
 }
 

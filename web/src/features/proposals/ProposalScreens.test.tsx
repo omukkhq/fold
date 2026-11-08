@@ -2747,6 +2747,63 @@ describe("Intent", () => {
     ).toBeNull();
   });
 
+  it("renders the Markdown of the intent: code names as code, lists, emphasis and mentions, and HTML only as typed", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      versions: p.versions.map((v) => ({
+        ...v,
+        intent: intent(
+          "Moves `accounts.bootstrap_superadmin` behind **one** job for #T-9.\n\n<b>not bold</b>",
+          [
+            [
+              "Job",
+              "Runs as `SystemActor(job=...)`:\n- reads the config\n- writes the row",
+              [SCHEMA],
+            ],
+          ],
+          {
+            contracts: {
+              routes: [],
+              database: [],
+              rights: [],
+              config: ["`FOLD_JOBS` turns the job on"],
+              errors: [],
+              events: [],
+              commands: [],
+            },
+            decisions: ["Keep _each_ job per kind."],
+            not_changed: [],
+          },
+        ),
+      })),
+      files: [comparedFile(SCHEMA, "added")],
+    }));
+    renderAt("/p/demo/proposals/P-4");
+    const card = await screen.findByRole("region", { name: "Intent" });
+    const summary = within(card).getByText("accounts.bootstrap_superadmin");
+    expect(summary.tagName).toBe("CODE");
+    expect(summary.className).toContain("wrap-anywhere");
+    expect(within(card).getByText("one").tagName).toBe("STRONG");
+    expect(
+      within(card).getByRole("link", { name: "T-9" }).getAttribute("href"),
+    ).toBe("/p/demo/t/T-9");
+    expect(within(card).getByText("<b>not bold</b>").tagName).toBe("P");
+    expect(card.querySelector("b")).toBeNull();
+    const parts = within(card).getByRole("region", { name: "Parts" });
+    expect(within(parts).getByText("SystemActor(job=...)").tagName).toBe(
+      "CODE",
+    );
+    expect(
+      within(parts)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toContain("reads the config");
+    const contracts = within(card).getByRole("region", { name: "Contracts" });
+    expect(within(contracts).getByText("FOLD_JOBS").tagName).toBe("CODE");
+    const decisions = within(card).getByRole("region", { name: "Decisions" });
+    expect(within(decisions).getByText("each").tagName).toBe("EM");
+  });
+
   it("groups the changed files by part and shows the part above the file", async () => {
     update("P-4", (p) => ({
       ...p,

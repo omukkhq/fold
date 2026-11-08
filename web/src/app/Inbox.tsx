@@ -58,6 +58,7 @@ import {
 } from "./AgentChangeChoices";
 import { HrefLink } from "./HrefLink";
 import { SharedChangeDismiss, SharedFilesDialog } from "./SharedChangeDismiss";
+import { RestartStalled } from "@/features/workers/RestartStalled";
 import { listNote, listState } from "./listNote";
 import { PanelNote } from "./PanelNote";
 import {
@@ -87,6 +88,7 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   notify_target_off: BellOff,
   agent_change: Bot,
   shared_changed: Link2,
+  worker_stalled: Hand,
 };
 
 const MINUTE_MS = 60_000;
@@ -169,11 +171,13 @@ function NeedLine({
           {formatAsOfMinute(now, line.since)}
         </span>
         {!line.inline && line.title ? (
-          // A row that opens nothing has no tooltip to give a cut title, so its title wraps whole.
+          // A row that opens nothing has no tooltip to give a cut title, and a stalled worker's title is the command that restarts it, so each wraps whole.
           <span
             className={cn(
               "min-w-0 basis-full text-13 text-text-2",
-              line.href === null ? "wrap-anywhere" : "truncate",
+              line.href === null || line.restart !== null
+                ? "wrap-anywhere"
+                : "truncate",
             )}
           >
             <CodeText text={line.title} caption />
@@ -326,13 +330,17 @@ export function Inbox({ slug }: { slug: string }) {
   const session = useQuery(sessionQuery());
   const feed = useFeed(slug);
   const status = useLiveStatus();
-  const now = useNow(status.state === "reconnecting", MINUTE_MS);
+  // A stalled worker's line says for how long fold saw nothing, so the time moves each minute while one shows.
+  const stalls = (needs.data ?? []).some(
+    (item) => item.kind === "worker_stalled",
+  );
+  const now = useNow(status.state === "reconnecting" || stalls, MINUTE_MS);
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<InboxTab>("needs");
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
   const agentChange = useAgentChangeChoices(slug);
   const items = itemsFor(needs.data ?? [], session.data?.human ?? null);
-  const groups = needsYouGroups(slug, items);
+  const groups = needsYouGroups(slug, items, now);
   const note = listNote(listState(needs), groups.length, {
     loading: "Loading what waits for you",
     failed: "Needs you could not load.",
@@ -475,6 +483,8 @@ export function Inbox({ slug }: { slug: string }) {
                                 choices={agentChange}
                                 change={line.settle}
                               />
+                            ) : line.restart !== null ? (
+                              <RestartStalled slug={slug} name={line.restart} />
                             ) : line.dismiss === null ? undefined : (
                               <SharedChangeDismiss
                                 slug={slug}

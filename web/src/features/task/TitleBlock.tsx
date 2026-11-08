@@ -11,6 +11,8 @@ import { Mono } from "@/components/mono/Mono";
 import { useState } from "react";
 import { cn } from "@/lib/cn";
 import { PersonName } from "@/people/PersonName";
+import { RestartStalled } from "@/features/workers/RestartStalled";
+import { toldText } from "@/live/workerActivity";
 import type { LiveStrip } from "./liveStrip";
 import { LinkButton, submit, WriteError } from "./parts";
 import { proposalPath } from "./links";
@@ -143,6 +145,23 @@ function Strip({ strip }: { strip: LiveStrip }) {
   );
 }
 
+/** Who fold told of the worker's stall, and Restart worker for a worker whose process fold runs. */
+function StallActions({ slug, strip }: { slug: string; strip: LiveStrip }) {
+  const activity = strip.activity;
+  const told = activity === null ? null : toldText(activity);
+  if (activity === null || told === null) {
+    return null;
+  }
+  return (
+    <div className="flex flex-col gap-8 px-14">
+      <p className="text-14 wrap-anywhere text-text-2">{told}</p>
+      {activity.restart === null ? null : (
+        <RestartStalled slug={slug} name={activity.restart} />
+      )}
+    </div>
+  );
+}
+
 function ProposalStrip({ slug, task }: { slug: string; task: TaskDetail }) {
   const strip = proposalStrip(task);
   if (strip === null) {
@@ -235,6 +254,7 @@ export function TitleBlock({ slug, task, strip }: Props) {
         ) : null}
       </div>
       {strip ? <Strip strip={strip} /> : null}
+      {strip?.activity ? <StallActions slug={slug} strip={strip} /> : null}
       <ProposalStrip slug={slug} task={task} />
     </div>
   );

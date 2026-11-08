@@ -1,5 +1,8 @@
 import {
+  Activity,
+  CircleStop,
   ClipboardCheck,
+  Clock,
   GitPullRequest,
   Hand,
   Hourglass,
@@ -12,6 +15,7 @@ import {
 import type { BoardCard, LiveCheckRun } from "@/api/board";
 import type { ChipTone } from "@/components/badge/chips";
 import { planWaitLabel } from "@/features/proposals/planWait";
+import type { WorkerActivity } from "@/live/workerActivity";
 import { hasKind } from "./attention";
 import {
   blockedText,
@@ -39,16 +43,39 @@ type ChipCard = Pick<
   | "status"
 >;
 
+/** The words of a slot wait on the card, which leave out the slot's role so the narrow chip keeps one line; the details panel names it. */
+export const SLOT_CHIP_TEXT = "Waiting for a free slot";
+
+/** What fold saw of the worker as a chip: gold only once the stall waits for a person, else the icon says what kind of state it is. */
+function activityChip(activity: WorkerActivity): CardChip {
+  if (activity.needsYou) {
+    return { tone: "warn", icon: Hand, text: activity.text };
+  }
+  if (activity.stall) {
+    return { tone: "neutral", icon: Clock, text: activity.text };
+  }
+  switch (activity.state) {
+    case "stopped":
+      return { tone: "neutral", icon: CircleStop, text: activity.text };
+    case "waits_for_slot":
+      return { tone: "neutral", icon: Hourglass, text: SLOT_CHIP_TEXT };
+    default:
+      return { tone: "neutral", icon: Activity, text: activity.text };
+  }
+}
+
 /**
  * The one chip a card shows, or null. The first state that holds wins: a person must answer or approve, a human
  * blocker, an unfinished prerequisite (before the stall, which it causes), a check run that goes, which no person
- * waits for, which the daemon never counts as a stall and during which the worker's claim never runs out, a stalled
- * worker or a stale claim, a proposal back with its author, then a wait on others. `run` is the card's run as the live
- * frame of its workspace has it. A Done card has no chip.
+ * waits for, which the daemon never counts as a stall and during which the worker's claim never runs out, what fold saw
+ * of the worker (work in progress in the neutral tone, a stall in gold only once it waits for a person), a stale
+ * claim, a proposal back with its author, then a wait on others. `run` is the card's run and `activity` its worker's
+ * activity as the live frame of its workspace has them. A Done card has no chip.
  */
 export function cardChip(
   card: ChipCard,
   run: LiveCheckRun | null = null,
+  activity: WorkerActivity | null = null,
 ): CardChip | null {
   if (card.status === "done") {
     return null;
@@ -68,6 +95,9 @@ export function cardChip(
   }
   if (run !== null) {
     return { tone: "neutral", icon: ListChecks, text: "Running checks" };
+  }
+  if (activity !== null) {
+    return activityChip(activity);
   }
   if (hasKind(card.attention, "stalled")) {
     return { tone: "warn", icon: Hand, text: "Stalled · needs you" };
