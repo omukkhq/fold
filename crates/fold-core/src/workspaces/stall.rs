@@ -92,15 +92,25 @@ pub fn stall_start(
     checks: WorkspaceChecks,
     worker: WorkerTurn,
 ) -> Timestamp {
-    let start = match turn {
-        Some(ProposalTurn::Author { since }) => last_activity_at.max(since),
-        Some(ProposalTurn::Others) | None => last_activity_at,
+    turn_given_at(turn, checks, worker)
+        .map_or(last_activity_at, |given| last_activity_at.max(given))
+}
+
+/// The latest time others gave the worker the turn: the proposal came back to its author, the workspace's newest check run ended, a person answered, or its process started. The workspace's own changes are not in it; `None` when none of these happened.
+pub fn turn_given_at(
+    turn: Option<ProposalTurn>,
+    checks: WorkspaceChecks,
+    worker: WorkerTurn,
+) -> Option<Timestamp> {
+    let back = match turn {
+        Some(ProposalTurn::Author { since }) => Some(since),
+        Some(ProposalTurn::Others) | None => None,
     };
-    let start = match checks {
-        WorkspaceChecks::Ended { at } => start.max(at),
-        WorkspaceChecks::None | WorkspaceChecks::Running => start,
+    let checked = match checks {
+        WorkspaceChecks::Ended { at } => Some(at),
+        WorkspaceChecks::None | WorkspaceChecks::Running => None,
     };
-    worker.given_at().map_or(start, |given| start.max(given))
+    back.max(checked).max(worker.given_at())
 }
 
 /// A worker is stalled when it holds the unreleased implementation claim of the task whose active workspace has had no tracked content change for `stall_minutes`, runs no checks and waits for nobody. The time counts from `last_activity_at`, which is the creation time of a workspace with no edits. Calls do not count: a stalled worker can hold a fresh lease. A `last_activity_at` later than `now` is not stalled. This is [`activity`] for a worker whose stream fold does not read.
@@ -247,6 +257,8 @@ pub struct StallFacts {
     pub paused: bool,
     /// The resume that fold owes the worker; `None` when it owes none.
     pub owed: Option<OwedTurn>,
+    /// The latest time others gave the worker the turn, from [`turn_given_at`]. A process that ended counts as ended until someone gives the worker the turn after its end; a change of the workspace after the end, such as a write the watcher saw late, is not the worker's.
+    pub given_at: Option<Timestamp>,
 }
 
 impl Default for StallFacts {
@@ -260,6 +272,7 @@ impl Default for StallFacts {
             explained: false,
             paused: false,
             owed: None,
+            given_at: None,
         }
     }
 }
@@ -306,7 +319,7 @@ impl Activity {
     }
 }
 
-/// Decides what the worker of a workspace does at `now`. Nothing is said while the project's agents are paused, nor of a worker without the implementation claim, a workspace that is not active, a check run that goes, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A worker whose resume fold owes while the worker limits hold it is `WaitsForSlot`, never a stall; once a place is free for it, it is `Silent` when a stall window from that time, and from `start`, passed without a run. A process that ended is `Failed` at once when it ended without anyone asking and `Stopped` when someone asked for its stop, unless the worker was given the turn after it ended, such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
+/// Decides what the worker of a workspace does at `now`. Nothing is said while the project's agents are paused, nor of a worker without the implementation claim, a workspace that is not active, a check run that goes, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A worker whose resume fold owes while the worker limits hold it is `WaitsForSlot`, never a stall; once a place is free for it, it is `Silent` when a stall window from that time, and from `start`, passed without a run. A process that ended is `Failed` at once when it ended without anyone asking and `Stopped` when someone asked for its stop, whatever changed in the workspace after the end, unless others gave the worker the turn after it ended (`given_at`), such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
 pub fn activity(
     now: Timestamp,
     facts: &StallFacts,
@@ -349,8 +362,13 @@ pub fn activity(
     };
     match stream {
         WorkerStream::Unread => silent(start),
-        WorkerStream::Ended { at, failed: true } if at >= start => Activity::Failed { since: at },
-        WorkerStream::Ended { at, failed: false } if at >= start => Activity::Stopped { since: at },
+        WorkerStream::Ended { at, failed } if facts.given_at.is_none_or(|given| given <= at) => {
+            if failed {
+                Activity::Failed { since: at }
+            } else {
+                Activity::Stopped { since: at }
+            }
+        }
         WorkerStream::Ended { .. } => silent(start),
         WorkerStream::Running {
             last_output_at,
@@ -886,6 +904,7 @@ mod tests {
         explained: false,
         paused: false,
         owed: None,
+        given_at: None,
     };
 
     fn running(last_output: i64, call: Option<(CallKind, i64)>) -> WorkerStream {
@@ -1108,13 +1127,58 @@ mod tests {
             failed: true,
         };
         let back = at(12 * MINUTE);
+        let given = StallFacts {
+            given_at: Some(back),
+            ..CLAIMED
+        };
         assert_eq!(
-            activity(at(16 * MINUTE), &CLAIMED, ended, back, 5),
+            activity(at(16 * MINUTE), &given, ended, back, 5),
             Activity::Quiet
         );
         assert_eq!(
-            activity(at(17 * MINUTE), &CLAIMED, ended, back, 5),
+            activity(at(17 * MINUTE), &given, ended, back, 5),
             Activity::Silent { since: back }
+        );
+    }
+
+    #[test]
+    fn a_change_of_the_workspace_after_the_end_never_hides_it() {
+        let end = at(10 * MINUTE);
+        let late_write = at(10 * MINUTE + 500);
+        let started = StallFacts {
+            given_at: Some(at(0)),
+            ..CLAIMED
+        };
+        for (failed, seen) in [
+            (true, Activity::Failed { since: end }),
+            (false, Activity::Stopped { since: end }),
+        ] {
+            let ended = WorkerStream::Ended { at: end, failed };
+            for facts in [CLAIMED, started] {
+                for minutes in [10, 16, 60] {
+                    assert_eq!(
+                        activity(at(minutes * MINUTE + 500), &facts, ended, late_write, 5),
+                        seen,
+                        "{minutes} min"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            turn_given_at(None, NONE, IDLE),
+            None,
+            "the workspace's own changes are not in it"
+        );
+        assert_eq!(
+            turn_given_at(
+                Some(ProposalTurn::Author { since: at(3) }),
+                WorkspaceChecks::Ended { at: at(5) },
+                WorkerTurn {
+                    answered_at: Some(at(4)),
+                    ..IDLE
+                }
+            ),
+            Some(at(5))
         );
     }
 

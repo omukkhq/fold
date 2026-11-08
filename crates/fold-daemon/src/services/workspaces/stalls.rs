@@ -5,6 +5,7 @@ use fold_core::roles::{OwedResume, Role, WorkerLimits, waits_for_place};
 use fold_core::stall::{
     Activity, OwedTurn, ProposalTurn, Slot, StallFacts, WorkerStream, WorkerTurn, WorkspaceChecks,
     WorkspaceFact, activity, needs_person, present_workspace, stall_receivers, stall_start,
+    turn_given_at,
 };
 use fold_core::{
     AgentName, ProjectPaths, ProposalId, TaskId, Timestamp, WorkerName, WorkerState, WorkspaceId,
@@ -128,6 +129,7 @@ pub(super) async fn decide_stalls(
             owed: agent
                 .as_ref()
                 .and_then(|agent| inputs.owed_turn(agent, limits)),
+            given_at: turn_given_at(turn, checks, worker_turn),
         };
         let verdict = activity(now, &facts, stream, start, stall_minutes);
         let (told, stalled) = match (verdict.reason(), verdict_since(verdict), &agent) {

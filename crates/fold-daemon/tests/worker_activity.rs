@@ -190,6 +190,31 @@ async fn a_process_that_failed_without_a_report_is_a_stall_at_once() {
             .as_deref(),
         Some("@web-worker failed")
     );
+
+    // A file that the watcher sees after the end, such as the process's last write, is not the work of a running worker.
+    let before = state(&harness, &work).await.view.last_activity_at;
+    advance(&harness, Duration::from_secs(1));
+    work.write(&[("late.txt", "written as the process ended\n")]);
+    let late = eventually(WAIT, async || {
+        let view = state(&harness, &work).await.view;
+        if view.last_activity_at > before {
+            Ok(view)
+        } else {
+            Err(view.last_activity_at)
+        }
+    })
+    .await;
+    assert_eq!(
+        late.activity.map(|seen| seen.state),
+        Some(ActivityState::Failed)
+    );
+    advance(&harness, 2 * STALL);
+    let view = state(&harness, &work).await.view;
+    assert_eq!(
+        view.activity.map(|seen| seen.state),
+        Some(ActivityState::Failed)
+    );
+    assert_eq!(stalled_events(&harness).await.len(), 1, "told once");
 }
 
 /// A worker whose ask about its task waits for a person is never stalled, however long it waits and whatever call it left open.
