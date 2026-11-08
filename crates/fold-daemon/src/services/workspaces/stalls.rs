@@ -6,7 +6,9 @@ use fold_core::stall::{
     Activity, OwedTurn, ProposalTurn, Slot, StallFacts, WorkerStream, WorkerTurn, WorkspaceChecks,
     WorkspaceFact, activity, needs_person, present_workspace, stall_receivers, stall_start,
 };
-use fold_core::{AgentName, ProjectPaths, ProposalId, TaskId, Timestamp, WorkerName, WorkspaceId};
+use fold_core::{
+    AgentName, ProjectPaths, ProposalId, TaskId, Timestamp, WorkerName, WorkerState, WorkspaceId,
+};
 use fold_store::agents::{self, ClaimKind, OwedStart};
 use fold_store::reviews::checks;
 use fold_store::tasks::reports;
@@ -95,6 +97,7 @@ pub(super) async fn decide_stalls(
             (Some(process), _) if !process.running && in_session => WorkerStream::Unread,
             (Some(process), _) if !process.running => WorkerStream::Ended {
                 at: process.ended_at,
+                failed: process.failed,
             },
             (Some(process), Some(agent)) => {
                 match live.streams().and_then(|streams| streams.facts(agent)) {
@@ -179,8 +182,11 @@ fn verdict_since(verdict: Activity) -> Option<Timestamp> {
     match verdict {
         Activity::Silent { since }
         | Activity::LongCall { since, .. }
-        | Activity::Stopped { since } => Some(since),
-        Activity::Quiet | Activity::Working { .. } | Activity::WaitsForSlot { .. } => None,
+        | Activity::Failed { since } => Some(since),
+        Activity::Quiet
+        | Activity::Working { .. }
+        | Activity::Stopped { .. }
+        | Activity::WaitsForSlot { .. } => None,
     }
 }
 
@@ -351,6 +357,8 @@ struct ProcessFacts {
     started_at: Timestamp,
     /// When the process ended; its start for a row that has no end.
     ended_at: Timestamp,
+    /// It ended without anyone asking, by a crash or a failure; a stop that someone asked for leaves the row `stopped`.
+    failed: bool,
     /// The agent that started it, its lead; `None` for a person or fold.
     starter: Option<AgentName>,
     /// Needs you already names why it cannot work.
@@ -485,6 +493,7 @@ async fn stall_inputs(store: &Store) -> Result<StallInputs, StoreError> {
                 running: row.state.is_running(),
                 started_at: row.started_at,
                 ended_at: row.stopped_at.unwrap_or(row.started_at),
+                failed: row.state == WorkerState::Failed,
                 starter: starter_agent(&row.started_by),
                 explained,
             };

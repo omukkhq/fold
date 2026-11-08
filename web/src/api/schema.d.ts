@@ -2037,10 +2037,10 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @description What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended without a report, and `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free. `working` and `waits_for_slot` are never stalls.
+         * @description What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, and `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free. `working`, `stopped` and `waits_for_slot` are never stalls.
          * @enum {string}
          */
-        ActivityState: "working" | "silent" | "long_call" | "stopped" | "waits_for_slot";
+        ActivityState: "working" | "silent" | "long_call" | "stopped" | "failed" | "waits_for_slot";
         /** @description One comment on the version the human read, as its own `comment` review. */
         AddCommentBody: components["schemas"]["CommentBody"] & {
             /**
@@ -3568,7 +3568,7 @@ export interface components {
             call: components["schemas"]["LiveCall"] | null;
             /**
              * Format: int64
-             * @description UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped worker's process, or the time the work came that fold owes a `waits_for_slot` worker.
+             * @description UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, or the time the work came that fold owes a `waits_for_slot` worker.
              */
             since: number;
             slot: components["schemas"]["LiveSlot"] | null;

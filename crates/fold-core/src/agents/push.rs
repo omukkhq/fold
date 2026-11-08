@@ -750,9 +750,9 @@ fn stall_rule(event: &Event) -> Option<(Vec<AgentName>, String, &'static str)> {
                 "restart_worker",
             )
         }
-        "stopped" => (
+        "failed" => (
             format!(
-                "{agent} stopped on {task} without a report; {restart}, or send_message resumes it in its session"
+                "{agent} failed on {task} without a report; {restart}, or send_message resumes it in its session"
             ),
             "restart_worker",
         ),
@@ -1981,20 +1981,20 @@ mod tests {
                 .text
                 .starts_with("fold: a tool call of web-worker")
         );
-        let stopped = stalled(
-            json!({"agent": "web-worker", "reason": "stopped", "minutes": 0, "told": ["web-lead", "main"]}),
+        let failed = stalled(
+            json!({"agent": "web-worker", "reason": "failed", "minutes": 0, "told": ["web-lead", "main"]}),
         );
         assert_eq!(
-            sent(&notice_for(&stopped, &ctx())),
+            sent(&notice_for(&failed, &ctx())),
             vec![
                 row(
                     "web-lead",
-                    "fold: web-worker stopped on T-12 without a report; restart_worker starts it again in a new session, or send_message resumes it in its session. Call restart_worker.",
+                    "fold: web-worker failed on T-12 without a report; restart_worker starts it again in a new session, or send_message resumes it in its session. Call restart_worker.",
                     "restart_worker"
                 ),
                 row(
                     "main",
-                    "fold: web-worker stopped on T-12 without a report; restart_worker starts it again in a new session, or send_message resumes it in its session. Call restart_worker.",
+                    "fold: web-worker failed on T-12 without a report; restart_worker starts it again in a new session, or send_message resumes it in its session. Call restart_worker.",
                     "restart_worker"
                 ),
             ]

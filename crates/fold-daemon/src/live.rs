@@ -146,7 +146,7 @@ pub struct LiveActivity {
     /// The role whose free place a `waits_for_slot` worker waits for; null for the other states.
     #[schema(required = true)]
     pub slot: Option<LiveSlot>,
-    /// UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped worker's process, or the time the work came that fold owes a `waits_for_slot` worker.
+    /// UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, or the time the work came that fold owes a `waits_for_slot` worker.
     #[schema(value_type = i64)]
     pub since: Timestamp,
     /// fold runs the worker's process, so `restart_worker` can start it again in a new session.
@@ -155,7 +155,7 @@ pub struct LiveActivity {
     pub told: Vec<String>,
 }
 
-/// What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended without a report, and `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free. `working` and `waits_for_slot` are never stalls.
+/// What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, and `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free. `working`, `stopped` and `waits_for_slot` are never stalls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityState {
@@ -163,6 +163,7 @@ pub enum ActivityState {
     Silent,
     LongCall,
     Stopped,
+    Failed,
     WaitsForSlot,
 }
 
@@ -216,6 +217,7 @@ impl LiveActivity {
             Activity::Silent { since } => (ActivityState::Silent, None, since),
             Activity::LongCall { call, since } => (ActivityState::LongCall, Some(call), since),
             Activity::Stopped { since } => (ActivityState::Stopped, None, since),
+            Activity::Failed { since } => (ActivityState::Failed, None, since),
             Activity::WaitsForSlot { slot: waits, since } => {
                 slot = Some(LiveSlot::from(waits));
                 (ActivityState::WaitsForSlot, None, since)
@@ -246,6 +248,7 @@ impl LiveActivity {
             ActivityState::Silent => Activity::Silent { since },
             ActivityState::LongCall => Activity::LongCall { call, since },
             ActivityState::Stopped => Activity::Stopped { since },
+            ActivityState::Failed => Activity::Failed { since },
             ActivityState::WaitsForSlot => Activity::WaitsForSlot {
                 slot: match self.slot {
                     Some(LiveSlot::Reviewer) => Slot::Reviewer,
@@ -256,12 +259,9 @@ impl LiveActivity {
         }
     }
 
-    /// A stall rather than work or a wait for a free place.
+    /// A stall rather than work, a stop someone asked for or a wait for a free place.
     pub fn is_stall(&self) -> bool {
-        !matches!(
-            self.state,
-            ActivityState::Working | ActivityState::WaitsForSlot
-        )
+        self.activity().is_stall()
     }
 }
 

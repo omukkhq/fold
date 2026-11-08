@@ -201,8 +201,8 @@ pub enum WorkerStream {
         last_output_at: Timestamp,
         open_call: Option<OpenCall>,
     },
-    /// The worker's process ended at `at`, and no process of it runs.
-    Ended { at: Timestamp },
+    /// The worker's process ended at `at`, and no process of it runs. `failed` is true when it ended without anyone asking, by a crash or a failure; false for a stop that a person, an agent or fold asked for, such as `stop_worker` or the idle sweep.
+    Ended { at: Timestamp, failed: bool },
 }
 
 /// The kind of place a worker waits for: the roles that the worker limits count.
@@ -275,33 +275,38 @@ pub enum Activity {
     Silent { since: Timestamp },
     /// The call open since `since` ran long; see [`LONG_CALL`].
     LongCall { call: CallKind, since: Timestamp },
-    /// The worker's process ended at `since` and the task has no report.
+    /// Someone asked the worker's process to stop, and it ended at `since`: a choice, so nobody is told.
     Stopped { since: Timestamp },
+    /// The worker's process ended at `since` without anyone asking, by a crash or a failure, and the task has no report.
+    Failed { since: Timestamp },
     /// fold owes the worker a resume since `since`, and the worker limits hold it until a place of `slot` is free for it: fold starts it then, so nobody must act.
     WaitsForSlot { slot: Slot, since: Timestamp },
 }
 
 impl Activity {
-    /// The worker needs someone to act: it is silent, its call ran long, or its process ended.
+    /// The worker needs someone to act: it is silent, its call ran long, or its process failed.
     pub fn is_stall(self) -> bool {
         matches!(
             self,
-            Self::Silent { .. } | Self::LongCall { .. } | Self::Stopped { .. }
+            Self::Silent { .. } | Self::LongCall { .. } | Self::Failed { .. }
         )
     }
 
-    /// The name of a stall, as events and the live state write it; `None` for `Quiet`, `Working` and `WaitsForSlot`.
+    /// The name of a stall, as events and the live state write it; `None` for `Quiet`, `Working`, `Stopped` and `WaitsForSlot`.
     pub fn reason(self) -> Option<&'static str> {
         match self {
             Self::Silent { .. } => Some("silent"),
             Self::LongCall { .. } => Some("long_call"),
-            Self::Stopped { .. } => Some("stopped"),
-            Self::Quiet | Self::Working { .. } | Self::WaitsForSlot { .. } => None,
+            Self::Failed { .. } => Some("failed"),
+            Self::Quiet
+            | Self::Working { .. }
+            | Self::Stopped { .. }
+            | Self::WaitsForSlot { .. } => None,
         }
     }
 }
 
-/// Decides what the worker of a workspace does at `now`. Nothing is said while the project's agents are paused, nor of a worker without the implementation claim, a workspace that is not active, a check run that goes, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A worker whose resume fold owes while the worker limits hold it is `WaitsForSlot`, never a stall; once a place is free for it, it is `Silent` when a stall window from that time, and from `start`, passed without a run. A process that ended is `Stopped` at once, unless the worker was given the turn after it ended, such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
+/// Decides what the worker of a workspace does at `now`. Nothing is said while the project's agents are paused, nor of a worker without the implementation claim, a workspace that is not active, a check run that goes, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A worker whose resume fold owes while the worker limits hold it is `WaitsForSlot`, never a stall; once a place is free for it, it is `Silent` when a stall window from that time, and from `start`, passed without a run. A process that ended is `Failed` at once when it ended without anyone asking and `Stopped` when someone asked for its stop, unless the worker was given the turn after it ended, such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
 pub fn activity(
     now: Timestamp,
     facts: &StallFacts,
@@ -344,7 +349,8 @@ pub fn activity(
     };
     match stream {
         WorkerStream::Unread => silent(start),
-        WorkerStream::Ended { at } if at >= start => Activity::Stopped { since: at },
+        WorkerStream::Ended { at, failed: true } if at >= start => Activity::Failed { since: at },
+        WorkerStream::Ended { at, failed: false } if at >= start => Activity::Stopped { since: at },
         WorkerStream::Ended { .. } => silent(start),
         WorkerStream::Running {
             last_output_at,
@@ -377,7 +383,7 @@ pub fn activity(
     }
 }
 
-/// What fold saw of the worker `worker`, in the words that the board's chip, the task, Activity, Needs you and the notices all use: `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped` or `Waits for a free task worker slot`. The time is the span from the activity's start to `now`, rounded down, in seconds, minutes, hours or days. `None` for [`Activity::Quiet`].
+/// What fold saw of the worker `worker`, in the words that the board's chip, the task, Activity, Needs you and the notices all use: `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed` or `Waits for a free task worker slot`. The time is the span from the activity's start to `now`, rounded down, in seconds, minutes, hours or days. `None` for [`Activity::Quiet`].
 pub fn activity_text(activity: Activity, worker: &str, now: Timestamp) -> Option<String> {
     let span = |since: Timestamp| {
         let seconds = now
@@ -416,6 +422,7 @@ pub fn activity_text(activity: Activity, worker: &str, now: Timestamp) -> Option
             span(since)
         )),
         Activity::Stopped { .. } => Some(format!("@{worker} stopped")),
+        Activity::Failed { .. } => Some(format!("@{worker} failed")),
         Activity::WaitsForSlot { slot, .. } => Some(
             match slot {
                 Slot::TaskWorker => "Waits for a free task worker slot",
@@ -1044,19 +1051,36 @@ mod tests {
     }
 
     #[test]
-    fn a_process_that_ended_is_stopped_at_once() {
+    fn a_process_that_failed_is_a_stall_at_once_and_a_stop_someone_asked_for_never_is() {
         let ended = WorkerStream::Ended {
             at: at(10 * MINUTE),
+            failed: true,
         };
-        let stopped = activity(at(10 * MINUTE), &CLAIMED, ended, at(0), 5);
+        let failed = activity(at(10 * MINUTE), &CLAIMED, ended, at(0), 5);
         assert_eq!(
-            stopped,
-            Activity::Stopped {
+            failed,
+            Activity::Failed {
                 since: at(10 * MINUTE)
             }
         );
-        assert!(stopped.is_stall());
-        assert_eq!(stopped.reason(), Some("stopped"));
+        assert!(failed.is_stall());
+        assert_eq!(failed.reason(), Some("failed"));
+        let asked = WorkerStream::Ended {
+            at: at(10 * MINUTE),
+            failed: false,
+        };
+        for minutes in [10, 60, 24 * 60] {
+            let stopped = activity(at(minutes * MINUTE), &CLAIMED, asked, at(0), 5);
+            assert_eq!(
+                stopped,
+                Activity::Stopped {
+                    since: at(10 * MINUTE)
+                },
+                "{minutes} min"
+            );
+            assert!(!stopped.is_stall());
+            assert_eq!(stopped.reason(), None);
+        }
         let reported = StallFacts {
             reported: true,
             ..CLAIMED
@@ -1081,6 +1105,7 @@ mod tests {
     fn a_turn_given_after_the_end_waits_one_window_for_the_owed_resume() {
         let ended = WorkerStream::Ended {
             at: at(10 * MINUTE),
+            failed: true,
         };
         let back = at(12 * MINUTE);
         assert_eq!(
@@ -1106,7 +1131,10 @@ mod tests {
             WorkerStream::Unread,
             running(0, None),
             running(0, Some((CallKind::Command, 0))),
-            WorkerStream::Ended { at: at(0) },
+            WorkerStream::Ended {
+                at: at(0),
+                failed: true,
+            },
         ] {
             assert_eq!(
                 activity(at(24 * 60 * MINUTE), &asked, stream, at(0), 5),
@@ -1157,6 +1185,7 @@ mod tests {
         };
         let ended = WorkerStream::Ended {
             at: at(10 * MINUTE),
+            failed: true,
         };
         for minutes in [12, 17, 60, 24 * 60] {
             let seen = activity(at(minutes * MINUTE), &waiting, ended, came, 5);
@@ -1173,6 +1202,7 @@ mod tests {
         }
         let sent_back_after_the_end = WorkerStream::Ended {
             at: at(20 * MINUTE),
+            failed: true,
         };
         assert!(
             matches!(
@@ -1201,6 +1231,7 @@ mod tests {
     fn an_owed_resume_with_a_free_slot_is_silent_one_window_after_the_slot_freed() {
         let ended = WorkerStream::Ended {
             at: at(10 * MINUTE),
+            failed: true,
         };
         let freed = at(40 * MINUTE);
         let free = StallFacts {
@@ -1219,6 +1250,7 @@ mod tests {
         );
         let sent_back = WorkerStream::Ended {
             at: at(41 * MINUTE),
+            failed: true,
         };
         assert_eq!(
             activity(at(45 * MINUTE), &free, sent_back, back, 5),
@@ -1242,8 +1274,14 @@ mod tests {
             WorkerStream::Unread,
             running(0, None),
             running(0, Some((CallKind::Command, 0))),
-            WorkerStream::Ended { at: at(0) },
-            WorkerStream::Ended { at: at(MINUTE) },
+            WorkerStream::Ended {
+                at: at(0),
+                failed: true,
+            },
+            WorkerStream::Ended {
+                at: at(MINUTE),
+                failed: true,
+            },
         ] {
             assert_eq!(
                 activity(late, &paused, stream, at(0), 5),
@@ -1341,6 +1379,10 @@ mod tests {
         assert_eq!(
             text(Activity::Stopped { since: at(0) }).as_deref(),
             Some("@web-worker stopped")
+        );
+        assert_eq!(
+            text(Activity::Failed { since: at(0) }).as_deref(),
+            Some("@web-worker failed")
         );
         assert_eq!(text(Activity::Quiet), None);
         assert_eq!(

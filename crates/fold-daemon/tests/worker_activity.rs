@@ -125,9 +125,9 @@ async fn an_open_command_is_work_until_it_runs_twice_claude_codes_limit() {
     assert_eq!(told[0]["minutes"], 20);
 }
 
-/// A process that ended without a report is stopped at once, and its lead hears of it; a session of the agent that fold does not run keeps it from counting as stopped.
+/// A stop that the lead asked for is a choice: the worker shows stopped in the neutral tone, fold tells nobody and no person is needed, however long it stays stopped. A session of the agent that fold does not run keeps it from counting as stopped.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_process_that_ended_without_a_report_is_stopped_at_once() {
+async fn a_stop_that_someone_asked_for_is_shown_and_never_a_stall() {
     let fake = FakeClaude::new("result");
     let mut harness = task_worker_for(&fake, &["Draw the page"], WorkerState::Idle).await;
     let work = harness.start_work(TASK_WORKER, "T-1").await;
@@ -150,8 +150,46 @@ async fn a_process_that_ended_without_a_report_is_stopped_at_once() {
         }
     })
     .await;
-    assert_eq!(stopped.told, ["web-lead"]);
-    assert_eq!(stalled_events(&harness).await[0]["reason"], "stopped");
+    assert!(stopped.told.is_empty());
+    assert!(!stopped.is_stall());
+    advance(&harness, 3 * STALL);
+    let view = state(&harness, &work).await.view;
+    assert_eq!(
+        view.activity.map(|seen| seen.state),
+        Some(ActivityState::Stopped)
+    );
+    assert!(!view.stalled, "no person is needed");
+    assert!(
+        stalled_events(&harness).await.is_empty(),
+        "fold tells nobody"
+    );
+}
+
+/// A process that ended without anyone asking, such as by a crash, and without a report fails at once, and its lead hears of it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_process_that_failed_without_a_report_is_a_stall_at_once() {
+    let fake = FakeClaude::new("result").failing_with_stderr("Segmentation fault");
+    let mut harness = task_worker_for(&fake, &["Draw the page"], WorkerState::Failed).await;
+    let work = harness.start_work(TASK_WORKER, "T-1").await;
+    harness.disconnect(TASK_WORKER).await;
+    let failed = eventually(WAIT, async || {
+        let view = state(&harness, &work).await.view;
+        match view.activity {
+            Some(seen) if seen.state == ActivityState::Failed => Ok(seen),
+            other => Err(other),
+        }
+    })
+    .await;
+    assert!(failed.is_stall());
+    assert_eq!(failed.told, ["web-lead"]);
+    let told = stalled_events(&harness).await;
+    assert_eq!(told.len(), 1);
+    assert_eq!(told[0]["reason"], "failed");
+    assert_eq!(
+        fold_core::stall::activity_text(failed.activity(), TASK_WORKER, harness.project.now())
+            .as_deref(),
+        Some("@web-worker failed")
+    );
 }
 
 /// A worker whose ask about its task waits for a person is never stalled, however long it waits and whatever call it left open.
