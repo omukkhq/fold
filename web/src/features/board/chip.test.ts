@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { CircleStop, Clock, Hand } from "lucide-react";
+import { Activity, CircleStop, Clock, Hand, Hourglass } from "lucide-react";
 import type { BoardCard, BoardProposal } from "@/api/board";
 import { boardCard } from "@/test/payloads";
-import { cardChip, integratedText, metaFact } from "./chip";
+import { SLOT_CHIP_TEXT, cardChip, integratedText, metaFact } from "./chip";
 
 const proposal = (
   state: BoardProposal["state"],
@@ -287,10 +287,12 @@ describe("metaFact", () => {
       state: "waits_for_slot" as const,
       text: "Waits for a free task worker slot",
     };
-    expect(cardChip(card, null, waits)).toMatchObject({
+    expect(cardChip(card, null, waits)).toEqual({
       tone: "neutral",
-      text: "Waits for a free task worker slot",
+      icon: Hourglass,
+      text: SLOT_CHIP_TEXT,
     });
+    expect(cardChip(card, null, working)?.icon).toBe(Activity);
   });
 
   it("shows a worker stopped on purpose in the neutral tone with the stop icon, and a failed one as a stall", () => {

@@ -43,6 +43,27 @@ type ChipCard = Pick<
   | "status"
 >;
 
+/** The words of a slot wait on the card, which leave out the slot's role so the narrow chip keeps one line; the details panel names it. */
+export const SLOT_CHIP_TEXT = "Waits for a free slot";
+
+/** What fold saw of the worker as a chip: gold only once the stall waits for a person, else the icon says what kind of state it is. */
+function activityChip(activity: WorkerActivity): CardChip {
+  if (activity.needsYou) {
+    return { tone: "warn", icon: Hand, text: activity.text };
+  }
+  if (activity.stall) {
+    return { tone: "neutral", icon: Clock, text: activity.text };
+  }
+  switch (activity.state) {
+    case "stopped":
+      return { tone: "neutral", icon: CircleStop, text: activity.text };
+    case "waits_for_slot":
+      return { tone: "neutral", icon: Hourglass, text: SLOT_CHIP_TEXT };
+    default:
+      return { tone: "neutral", icon: Activity, text: activity.text };
+  }
+}
+
 /**
  * The one chip a card shows, or null. The first state that holds wins: a person must answer or approve, a human
  * blocker, an unfinished prerequisite (before the stall, which it causes), a check run that goes, which no person
@@ -76,17 +97,7 @@ export function cardChip(
     return { tone: "neutral", icon: ListChecks, text: "Running checks" };
   }
   if (activity !== null) {
-    return {
-      tone: activity.needsYou ? "warn" : "neutral",
-      icon: activity.needsYou
-        ? Hand
-        : activity.stall
-          ? Clock
-          : activity.state === "stopped"
-            ? CircleStop
-            : Activity,
-      text: activity.text,
-    };
+    return activityChip(activity);
   }
   if (hasKind(card.attention, "stalled")) {
     return { tone: "warn", icon: Hand, text: "Stalled · needs you" };
