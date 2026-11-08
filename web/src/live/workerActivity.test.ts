@@ -133,7 +133,7 @@ describe("workerActivity", () => {
     });
   });
 
-  it("waits for a person only once the daemon flags the stall, and restarts only a worker fold runs", () => {
+  it("waits for a person and offers the restart only once the daemon flags the stall, and restarts only a worker fold runs", () => {
     const silent = seen({ state: "silent", call: null, told: ["web-lead"] });
     const told = workerActivity(
       { activity: silent, stalled: false, worker: "web-worker" },
@@ -142,7 +142,7 @@ describe("workerActivity", () => {
     expect(told).toMatchObject({
       stall: true,
       needsYou: false,
-      restart: "web-worker",
+      restart: null,
       told: ["web-lead"],
       since: silent.since,
     });

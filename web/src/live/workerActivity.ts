@@ -14,7 +14,7 @@ export interface WorkerActivity {
   stall: boolean;
   /** The stall waits for a person: fold told the lead and it lasted one more window, or no agent can act. */
   needsYou: boolean;
-  /** The agent that Restart worker starts again in a new session; null while it works or when fold does not run its session. */
+  /** The agent that Restart worker starts again in a new session, once the stall waits for a person; null before that, while it works, or when fold does not run its session. */
   restart: string | null;
   /** The agents fold told of the stall. */
   told: readonly string[];
@@ -109,11 +109,13 @@ export function workerActivity(
     return null;
   }
   const stall = isStall(activity.state);
+  const needsYou = stall && live.stalled;
   return {
     text: activityText(activity, live.worker, now),
     stall,
-    needsYou: stall && live.stalled,
-    restart: stall && activity.supervised ? agentOf(live.worker) : null,
+    needsYou,
+    // The lead fold told gets one stall window to restart the worker itself; only then does a person get the button.
+    restart: needsYou && activity.supervised ? agentOf(live.worker) : null,
     told: activity.told,
     since: activity.since,
   };
