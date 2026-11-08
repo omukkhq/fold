@@ -65,4 +65,17 @@ describe("plainPreview", () => {
     expect(preview.length).toBeLessThanOrEqual(PREVIEW_CHARS + 1);
     expect(plainPreview("abcdefghij", 4)).toBe("abcd…");
   });
+
+  it("reads only the start of a very long text and still ends the preview with an ellipsis", () => {
+    const line = "**a ".repeat(20_000);
+    const started = performance.now();
+    const preview = plainPreview(line);
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(preview.endsWith("…")).toBe(true);
+    expect(preview.length).toBeLessThanOrEqual(PREVIEW_CHARS + 1);
+    expect(preview).not.toContain("*");
+    const many = `${"[x](/a) ".repeat(400)}\nlast words`;
+    expect(plainPreview(many).endsWith("…")).toBe(true);
+    expect(plainPreview("short\n\n")).toBe("short");
+  });
 });
