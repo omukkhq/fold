@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT workspace_id AS \"workspace!: i64\", MAX(created_at) AS \"at!: i64\"\n           FROM events\n           WHERE type = ?1 AND workspace_id IS NOT NULL AND created_at < ?2\n           GROUP BY workspace_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "workspace!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "workspace_id"
+          }
+        }
+      },
+      {
+        "name": "at!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "1ba9d1be83c57fdf36a3659491f5e931989925b4abcde8e606df3ae9597787e0"
+}

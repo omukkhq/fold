@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -476,6 +476,8 @@ struct Shared {
     opened_at: Timestamp,
     /// Who was told of each workspace's stall, and when.
     told: Mutex<HashMap<WorkspaceId, Told>>,
+    /// A stall decision ran since the daemon opened the project, so the stalled flags say what the stall rule decides; before it, they say nothing yet.
+    stalls_decided: AtomicBool,
 }
 
 impl Drop for Shared {
@@ -602,6 +604,7 @@ impl LiveState {
                 streams: OnceLock::new(),
                 opened_at,
                 told: Mutex::default(),
+                stalls_decided: AtomicBool::new(false),
             }),
         }
     }
@@ -936,13 +939,33 @@ impl LiveState {
         lock(&self.shared.told).get(&workspace).cloned()
     }
 
-    /// Records who was told of the stall of `workspace`, or forgets it with `None` once the stall ended.
+    /// Records who was told of the stall of `workspace`, or forgets it with `None` once the stall ended. A workspace that left the live state keeps no record.
     pub fn set_told(&self, workspace: WorkspaceId, told: Option<Told>) {
+        let present = told.is_some() && self.get(workspace).is_some();
         let mut all = lock(&self.shared.told);
         match told {
-            Some(told) => all.insert(workspace, told),
-            None => all.remove(&workspace),
-        };
+            Some(told) if present => {
+                all.insert(workspace, told);
+            }
+            _ => {
+                all.remove(&workspace);
+            }
+        }
+    }
+
+    /// Forgets who was told of the stalls of the workspaces that left the live state: every one but `live`.
+    pub fn keep_told(&self, live: &HashSet<WorkspaceId>) {
+        lock(&self.shared.told).retain(|workspace, _| live.contains(workspace));
+    }
+
+    /// Whether a stall decision ran since the daemon opened the project.
+    pub fn stalls_decided(&self) -> bool {
+        self.shared.stalls_decided.load(Ordering::SeqCst)
+    }
+
+    /// Records that a stall decision ran.
+    pub fn mark_stalls_decided(&self) {
+        self.shared.stalls_decided.store(true, Ordering::SeqCst);
     }
 
     /// Holds the project's turn for a stall decision until the guard drops.

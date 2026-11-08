@@ -28,7 +28,7 @@ use crate::push::starter_agent;
 use crate::services::events::{BusMessage, EventBuffer, EventBus};
 use crate::services::projects::load_config;
 
-/// Decides what fold saw of the worker of every live workspace of `project` at `now`, with the project's `stall_minutes`, sets it in the live state with the check run that goes in each workspace, and tells the worker's lead of each new stall. A workspace whose files are its open proposal's newest version never stalls while the proposal waits on others; once it comes back to its author, the stall time counts from that moment at the earliest. A workspace whose checks run never stalls, and the stall time counts from the end of its newest run at the earliest, so the worker gets the whole window to act on the result. A worker never stalls while an ask about its task or one of its permission questions waits for a person, and the stall time counts from a person's newest answer and the start of its current process at the earliest. A worker whose process fold supervises counts from its newest output too: an open call is work, a call that runs long, a silence of `stall_minutes` and a process that ended without a report are stalls. A worker whose resume fold owes while the worker limits hold it waits for a slot, which is never a stall; once a place is free for it, the stall time counts from the newest stop of a worker of its role or change of the limits at the earliest. Each new stall appends `worker.stalled`, which tells the worker's lead, or else the main agents; the stall needs a person once one more `stall_minutes` passed after that, or at once when no agent can act. A change publishes `workspace.changed`. Returns how many workspaces changed, the ones a starting run cleared included. While the project's agents are paused no worker stalls: the pause clears every activity and stalled flag and appends no `worker.stalled`, and after a resume the stall time counts from the resume at the earliest, so the paused time never stalls a worker.
+/// Decides what fold saw of the worker of every live workspace of `project` at `now`, with the project's `stall_minutes`, sets it in the live state with the check run that goes in each workspace, and tells the worker's lead of each new stall. A workspace whose files are its open proposal's newest version never stalls while the proposal waits on others; once it comes back to its author, the stall time counts from that moment at the earliest. A workspace whose checks run never stalls, and the stall time counts from the end of its newest run at the earliest, so the worker gets the whole window to act on the result. A worker never stalls while an ask about its task or one of its permission questions waits for a person, and the stall time counts from a person's newest answer and the start of its current process at the earliest. A worker whose process fold supervises counts from its newest output too: an open call is work, a call that runs long, a silence of `stall_minutes` and a process that ended without anyone asking and without a report are stalls, and a stop that a person, an agent or fold asked for is not. A worker whose resume fold owes while the worker limits hold it waits for a slot, which is never a stall; once a place is free for it, the stall time counts from the newest stop of a worker of its role or change of the limits at the earliest. Each new stall appends `worker.stalled`, which tells the worker's lead, or else the main agents; the stall needs a person once one more `stall_minutes` passed after that, or at once when no agent can act. A stall that a `worker.stalled` from before the daemon started already told is not told again, and its person's window counts from that event. A change publishes `workspace.changed`. Returns how many workspaces changed, the ones a starting run cleared included. While the project's agents are paused no worker stalls: the pause clears every activity and stalled flag and appends no `worker.stalled`, and after a resume the stall time counts from the resume at the earliest, so the paused time never stalls a worker.
 pub async fn check_stalls(
     project: &ProjectHandle,
     now: Timestamp,
@@ -48,10 +48,12 @@ pub(super) async fn decide_stalls(
     let limits = config.workers.limits();
     let _turn = live.stall_turn().await;
     let states = live.all();
+    live.keep_told(&states.iter().map(|state| state.view.workspace).collect());
     if states.is_empty() {
+        live.mark_stalls_decided();
         return Ok(0);
     }
-    let inputs = stall_inputs(store).await?;
+    let inputs = stall_inputs(store, live.opened_at()).await?;
     let mut changed = 0;
     let mut new_stalls = Vec::new();
     for state in states {
@@ -139,20 +141,36 @@ pub(super) async fn decide_stalls(
                         let starter = process
                             .and_then(|process| process.starter.as_ref())
                             .filter(|starter| inputs.known.contains(*starter));
-                        let told = Told {
-                            reason,
-                            since,
-                            at: now,
-                            agents: stall_receivers(agent, starter, &inputs.main_agents),
-                        };
-                        new_stalls.push((
-                            view.workspace,
-                            view.task,
-                            agent.clone(),
-                            verdict,
-                            told.clone(),
-                        ));
-                        told
+                        let agents = stall_receivers(agent, starter, &inputs.main_agents);
+                        match inputs.told_before.get(&view.workspace) {
+                            // The newest event came after this stall started, so it told this stall before the daemon started.
+                            Some(at) if *at >= since => {
+                                let told = Told {
+                                    reason,
+                                    since,
+                                    at: *at,
+                                    agents,
+                                };
+                                live.set_told(view.workspace, Some(told.clone()));
+                                told
+                            }
+                            _ => {
+                                let told = Told {
+                                    reason,
+                                    since,
+                                    at: now,
+                                    agents,
+                                };
+                                new_stalls.push((
+                                    view.workspace,
+                                    view.task,
+                                    agent.clone(),
+                                    verdict,
+                                    told.clone(),
+                                ));
+                                told
+                            }
+                        }
                     }
                 };
                 let to_agent = (!told.agents.is_empty()).then_some(told.at);
@@ -174,6 +192,7 @@ pub(super) async fn decide_stalls(
         }
     }
     tell_stalls(store, live, now, new_stalls).await;
+    live.mark_stalls_decided();
     Ok(changed)
 }
 
@@ -348,6 +367,8 @@ struct StallInputs {
     owed: Vec<OwedStart>,
     /// The newest change of the worker limits.
     limits_changed_at: Option<Timestamp>,
+    /// The newest `worker.stalled` of each workspace from before the daemon started.
+    told_before: HashMap<WorkspaceId, Timestamp>,
 }
 
 /// A supervised agent's process as the stall rule reads it.
@@ -423,7 +444,7 @@ impl StallInputs {
 }
 
 /// The pause, the holder of each unreleased implementation claim by task, the turn of each open proposal by task, the proposal-stage check runs by workspace, and what each worker waits for and when it was last given the turn, read in one read transaction.
-async fn stall_inputs(store: &Store) -> Result<StallInputs, StoreError> {
+async fn stall_inputs(store: &Store, opened_at: Timestamp) -> Result<StallInputs, StoreError> {
     let mut tx = store.read().begin().await?;
     let pause = agents::pause_state(&mut *tx).await?;
     let names: HashMap<i64, WorkerName> = agents::all_workers(&mut *tx)
@@ -525,6 +546,10 @@ async fn stall_inputs(store: &Store) -> Result<StallInputs, StoreError> {
     let owed = agents::owed_starts(&mut *tx).await?;
     let limits_changed_at =
         events::newest_at_of_type(&mut *tx, types::WORKERS_LIMITS_CHANGED).await?;
+    let told_before = events::newest_at_by_workspace(&mut *tx, types::WORKER_STALLED, opened_at)
+        .await?
+        .into_iter()
+        .collect();
     tx.commit().await?;
     Ok(StallInputs {
         paused: pause.is_paused(),
@@ -546,5 +571,6 @@ async fn stall_inputs(store: &Store) -> Result<StallInputs, StoreError> {
         sessions,
         owed,
         limits_changed_at,
+        told_before,
     })
 }

@@ -333,3 +333,37 @@ async fn a_resume_the_limits_hold_waits_for_a_slot_and_is_never_a_stall() {
     );
     assert!(stalled_events(&harness).await.is_empty());
 }
+
+/// fold keeps who it told of a stall in memory, so after a daemon start the `worker.stalled` it appended before tells it that the stall was told already: nobody hears of it again, and a person sees it one window after that first notice.
+#[tokio::test]
+async fn a_stall_told_before_a_daemon_start_is_not_told_again() {
+    let mut harness = Harness::start_without_leads().await;
+    harness.lead_area("backend").await;
+    harness.make_main(MAIN).await;
+    let task = harness.create_task(MAIN, "Draw the page").await;
+    let work = harness.start_work("backend", &task).await;
+    advance(&harness, STALL);
+    let told = state(&harness, &work).await.view;
+    let before = told.activity.clone().expect("silent");
+    assert_eq!(before.told, [MAIN]);
+    assert!(!told.stalled);
+    assert_eq!(stalled_events(&harness).await.len(), 1);
+
+    advance(&harness, MINUTE);
+    harness.restart().await;
+    let again = state(&harness, &work).await.view;
+    assert!(harness.handle.live.stalls_decided());
+    let seen = again.activity.expect("still silent");
+    assert_eq!(seen.state, ActivityState::Silent);
+    assert_eq!(seen.since, before.since, "the same stall");
+    assert_eq!(seen.told, [MAIN]);
+    assert!(
+        !again.stalled,
+        "the person's window counts from the first notice"
+    );
+    assert_eq!(stalled_events(&harness).await.len(), 1, "told once");
+
+    advance(&harness, STALL - MINUTE);
+    assert!(state(&harness, &work).await.view.stalled);
+    assert_eq!(stalled_events(&harness).await.len(), 1);
+}

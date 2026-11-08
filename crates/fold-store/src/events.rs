@@ -386,6 +386,36 @@ pub async fn newest_at_of_type(
     .transpose()
 }
 
+/// When the newest event of `event_type` before `before` happened in each workspace that has one, by workspace.
+pub async fn newest_at_by_workspace(
+    executor: impl SqliteExecutor<'_>,
+    event_type: EventType,
+    before: Timestamp,
+) -> Result<Vec<(WorkspaceId, Timestamp)>, StoreError> {
+    let event_type = event_type.as_str();
+    let before = before.as_millis();
+    let rows = sqlx::query!(
+        r#"SELECT workspace_id AS "workspace!: i64", MAX(created_at) AS "at!: i64"
+           FROM events
+           WHERE type = ?1 AND workspace_id IS NOT NULL AND created_at < ?2
+           GROUP BY workspace_id"#,
+        event_type,
+        before
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok((
+                WorkspaceId::try_from_db(row.workspace)
+                    .ok_or(StoreError::Corrupt("events.workspace_id"))?,
+                Timestamp::from_millis(row.at)
+                    .map_err(|_| StoreError::Corrupt("events.created_at"))?,
+            ))
+        })
+        .collect()
+}
+
 /// The newest `limit` events that a worker of `agent` performed, newest first. The actor column holds the worker name, so the agent's own name or a name under `agent/` matches. The children are the range from `agent/` up to `agent0`, because `0` follows `/`; a range, unlike a pattern built from a parameter, can use `events_actor_seq`.
 pub async fn newest_by_agent(
     executor: impl SqliteExecutor<'_>,

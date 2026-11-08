@@ -266,7 +266,7 @@ fn serialise(notice: &Notice) -> Result<String, FoldError> {
         .map_err(|_| FoldError::new(codes::INTERNAL_ERROR, "a notice did not serialise"))
 }
 
-/// Compares the open Needs you items with those the notifier saw before: a new item queues `needs_you.opened` to each target added before it came, a closed one `needs_you.closed` to each target added before it was seen, except that an item that closes while its `needs_you.opened` still waits for the send takes that notice back and sends no close either. Until the folder's first look since the project opened, a missing branch or folder item may only be unseen yet, so its row stays.
+/// Compares the open Needs you items with those the notifier saw before: a new item queues `needs_you.opened` to each target added before it came, a closed one `needs_you.closed` to each target added before it was seen, except that an item that closes while its `needs_you.opened` still waits for the send takes that notice back and sends no close either. Until the folder's first look since the project opened, a missing branch or folder item may only be unseen yet, and until the first stall decision a missing stall item, so its row stays.
 async fn queue_needs_you(
     handle: &ProjectHandle,
     settings: &NotifySettings,
@@ -287,14 +287,17 @@ async fn queue_needs_you(
     for item in items {
         open.entry(item_key(&item)).or_insert(item);
     }
-    let unsure: &[&str] = if handle.git_attention.observed() {
-        &[]
-    } else {
-        &[
+    let mut unsure: Vec<&str> = Vec::new();
+    if !handle.git_attention.observed() {
+        unsure.extend([
             NeedsYouKind::HeadMoved.as_str(),
             NeedsYouKind::FolderHeld.as_str(),
-        ]
-    };
+        ]);
+    }
+    // A stall lives in memory, so until the first stall decision since the project opened it only says nothing yet.
+    if !handle.live.stalls_decided() {
+        unsure.push(NeedsYouKind::WorkerStalled.as_str());
+    }
     let seen = outbox::seen_items(handle.store.read())
         .await
         .map_err(store_error)?;
