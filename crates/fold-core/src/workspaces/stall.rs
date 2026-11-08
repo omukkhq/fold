@@ -401,7 +401,7 @@ pub fn activity(
     }
 }
 
-/// What fold saw of the worker `worker`, in the words that the board's chip, the task, Activity, Needs you and the notices all use: `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed` or `Waits for a free task worker slot`. The time is the span from the activity's start to `now`, rounded down, in seconds, minutes, hours or days. `None` for [`Activity::Quiet`].
+/// What fold saw of the worker `worker`, in the words that the board's chip, the task, Activity, Needs you and the notices all use: `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed` or `Waiting for a free slot`. The time is the span from the activity's start to `now`, rounded down, in seconds, minutes, hours or days. `None` for [`Activity::Quiet`].
 pub fn activity_text(activity: Activity, worker: &str, now: Timestamp) -> Option<String> {
     let span = |since: Timestamp| {
         let seconds = now
@@ -441,13 +441,8 @@ pub fn activity_text(activity: Activity, worker: &str, now: Timestamp) -> Option
         )),
         Activity::Stopped { .. } => Some(format!("@{worker} stopped")),
         Activity::Failed { .. } => Some(format!("@{worker} failed")),
-        Activity::WaitsForSlot { slot, .. } => Some(
-            match slot {
-                Slot::TaskWorker => "Waits for a free task worker slot",
-                Slot::Reviewer => "Waits for a free reviewer slot",
-            }
-            .to_owned(),
-        ),
+        // One text for both roles: the board's column says which place the worker waits for.
+        Activity::WaitsForSlot { .. } => Some("Waiting for a free slot".to_owned()),
     }
 }
 
@@ -1455,7 +1450,7 @@ mod tests {
                 since: at(0)
             })
             .as_deref(),
-            Some("Waits for a free task worker slot")
+            Some("Waiting for a free slot")
         );
         assert_eq!(
             text(Activity::WaitsForSlot {
@@ -1463,7 +1458,7 @@ mod tests {
                 since: at(0)
             })
             .as_deref(),
-            Some("Waits for a free reviewer slot")
+            Some("Waiting for a free slot")
         );
         let later = |millis: i64| activity_text(Activity::Silent { since: at(0) }, "w", at(millis));
         assert_eq!(

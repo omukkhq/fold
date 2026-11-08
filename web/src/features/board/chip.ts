@@ -44,7 +44,7 @@ type ChipCard = Pick<
 >;
 
 /** The words of a slot wait on the card, which leave out the slot's role so the narrow chip keeps one line; the details panel names it. */
-export const SLOT_CHIP_TEXT = "Waits for a free slot";
+export const SLOT_CHIP_TEXT = "Waiting for a free slot";
 
 /** What fold saw of the worker as a chip: gold only once the stall waits for a person, else the icon says what kind of state it is. */
 function activityChip(activity: WorkerActivity): CardChip {

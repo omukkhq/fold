@@ -326,7 +326,7 @@ async fn a_resume_the_limits_hold_waits_for_a_slot_and_is_never_a_stall() {
         assert_eq!(
             fold_core::stall::activity_text(seen.activity(), TASK_WORKER, harness.project.now())
                 .as_deref(),
-            Some("Waits for a free task worker slot")
+            Some("Waiting for a free slot")
         );
         advance(&harness, STALL);
     }

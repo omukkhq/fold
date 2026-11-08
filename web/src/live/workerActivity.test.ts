@@ -130,14 +130,14 @@ describe("a resume that waits for a free slot", () => {
     since: NOW - 30 * MINUTE,
   });
 
-  it("says which slot it waits for, with no time", () => {
+  it("says one text for every role, with no time", () => {
     expect(activityText(waits, "web-worker", NOW)).toBe(
-      "Waits for a free task worker slot",
+      "Waiting for a free slot",
     );
     expect(activityText({ ...waits, slot: "reviewer" }, "review", NOW)).toBe(
-      "Waits for a free reviewer slot",
+      "Waiting for a free slot",
     );
-    expect(activityVerb(waits, NOW)).toBe("waits for a free task worker slot");
+    expect(activityVerb(waits, NOW)).toBe("waiting for a free slot");
   });
 
   it("is neutral: never a stall, never a person's, never a restart", () => {
@@ -149,7 +149,7 @@ describe("a resume that waits for a free slot", () => {
       NOW,
     );
     expect(view).toMatchObject({
-      text: "Waits for a free task worker slot",
+      text: "Waiting for a free slot",
       stall: false,
       needsYou: false,
       restart: null,

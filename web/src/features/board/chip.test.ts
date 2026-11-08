@@ -285,7 +285,7 @@ describe("metaFact", () => {
     const waits = {
       ...working,
       state: "waits_for_slot" as const,
-      text: "Waits for a free task worker slot",
+      text: "Waiting for a free slot",
     };
     expect(cardChip(card, null, waits)).toEqual({
       tone: "neutral",

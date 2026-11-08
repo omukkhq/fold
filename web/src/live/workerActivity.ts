@@ -4,13 +4,12 @@ import type { LiveWorkspace } from "./envelope";
 
 export type LiveActivity = components["schemas"]["LiveActivity"];
 type LiveCall = components["schemas"]["LiveCall"];
-type LiveSlot = components["schemas"]["LiveSlot"];
 
 /** What the board, the task, Activity and Needs you show of a workspace's worker, from the daemon's live state alone. */
 export interface WorkerActivity {
   /** The state the daemon decided, which the chip draws its icon from. */
   state: LiveActivity["state"];
-  /** `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed` or `Waits for a free task worker slot`. */
+  /** `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed` or `Waiting for a free slot`. */
   text: string;
   /** Silent, a call that ran long, or a process that failed: someone must act. Work in progress, a process that was stopped on purpose and a resume that waits for a free slot are never a stall. */
   stall: boolean;
@@ -32,17 +31,15 @@ const WORKING: Readonly<Record<LiveCall, string>> = {
   tool: "Running a tool",
 };
 
+/** One text for task workers and reviewers: the board's column says which place the worker waits for. */
+const SLOT_WAIT = "Waiting for a free slot";
+
 const LONG: Readonly<Record<LiveCall, string>> = {
   command: "A command",
   fold: "A fold call",
   subagent: "A subagent",
   question: "A question",
   tool: "A tool call",
-};
-
-const SLOT: Readonly<Record<LiveSlot, string>> = {
-  task_worker: "task worker",
-  reviewer: "reviewer",
 };
 
 /** The agent of a worker label: `frontend/ui` is a worker of `frontend`. */
@@ -70,11 +67,11 @@ export function activityText(
     case "failed":
       return `${who} failed`;
     case "waits_for_slot":
-      return `Waits for a free ${SLOT[activity.slot ?? "task_worker"]} slot`;
+      return SLOT_WAIT;
   }
 }
 
-/** What fold saw, after the worker's name: `running a command for 8 min`, `no activity for 12 min`, `a command has run for 25 min`, `stopped`, `failed` or `waits for a free task worker slot`. */
+/** What fold saw, after the worker's name: `running a command for 8 min`, `no activity for 12 min`, `a command has run for 25 min`, `stopped`, `failed` or `waiting for a free slot`. */
 export function activityVerb(activity: LiveActivity, now: number): string {
   const time = formatAge(now, activity.since);
   switch (activity.state) {
@@ -93,7 +90,7 @@ export function activityVerb(activity: LiveActivity, now: number): string {
     case "failed":
       return "failed";
     case "waits_for_slot":
-      return `waits for a free ${SLOT[activity.slot ?? "task_worker"]} slot`;
+      return "waiting for a free slot";
   }
 }
 
