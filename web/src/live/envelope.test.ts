@@ -187,6 +187,7 @@ describe("isEventEnvelope", () => {
     const activity = {
       state: "long_call",
       call: "command",
+      slot: null,
       since: 1,
       supervised: true,
       told: ["web-lead"],
@@ -203,6 +204,31 @@ describe("isEventEnvelope", () => {
     expect(
       isLiveWorkspace({ ...workspace(), activity: { ...activity, told: [3] } }),
     ).toBe(false);
+    expect(
+      isLiveWorkspace({
+        ...workspace(),
+        activity: { ...activity, slot: "everyone" },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts a worker that waits for a free slot, alone and in a snapshot", () => {
+    const waits = {
+      state: "waits_for_slot",
+      call: null,
+      slot: "reviewer",
+      since: 1,
+      supervised: true,
+      told: [],
+    };
+    expect(isEventEnvelope({ ...changed(), activity: waits })).toBe(true);
+    expect(
+      isEventEnvelope({
+        kind: "snapshot",
+        seq: 3,
+        workspaces: [workspace(), { ...workspace(), activity: waits }],
+      }),
+    ).toBe(true);
   });
 
   it("accepts a stored event of a type this build does not know", () => {
