@@ -37,7 +37,7 @@ describe("person mentions", () => {
       "human",
     );
     const agent = container.querySelector('a[data-mention="agent"]');
-    expect(agent?.getAttribute("href")).toBe("/p/demo/board?agent=frontend");
+    expect(agent?.getAttribute("href")).toBe("/p/demo/agents");
   });
 
   it("does the same in Markdown", () => {

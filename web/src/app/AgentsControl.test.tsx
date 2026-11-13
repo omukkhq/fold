@@ -41,7 +41,7 @@ function wrap(client: QueryClient) {
   );
 }
 
-/** The chips under a root route, with a board route that shows the agent filter it received. */
+/** The chips under a root route, with the Agents screen a row opens. */
 async function renderChips(client: QueryClient) {
   const root = createRootRoute({
     component: () => (
@@ -56,16 +56,13 @@ async function renderChips(client: QueryClient) {
     path: "/",
     component: () => null,
   });
-  const board = createRoute({
+  const agents = createRoute({
     getParentRoute: () => root,
-    path: "/p/$slug/board",
-    component: function Board() {
-      const search: { agent?: string } = board.useSearch();
-      return <p>Board for {search.agent}</p>;
-    },
+    path: "/p/$slug/agents",
+    component: () => <p>Agents screen</p>,
   });
   const router = createRouter({
-    routeTree: root.addChildren([index, board]),
+    routeTree: root.addChildren([index, agents]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   render(<RouterProvider router={router} />, { wrapper: wrap(client) });
@@ -161,16 +158,16 @@ describe("AgentsControl", () => {
     expect(screen.getByRole("button", { name: "Reconnecting…" })).toBeTruthy();
   });
 
-  it("opens the board filtered to the agent of the row and closes", async () => {
+  it("opens the Agents screen from a row and closes", async () => {
     liveStatusStore.set({ state: "live" });
     const client = cacheOnly();
     client.setQueryData(keys.agentBar("demo"), [frontend]);
     const router = await renderChips(client);
     const row = screen.getByRole("link", { name: /frontend/ });
-    expect(row.getAttribute("href")).toBe("/p/demo/board?agent=frontend");
+    expect(row.getAttribute("href")).toBe("/p/demo/agents");
     await userEvent.click(row);
-    expect(await screen.findByText("Board for frontend")).toBeTruthy();
-    expect(router.state.location.pathname).toBe("/p/demo/board");
+    expect(await screen.findByText("Agents screen")).toBeTruthy();
+    expect(router.state.location.pathname).toBe("/p/demo/agents");
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

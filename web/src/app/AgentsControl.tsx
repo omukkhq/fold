@@ -12,7 +12,6 @@ import { useNow } from "../live/useNow";
 import { PersonName } from "../people/PersonName";
 import { projectPath } from "../routes/paths";
 import {
-  agentBoardPath,
   chipErrorTitle,
   chipStateText,
   isPaused,
@@ -131,7 +130,7 @@ export function AgentsControl({ slug }: { slug: string }) {
                 const error = chipErrorTitle(agent);
                 const row = (
                   <HrefLink
-                    href={agentBoardPath(slug, agent.name)}
+                    href={projectPath(slug, "agents")}
                     onClick={close}
                     className={cn(
                       "flex items-center gap-12 rounded-s px-10 py-8 text-14 hover:bg-sunken",
@@ -176,7 +175,7 @@ export function AgentsControl({ slug }: { slug: string }) {
             </ul>
           )}
           <div className="flex shrink-0 items-center justify-between gap-12 px-16 pt-8 pb-14 text-13 text-text-2">
-            <span>Choose an agent to see its tasks on the board.</span>
+            <span>Choose an agent to see it on the Agents tab.</span>
             <HrefLink
               href={projectPath(slug, "agents")}
               onClick={close}

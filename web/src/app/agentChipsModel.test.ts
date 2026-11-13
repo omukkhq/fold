@@ -3,7 +3,6 @@ import type { ProjectAgent } from "../api/agentBar";
 import { agent as baseAgent, claim, worker, workspace } from "../test/agents";
 import { INITIAL_STATUS, type LiveStatus } from "../live/status";
 import {
-  agentBoardPath,
   agentStateText,
   checkingCount,
   panelAgents,
@@ -339,13 +338,5 @@ describe("panelAgents", () => {
     ];
     const shown = panelAgents(input, false);
     expect(shown.map((a) => a.name)).toEqual(["b", "c", "d", "e", "a"]);
-  });
-});
-
-describe("agentBoardPath", () => {
-  it("opens the board with the agent filter", () => {
-    expect(agentBoardPath("demo", "frontend")).toBe(
-      "/p/demo/board?agent=frontend",
-    );
   });
 });
