@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use fold_core::{AgentName, TaskId};
 use fold_store::SqliteConnection;
 use fold_store::agents::{self, ClaimKind};
-use fold_store::tasks::claims::{self, ClaimTarget};
+use fold_store::tasks::claims::{self, ClaimForPerson, ClaimTarget};
 use fold_store::{Store, StoreError, messages};
 
 use crate::live::LiveState;
@@ -132,6 +132,22 @@ pub async fn attention_in(
         .collect())
 }
 
+/// The holder of each task's stale claim that needs a person: the holder of its implementation claim before the reviewer of a review claim on its proposal, because the task's card is the implementation's.
+fn stale_holders(claims: Vec<ClaimForPerson>) -> HashMap<TaskId, AgentName> {
+    let mut holders = HashMap::new();
+    for claim in claims {
+        match claim.target {
+            ClaimTarget::Task(task) => {
+                holders.insert(task, claim.worker.agent());
+            }
+            ClaimTarget::Review { task, .. } => {
+                holders.entry(task).or_insert_with(|| claim.worker.agent());
+            }
+        }
+    }
+    holders
+}
+
 /// What the attention items read to name a person's action: the holder of each task's implementation claim and of each stale claim, and the state of each agent's supervised process.
 #[derive(Debug, Default)]
 struct Actions {
@@ -154,16 +170,7 @@ impl Actions {
             .filter(|claim| claim.kind == ClaimKind::Implementation)
             .filter_map(|claim| Some((claim.task, names.get(&claim.worker_id)?.clone())))
             .collect();
-        let stale_holders = claims::claims_for_person(&mut *conn)
-            .await?
-            .into_iter()
-            .map(|claim| {
-                let task = match claim.target {
-                    ClaimTarget::Task(task) | ClaimTarget::Review { task, .. } => task,
-                };
-                (task, claim.worker.agent())
-            })
-            .collect();
+        let stale_holders = stale_holders(claims::claims_for_person(&mut *conn).await?);
         let running = agents::list_worker_processes(conn)
             .await?
             .into_iter()
@@ -213,4 +220,44 @@ pub fn stalled_tasks(live: Option<&LiveState>) -> BTreeSet<TaskId> {
         .filter(|state| state.view.stalled)
         .filter_map(|state| state.view.task)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use fold_core::{ProposalId, Timestamp, WorkerName};
+
+    use super::*;
+
+    fn claim(target: ClaimTarget, worker: &str) -> ClaimForPerson {
+        ClaimForPerson {
+            target,
+            worker: WorkerName::parse(worker).unwrap(),
+            since: Timestamp::from_millis(0).unwrap(),
+        }
+    }
+
+    #[test]
+    fn the_implementation_holder_names_the_action_of_a_task_before_a_reviewer() {
+        let task = TaskId::from_number(4).unwrap();
+        let review = ClaimTarget::Review {
+            proposal: ProposalId::from_number(4).unwrap(),
+            task,
+        };
+        for claims in [
+            vec![
+                claim(review, "review-dates"),
+                claim(ClaimTarget::Task(task), "web-dates"),
+            ],
+            vec![
+                claim(ClaimTarget::Task(task), "web-dates"),
+                claim(review, "review-dates"),
+            ],
+        ] {
+            assert_eq!(stale_holders(claims)[&task].as_str(), "web-dates");
+        }
+        assert_eq!(
+            stale_holders(vec![claim(review, "review-dates")])[&task].as_str(),
+            "review-dates"
+        );
+    }
 }
