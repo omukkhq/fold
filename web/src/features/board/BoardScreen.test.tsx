@@ -700,6 +700,14 @@ describe("BoardScreen", () => {
     await waitFor(() => {
       expect(tasksIn("To do")).toEqual(["T-6"]);
     });
+    // A failed read after the owners arrived keeps them, so the filter still tells the lead's tasks and no banner shows.
+    daemon.on("GET /api/v1/projects/:slug/workers", refuse(500, "internal"));
+    await act(() => client.refetchQueries({ queryKey: keys.workers("demo") }));
+    await waitFor(() => {
+      expect(client.getQueryState(keys.workers("demo"))?.status).toBe("error");
+    });
+    expect(screen.queryByText("The owners could not load.")).toBeNull();
+    expect(tasksIn("To do")).toEqual(["T-6"]);
     cleanup();
 
     daemon.reset();

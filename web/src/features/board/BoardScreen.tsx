@@ -109,7 +109,8 @@ export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
           onRetry={() => void board.refetch()}
         />
       ) : null}
-      {ownersWanted && workers.isError ? (
+      {/* A failed refetch keeps the owners it had, so the filter still tells every owner then. */}
+      {ownersWanted && workers.isError && workers.data === undefined ? (
         <ErrorBanner
           title="The owners could not load."
           message="The daemon did not answer, so the Owner filter matches only human tasks."
