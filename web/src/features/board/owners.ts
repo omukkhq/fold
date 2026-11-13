@@ -3,7 +3,7 @@ import type { WorkerList } from "@/api/workers";
 
 /** The owner key of the human tasks. */
 export const HUMAN_OWNER = "human";
-/** The owner key of the tasks of the built-in area Main, which the main agent builds itself. */
+/** The owner key of the tasks of the built-in area Main, which the main agent builds itself, and of the tasks in no area, whose area it chooses. */
 export const MAIN_OWNER = "main";
 const AREA_PREFIX = "area:";
 
@@ -53,7 +53,9 @@ export function needsOwners(keys: readonly string[] | undefined): boolean {
   return (keys ?? []).some((key) => key !== HUMAN_OWNER);
 }
 
-/** Human owns the human tasks; Main agent the tasks with the main label; an area lead every task with its area's label, in every column. An unknown key owns nothing. */
+/**
+ * Human owns the human tasks. Main agent owns the other tasks with the main label and those in no area, whose area the main agent chooses; never a human task. An area lead owns every task with its area's label, a human task too, in every column. An unknown key owns nothing.
+ */
 export function ownsCard(
   key: string,
   card: BoardCard,
@@ -61,13 +63,14 @@ export function ownsCard(
 ): boolean {
   if (key === HUMAN_OWNER) return card.kind === "human";
   if (owners === null) return false;
-  const label =
-    key === MAIN_OWNER
-      ? owners.mainLabel
-      : key.startsWith(AREA_PREFIX)
-        ? owners.areaLabels.get(key.slice(AREA_PREFIX.length))
-        : undefined;
-  return label !== undefined && card.labels.some((l) => l.name === label);
+  const has = (label: string) => card.labels.some((l) => l.name === label);
+  if (key === MAIN_OWNER) {
+    if (card.kind === "human") return false;
+    return has(owners.mainLabel) || ![...owners.areaLabels.values()].some(has);
+  }
+  if (!key.startsWith(AREA_PREFIX)) return false;
+  const label = owners.areaLabels.get(key.slice(AREA_PREFIX.length));
+  return label !== undefined && has(label);
 }
 
 /** The menu's entries, with a ticked key the answer does not know kept at the end so it can be unticked. */

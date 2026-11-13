@@ -45,19 +45,33 @@ describe("ownsCard", () => {
     expect(ownsCard("human", mainTask, owners)).toBe(false);
   });
 
-  it("tells Main agent by the main label", () => {
+  it("gives Main agent the other tasks with the main label and those in no area, never a human task", () => {
     expect(ownsCard("main", mainTask, owners)).toBe(true);
+    expect(ownsCard("main", loose, owners)).toBe(true);
     expect(ownsCard("main", apiTask, owners)).toBe(false);
     expect(ownsCard("main", mainTask, null)).toBe(false);
+    const humanMain = boardCard("T-5", {
+      kind: "human",
+      labels: [{ name: "main", color: "ink" }],
+    });
+    expect(ownsCard("main", humanMain, owners)).toBe(false);
+    expect(ownsCard("main", human, owners)).toBe(false);
+    expect(ownsCard("human", humanMain, owners)).toBe(true);
   });
 
-  it("gives an area lead every task with its area's label, in any column", () => {
+  it("gives an area lead every task with its area's label, a human task too, in any column", () => {
     expect(ownsCard(areaOwner("api"), apiTask, owners)).toBe(true);
     expect(ownsCard(areaOwner("web"), apiTask, owners)).toBe(false);
+    const humanApi = boardCard("T-6", {
+      kind: "human",
+      labels: [{ name: "backend", color: "sage" }],
+    });
+    expect(ownsCard(areaOwner("api"), humanApi, owners)).toBe(true);
+    expect(ownsCard("main", humanApi, owners)).toBe(false);
   });
 
-  it("gives a task in no area and an unknown key no owner", () => {
-    for (const key of ["human", "main", "area:api", "area:web"]) {
+  it("gives a task in no area no lead, and an unknown key nothing", () => {
+    for (const key of ["human", "area:api", "area:web"]) {
       expect(ownsCard(key, loose, owners)).toBe(false);
     }
     expect(ownsCard("area:gone", apiTask, owners)).toBe(false);

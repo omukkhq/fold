@@ -62,9 +62,10 @@ describe("applyFilters", () => {
     expect(run({ label: ["gone"] })).toEqual([]);
   });
 
-  it("matches any ticked owner, an area lead in every column", () => {
+  it("matches any ticked owner, an area lead in every column and Main agent with the tasks in no area", () => {
     expect(run({ owner: [areaOwner("web")] })).toEqual(["T-1", "T-4", "T-6"]);
-    expect(run({ owner: ["human", "main"] })).toEqual(["T-3", "T-5"]);
+    expect(run({ owner: ["human", "main"] })).toEqual(["T-3", "T-5", "T-7"]);
+    expect(run({ owner: ["main"] })).toEqual(["T-3", "T-7"]);
     expect(run({ owner: [areaOwner("api"), "human"] })).toEqual([
       "T-2",
       "T-4",
