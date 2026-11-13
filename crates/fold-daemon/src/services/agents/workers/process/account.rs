@@ -8,7 +8,7 @@ use fold_store::StoreError;
 use fold_store::agents::{self, ProcessEnd};
 
 use super::stop::stopped_event;
-use super::{Supervisor, lock};
+use super::{Input, Supervisor, lock};
 use crate::push::StdinSink;
 use crate::services::agents::workers::code_of;
 use crate::services::agents::{AgentError, accounts};
@@ -97,6 +97,20 @@ impl Supervisor {
             })
         };
         self.inner.push.register_stdin(agent, sink);
+        // A turn that reached the process before its notices were held keeps the process, with every notice held since.
+        if run.open_turns.load(Ordering::SeqCst) > 0 {
+            let input = run.input.clone();
+            let live: StdinSink =
+                Arc::new(move |text: &str| input.send(Input::Turn(text.to_owned())).is_ok());
+            self.inner.push.register_stdin(agent, live);
+            lock(&self.inner.switching).remove(agent);
+            lock(&self.inner.refreshing).remove(agent);
+            let waiting = std::mem::take(&mut *lock(&held));
+            if !waiting.is_empty() {
+                self.send_turn(agent, &waiting.join("\n\n"));
+            }
+            return Ok(());
+        }
         let switched = self.switch_row(agent, &run, &row).await;
         lock(&self.inner.switching).remove(agent);
         lock(&self.inner.refreshing).remove(agent);
