@@ -81,14 +81,16 @@ fn limits_json(limits: WorkerLimits) -> Value {
     })
 }
 
-fn config_io(error: &std::io::Error) -> FoldError {
+pub(super) fn config_io(error: &std::io::Error) -> FoldError {
     FoldError::new(
         codes::WORKSPACE_IO,
         format!("cannot read or write config.toml: {}", error.kind()),
     )
 }
 
-fn joined<T>(result: Result<Result<T, FoldError>, tokio::task::JoinError>) -> Result<T, FoldError> {
+pub(super) fn joined<T>(
+    result: Result<Result<T, FoldError>, tokio::task::JoinError>,
+) -> Result<T, FoldError> {
     result.unwrap_or_else(|error| {
         Err(FoldError::new(
             codes::INTERNAL_ERROR,
@@ -169,12 +171,12 @@ fn set_number(section: &mut dyn TableLike, key: &str, number: u64) -> Result<(),
 }
 
 /// Writes `text` over `path` through `write_atomic`, so a reader sees the old file or the new one.
-fn replace(path: &Path, text: &str) -> Result<(), FoldError> {
+pub(super) fn replace(path: &Path, text: &str) -> Result<(), FoldError> {
     write_atomic(path, text.as_bytes()).map_err(|error| config_io(&error))
 }
 
 /// Puts `original` back after a write that did not commit; `None` removes the file, as it was missing before.
-fn restore(path: &Path, original: Option<&str>) -> Result<(), FoldError> {
+pub(super) fn restore(path: &Path, original: Option<&str>) -> Result<(), FoldError> {
     match original {
         Some(text) => replace(path, text),
         None => match std::fs::remove_file(path) {
@@ -186,7 +188,7 @@ fn restore(path: &Path, original: Option<&str>) -> Result<(), FoldError> {
 }
 
 /// Serialises the config rewrites of the daemon's projects; the file lock held beside it serialises them with `fld remote`, so a restore never overwrites a rewrite that started after it.
-static REWRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(super) static REWRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 impl AgentService {
     pub(super) fn config_paths(&self) -> Option<&ProjectPaths> {

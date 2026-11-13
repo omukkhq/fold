@@ -174,7 +174,7 @@ const FOLD_TOOLS: [&str; 99] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 184] = [
+const FOLD_ERROR_CODES: [&str; 185] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -359,6 +359,7 @@ const FOLD_ERROR_CODES: [&str; 184] = [
     "invalid_intent",
     "record_needs_confirmation",
     "agent_change_not_found",
+    "account_in_use",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.

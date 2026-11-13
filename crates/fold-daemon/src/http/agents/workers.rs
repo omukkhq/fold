@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::extract::Path;
 use axum::http::StatusCode;
+use fold_core::accounts::AccountName;
 use fold_core::roles::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, WorkerLimits, WorkerLimitsChange,
 };
@@ -15,7 +16,7 @@ use super::super::Project;
 use super::super::actor::Human;
 use super::super::error::{ApiError, ApiJson, ErrorEnvelope, fold};
 use crate::daemon::AppState;
-use crate::services::agents::{PauseState, StartWorker};
+use crate::services::agents::{PauseState, ProjectAccount, StartWorker};
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -27,6 +28,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(set_worker_limits))
         .routes(routes!(pause_project))
         .routes(routes!(resume_project))
+        .routes(routes!(set_project_account))
 }
 
 /// The areas and every worker fold runs or ran.
@@ -47,6 +49,38 @@ pub struct WorkerList {
     pub pause: PauseEntry,
     /// Whether `supervised = true` under `[main]` has fold run the main agent as the worker of role `main`; false when fold cannot read `.fold/config.toml`. With it off, the main agent is the user's own `fld claude` session, and a row of role `main` is left from a time it was on.
     pub main_supervised: bool,
+    pub account: ProjectAccountEntry,
+}
+
+/// The Claude account of the project's workers and the host's accounts it can choose, by name only; a token never leaves the host's data folder.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectAccountEntry {
+    /// The account that `.fold/config.toml` names; null when the workers use Claude Code's own login.
+    #[schema(required = true, example = "work-a")]
+    pub account: Option<String>,
+    /// The host's accounts, in name order, as `fld account add` added them.
+    pub accounts: Vec<String>,
+}
+
+impl From<ProjectAccount> for ProjectAccountEntry {
+    fn from(view: ProjectAccount) -> Self {
+        Self {
+            account: view.account.map(|name| name.as_str().to_owned()),
+            accounts: view
+                .accounts
+                .into_iter()
+                .map(|name| name.as_str().to_owned())
+                .collect(),
+        }
+    }
+}
+
+/// The account a person chooses for the project.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetProjectAccountBody {
+    /// The name of one of the host's accounts, or null for Claude Code's own login.
+    #[schema(required = true, example = "work-a")]
+    pub account: Option<String>,
 }
 
 /// Whether the project's agents are paused. While paused, fold runs no worker process; a worker that was working, idle or starting keeps that state and runs again in its own session at the resume.
@@ -484,6 +518,7 @@ pub async fn list_workers(project: Project) -> Result<Json<WorkerList>, ApiError
         limits: config.as_ref().map(|config| config.workers.limits().into()),
         pause: agents.pause_state().await?.into(),
         main_supervised: config.as_ref().is_some_and(|config| config.main.supervised),
+        account: agents.project_account().await.into(),
     }))
 }
 
@@ -782,6 +817,37 @@ pub async fn pause_project(human: Human, project: Project) -> Result<Json<PauseE
 pub async fn resume_project(human: Human, project: Project) -> Result<Json<PauseEntry>, ApiError> {
     let state = project.0.agents().resume_project(&human.actor()).await?;
     Ok(Json(state.into()))
+}
+
+/// A named human chooses the Claude account of the project's workers, one of the host's accounts or null for Claude Code's own login. The name goes into `.fold/config.toml`; each running worker continues in its own session with the new account when its current turn ends, an idle one at once. The interactive main agent of `fld claude` keeps its account until it starts again. The answer names accounts only, never a token.
+#[utoipa::path(
+    put,
+    path = "/api/v1/projects/{slug}/account",
+    operation_id = "set_project_account",
+    params(("slug" = String, Path, description = "The project slug")),
+    request_body = SetProjectAccountBody,
+    responses(
+        (status = 200, description = "The project's account after the change", body = ProjectAccountEntry),
+        (status = 400, description = "`invalid_account_name`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`project_not_found`, or `account_not_found` with the name in `details.account`: the host has no such account", body = ErrorEnvelope),
+        (status = 409, description = "`invalid_config`: `.fold/config.toml` is not valid", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "`accounts_io` or internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn set_project_account(
+    human: Human,
+    project: Project,
+    ApiJson(body): ApiJson<SetProjectAccountBody>,
+) -> Result<Json<ProjectAccountEntry>, ApiError> {
+    let account = fold(body.account.as_deref().map(AccountName::parse).transpose())?;
+    let chosen = project
+        .0
+        .agents()
+        .set_account(&human.actor(), account)
+        .await?;
+    Ok(Json(chosen.into()))
 }
 
 #[cfg(test)]

@@ -36,7 +36,15 @@ impl HostPaths {
     pub fn notify_dir(&self) -> PathBuf {
         self.fold_dir.join("notices")
     }
+
+    /// The host's Claude accounts: their index and one token file each, mode 0600 in a folder of mode 0700, outside every project folder.
+    pub fn accounts_dir(&self) -> PathBuf {
+        self.fold_dir.join(ACCOUNTS_DIR)
+    }
 }
+
+/// The folder of the host's accounts below fold's data folder.
+pub const ACCOUNTS_DIR: &str = "accounts";
 
 fn absolute(value: Option<&str>) -> Option<&str> {
     value.filter(|text| Path::new(text).is_absolute())

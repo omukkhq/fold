@@ -14,6 +14,7 @@
 # stall_minutes = 5
 # How many days fold keeps the checkpoints of a closed workspace before garbage collection prunes them. They are a record, not a restore point: a closed workspace is never restored. Its directory goes once the workspace is closed and its owning agent has no running worker process and no open session.
 # closed_workspace_days = 14
+# The Claude subscription of the project: the key account names an account of this host, which `fld account add <name>` added and `fld account use <name>` or the project's Settings choose. fold then starts every worker of the project, and `fld claude` and `fld new` start the main agent, with that account's token. Without the key they use Claude Code's own login. The token stays in fold's data folder; this file holds the name only.
 # The project's Git history: every integration becomes a commit on this branch of the project folder's repository .git, which the folder has checked out.
 # [git]
 # branch = "main"

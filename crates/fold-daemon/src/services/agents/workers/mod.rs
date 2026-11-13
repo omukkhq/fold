@@ -22,6 +22,7 @@ use crate::services::reviews::{Assignment, assign_reviews_in_tx};
 use crate::services::tasks::assign_in_tx;
 use tokio::sync::OwnedMutexGuard;
 
+mod account;
 mod fresh;
 mod handoff;
 mod limits;
@@ -30,6 +31,7 @@ mod pause;
 mod process;
 mod streams;
 
+pub use account::ProjectAccount;
 pub use limits::WorkerLimitsChanged;
 pub use pause::PauseState;
 #[cfg(feature = "dev-launcher")]

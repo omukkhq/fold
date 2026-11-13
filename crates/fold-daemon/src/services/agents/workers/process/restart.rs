@@ -243,7 +243,7 @@ impl Supervisor {
     }
 
     /// `turn` with the work that waits for a lead joined to it. A lead whose process starts again in its own session may have missed the notices of that work, because fold stores none and one sent while the lead had no process is lost. Joining it to the turn the start sends anyway gives the lead one turn, never two, and a lead with nothing waiting and no turn stays idle.
-    async fn with_catch_up(
+    pub(super) async fn with_catch_up(
         &self,
         row: &WorkerProcessRow,
         turn: Option<String>,

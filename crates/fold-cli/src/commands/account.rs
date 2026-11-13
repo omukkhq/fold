@@ -1,0 +1,275 @@
+use std::io::{self, BufRead, Read, Write};
+use std::path::PathBuf;
+
+use clap::{Args, Subcommand};
+use fold_core::accounts::{AccountName, check_token};
+use fold_core::{Clock, FoldError, HostPaths};
+use fold_daemon::SystemClock;
+use fold_daemon::services::agents::accounts::{self, Added};
+use hyper::Method;
+use serde_json::json;
+use thiserror::Error;
+
+use super::remote::{RemoteError, refusal, request_project_with};
+use crate::init::host_paths;
+use crate::output;
+use crate::serve::{Dirs, current_thread_runtime};
+
+/// The most bytes `fld account add` reads from a pipe: far more than a token, so a file given by mistake is refused as no token.
+const MAX_INPUT: u64 = 64 * 1024;
+
+#[derive(Args, Debug)]
+pub struct AccountArgs {
+    #[command(subcommand)]
+    command: AccountCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum AccountCommand {
+    /// Add a Claude subscription under a name, with the token that `claude setup-token` printed, read from stdin; the name again gives the account a new token
+    Add(NameArgs),
+    /// List the accounts: name, when the token was added and which projects use each, never the token
+    List,
+    /// Remove an account and its token; refused while a project uses it
+    Remove(NameArgs),
+    /// Make the account the one of the project in this folder: each worker continues in its own session with it when its turn ends
+    Use(UseArgs),
+}
+
+#[derive(Args, Debug)]
+struct NameArgs {
+    /// The account's name, such as work-a
+    name: String,
+}
+
+#[derive(Args, Debug)]
+struct UseArgs {
+    /// The account's name, such as work-a
+    name: String,
+    /// Unix socket of the daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
+    #[arg(long)]
+    socket: Option<PathBuf>,
+    /// The project directory or a directory inside it; defaults to the current directory
+    #[arg(long, value_name = "DIR")]
+    project: Option<PathBuf>,
+}
+
+#[derive(Debug, Error)]
+pub enum AccountError {
+    #[error(transparent)]
+    Fold(#[from] FoldError),
+    #[error(transparent)]
+    Daemon(#[from] RemoteError),
+    #[error("cannot read the token from stdin: {0}")]
+    Read(io::Error),
+    #[error("cannot start the async runtime: {0}")]
+    Runtime(io::Error),
+    #[error("cannot write the output: {0}")]
+    Write(#[from] io::Error),
+}
+
+impl AccountError {
+    /// The stable code of the errors that have one.
+    pub fn code(&self) -> Option<&str> {
+        match self {
+            Self::Fold(error) => Some(error.code()),
+            Self::Daemon(error) => error.code(),
+            Self::Read(_) | Self::Runtime(_) | Self::Write(_) => None,
+        }
+    }
+
+    /// The hint that names the next step, when a refusal carries one.
+    pub fn hint(&self) -> Option<&str> {
+        match self {
+            Self::Fold(error) => error.hint(),
+            Self::Daemon(error) => error.hint(),
+            _ => None,
+        }
+    }
+}
+
+/// `add`, `list` and `remove` read and write the host's accounts directly, the way `fld token list` reads the registry, so they work while the daemon is down; a worker reads its account's token at its start. `use` goes through the daemon, which changes the project's config and lets each worker continue with the new account.
+pub fn run(
+    args: &AccountArgs,
+    dirs: &Dirs,
+    input: &mut impl Read,
+    terminal: bool,
+    out: &mut impl Write,
+) -> Result<(), AccountError> {
+    match &args.command {
+        AccountCommand::Add(args) => {
+            let name = AccountName::parse(&args.name)?;
+            let text = if terminal {
+                read_hidden_line()?
+            } else {
+                read_piped(input)?
+            };
+            let token = check_token(&text)?;
+            let dir = host_paths(dirs)?.accounts_dir();
+            let added = accounts::add(&dir, &name, &token, SystemClock.now())?;
+            output::line(out, &added_line(&name, added))?;
+        }
+        AccountCommand::List => {
+            let host = host_paths(dirs)?;
+            let runtime = current_thread_runtime().map_err(AccountError::Runtime)?;
+            let usage = runtime.block_on(accounts::usage_on_host(&host))?;
+            let listed = accounts::list(&host.accounts_dir())?;
+            if listed.is_empty() {
+                output::line(
+                    out,
+                    "no accounts: every project uses Claude Code's own login",
+                )?;
+            }
+            for account in listed {
+                let projects = usage.get(&account.name).map(Vec::as_slice).unwrap_or(&[]);
+                output::line(
+                    out,
+                    &list_line(
+                        &account.name,
+                        &output::local_time(account.added_at),
+                        projects,
+                    ),
+                )?;
+            }
+        }
+        AccountCommand::Remove(args) => {
+            let name = AccountName::parse(&args.name)?;
+            remove(&host_paths(dirs)?, &name)?;
+            output::line(out, &format!("removed account {name} and its token"))?;
+        }
+        AccountCommand::Use(args) => {
+            let name = AccountName::parse(&args.name)?;
+            let body = json!({ "account": name.as_str() });
+            let response = request_project_with(
+                args.socket.as_deref(),
+                args.project.as_deref(),
+                Method::PUT,
+                "account",
+                Some(&body),
+            )?;
+            refusal(&response)?;
+            output::line(out, &use_line(&name))?;
+        }
+    }
+    Ok(())
+}
+
+fn remove(host: &HostPaths, name: &AccountName) -> Result<(), AccountError> {
+    let runtime = current_thread_runtime().map_err(AccountError::Runtime)?;
+    runtime.block_on(accounts::remove_on_host(host, name))?;
+    Ok(())
+}
+
+fn added_line(name: &AccountName, added: Added) -> String {
+    match added {
+        Added::New => format!(
+            "added account {name}; run `fld account use {name}` in a project folder to give its workers this subscription"
+        ),
+        Added::Replaced => format!(
+            "account {name} has the new token; each worker of a project that uses it continues in its own session with it after its next turn, and every new start takes it"
+        ),
+    }
+}
+
+fn list_line(name: &AccountName, added: &str, projects: &[String]) -> String {
+    let used = if projects.is_empty() {
+        "no project".to_owned()
+    } else {
+        projects.join(", ")
+    };
+    format!("{name} added {added} used by {used}")
+}
+
+fn use_line(name: &AccountName) -> String {
+    format!(
+        "the project uses account {name}: each worker continues in its own session with it when its turn ends, an idle one at once; a running `fld claude` session keeps its account until you start it again"
+    )
+}
+
+/// Everything a pipe or a file gives, up to [`MAX_INPUT`] bytes.
+fn read_piped(input: &mut impl Read) -> Result<String, AccountError> {
+    let mut bytes = Vec::new();
+    input
+        .take(MAX_INPUT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(AccountError::Read)?;
+    if bytes.len() as u64 > MAX_INPUT {
+        bytes.clear();
+        bytes.extend_from_slice(b"\n\n");
+    }
+    String::from_utf8(bytes).map_err(|_| AccountError::Read(io::ErrorKind::InvalidData.into()))
+}
+
+/// One line from the terminal, which does not show what the person pastes, after a prompt on stderr. The terminal's echo comes back before the line is checked.
+fn read_hidden_line() -> Result<String, AccountError> {
+    use rustix::termios::{LocalModes, OptionalActions, tcgetattr, tcsetattr};
+    let stdin = io::stdin();
+    let mut stderr = io::stderr().lock();
+    output::line(
+        &mut stderr,
+        "paste the token that `claude setup-token` printed, then press Enter:",
+    )
+    .map_err(AccountError::Write)?;
+    let saved = tcgetattr(&stdin).ok();
+    if let Some(saved) = &saved {
+        let mut quiet = saved.clone();
+        quiet.local_modes.remove(LocalModes::ECHO);
+        let _ = tcsetattr(&stdin, OptionalActions::Now, &quiet);
+    }
+    let mut line = String::new();
+    let read = stdin.lock().read_line(&mut line);
+    if let Some(saved) = &saved {
+        let _ = tcsetattr(&stdin, OptionalActions::Now, saved);
+    }
+    let _ = output::line(&mut stderr, "");
+    read.map_err(AccountError::Read)?;
+    Ok(line)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn name(text: &str) -> AccountName {
+        AccountName::parse(text).unwrap()
+    }
+
+    #[test]
+    fn the_lines_name_accounts_and_projects_and_never_a_token() {
+        assert_eq!(
+            list_line(&name("work-a"), "2026-11-14 10:00", &[]),
+            "work-a added 2026-11-14 10:00 used by no project"
+        );
+        assert_eq!(
+            list_line(
+                &name("work-a"),
+                "2026-11-14 10:00",
+                &["demo".to_owned(), "shop".to_owned()]
+            ),
+            "work-a added 2026-11-14 10:00 used by demo, shop"
+        );
+        assert!(added_line(&name("work-a"), Added::New).contains("fld account use work-a"));
+        assert!(added_line(&name("work-a"), Added::Replaced).contains("new token"));
+        assert!(use_line(&name("work-b")).contains("fld claude"));
+    }
+
+    #[test]
+    fn a_pipe_gives_its_text_and_a_huge_one_gives_no_token() {
+        let mut small: &[u8] = b"sk-ant-oat01-aaaaaaaaaaaaaaaaaaaaaaaa\n";
+        assert_eq!(
+            read_piped(&mut small).unwrap(),
+            "sk-ant-oat01-aaaaaaaaaaaaaaaaaaaaaaaa\n"
+        );
+        let big = vec![b'a'; 70_000];
+        let text = read_piped(&mut big.as_slice()).unwrap();
+        assert_eq!(
+            check_token(&text).unwrap_err().code(),
+            fold_core::codes::INVALID_ACCOUNT_TOKEN
+        );
+        let mut broken: &[u8] = &[0xff, 0xfe];
+        assert!(matches!(
+            read_piped(&mut broken),
+            Err(AccountError::Read(_))
+        ));
+    }
+}

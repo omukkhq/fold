@@ -207,6 +207,11 @@ define_codes! {
     INVALID_INTENT = "invalid_intent",
     RECORD_NEEDS_CONFIRMATION = "record_needs_confirmation",
     AGENT_CHANGE_NOT_FOUND = "agent_change_not_found",
+    INVALID_ACCOUNT_NAME = "invalid_account_name",
+    INVALID_ACCOUNT_TOKEN = "invalid_account_token",
+    ACCOUNT_NOT_FOUND = "account_not_found",
+    ACCOUNT_IN_USE = "account_in_use",
+    ACCOUNTS_IO = "accounts_io",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

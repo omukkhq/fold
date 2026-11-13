@@ -349,6 +349,12 @@ describe("eventLine", () => {
     expect(line("worker.model_unreachable", { agent: "web-lead" })).toBe(
       "web-lead cannot reach the model",
     );
+    expect(line("workers.account_changed", { old: null, new: "work-a" })).toBe(
+      "gave the workers the account work-a",
+    );
+    expect(line("workers.account_changed", { old: "work-a", new: null })).toBe(
+      "gave the workers Claude Code's own login",
+    );
     expect(
       line("worker.stalled", {
         agent: "web-worker",
