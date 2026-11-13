@@ -78,7 +78,7 @@ export function activityText(
     case "waits_for_slot":
       return SLOT_WAIT;
     case "parked":
-      return parkedText(activity.parked_by);
+      return parkedText(activity.parked_by ?? null);
   }
 }
 
@@ -103,7 +103,7 @@ export function activityVerb(activity: LiveActivity, now: number): string {
     case "waits_for_slot":
       return "waiting for a free slot";
     case "parked": {
-      const text = parkedText(activity.parked_by);
+      const text = parkedText(activity.parked_by ?? null);
       return `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
     }
   }
@@ -133,7 +133,7 @@ export function workerActivity(
   return {
     state: activity.state,
     text: activityText(activity, live.worker, now),
-    waitFor: activity.state === "parked" ? activity.wait_for : null,
+    waitFor: activity.state === "parked" ? (activity.wait_for ?? null) : null,
     stall,
     needsYou,
     // The lead fold told gets one stall window to restart the worker itself; only then does a person get the button.

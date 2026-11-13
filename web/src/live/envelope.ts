@@ -113,6 +113,7 @@ const ACTIVITY_STATES: readonly unknown[] = [
   "stopped",
   "failed",
   "waits_for_slot",
+  "parked",
 ] satisfies components["schemas"]["ActivityState"][];
 
 const CALLS: readonly unknown[] = [
@@ -137,7 +138,10 @@ function isActivity(value: unknown): boolean {
     typeof value.since === "number" &&
     typeof value.supervised === "boolean" &&
     Array.isArray(value.told) &&
-    value.told.every((name) => typeof name === "string")
+    value.told.every((name) => typeof name === "string") &&
+    // A recorded frame or an older daemon sends no park.
+    (value.parked_by === undefined || isNullableString(value.parked_by)) &&
+    (value.wait_for === undefined || isNullableString(value.wait_for))
   );
 }
 
