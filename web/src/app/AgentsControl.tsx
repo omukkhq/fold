@@ -59,7 +59,8 @@ export function AgentsControl({ slug }: { slug: string }) {
   const [open, setOpen] = useState(false);
   const paused = isPaused(project.data?.overview?.paused_since);
   const list = agents.data ?? [];
-  const workers = useQuery(workersQuery(slug));
+  // Only the open panel links its rows, so a closed one does not read the workers again on each of their turns.
+  const workers = useQuery({ ...workersQuery(slug), enabled: open });
   const links = agentLinksOf(workers.data, agents.data);
   const note = listNote(listState(agents), list.length, {
     loading: "Loading the agents",

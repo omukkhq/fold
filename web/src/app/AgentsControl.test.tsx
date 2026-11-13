@@ -42,8 +42,8 @@ function wrap(client: QueryClient) {
   );
 }
 
-/** The chips under a root route, with the board and the Agents screen a row opens. */
-async function renderChips(client: QueryClient) {
+/** The chips under a root route, with the board and the Agents screen a row opens; the panel opens unless `open` is false. */
+async function renderChips(client: QueryClient, open = true) {
   const root = createRootRoute({
     component: () => (
       <>
@@ -75,11 +75,11 @@ async function renderChips(client: QueryClient) {
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   render(<RouterProvider router={router} />, { wrapper: wrap(client) });
-  await userEvent.click(
-    await screen.findByRole("button", {
-      name: /work|Reconnecting|paused|Agents/,
-    }),
-  );
+  const button = await screen.findByRole("button", {
+    name: /work|Reconnecting|paused|Agents/,
+  });
+  if (!open) return router;
+  await userEvent.click(button);
   await screen.findByRole("list", { name: "Agents" });
   return router;
 }
@@ -199,6 +199,20 @@ describe("AgentsControl", () => {
     expect(await screen.findByText('Board for ["area:api"]')).toBeTruthy();
     expect(router.state.location.pathname).toBe("/p/demo/board");
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("reads the workers only while its panel is open", async () => {
+    liveStatusStore.set({ state: "live" });
+    const client = cacheOnly();
+    client.setQueryData(keys.agentBar("demo"), [frontend]);
+    client.setQueryData(keys.workers("demo"), workerList());
+    await renderChips(client, false);
+    const workers = () =>
+      client.getQueryCache().find({ queryKey: keys.workers("demo") });
+    expect(workers()?.isDisabled()).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: /work/ }));
+    await screen.findByRole("list", { name: "Agents" });
+    expect(workers()?.isDisabled()).toBe(false);
   });
 
   it("opens the Agents screen from a task worker's row and closes", async () => {
