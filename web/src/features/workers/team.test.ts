@@ -201,6 +201,7 @@ describe("steps", () => {
         title: "cannot reach the model",
         text: "Invalid API key",
         hint: null,
+        waits: false,
       }),
     ).toBe("cannot reach the model: Invalid API key");
   });
@@ -307,7 +308,12 @@ describe("steps", () => {
     expect(rowError(workerProcess("web-lead"))).toBeNull();
     expect(
       rowError(workerProcess("web-lead", { last_error: "Reached max turns" })),
-    ).toEqual({ title: "last error", text: "Reached max turns", hint: null });
+    ).toEqual({
+      title: "last error",
+      text: "Reached max turns",
+      hint: null,
+      waits: false,
+    });
     const failing = workerProcess("web-lead", {
       state: "idle",
       last_error: "Invalid key",
@@ -319,7 +325,30 @@ describe("steps", () => {
       title: "cannot reach the model",
       text: "Invalid key",
       hint: "check the sign-in, or run `fld doctor`",
+      waits: false,
     });
+    expect(
+      rowError(
+        workerProcess("web-lead", {
+          state: "idle",
+          last_error: "API Error: Can't reach the API server",
+          waits_for: "network",
+        }),
+      ),
+    ).toEqual({
+      title: "waiting for the network",
+      text: "API Error: Can't reach the API server",
+      hint: null,
+      waits: true,
+    });
+    expect(
+      rowError(
+        workerProcess("web-lead", {
+          last_error: "You've hit your weekly limit",
+          waits_for: "usage_limit",
+        }),
+      )?.title,
+    ).toBe("waits for the usage limit");
     const [group] = teamGroups(
       input({ workers: workerList({ workers: [failing] }) }),
     );

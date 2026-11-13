@@ -14,7 +14,9 @@ use super::super::error::{ApiError, ApiJson, ErrorEnvelope};
 use super::super::messages::MessageChoice;
 use crate::daemon::AppState;
 use crate::live::LiveActivity;
-use crate::services::agents::{NeedsYouItem, NeedsYouKind, Screen, with_folder_attention};
+use crate::services::agents::{
+    NeedsYouAction, NeedsYouItem, NeedsYouKind, Screen, with_folder_attention,
+};
 use crate::services::projects::notify;
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -146,7 +148,7 @@ pub enum NeedsYouItemKind {
     ChecksFileInvalidOnMain,
     /// The worker `agent` failed because it cannot reach fold: its fold MCP server did not connect, or the fld binary it would start is gone. Starting it again fails the same way until the daemon runs the installed fld; `reason` says what the human does. A daemon start resumes the worker once fld is there. The item ends when the worker runs again, through that resume or through `resume_worker`.
     WorkerUnreachable,
-    /// The worker `agent` failed several turns in a row before any token reached the model, so it does no work until a human fixes what Claude Code needs, such as its sign-in, its model or its usage limit: `title` holds Claude Code's error and `reason` what to check. The item ends when a turn of the worker reaches the model, with or without an error, or when the worker is stopped. A worker whose process failed cannot be stopped, so it keeps the item until `resume_worker` runs it again and a turn reaches the model; a start that runs a stopped worker again shows the item again until then.
+    /// The worker `agent` failed several turns in a row before any token reached the model, so it does no work until a human fixes what Claude Code needs, such as its sign-in, its model or its usage limit: `title` holds Claude Code's error and `reason` what to check. The item ends when a turn of the worker reaches the model, with or without an error, or when the worker is stopped. A worker whose process failed cannot be stopped, so it keeps the item until `resume_worker` runs it again and a turn reaches the model; a start that runs a stopped worker again shows the item again until then. The same kind with a null `agent` is the project's one item for turns that could not reach the model at all, such as while the network is down: `agents` names the workers whose turn waits, `title` holds Claude Code's newest error and `reason` says what fold does. fold runs each turn again in its session once the model answers, which ends the item.
     WorkerModelUnreachable,
     /// The worker `agent` failed because the daemon found no `claude` on the `PATH` it gives workers, which it reads from the user's login shell at its start. `reason` says what the human does; a daemon start resumes the worker, and the item ends when the worker runs again.
     ClaudeNotFound,
@@ -158,6 +160,56 @@ pub enum NeedsYouItemKind {
     SharedChanged,
     /// The worker `agent` on `task` stalled, fold told its lead, or else the main agent, and one more stall window passed without a fix, or no agent can act on it: `activity` says what fold saw and `reason` what the human does. The web's Restart worker calls `restart_worker`. The item ends when the worker works again. fold keeps it in memory, so after a daemon start it counts from that start.
     WorkerStalled,
+    /// Turns of the project's workers reached Claude Code's usage limit `limit`; one item per limit. `agents` names the workers whose turn waits, `title` holds Claude Code's newest message, `reset` its wording of the reset and `resets_at` the reset instant when the message gives one, `reason` what fold does and `actions` what the human can do. fold runs each turn again in its session after the reset, which ends the item.
+    UsageLimit,
+}
+
+/// A usage limit of Claude Code: `session`, `weekly`, `opus`, `sonnet`, or `usage` for the older message that names no kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageLimitKind {
+    Session,
+    Weekly,
+    Opus,
+    Sonnet,
+    Usage,
+}
+
+impl From<fold_core::turn_waits::LimitKind> for UsageLimitKind {
+    fn from(kind: fold_core::turn_waits::LimitKind) -> Self {
+        use fold_core::turn_waits::LimitKind;
+        match kind {
+            LimitKind::Session => Self::Session,
+            LimitKind::Weekly => Self::Weekly,
+            LimitKind::Opus => Self::Opus,
+            LimitKind::Sonnet => Self::Sonnet,
+            LimitKind::Usage => Self::Usage,
+        }
+    }
+}
+
+/// What a human can do from an item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NeedsYouActionKind {
+    /// Pause every agent of the project, as `pause_project` does.
+    Pause,
+}
+
+/// One action of an item.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct NeedsYouActionEntry {
+    pub action: NeedsYouActionKind,
+}
+
+impl From<NeedsYouAction> for NeedsYouActionEntry {
+    fn from(action: NeedsYouAction) -> Self {
+        Self {
+            action: match action {
+                NeedsYouAction::Pause => NeedsYouActionKind::Pause,
+            },
+        }
+    }
 }
 
 /// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task, `repository` the history of main and `settings` the project's notice targets.
@@ -235,6 +287,17 @@ pub struct NeedsYouEntry {
     /// What fold saw of the worker of a `worker_stalled`; null for every other kind.
     #[schema(required = true)]
     pub activity: Option<LiveActivity>,
+    /// The limit of a `usage_limit`; null for every other kind.
+    #[schema(required = true)]
+    pub limit: Option<UsageLimitKind>,
+    /// Claude Code's wording of the reset of a `usage_limit`, such as `1:50am (Asia/Tokyo)` or `Mon 12:00am`, a local time without a date; null when its message gives none, and for every other kind.
+    #[schema(required = true, example = "1:50am (Asia/Tokyo)")]
+    pub reset: Option<String>,
+    /// UTC milliseconds of the reset of a `usage_limit`, when Claude Code's message gives the instant; null otherwise.
+    #[schema(value_type = Option<i64>, required = true)]
+    pub resets_at: Option<fold_core::Timestamp>,
+    /// What the human can do from the item, such as `pause` for a `usage_limit`; empty for most kinds.
+    pub actions: Vec<NeedsYouActionEntry>,
 }
 
 impl From<NeedsYouItem> for NeedsYouEntry {
@@ -258,6 +321,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::AgentChange => NeedsYouItemKind::AgentChange,
             NeedsYouKind::SharedChanged => NeedsYouItemKind::SharedChanged,
             NeedsYouKind::WorkerStalled => NeedsYouItemKind::WorkerStalled,
+            NeedsYouKind::UsageLimit => NeedsYouItemKind::UsageLimit,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,
@@ -292,6 +356,10 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             target: item.target.map(|target| target.to_string()),
             agents: item.agents.iter().map(ToString::to_string).collect(),
             activity: item.activity,
+            limit: item.limit.map(UsageLimitKind::from),
+            reset: item.reset,
+            resets_at: item.resets_at,
+            actions: item.actions.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -359,7 +427,7 @@ pub async fn answer_worker_question(
     Ok(Json(answered.into()))
 }
 
-/// Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, a worker whose turns fail before they reach the model, a notice target fold turned off, which a person's change of the target or a test send that gets through ends, and the files that changed in the project folder during supervised workers' tool calls, whose paths leave the waiting folder's item. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `stash.discarded`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, `notify.target_changed`, `folder.agent_changed` and `folder.agent_change_cleared`, and with the live `worker.output` steps `result` and `result_error`, which end a turn, and with the live `workspace.changed` whose `stalled` changed, which starts or ends a `worker_stalled` item.
+/// Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, a worker whose turns fail before they reach the model, the turns that could not reach the model at all and those that reached a usage limit, which fold runs again, a notice target fold turned off, which a person's change of the target or a test send that gets through ends, and the files that changed in the project folder during supervised workers' tool calls, whose paths leave the waiting folder's item. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `stash.discarded`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, `notify.target_changed`, `folder.agent_changed`, `folder.agent_change_cleared`, `worker.waiting` and `worker.wait_ended`, and with the live `worker.output` steps `result` and `result_error`, which end a turn, and with the live `workspace.changed` whose `stalled` changed, which starts or ends a `worker_stalled` item.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/needs-you",

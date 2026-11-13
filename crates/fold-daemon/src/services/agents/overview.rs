@@ -59,6 +59,8 @@ pub struct ProcessSummary {
     pub last_error: Option<String>,
     /// Its turns fail without reaching the model, as [`fold_core::turn_errors::model_unreachable`] decides.
     pub model_unreachable: bool,
+    /// The cause outside the worker its idle process's last turn waits for, which fold runs again once it has passed.
+    pub waits_for: Option<fold_core::turn_waits::WaitReason>,
 }
 
 /// A connected session of the agent. `cwd` is `None` for a session opened without a working directory.
@@ -154,6 +156,7 @@ impl AgentService {
             .await?
             .into_iter()
             .map(|row| {
+                let waits_for = waits_for(&row);
                 (
                     row.agent_id,
                     ProcessSummary {
@@ -164,6 +167,7 @@ impl AgentService {
                             row.failed_turns,
                             row.state,
                         ),
+                        waits_for,
                     },
                 )
             })
@@ -298,4 +302,12 @@ fn agent_attention(workers: &[WorkerOverview], stalled: &BTreeSet<TaskId>) -> Ve
         }
     }
     items
+}
+
+/// The cause outside the worker that `row`'s idle process waits for, as every view shows it.
+pub fn waits_for(row: &agents::WorkerProcessRow) -> Option<fold_core::turn_waits::WaitReason> {
+    row.wait
+        .as_ref()
+        .filter(|_| fold_core::turn_waits::shows_wait(row.state))
+        .map(|wait| wait.reason)
 }

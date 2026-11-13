@@ -3,6 +3,7 @@ import { MAIN_TAG } from "../api/agents";
 import { formatAsOfMinute } from "../format/time";
 import type { LiveStatus } from "../live/status";
 import { syncedAt } from "./streamStatusModel";
+import { waitWords } from "../live/turnWaits";
 import { projectPath, withQuery } from "@/routes/paths";
 
 /** Tasks the agent's workers hold an implementation claim on. */
@@ -73,8 +74,11 @@ function knownFailure(process: AgentProcess): boolean {
   );
 }
 
-/** A supervised agent runs Claude Code only during a turn, so its process tells its state; its presence would read offline between turns. A process whose turns cannot reach the model says so, unless it failed for a reason the chip names. */
+/** A supervised agent runs Claude Code only during a turn, so its process tells its state; its presence would read offline between turns. A process whose turn waits for the network or a usage limit says so, and one whose turns cannot reach the model says so, unless it failed for a reason the chip names. */
 function processText(agent: ProjectAgent, process: AgentProcess): string {
+  if (process.waits_for !== null) {
+    return withStalled(agent, waitWords(process.waits_for));
+  }
   if (process.model_unreachable && !knownFailure(process)) {
     return MODEL_UNREACHABLE_TEXT;
   }

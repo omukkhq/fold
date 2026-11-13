@@ -50,6 +50,7 @@ mod acceptance_38_folder_reset;
 mod acceptance_39_request_wakeup;
 mod acceptance_3_parallel_workspaces;
 mod acceptance_40_stall_tells_the_lead_first;
+mod acceptance_42_turn_waits;
 mod acceptance_4_live_diff;
 mod acceptance_5_review_and_integrate;
 mod acceptance_6_dependency_unblocks;
@@ -199,6 +200,7 @@ mod task_read;
 mod task_views;
 mod tasks_service;
 mod tracked_ignored;
+mod turn_waits;
 #[cfg(feature = "failpoints")]
 mod version_run_race;
 mod web_tokens;

@@ -113,6 +113,8 @@ const ACTIVITY_STATES: readonly unknown[] = [
   "stopped",
   "failed",
   "waits_for_slot",
+  "waits_for_network",
+  "waits_for_usage_limit",
 ] satisfies components["schemas"]["ActivityState"][];
 
 const CALLS: readonly unknown[] = [

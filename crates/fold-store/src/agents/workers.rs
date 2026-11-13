@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use fold_core::roles::AreaProfile;
+use fold_core::turn_waits::{LimitKind, TurnWait, WaitGroup, WaitReason};
 use fold_core::{AgentName, AreaName, LabelName, ProposalId, Role, TaskId, Timestamp, WorkerState};
 use sqlx::{SqliteConnection, SqliteExecutor};
 
@@ -53,8 +54,37 @@ pub struct WorkerProcessRow {
     pub failed_turns: u64,
     /// The fingerprint of the skill texts that the current session last read; `None` for a session that a fold without fingerprints started. See [`fold_core::roles::session_fingerprint`].
     pub fold_fingerprint: Option<String>,
+    /// The cause outside the worker that its last turn ended for, which fold owes a re-run; `None` when its last turn ended for any other reason.
+    pub wait: Option<StoredWait>,
     pub tasks: Vec<TaskId>,
     pub proposals: Vec<ProposalId>,
+}
+
+/// A worker's turn that ended for a cause outside it, as its row keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredWait {
+    pub reason: WaitReason,
+    /// The limit of a `UsageLimit` wait.
+    pub limit: Option<LimitKind>,
+    /// The end of the first turn of the wait.
+    pub since: Timestamp,
+    /// The end of the newest turn of the wait.
+    pub tried_at: Timestamp,
+    /// The turns of the wait after its first, each of which ended for the same cause.
+    pub tries: u32,
+    /// Claude Code's wording of a limit's reset, such as `1:50am (Asia/Tokyo)`.
+    pub reset: Option<String>,
+    /// A limit's reset instant, when Claude Code's message gives one.
+    pub resets_at: Option<Timestamp>,
+}
+
+impl StoredWait {
+    pub fn group(&self) -> WaitGroup {
+        WaitGroup {
+            reason: self.reason,
+            limit: self.limit,
+        }
+    }
 }
 
 pub struct NewWorkerProcess<'a> {
@@ -350,10 +380,46 @@ struct RawProcess {
     last_error_at: Option<i64>,
     failed_turns: i64,
     fold_fingerprint: Option<String>,
+    wait_reason: Option<String>,
+    wait_limit: Option<String>,
+    wait_since: Option<i64>,
+    wait_tried_at: Option<i64>,
+    wait_tries: i64,
+    wait_reset: Option<String>,
+    wait_resets_at: Option<i64>,
 }
 
 impl RawProcess {
+    fn wait(&self) -> Result<Option<StoredWait>, StoreError> {
+        let Some(reason) = self.wait_reason.as_deref() else {
+            return Ok(None);
+        };
+        let reason =
+            WaitReason::parse(reason).ok_or(StoreError::Corrupt("worker_processes.wait_reason"))?;
+        let limit = self
+            .wait_limit
+            .as_deref()
+            .map(|limit| {
+                LimitKind::parse(limit).ok_or(StoreError::Corrupt("worker_processes.wait_limit"))
+            })
+            .transpose()?;
+        let since = optional_time(self.wait_since, "worker_processes.wait_since")?
+            .ok_or(StoreError::Corrupt("worker_processes.wait_since"))?;
+        let tried_at = optional_time(self.wait_tried_at, "worker_processes.wait_tried_at")?
+            .ok_or(StoreError::Corrupt("worker_processes.wait_tried_at"))?;
+        Ok(Some(StoredWait {
+            reason,
+            limit,
+            since,
+            tried_at,
+            tries: count(self.wait_tries, "worker_processes.wait_tries")?,
+            reset: self.wait_reset.clone(),
+            resets_at: optional_time(self.wait_resets_at, "worker_processes.wait_resets_at")?,
+        }))
+    }
+
     fn into_row(self) -> Result<WorkerProcessRow, StoreError> {
+        let wait = self.wait()?;
         Ok(WorkerProcessRow {
             id: self.id,
             agent_id: self.agent_id,
@@ -387,6 +453,7 @@ impl RawProcess {
             last_error_at: optional_time(self.last_error_at, "worker_processes.last_error_at")?,
             failed_turns: count(self.failed_turns, "worker_processes.failed_turns")?,
             fold_fingerprint: self.fold_fingerprint,
+            wait,
             tasks: Vec::new(),
             proposals: Vec::new(),
         })
@@ -402,7 +469,8 @@ macro_rules! select_processes {
                       w.model, w.session_id, w.pid, w.state, w.started_by, w.started_at, w.stopped_at,
                       w.idle_since, w.turns, w.cost_micro_usd, w.cache_read_tokens, w.cache_write_tokens,
                       w.context_tokens, w.exit_code, w.failed_reason, w.last_error, w.last_error_at,
-                      w.failed_turns, w.fold_fingerprint
+                      w.failed_turns, w.fold_fingerprint, w.wait_reason, w.wait_limit, w.wait_since,
+                      w.wait_tried_at, w.wait_tries, w.wait_reset, w.wait_resets_at
                FROM worker_processes w JOIN agents g ON g.id = w.agent_id LEFT JOIN areas a ON a.id = w.area_id
                "# + $tail
             $(, $arg)*
@@ -739,6 +807,80 @@ pub async fn record_turn_error(
     turns
         .map(|turns| count(turns, "worker_processes.failed_turns"))
         .transpose()
+}
+
+/// Records a turn that ended in Claude Code's `error` for the cause outside the worker that `wait` names: the error becomes the row's last error, without counting as a failed turn, and the row holds the wait. A wait for the same cause keeps its start and counts one more try; any other starts again. A row that is stopping or has ended is left as it is. Returns whether the wait is new, or `None` for a row left as it was.
+pub async fn record_turn_wait(
+    tx: &mut WriteTx,
+    id: i64,
+    error: &str,
+    wait: &TurnWait,
+    now: Timestamp,
+) -> Result<Option<bool>, StoreError> {
+    let now = now.as_millis();
+    let group = wait.group();
+    let reason = group.reason.as_str();
+    let limit = group.limit.map(LimitKind::as_str);
+    let (reset, resets_at) = match wait {
+        TurnWait::Network => (None, None),
+        TurnWait::UsageLimit {
+            reset, resets_at, ..
+        } => (reset.as_deref(), resets_at.map(Timestamp::as_millis)),
+    };
+    let tries = sqlx::query_scalar!(
+        r#"UPDATE worker_processes
+           SET last_error = ?2, last_error_at = ?3,
+               wait_tries = CASE WHEN wait_reason IS ?4 AND wait_limit IS ?5 THEN wait_tries + 1 ELSE 0 END,
+               wait_since = CASE WHEN wait_reason IS ?4 AND wait_limit IS ?5 THEN wait_since ELSE ?3 END,
+               wait_reason = ?4, wait_limit = ?5, wait_tried_at = ?3, wait_reset = ?6, wait_resets_at = ?7
+           WHERE id = ?1 AND state IN ('starting', 'working', 'idle')
+           RETURNING wait_tries AS "wait_tries!: i64""#,
+        id,
+        error,
+        now,
+        reason,
+        limit,
+        reset,
+        resets_at
+    )
+    .fetch_optional(tx.conn())
+    .await?;
+    Ok(tries.map(|tries| tries == 0))
+}
+
+/// Ends the row's wait, because a turn ended for another reason. Returns the group it waited in, or `None` when it waited for nothing.
+pub async fn clear_turn_wait(tx: &mut WriteTx, id: i64) -> Result<Option<WaitGroup>, StoreError> {
+    let held = sqlx::query!(
+        "SELECT wait_reason, wait_limit FROM worker_processes WHERE id = ? AND wait_reason IS NOT NULL",
+        id
+    )
+    .fetch_optional(tx.conn())
+    .await?;
+    let Some(held) = held else {
+        return Ok(None);
+    };
+    let reason = held
+        .wait_reason
+        .as_deref()
+        .and_then(WaitReason::parse)
+        .ok_or(StoreError::Corrupt("worker_processes.wait_reason"))?;
+    let limit = held
+        .wait_limit
+        .as_deref()
+        .map(|limit| {
+            LimitKind::parse(limit).ok_or(StoreError::Corrupt("worker_processes.wait_limit"))
+        })
+        .transpose()?;
+    sqlx::query!(
+        "UPDATE worker_processes
+         SET wait_reason = NULL, wait_limit = NULL, wait_since = NULL, wait_tried_at = NULL, wait_tries = 0,
+             wait_reset = NULL, wait_resets_at = NULL
+         WHERE id = ?",
+        id
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(Some(WaitGroup { reason, limit }))
 }
 
 /// A turn ended without an error, so the worker reaches the model: the last error goes and the count of failed turns starts again.

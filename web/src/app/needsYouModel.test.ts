@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { needsItem } from "@/test/workers";
 import {
   GROUP_OF,
+  limitText,
+  waitersText,
   fullTitle,
   itemsFor,
   needsYouGroups,
@@ -132,7 +134,7 @@ describe("needsYouGroups", () => {
     expect(new Set(Object.values(GROUP_OF))).toEqual(
       new Set(["ask", "wait", "project"]),
     );
-    expect(Object.keys(GROUP_OF)).toHaveLength(18);
+    expect(Object.keys(GROUP_OF)).toHaveLength(19);
   });
 
   it("drops an empty group and words a missing tool", () => {
@@ -574,6 +576,68 @@ describe("needsYouGroups", () => {
       title: null,
       text: "cannot reach the model",
     });
+  });
+
+  it("shows the turns that cannot reach the model as one project line with who waits and what fold does", () => {
+    const groups = needsYouGroups("demo", [
+      needsItem({
+        kind: "worker_model_unreachable",
+        screen: "worker",
+        agent: null,
+        agents: ["api-lead", "web-lead"],
+        title: "API Error: Can't reach the API server",
+        reason: "fold runs each waiting turn again once the model answers",
+      }),
+    ]);
+    expect(groups.map((g) => g.title)).toEqual(["Project"]);
+    expect(allLines(groups)[0]).toMatchObject({
+      person: null,
+      chip: null,
+      text: "fold cannot reach the model",
+      title:
+        "@api-lead and @web-lead wait; fold runs each waiting turn again once the model answers",
+      href: "/p/demo/agents",
+      actions: [],
+    });
+  });
+
+  it("shows a usage limit as one project line with its reset and the pause action, last of its group", () => {
+    const limit = needsItem({
+      kind: "usage_limit",
+      screen: "worker",
+      agents: ["web-lead"],
+      limit: "weekly",
+      reset: "Mon 12:00am",
+      title: "You've hit your weekly limit · resets Mon 12:00am",
+      reason: "fold runs each waiting turn again after the reset",
+      actions: [{ action: "pause" }],
+    });
+    const groups = needsYouGroups("demo", [
+      limit,
+      needsItem({ kind: "worker_unreachable", agent: "api-lead" }),
+    ]);
+    expect(lineKinds(groups)).toEqual(["worker_unreachable", "usage_limit"]);
+    expect(allLines(groups)[1]).toMatchObject({
+      person: null,
+      chip: null,
+      text: "Claude Code reached its weekly limit, which resets Mon 12:00am",
+      title:
+        "@web-lead waits; fold runs each waiting turn again after the reset",
+      href: null,
+      actions: ["pause"],
+    });
+    const now = new Date(2026, 10, 14, 9, 0).getTime();
+    const at = new Date(2026, 10, 14, 13, 50).getTime();
+    expect(limitText({ limit: "usage", reset: null, resets_at: at }, now)).toBe(
+      "Claude Code reached its usage limit, which resets at 13:50",
+    );
+    expect(
+      limitText({ limit: "sonnet", reset: null, resets_at: null }, now),
+    ).toBe("Claude Code reached its Sonnet limit");
+    expect(
+      limitText({ limit: "opus", reset: "3:45pm `x`", resets_at: at }, now),
+    ).toBe("Claude Code reached its Opus limit, which resets 3:45pm \\`x\\`");
+    expect(waitersText(["a", "b", "c"], null)).toBe("3 agents wait");
   });
 
   it("shows a worker whose claude the daemon cannot find with the fix, after the worker connections", () => {

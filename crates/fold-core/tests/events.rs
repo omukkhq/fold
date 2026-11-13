@@ -146,6 +146,8 @@ fn all_equals_the_plans_event_types() {
         "shared.paths_changed",
         "stash.discarded",
         "worker.stalled",
+        "worker.waiting",
+        "worker.wait_ended",
     ]);
     assert_eq!(declared, expected);
 }

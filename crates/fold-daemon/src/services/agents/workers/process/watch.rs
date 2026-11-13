@@ -6,6 +6,7 @@ use fold_core::agent_changes::may_write_files;
 use fold_core::events::types;
 use fold_core::roles::MCP_UNAVAILABLE;
 use fold_core::turn_errors::MODEL_UNREACHABLE_TURNS;
+use fold_core::turn_waits::{LimitKind, WaitGroup, released_by};
 use fold_core::{AgentName, EventActor, LiveEvent, NewEvent, WorkerState, codes};
 use fold_store::StoreError;
 use fold_store::agents::{self, ProcessEnd, TurnTotals};
@@ -148,6 +149,7 @@ impl Supervisor {
         }
         let id = process.id;
         let mut ended = None;
+        let mut waits = false;
         let written: Result<(), AgentError> = match change {
             _ if detached => Ok(()),
             RowChange::None => Ok(()),
@@ -162,14 +164,9 @@ impl Supervisor {
                 })
                 .await
                 .map_err(AgentError::from),
-            RowChange::Context { tokens, model } => self
-                .inner
-                .store
-                .write(async |tx| {
-                    agents::set_worker_context(tx, id, model.as_deref(), Some(tokens)).await
-                })
-                .await
-                .map_err(AgentError::from),
+            RowChange::Context { tokens, model } => {
+                self.record_context(process, tokens, model.as_deref()).await
+            }
             RowChange::TurnEnded {
                 total_cost_usd,
                 usage,
@@ -191,7 +188,14 @@ impl Supervisor {
                         .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |open| {
                             open.checked_sub(1)
                         });
-                self.end_turn(process, totals, error.as_ref()).await
+                match self.end_turn(process, totals, error.as_ref()).await {
+                    Ok(true) => {
+                        waits = true;
+                        Ok(())
+                    }
+                    Ok(false) => Ok(()),
+                    Err(error) => Err(error),
+                }
             }
         };
         if let Err(error) = &written {
@@ -204,8 +208,10 @@ impl Supervisor {
         ) {
             self.inner.bus.publish_live(event);
         }
+        // A turn that waits asks for no hand-off and is no answer: fold owes the worker the turn.
         if let Some(windows) = ended
             && written.is_ok()
+            && !waits
         {
             self.after_turn(&process.agent, &windows).await;
         }
@@ -237,22 +243,71 @@ impl Supervisor {
         }
     }
 
-    /// Counts a finished turn. A turn that ended in an error leaves Claude Code's text on the row; the turn that makes [`MODEL_UNREACHABLE_TURNS`] in a row that reached no model appends `worker.model_unreachable`, once per run of such turns, so the main agent and the worker's starter hear of it. A turn that ended well clears the error.
-    async fn end_turn(
+    /// Records the context size of a request the model answered. A model that answers ends the worker's wait for the network or a usage limit at once, with `worker.wait_ended`, and releases the turns that wait for the same cause, so the turn that runs again shows as work while it works.
+    async fn record_context(
         &self,
         process: &Process,
-        totals: TurnTotals,
-        error: Option<&TurnError>,
+        tokens: u64,
+        model: Option<&str>,
     ) -> Result<(), AgentError> {
         let now = self.inner.clock.now();
         let id = process.id;
         let agent = &process.agent;
         let mut buffer = EventBuffer::new();
-        self.inner
+        let cleared = self
+            .inner
             .store
             .write(async |tx| {
-                match error {
-                    Some(error) => {
+                agents::set_worker_context(tx, id, model, Some(tokens)).await?;
+                if tokens == 0 {
+                    return Ok::<_, AgentError>(None);
+                }
+                let cleared = agents::clear_turn_wait(tx, id).await?;
+                if let Some(group) = cleared {
+                    buffer.append(tx, &wait_ended(agent, group)?, now).await?;
+                }
+                Ok(cleared)
+            })
+            .await?;
+        self.inner.bus.publish(buffer);
+        if cleared.is_some() {
+            self.owed_turns_changed(released_by(true, cleared));
+        }
+        Ok(())
+    }
+
+    /// Counts a finished turn. A turn that ended in an error leaves Claude Code's text on the row; the turn that makes [`MODEL_UNREACHABLE_TURNS`] in a row that reached no model appends `worker.model_unreachable`, once per run of such turns, so the main agent and the worker's starter hear of it. A turn that ended for a cause outside the worker, the network or a usage limit, is no failed turn: the row holds the wait, the start of a wait appends `worker.waiting`, and fold runs the turn again once the cause has passed (see [`Supervisor::owed_turns_changed`]). Any other end of a turn ends the row's wait with `worker.wait_ended`, and a turn that reached the model or ended well releases the turns that wait for it. A turn that ended well clears the error. Returns whether the turn waits.
+    async fn end_turn(
+        &self,
+        process: &Process,
+        totals: TurnTotals,
+        error: Option<&TurnError>,
+    ) -> Result<bool, AgentError> {
+        let now = self.inner.clock.now();
+        let id = process.id;
+        let agent = &process.agent;
+        let mut buffer = EventBuffer::new();
+        let wait = error.and_then(|error| error.wait.as_ref());
+        let cleared = self
+            .inner
+            .store
+            .write(async |tx| {
+                let mut cleared = None;
+                match (error, wait) {
+                    (Some(error), Some(wait)) => {
+                        let new = agents::record_turn_wait(tx, id, &error.text, wait, now).await?;
+                        if new == Some(true) {
+                            let group = wait.group();
+                            let event = NewEvent::new(types::WORKER_WAITING, EventActor::fold())?
+                                .data(json!({
+                                "agent": agent.as_str(),
+                                "reason": group.reason.as_str(),
+                                "limit": group.limit.map(LimitKind::as_str),
+                            }))?;
+                            buffer.append(tx, &event, now).await?;
+                        }
+                    }
+                    (Some(error), None) => {
                         let failed = agents::record_turn_error(
                             tx,
                             id,
@@ -271,14 +326,30 @@ impl Supervisor {
                             buffer.append(tx, &event, now).await?;
                         }
                     }
-                    None => agents::clear_turn_error(tx, id).await?,
+                    (None, _) => agents::clear_turn_error(tx, id).await?,
+                }
+                if wait.is_none() {
+                    cleared = agents::clear_turn_wait(tx, id).await?;
+                    if let Some(group) = cleared {
+                        buffer.append(tx, &wait_ended(agent, group)?, now).await?;
+                    }
                 }
                 agents::record_turn(tx, id, totals, now).await?;
-                Ok::<_, AgentError>(())
+                Ok::<_, AgentError>(cleared)
             })
             .await?;
         self.inner.bus.publish(buffer);
-        Ok(())
+        if let Some(wait) = wait {
+            tracing::info!(%agent, reason = wait.group().reason.as_str(), "a worker's turn waits for a cause outside it");
+            self.owed_turns_changed(Vec::new());
+        } else {
+            let answered = error.is_none_or(|error| error.reached_model);
+            let released = released_by(answered, cleared);
+            if cleared.is_some() || self.has_owed_turns() {
+                self.owed_turns_changed(released);
+            }
+        }
+        Ok(wait.is_some())
     }
 
     /// Ends a worker whose fold MCP server did not connect, which without the fold tools can only end its turns: the row ends `failed` with [`MCP_UNAVAILABLE`] at once, and the process is let go of and stopped, so the rest of its turn changes no row. A worker that a stop is ending is left to the stop. A failure that cannot be recorded still stops the process, whose exit then records the failure. The stop runs in a task of its own, because it waits for the exit that this process's reader records.
@@ -388,6 +459,17 @@ impl Supervisor {
         self.clone().resume_owed_messages().await;
         self.resume_pending().await;
     }
+}
+
+/// The `worker.wait_ended` of `agent`'s wait in `group`.
+fn wait_ended(agent: &AgentName, group: WaitGroup) -> Result<NewEvent, AgentError> {
+    Ok(
+        NewEvent::new(types::WORKER_WAIT_ENDED, EventActor::fold())?.data(json!({
+            "agent": agent.as_str(),
+            "reason": group.reason.as_str(),
+            "limit": group.limit.map(LimitKind::as_str),
+        }))?,
+    )
 }
 
 /// A signal's exit is reported as 128 plus its number, as a shell does.

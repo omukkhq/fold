@@ -146,7 +146,7 @@ pub struct LiveActivity {
     /// The role whose free place a `waits_for_slot` worker waits for; null for the other states.
     #[schema(required = true)]
     pub slot: Option<LiveSlot>,
-    /// UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, or the time the work came that fold owes a `waits_for_slot` worker.
+    /// UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, the time the work came that fold owes a `waits_for_slot` worker, or the end of the first turn of a wait for the network or a usage limit.
     #[schema(value_type = i64)]
     pub since: Timestamp,
     /// fold runs the worker's process, so `restart_worker` can start it again in a new session.
@@ -155,7 +155,7 @@ pub struct LiveActivity {
     pub told: Vec<String>,
 }
 
-/// What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, and `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free. `working`, `stopped` and `waits_for_slot` are never stalls.
+/// What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free, `waits_for_network` while its last turn could not reach the model, which fold runs again once the model answers, and `waits_for_usage_limit` while its last turn reached a usage limit, which fold runs again after the reset. `working`, `stopped` and the waits are never stalls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityState {
@@ -165,6 +165,8 @@ pub enum ActivityState {
     Stopped,
     Failed,
     WaitsForSlot,
+    WaitsForNetwork,
+    WaitsForUsageLimit,
 }
 
 /// The role of a place under the worker limits.
@@ -222,6 +224,10 @@ impl LiveActivity {
                 slot = Some(LiveSlot::from(waits));
                 (ActivityState::WaitsForSlot, None, since)
             }
+            Activity::WaitsForNetwork { since } => (ActivityState::WaitsForNetwork, None, since),
+            Activity::WaitsForUsageLimit { since } => {
+                (ActivityState::WaitsForUsageLimit, None, since)
+            }
         };
         Some(Self {
             state,
@@ -256,6 +262,8 @@ impl LiveActivity {
                 },
                 since,
             },
+            ActivityState::WaitsForNetwork => Activity::WaitsForNetwork { since },
+            ActivityState::WaitsForUsageLimit => Activity::WaitsForUsageLimit { since },
         }
     }
 

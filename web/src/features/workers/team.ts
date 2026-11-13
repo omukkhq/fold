@@ -12,6 +12,7 @@ import type {
 } from "@/api/workers";
 import type { WorkerSteps } from "@/live/apply";
 import { type SessionView, sessionView } from "./session";
+import { waitWords } from "@/live/turnWaits";
 
 /** The look of a state pill; each tone has its soft fill, dot and text colour. */
 export type PillTone =
@@ -151,6 +152,8 @@ export interface RowError {
   text: string;
   /** The daemon's hint, with its commands between backticks; null when the worker still reaches the model. */
   hint: string | null;
+  /** The turn waits for the network or a usage limit, which fold runs again itself: no failure, so the row draws it in the neutral tone. */
+  waits: boolean;
 }
 
 /** The hover text of a step the row may cut: its tool and its sentence; null for a step with no sentence, which the row never cuts. */
@@ -164,13 +167,22 @@ export function errorHoverText(error: RowError): string {
   return `${error.title}: ${error.text}`;
 }
 
-/** The row's error line; null for a worker whose last turn ended without an error. */
+/** The row's error line; null for a worker whose last turn ended without an error. A turn that waits for the network or a usage limit names the wait, which fold ends itself. */
 export function rowError(worker: WorkerProcess): RowError | null {
   if (worker.last_error === null) return null;
+  if (worker.waits_for !== null) {
+    return {
+      title: waitWords(worker.waits_for),
+      text: worker.last_error,
+      hint: null,
+      waits: true,
+    };
+  }
   return {
     title: worker.model_unreachable ? "cannot reach the model" : "last error",
     text: worker.last_error,
     hint: worker.hint,
+    waits: false,
   };
 }
 

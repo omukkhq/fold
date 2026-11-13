@@ -30,7 +30,7 @@ pub const MCP_RETRY_TURN: &str = "fold resumed you after your fold MCP server fa
 pub const PAUSE_TURN: &str = "fold resumed you after a pause of every agent of the project. Your claims kept their leases. Check your inbox, your claims and your workspace, then continue your work.";
 
 impl Supervisor {
-    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped, and every worker that could not reach fold: `--resume` of its session, with a turn that tells a working one to go on and a turn that tells the other one that its fold connection failed. A lead hears in the same turn of the work that waits for it, and an idle lead with nothing waiting gets no turn. A worker whose fld binary was gone resumes only once the fld path names a file again. A start reads the rows once, so a worker that fails the same way again stays failed until the next start. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes, conflicts, send-backs and reviews of new versions that the worker limits held back are then served. A start in a paused project does none of this: the resume of the pause runs the workers again, those that could not reach fold among them.
+    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped, and every worker that could not reach fold: `--resume` of its session, with a turn that tells a working one to go on and a turn that tells the other one that its fold connection failed. A lead hears in the same turn of the work that waits for it, and an idle lead with nothing waiting gets no turn. A worker whose fld binary was gone resumes only once the fld path names a file again. A start reads the rows once, so a worker that fails the same way again stays failed until the next start. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes, conflicts, send-backs and reviews of new versions that the worker limits held back are then served, and the turns that wait for the network or a usage limit are run again when due. A start in a paused project does none of this: the resume of the pause runs the workers again, those that could not reach fold among them.
     pub async fn resume_after_restart(&self) -> Result<(), AgentError> {
         if self.is_paused().await? {
             self.inner.unreachable_owed.store(true, Ordering::SeqCst);
@@ -65,6 +65,7 @@ impl Supervisor {
         tokio::spawn(self.clone().resume_owed_reviewers(None));
         tokio::spawn(self.clone().resume_owed_messages());
         tokio::spawn(self.clone().catch_up_main());
+        self.owed_turns_changed(Vec::new());
         Ok(())
     }
 
@@ -198,6 +199,7 @@ impl Supervisor {
         tokio::spawn(self.clone().resume_owed_reviewers(None));
         tokio::spawn(self.clone().resume_owed_messages());
         tokio::spawn(self.clone().catch_up_main());
+        self.owed_turns_changed(Vec::new());
         Ok(())
     }
 
@@ -243,7 +245,7 @@ impl Supervisor {
     }
 
     /// `turn` with the work that waits for a lead joined to it. A lead whose process starts again in its own session may have missed the notices of that work, because fold stores none and one sent while the lead had no process is lost. Joining it to the turn the start sends anyway gives the lead one turn, never two, and a lead with nothing waiting and no turn stays idle.
-    async fn with_catch_up(
+    pub(super) async fn with_catch_up(
         &self,
         row: &WorkerProcessRow,
         turn: Option<String>,

@@ -39,10 +39,12 @@ pub use context::{
     render as render_session_context,
 };
 pub use cost::{ProjectCost, cost_totals};
-pub use needs_you::{NeedsYouItem, NeedsYouKind, Screen, needs_you, with_folder_attention};
+pub use needs_you::{
+    NeedsYouAction, NeedsYouItem, NeedsYouKind, Screen, needs_you, with_folder_attention,
+};
 pub use overview::{
     AgentAttention, AgentOverview, ClaimSummary, MAX_OVERVIEW_EVENTS, OverviewFilter,
-    ProcessSummary, ProposalSummary, SessionSummary, WorkerOverview, WorkspaceSummary,
+    ProcessSummary, ProposalSummary, SessionSummary, WorkerOverview, WorkspaceSummary, waits_for,
 };
 pub use presence::SeenPresence;
 #[cfg(feature = "dev-launcher")]

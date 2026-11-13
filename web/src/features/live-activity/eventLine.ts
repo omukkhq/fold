@@ -36,6 +36,7 @@ import type { DurableEvent } from "../../api/events";
 import { isHumanName } from "../../people/names";
 import { codeData } from "../../format/codeText";
 import { COLUMNS } from "../board/columns";
+import { limitWords } from "../../live/turnWaits";
 
 type EventType = DurableEvent["type"];
 
@@ -1101,7 +1102,21 @@ const SPECS: Record<EventType, Spec> = {
         : parts.join(", and ");
     },
   },
+  "worker.waiting": { icon: Hourglass, text: waitingText },
+  "worker.wait_ended": {
+    icon: Play,
+    text: (e) => `the turn of ${workerOf(e)} waits no more`,
+  },
 };
+
+/** The line of a worker's turn that ended for a cause outside it, which fold runs again. */
+function waitingText(e: DurableEvent): string {
+  const what =
+    e.data.reason === "usage_limit"
+      ? `reached the ${limitWords(e.data.limit)}`
+      : "could not reach the model";
+  return `the turn of ${workerOf(e)} ${what}; fold runs it again`;
+}
 
 /** The line of a notice target's change. The data does not tell a person's add from an edit, so a person's line names the state the target is in. */
 function notifyTargetText(event: DurableEvent): string {

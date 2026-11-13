@@ -325,7 +325,7 @@ impl Supervisor {
         Ok(done)
     }
 
-    /// Stops every short-lived worker that has been idle for its role's `idle_minutes` at `now`, except while the project's agents are paused: a resume gives each worker a new idle time. A worker is stopped only while it is still idle since the same moment, so one that took a turn after the rows were read keeps running. A worker that cannot be stopped is logged and the sweep goes on. Returns the agents it stopped.
+    /// Stops every short-lived worker that has been idle for its role's `idle_minutes` at `now`, except one whose turn waits for the network or a usage limit, and except while the project's agents are paused: a resume gives each worker a new idle time. A worker is stopped only while it is still idle since the same moment, so one that took a turn after the rows were read keeps running. A worker that cannot be stopped is logged and the sweep goes on. Returns the agents it stopped.
     pub async fn sweep_idle(
         &self,
         now: fold_core::Timestamp,
@@ -348,7 +348,11 @@ impl Supervisor {
             let Some(minutes) = config.role(row.role).idle_minutes else {
                 continue;
             };
-            let Some(since) = row.idle_since.filter(|_| row.state == WorkerState::Idle) else {
+            // A worker whose turn waits is idle only until fold runs that turn again.
+            let Some(since) = row
+                .idle_since
+                .filter(|_| row.state == WorkerState::Idle && row.wait.is_none())
+            else {
                 continue;
             };
             let due = since

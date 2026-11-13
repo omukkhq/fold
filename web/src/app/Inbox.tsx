@@ -10,6 +10,7 @@ import {
   FileWarning,
   FileX,
   FolderClock,
+  Gauge,
   GitBranch,
   GitMerge,
   GitPullRequest,
@@ -60,6 +61,7 @@ import { HrefLink } from "./HrefLink";
 import { SharedChangeDismiss, SharedFilesDialog } from "./SharedChangeDismiss";
 import { RestartStalled } from "@/features/workers/RestartStalled";
 import { listNote, listState } from "./listNote";
+import { PauseControl } from "./PauseControl";
 import { PanelNote } from "./PanelNote";
 import {
   fullTitle,
@@ -89,6 +91,7 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   agent_change: Bot,
   shared_changed: Link2,
   worker_stalled: Hand,
+  usage_limit: Gauge,
 };
 
 const MINUTE_MS = 60_000;
@@ -485,6 +488,11 @@ export function Inbox({ slug }: { slug: string }) {
                               />
                             ) : line.restart !== null ? (
                               <RestartStalled slug={slug} name={line.restart} />
+                            ) : line.actions.includes("pause") ? (
+                              <PauseControl
+                                slug={slug}
+                                className="items-start"
+                              />
                             ) : line.dismiss === null ? undefined : (
                               <SharedChangeDismiss
                                 slug={slug}

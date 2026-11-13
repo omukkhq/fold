@@ -34,6 +34,7 @@ mod resume;
 mod send_back;
 mod stderr;
 mod stop;
+mod waits;
 mod watch;
 
 pub use restart::{MCP_RETRY_TURN, PAUSE_TURN, RESTART_TURN};
@@ -204,6 +205,8 @@ struct Inner {
     tool_windows: Arc<ToolWindows>,
     /// What each running process wrote last and which of its calls are open, for the stall rule.
     streams: Arc<WorkerStreams>,
+    /// The turns fold owes workers whose last turn ended for a cause outside them.
+    owed: Mutex<waits::OwedTurns>,
 }
 
 impl Drop for Inner {
@@ -272,6 +275,7 @@ impl Supervisor {
                 cleanup_due: Mutex::new(None),
                 tool_windows: Arc::default(),
                 streams: Arc::default(),
+                owed: Mutex::default(),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();
