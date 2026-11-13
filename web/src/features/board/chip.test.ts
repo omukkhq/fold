@@ -324,6 +324,40 @@ describe("metaFact", () => {
     });
   });
 
+  it("shows a stale claim that waits for a person over a neutral activity, never over a stall that waits for one", () => {
+    const card = boardCard("T-1", {
+      status: "in_progress",
+      attention: [
+        { kind: "stale_claim", closable: false, action: "message_worker" },
+      ],
+    });
+    const parked = {
+      state: "parked" as const,
+      text: "Waits for @backend-lead's go",
+      stall: false,
+      needsYou: false,
+      restart: null,
+      told: [],
+      since: 0,
+      waitFor: null,
+    };
+    expect(cardChip(card, null, parked)).toEqual({
+      tone: "warn",
+      icon: Hand,
+      text: "Stale claim · message worker",
+    });
+    const silent = {
+      ...parked,
+      state: "silent" as const,
+      text: "No activity from @w for 40 min",
+      stall: true,
+      needsYou: true,
+    };
+    expect(cardChip(card, null, silent)?.text).toBe(
+      "No activity from @w for 40 min",
+    );
+  });
+
   it("names the person's action on the gold chip of a stall or a stale claim that only the daemon's item tells of", () => {
     const stale = boardCard("T-1", {
       status: "in_progress",
