@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_processes\n           SET last_error = ?2, last_error_at = ?3,\n               wait_tries = CASE WHEN wait_reason IS ?4 AND wait_limit IS ?5 THEN wait_tries + 1 ELSE 0 END,\n               wait_since = CASE WHEN wait_reason IS ?4 AND wait_limit IS ?5 THEN wait_since ELSE ?3 END,\n               wait_reason = ?4, wait_limit = ?5, wait_tried_at = ?3, wait_reset = ?6, wait_resets_at = ?7\n           WHERE id = ?1 AND state IN ('starting', 'working', 'idle')\n           RETURNING wait_tries AS \"wait_tries!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "wait_tries!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "wait_tries"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6164fe6955a51b980576ca3f7b74dcf397dbbe312fee378bec3fd75f505b975b"
+}

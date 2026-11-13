@@ -98,7 +98,7 @@ const supervised = (
   },
 ): ProjectAgent => ({
   ...agent({ presence: "offline", ...options }),
-  process: { state, failed_reason: failedReason, ...error },
+  process: { state, failed_reason: failedReason, waits_for: null, ...error },
 });
 
 describe("agentStateText of a supervised agent", () => {
@@ -153,6 +153,25 @@ describe("agentStateText of a supervised agent", () => {
     );
     expect(chipErrorTitle(supervised("idle"))).toBeUndefined();
     expect(chipErrorTitle(agent({ presence: "active" }))).toBeUndefined();
+  });
+
+  it("says that a process whose turn waits for the network or a usage limit waits, never that it fails", () => {
+    const waiting = (waits: "network" | "usage_limit") => ({
+      ...supervised("idle", { stalled: 1 }),
+      process: {
+        state: "idle" as const,
+        failed_reason: null,
+        last_error: "API Error",
+        model_unreachable: false,
+        waits_for: waits,
+      },
+    });
+    expect(agentStateText(waiting("network"))).toBe(
+      "waiting for the network · 1 stalled",
+    );
+    expect(agentStateText(waiting("usage_limit"))).toBe(
+      "waits for the usage limit · 1 stalled",
+    );
   });
 
   it("names the failures a person can act on", () => {

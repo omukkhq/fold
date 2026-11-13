@@ -104,6 +104,9 @@ pub struct AgentProcess {
     pub last_error: Option<String>,
     /// The process's turns failed often enough in a row without reaching the model that it cannot work until a human fixes Claude Code; the daemon decides it, and it is false for a stopped process.
     pub model_unreachable: bool,
+    /// What the idle process's last turn waits for, `network` or `usage_limit`, which fold runs again once it has passed; null when it waits for nothing.
+    #[schema(required = true)]
+    pub waits_for: Option<workers::TurnWaitReason>,
 }
 
 /// A connected session. A session has no public id; one adapter process is one session, so its pid names it.
@@ -328,6 +331,7 @@ impl From<AgentOverview> for AgentEntry {
                 failed_reason: process.failed_reason,
                 last_error: process.last_error,
                 model_unreachable: process.model_unreachable,
+                waits_for: process.waits_for.map(Into::into),
             }),
             notices: agent.push.into(),
         }

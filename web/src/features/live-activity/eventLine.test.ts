@@ -356,6 +356,21 @@ describe("eventLine", () => {
       "gave the workers Claude Code's own login",
     );
     expect(
+      line("worker.waiting", { agent: "web-lead", reason: "network" }),
+    ).toBe(
+      "the turn of web-lead could not reach the model; fold runs it again",
+    );
+    expect(
+      line("worker.waiting", {
+        agent: "web-lead",
+        reason: "usage_limit",
+        limit: "weekly",
+      }),
+    ).toBe("the turn of web-lead reached the weekly limit; fold runs it again");
+    expect(
+      line("worker.wait_ended", { agent: "web-lead", reason: "network" }),
+    ).toBe("the turn of web-lead waits no more");
+    expect(
       line("worker.stalled", {
         agent: "web-worker",
         reason: "silent",

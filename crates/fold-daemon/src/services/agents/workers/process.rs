@@ -36,6 +36,7 @@ mod resume;
 mod send_back;
 mod stderr;
 mod stop;
+mod waits;
 mod watch;
 
 pub use restart::{MCP_RETRY_TURN, PAUSE_TURN, RESTART_TURN};
@@ -213,6 +214,8 @@ struct Inner {
     streams: Arc<WorkerStreams>,
     /// The workers that continue in their own session with another account, whose notices wait for the new process meanwhile.
     switching: Mutex<HashSet<AgentName>>,
+    /// The turns fold owes workers whose last turn ended for a cause outside them.
+    owed: Mutex<waits::OwedTurns>,
 }
 
 impl Drop for Inner {
@@ -282,6 +285,7 @@ impl Supervisor {
                 tool_windows: Arc::default(),
                 streams: Arc::default(),
                 switching: Mutex::new(HashSet::new()),
+                owed: Mutex::default(),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();

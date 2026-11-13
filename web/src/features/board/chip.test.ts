@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { Activity, CircleStop, Clock, Hand, Hourglass } from "lucide-react";
+import {
+  Activity,
+  CircleStop,
+  Clock,
+  CloudOff,
+  Gauge,
+  Hand,
+  Hourglass,
+} from "lucide-react";
 import type { BoardCard, BoardProposal } from "@/api/board";
 import { boardCard } from "@/test/payloads";
 import { SLOT_CHIP_TEXT, cardChip, integratedText, metaFact } from "./chip";
@@ -293,6 +301,26 @@ describe("metaFact", () => {
       text: SLOT_CHIP_TEXT,
     });
     expect(cardChip(card, null, working)?.icon).toBe(Activity);
+    const network = {
+      ...working,
+      state: "waits_for_network" as const,
+      text: "Waiting for the network",
+    };
+    expect(cardChip(card, null, network)).toEqual({
+      tone: "neutral",
+      icon: CloudOff,
+      text: "Waiting for the network",
+    });
+    const limit = {
+      ...working,
+      state: "waits_for_usage_limit" as const,
+      text: "Waits for the usage limit",
+    };
+    expect(cardChip(card, null, limit)).toEqual({
+      tone: "neutral",
+      icon: Gauge,
+      text: "Waits for the usage limit",
+    });
   });
 
   it("shows a worker stopped on purpose in the neutral tone with the stop icon, and a failed one as a stall", () => {

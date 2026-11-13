@@ -6,6 +6,8 @@ import { agentsText, type AgentChange } from "./agentChanges";
 import { codeData, codeParts } from "@/format/codeText";
 import { projectPath, withQuery } from "@/routes/paths";
 import { activityText } from "@/live/workerActivity";
+import { limitWords } from "@/live/turnWaits";
+import { formatAsOfMinute } from "@/format/time";
 
 /** A line of the list: a person who asks, or an item chip, then the words and the screen it opens, if any. */
 export interface NeedsYouLine {
@@ -32,7 +34,11 @@ export interface NeedsYouLine {
   dismiss: number | null;
   /** The stalled worker that the line's Restart worker starts again in a new session; null for every other line, and for a worker whose session fold does not run. */
   restart: string | null;
+  /** What the human can do from the line, as the daemon lists it for the item, such as `pause` for a usage limit. */
+  actions: readonly NeedsYouActionKind[];
 }
+
+export type NeedsYouActionKind = NeedsYouItem["actions"][number]["action"];
 
 /** The files of an item as the second line names them: how many, the first path and the count of the rest. */
 export interface FilesSummary {
@@ -69,6 +75,7 @@ const KIND_ORDER: readonly NeedsYouKind[] = [
   "agent_change",
   "shared_changed",
   "worker_stalled",
+  "usage_limit",
 ];
 
 /** Agents that ask, things that wait for the human's decision, and the project's own state, which includes workers fold cannot run. */
@@ -91,6 +98,7 @@ export const GROUP_OF: Readonly<Record<NeedsYouKind, NeedsYouGroupId>> = {
   agent_change: "project",
   shared_changed: "project",
   worker_stalled: "wait",
+  usage_limit: "project",
 };
 
 /** The kinds whose title is the item's own name, which the sentence ends with. */
@@ -201,6 +209,32 @@ function stalledText(item: NeedsYouItem, now: number): string {
   );
 }
 
+/** The second line of an item whose workers' turns wait: who waits, then what fold does, as `@web-lead waits; fold runs each waiting turn again once the model answers`. */
+export function waitersText(
+  agents: readonly string[],
+  next: string | null,
+): string {
+  const who = codeData(agentsText(agents));
+  const waits = `${who} ${agents.length === 1 ? "waits" : "wait"}`;
+  return next === null ? waits : `${waits}; ${next}`;
+}
+
+/** `Claude Code reached its weekly limit, which resets Mon 12:00am`: the limit and its reset in Claude Code's words, or the reset instant in local time when the message gave one, or no reset at all. */
+export function limitText(
+  item: Pick<NeedsYouItem, "limit" | "reset" | "resets_at">,
+  now: number,
+): string {
+  const reached = `Claude Code reached its ${limitWords(item.limit)}`;
+  const reset = markedText(item.reset);
+  if (reset !== null) {
+    return `${reached}, which resets ${codeData(reset)}`;
+  }
+  if (item.resets_at !== null) {
+    return `${reached}, which resets at ${formatAsOfMinute(now, item.resets_at)}`;
+  }
+  return reached;
+}
+
 function lineOf(
   slug: string,
   item: NeedsYouItem,
@@ -221,6 +255,7 @@ function lineOf(
     files: null,
     dismiss: null,
     restart: null,
+    actions: item.actions.map((entry) => entry.action),
   };
   switch (item.kind) {
     case "human_task":
@@ -335,6 +370,17 @@ function lineOf(
       };
     case "worker_model_unreachable": {
       const check = markedText(item.reason);
+      if (item.agent === null) {
+        return {
+          ...base,
+          person: null,
+          chip: null,
+          task: null,
+          title: waitersText(item.agents, check),
+          text: "fold cannot reach the model",
+          href: projectPath(slug, "agents"),
+        };
+      }
       return {
         ...base,
         person: item.agent,
@@ -395,6 +441,16 @@ function lineOf(
         href: taskPath(slug, item.task ?? ""),
         restart:
           item.activity?.supervised === true ? (item.agent ?? null) : null,
+      };
+    case "usage_limit":
+      return {
+        ...base,
+        person: null,
+        chip: null,
+        task: null,
+        title: waitersText(item.agents, markedText(item.reason)),
+        text: limitText(item, now),
+        href: null,
       };
     case "human_review":
       return {

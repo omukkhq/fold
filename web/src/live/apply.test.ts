@@ -907,6 +907,16 @@ describe("invalidation rules", () => {
     expect(refreshes(keys.taskReaders(slug, "T-3"))).toBe(false);
   });
 
+  it("refreshes Needs you, the workers and the agents when a worker's turn starts or ends a wait", () => {
+    for (const type of ["worker.waiting", "worker.wait_ended"]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type));
+      expect(hit(keys.needsYou(slug)), type).toBe(true);
+      expect(hit(keys.workers(slug)), type).toBe(true);
+      expect(hit(keys.agents(slug)), type).toBe(true);
+    }
+  });
+
   it("refreshes the workers for a new or changed area", () => {
     for (const type of ["area.defined", "area.updated"]) {
       invalidated = [];

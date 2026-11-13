@@ -1,5 +1,6 @@
 use fold_core::layout::MCP_SERVER_NAME;
 use fold_core::turn_errors;
+use fold_core::turn_waits::{TurnWait, turn_wait};
 use serde_json::{Value, json};
 
 use crate::services::agents::claude::{
@@ -77,11 +78,12 @@ pub(super) enum RowChange {
     },
 }
 
-/// The error a turn ended in: Claude Code's text, bounded by [`turn_errors::error_text`], and whether any token of the turn reached the model. The text goes onto the worker's row only, never into a log or an event.
+/// The error a turn ended in: Claude Code's text, bounded by [`turn_errors::error_text`], whether any token of the turn reached the model, and the cause outside the worker that the text names, if any. The text goes onto the worker's row only, never into a log or an event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TurnError {
     pub text: String,
     pub reached_model: bool,
+    pub wait: Option<TurnWait>,
 }
 
 /// The last error of a turn whose result names none.
@@ -100,10 +102,18 @@ fn turn_error(result: &ResultMessage) -> TurnError {
         .saturating_add(usage.output_tokens)
         .saturating_add(usage.cache_creation_input_tokens)
         .saturating_add(usage.cache_read_input_tokens);
+    let text = named.unwrap_or_else(|| NO_ERROR_TEXT.to_owned());
     TurnError {
-        text: named.unwrap_or_else(|| NO_ERROR_TEXT.to_owned()),
+        wait: turn_wait(&text),
+        text,
         reached_model: tokens > 0,
     }
+}
+
+/// The error of a result: every result marked as an error, and one that is not but reached no model and names the network or a usage limit, which Claude Code's documentation leaves open.
+fn result_error(result: &ResultMessage) -> Option<TurnError> {
+    let error = turn_error(result);
+    (result.is_error || (!error.reached_model && error.wait.is_some())).then_some(error)
 }
 
 pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
@@ -187,7 +197,7 @@ pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
                     .filter(|(model, _)| real_model(model).is_some())
                     .map(|(model, usage)| (model.clone(), usage.context_window))
                     .collect(),
-                error: result.is_error.then(|| turn_error(result)),
+                error: result_error(result),
             },
             reply: None,
             permission: None,
@@ -464,6 +474,7 @@ mod tests {
                 text: "No conversation found with session ID: 00000000-0000-4000-8000-000000000074"
                     .to_owned(),
                 reached_model: false,
+                wait: None,
             }))
         );
         assert_eq!(turn_error_of(&effects("result")), Some(None));
@@ -480,6 +491,7 @@ mod tests {
             Some(Some(TurnError {
                 text: "No access".to_owned(),
                 reached_model: true,
+                wait: None,
             }))
         );
         assert_eq!(
@@ -489,6 +501,7 @@ mod tests {
             Some(Some(TurnError {
                 text: "first\nsecond".to_owned(),
                 reached_model: false,
+                wait: None,
             }))
         );
         assert_eq!(
@@ -498,7 +511,55 @@ mod tests {
             Some(Some(TurnError {
                 text: NO_ERROR_TEXT.to_owned(),
                 reached_model: false,
+                wait: None,
             }))
+        );
+    }
+
+    #[test]
+    fn a_turn_that_ends_for_the_network_or_a_usage_limit_waits() {
+        let network = turn_error_of(&effects("network_error")).flatten().unwrap();
+        assert_eq!(network.wait, Some(TurnWait::Network));
+        assert!(!network.reached_model);
+        let limit = turn_error_of(&effects("usage_limit")).flatten().unwrap();
+        assert_eq!(
+            limit.wait,
+            Some(TurnWait::UsageLimit {
+                kind: fold_core::turn_waits::LimitKind::Session,
+                reset: Some("1:50am (Asia/Tokyo)".to_owned()),
+                resets_at: None,
+            })
+        );
+        let result = |line: &str| turn_error_of(&[effect_of(&ClaudeMessage::parse(line).unwrap())]);
+        let unmarked = result(
+            r#"{"type":"result","subtype":"success","is_error":false,"session_id":"s","result":"You've hit your weekly limit · resets Mon 12:00am"}"#,
+        );
+        assert!(
+            matches!(
+                &unmarked,
+                Some(Some(TurnError {
+                    wait: Some(TurnWait::UsageLimit { .. }),
+                    ..
+                }))
+            ),
+            "a result not marked as an error that reached no model still waits: {unmarked:?}"
+        );
+        assert_eq!(
+            result(
+                r#"{"type":"result","subtype":"success","is_error":false,"session_id":"s","result":"You've hit your weekly limit","usage":{"output_tokens":3}}"#
+            ),
+            Some(None),
+            "a turn that ended well and only says the words is no wait"
+        );
+        let midway = result(
+            r#"{"type":"result","subtype":"success","is_error":true,"session_id":"s","result":"API Error: Can't reach the API server","usage":{"output_tokens":40}}"#,
+        )
+        .flatten()
+        .unwrap();
+        assert_eq!(
+            (midway.wait, midway.reached_model),
+            (Some(TurnWait::Network), true),
+            "a turn the network cut after some work waits too"
         );
     }
 
@@ -521,6 +582,7 @@ mod tests {
             Some(Some(TurnError {
                 text: "Not logged in · Please run /login".to_owned(),
                 reached_model: false,
+                wait: None,
             }))
         );
         let init = effect_of(

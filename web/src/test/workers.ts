@@ -38,6 +38,7 @@ export function workerProcess(
     last_error_at: null,
     failed_turns: 0,
     model_unreachable: false,
+    waits_for: null,
     hint: null,
     cache_ttl: "1h",
     older_fold: false,
@@ -119,6 +120,10 @@ export function needsItem(fields: Partial<NeedsYouItem> = {}): NeedsYouItem {
     target: null,
     agents: [],
     activity: null,
+    limit: null,
+    reset: null,
+    resets_at: null,
+    actions: [],
     ...fields,
   };
 }

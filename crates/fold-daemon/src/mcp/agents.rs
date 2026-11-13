@@ -211,7 +211,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_WORKERS,
-            "List the areas with their leads, models and MCP servers, and the workers that run or failed, each with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human. stopped_count counts the stopped workers; pass include_stopped true to list them, such as to read a finished worker's sessions, and include_instructions true for each area's instructions.",
+            "List the areas with their leads, models and MCP servers, and the workers that run or failed, each with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human. A worker whose last turn ended because Claude Code could not reach the model or reached a usage limit has waits_for, network or usage_limit: fold runs that turn again in its session once the cause has passed, so do not restart or replace it. stopped_count counts the stopped workers; pass include_stopped true to list them, such as to read a finished worker's sessions, and include_instructions true for each area's instructions.",
             schema_for_type::<ListWorkersInput>(),
         ),
         Tool::new(
@@ -278,6 +278,9 @@ fn worker_process_json(row: &WorkerProcessRow) -> Value {
     }
     if turn_errors::model_unreachable(row.failed_turns, row.state) {
         value["hint"] = json!(turn_errors::MODEL_UNREACHABLE_HINT);
+    }
+    if let Some(reason) = crate::services::agents::waits_for(row) {
+        value["waits_for"] = json!(reason.as_str());
     }
     value
 }

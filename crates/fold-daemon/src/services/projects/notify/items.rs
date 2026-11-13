@@ -22,7 +22,8 @@ pub fn item_key(item: &NeedsYouItem) -> String {
         | NeedsYouKind::UnstashConflicted
         | NeedsYouKind::ChecksFileInvalidOnMain
         | NeedsYouKind::AgentChange
-        | NeedsYouKind::SharedChanged => item.about.clone(),
+        | NeedsYouKind::SharedChanged
+        | NeedsYouKind::UsageLimit => item.about.clone(),
         NeedsYouKind::FolderHeld => None,
     };
     match about {
@@ -40,7 +41,8 @@ fn public_id(item: &NeedsYouItem) -> Option<String> {
         | NeedsYouKind::UnstashConflicted
         | NeedsYouKind::ChecksFileInvalidOnMain
         | NeedsYouKind::AgentChange
-        | NeedsYouKind::SharedChanged => None,
+        | NeedsYouKind::SharedChanged
+        | NeedsYouKind::UsageLimit => None,
         _ => item_key(item).split_once(':').map(|(_, id)| id.to_owned()),
     }
 }
@@ -82,7 +84,10 @@ fn title(item: &NeedsYouItem) -> String {
         NeedsYouKind::UnstashConflicted => "An unstash left conflict markers".to_owned(),
         NeedsYouKind::ChecksFileInvalidOnMain => "The checks file on main is not valid".to_owned(),
         NeedsYouKind::WorkerUnreachable => format!("{agent} cannot reach fold"),
-        NeedsYouKind::WorkerModelUnreachable => format!("{agent} cannot reach the model"),
+        NeedsYouKind::WorkerModelUnreachable => match &item.agent {
+            Some(_) => format!("{agent} cannot reach the model"),
+            None => "fold cannot reach the model".to_owned(),
+        },
         NeedsYouKind::ClaudeNotFound => {
             format!("{agent} cannot start: the daemon finds no claude")
         }
@@ -97,6 +102,10 @@ fn title(item: &NeedsYouItem) -> String {
         NeedsYouKind::WorkerStalled => {
             format!("{}{on_task}", own(&item.title, &format!("{agent} stalled")))
         }
+        NeedsYouKind::UsageLimit => format!(
+            "Claude Code reached its {}",
+            item.limit.map_or("usage limit", |limit| limit.words())
+        ),
     }
 }
 
@@ -130,7 +139,8 @@ fn path(item: &NeedsYouItem) -> String {
         | NeedsYouKind::SharedChanged => "repository".to_owned(),
         NeedsYouKind::WorkerUnreachable
         | NeedsYouKind::WorkerModelUnreachable
-        | NeedsYouKind::ClaudeNotFound => "agents".to_owned(),
+        | NeedsYouKind::ClaudeNotFound
+        | NeedsYouKind::UsageLimit => "agents".to_owned(),
         NeedsYouKind::NotifyTargetOff => "settings".to_owned(),
     }
 }

@@ -3,6 +3,8 @@ import {
   CircleStop,
   ClipboardCheck,
   Clock,
+  CloudOff,
+  Gauge,
   GitPullRequest,
   Hand,
   Hourglass,
@@ -59,6 +61,10 @@ function activityChip(activity: WorkerActivity): CardChip {
       return { tone: "neutral", icon: CircleStop, text: activity.text };
     case "waits_for_slot":
       return { tone: "neutral", icon: Hourglass, text: SLOT_CHIP_TEXT };
+    case "waits_for_network":
+      return { tone: "neutral", icon: CloudOff, text: activity.text };
+    case "waits_for_usage_limit":
+      return { tone: "neutral", icon: Gauge, text: activity.text };
     default:
       return { tone: "neutral", icon: Activity, text: activity.text };
   }

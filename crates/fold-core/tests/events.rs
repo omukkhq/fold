@@ -147,6 +147,8 @@ fn all_equals_the_plans_event_types() {
         "stash.discarded",
         "worker.stalled",
         "workers.account_changed",
+        "worker.waiting",
+        "worker.wait_ended",
     ]);
     assert_eq!(declared, expected);
 }

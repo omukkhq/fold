@@ -12,6 +12,7 @@ pub mod push;
 pub mod roles;
 pub mod transcript;
 pub mod turn_errors;
+pub mod turn_waits;
 
 pub(crate) const MAX_NAME_LEN: usize = 32;
 const MAX_WORKER_NAME_LEN: usize = 128;

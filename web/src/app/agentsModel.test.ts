@@ -22,6 +22,7 @@ function supervised(
       failed_reason: null,
       last_error: null,
       model_unreachable: false,
+      waits_for: null,
       ...extra,
     },
   };

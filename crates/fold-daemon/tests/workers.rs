@@ -2058,6 +2058,7 @@ async fn a_worker_whose_fold_server_failed_ends_failed_and_asks_for_a_restart() 
             "failed_reason": "mcp_unavailable",
             "last_error": null,
             "model_unreachable": false,
+            "waits_for": null,
         })
     );
     assert_eq!(
@@ -2399,7 +2400,7 @@ async fn a_worker_whose_turns_reach_no_model_shows_the_error_and_asks_a_human() 
         .unwrap();
     assert_eq!(
         process,
-        json!({"state": "idle", "failed_reason": null, "last_error": error, "model_unreachable": true})
+        json!({"state": "idle", "failed_reason": null, "last_error": error, "model_unreachable": true, "waits_for": null})
     );
 
     nudge().await;

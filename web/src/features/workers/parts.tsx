@@ -1,4 +1,4 @@
-import { CircleAlert } from "lucide-react";
+import { CircleAlert, Hourglass } from "lucide-react";
 import { CodeText } from "@/components/code/CodeText";
 import { Tooltip } from "@/components/overlay/Tooltip";
 import { cn } from "@/lib/cn";
@@ -72,11 +72,16 @@ export function ErrorTitle({ error }: { error: RowError }) {
         // Claude Code's text shows in the tooltip, which focus opens too; the open row holds it with the hint.
         tabIndex={0}
         className={cn(
-          "flex max-w-full min-w-0 items-center gap-6 rounded-s text-13 leading-tight font-medium text-bad",
+          "flex max-w-full min-w-0 items-center gap-6 rounded-s text-13 leading-tight font-medium",
+          error.waits ? "text-text-2" : "text-bad",
           focusRing,
         )}
       >
-        <CircleAlert aria-hidden="true" size={14} className="shrink-0" />
+        {error.waits ? (
+          <Hourglass aria-hidden="true" size={14} className="shrink-0" />
+        ) : (
+          <CircleAlert aria-hidden="true" size={14} className="shrink-0" />
+        )}
         <span className="truncate">{error.title}</span>
       </span>
     </Tooltip>
@@ -87,7 +92,11 @@ export function ErrorTitle({ error }: { error: RowError }) {
 export function RowErrorText({ error }: { error: RowError }) {
   return (
     <span className="flex min-w-0 flex-col gap-4 text-14">
-      <span className="font-medium text-bad">{error.title}</span>
+      <span
+        className={cn("font-medium", error.waits ? "text-text-2" : "text-bad")}
+      >
+        {error.title}
+      </span>
       <span className="font-mono text-13 wrap-anywhere text-text">
         {error.text}
       </span>

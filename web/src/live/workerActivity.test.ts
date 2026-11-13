@@ -158,6 +158,42 @@ describe("a resume that waits for a free slot", () => {
   });
 });
 
+describe("a turn that waits for the network or a usage limit", () => {
+  const network = seen({
+    state: "waits_for_network",
+    call: null,
+    since: NOW - 20 * MINUTE,
+  });
+  const limit = seen({ ...network, state: "waits_for_usage_limit" });
+
+  it("says the wait with no time and no name", () => {
+    expect(activityText(network, "web-worker", NOW)).toBe(
+      "Waiting for the network",
+    );
+    expect(activityText(limit, "web-worker", NOW)).toBe(
+      "Waits for the usage limit",
+    );
+    expect(activityVerb(network, NOW)).toBe("waiting for the network");
+    expect(activityVerb(limit, NOW)).toBe("waits for the usage limit");
+  });
+
+  it("is neutral: never a stall, never a person's, never a restart, also once the daemon flags it", () => {
+    for (const waits of [network, limit]) {
+      expect(isStall(waits.state)).toBe(false);
+      const view = workerActivity(
+        { activity: waits, stalled: true, worker: "web-worker" },
+        NOW,
+      );
+      expect(view).toMatchObject({
+        stall: false,
+        needsYou: false,
+        restart: null,
+      });
+      expect(view === null ? "" : toldText(view)).toBeNull();
+    }
+  });
+});
+
 describe("workerActivity", () => {
   it("is null without a frame or without anything to say", () => {
     expect(workerActivity(undefined, NOW)).toBeNull();

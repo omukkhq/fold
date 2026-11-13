@@ -176,6 +176,8 @@ define_event_types! {
     STASH_DISCARDED = "stash.discarded",
     WORKER_STALLED = "worker.stalled",
     WORKERS_ACCOUNT_CHANGED = "workers.account_changed",
+    WORKER_WAITING = "worker.waiting",
+    WORKER_WAIT_ENDED = "worker.wait_ended",
 }
 
 impl EventType {

@@ -239,6 +239,23 @@ impl From<fold_core::WorkerState> for WorkerProcessState {
     }
 }
 
+/// The cause outside a worker that its last turn waits for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnWaitReason {
+    Network,
+    UsageLimit,
+}
+
+impl From<fold_core::turn_waits::WaitReason> for TurnWaitReason {
+    fn from(reason: fold_core::turn_waits::WaitReason) -> Self {
+        match reason {
+            fold_core::turn_waits::WaitReason::Network => Self::Network,
+            fold_core::turn_waits::WaitReason::UsageLimit => Self::UsageLimit,
+        }
+    }
+}
+
 /// One worker agent and its supervised Claude Code process. The totals add up over every process of the worker.
 ///
 /// The agents route has its own `WorkerEntry`, so the schema takes another name: two schemas of one name leave only one in the OpenAPI document.
@@ -292,6 +309,9 @@ pub struct WorkerEntry {
     pub failed_turns: u64,
     /// The worker's turns failed often enough in a row without reaching the model that it cannot work until a human fixes Claude Code; the daemon decides it, and the human's list of what waits for them holds an item for it.
     pub model_unreachable: bool,
+    /// What the idle worker's last turn waits for: `network` when Claude Code could not reach the model, `usage_limit` when the account reached a usage limit. fold runs the turn again in the worker's session once the cause has passed, so the worker is neither stalled nor failing; null when it waits for nothing.
+    #[schema(required = true)]
+    pub waits_for: Option<TurnWaitReason>,
     /// What the human checks for a worker that cannot reach the model; null otherwise.
     #[schema(
         required = true,
@@ -367,6 +387,7 @@ impl WorkerEntry {
         let cache_ttl = config.map(|config| config.role(row.role).cache_ttl.as_str().to_owned());
         let model_unreachable =
             fold_core::turn_errors::model_unreachable(row.failed_turns, row.state);
+        let waits_for = crate::services::agents::waits_for(&row).map(Into::into);
         Self {
             name: row.agent.to_string(),
             role: row.role.into(),
@@ -389,6 +410,7 @@ impl WorkerEntry {
             last_error_at: row.last_error_at,
             failed_turns: row.failed_turns,
             model_unreachable,
+            waits_for,
             hint: model_unreachable
                 .then(|| fold_core::turn_errors::MODEL_UNREACHABLE_HINT.to_owned()),
             cache_ttl,
