@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { TaskStatus } from "@/api/board";
-import { agentBarQuery } from "@/api/agentBar";
 import { boardCards, boardQuery } from "@/api/board";
+import { workersQuery } from "@/api/queries";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { ReconnectingBanner } from "@/components/states/ReconnectingBanner";
 import { cn } from "@/lib/cn";
@@ -19,6 +19,7 @@ import {
 import { BoardToolbar } from "./BoardToolbar";
 import { groupColumns } from "./columns";
 import { applyFilters, labelOptions, needsYouCount } from "./filters";
+import { needsOwners, ownerChoices, ownersOf } from "./owners";
 import { isFiltered, type BoardSearch } from "./search";
 import {
   PHONE_LAYOUT,
@@ -40,7 +41,11 @@ export interface BoardScreenProps {
  */
 export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
   const board = useQuery(boardQuery(slug));
-  const agents = useQuery(agentBarQuery(slug));
+  const workers = useQuery(workersQuery(slug));
+  const owners = useMemo(
+    () => (workers.data ? ownersOf(workers.data) : null),
+    [workers.data],
+  );
   const status = useLiveStatus();
   const retry = useLiveRetry();
   // A new reconnect attempt renews the time too, so the reconnect countdown moves.
@@ -53,17 +58,20 @@ export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
     return {
       all: cards,
       columns: groupColumns(
-        applyFilters(cards, search),
+        applyFilters(cards, search, owners),
         board.data,
         isFiltered(search),
       ),
     };
-  }, [board.data, search]);
+  }, [board.data, search, owners]);
+  // Main agent and the area leads are told by the workers answer, so the board waits for it instead of showing no card.
+  const ownersWanted = needsOwners(search.owner);
+  const ownersWaiting = ownersWanted && workers.isPending;
   const asOf = reconnectAsOf(status, board.dataUpdatedAt);
   const isPhone = useMediaQuery(PHONE_LAYOUT);
   const [chosen, setChosen] = useState<TaskStatus | null>(null);
   const [opened, setOpened] = useState<TaskStatus | null>(null);
-  if (opened === null && board.data !== undefined) {
+  if (opened === null && board.data !== undefined && !ownersWaiting) {
     setOpened(phoneColumn(columns));
   }
   const phone = isPhone
@@ -71,7 +79,7 @@ export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
     : null;
 
   let body;
-  if (board.isPending) {
+  if (board.isPending || ownersWaiting) {
     body = <LoadingColumns phone={phone} />;
   } else if (board.isError) {
     body = <BareColumns phone={phone} />;
@@ -101,13 +109,25 @@ export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
           onRetry={() => void board.refetch()}
         />
       ) : null}
+      {/* A failed refetch keeps the owners it had, so the filter still tells every owner then. */}
+      {ownersWanted && workers.isError && workers.data === undefined ? (
+        <ErrorBanner
+          title="The owners could not load."
+          message="The daemon did not answer, so the Owner filter matches only human tasks."
+          onRetry={() => void workers.refetch()}
+        />
+      ) : null}
       <BoardToolbar
         search={search}
         onSearch={onSearch}
-        labels={labelOptions(all)}
-        agents={agents.data ?? []}
+        labels={labelOptions(all, search.label)}
+        owners={ownerChoices(owners, search.owner)}
         needsYou={board.isPending ? null : needsYouCount(all)}
-        summary={board.isPending ? "Loading the board…" : summaryText(columns)}
+        summary={
+          board.isPending || ownersWaiting
+            ? "Loading the board…"
+            : summaryText(columns)
+        }
         phone={isPhone}
       />
       {/* The columns dim while they show the board as of an earlier time. */}

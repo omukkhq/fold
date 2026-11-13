@@ -1,20 +1,22 @@
 import {
-  Bot,
   ChevronDown,
   Hand,
   OctagonAlert,
   Search,
   SlidersHorizontal,
   Tag,
+  UserRound,
+  X,
 } from "lucide-react";
-import type { ProjectAgent } from "@/api/agentBar";
 import type { BoardLabel } from "@/api/board";
 import { Button, IconButton } from "@/components/button/Button";
 import { COUNT_CLASSES } from "@/components/badge/chips";
 import { Menu, type MenuItem } from "@/components/overlay/Menu";
 import { Popover } from "@/components/overlay/Popover";
 import { cn } from "@/lib/cn";
-import { toggleValue, type BoardSearch } from "./search";
+import { choiceTitle } from "./filters";
+import type { OwnerOption } from "./owners";
+import { toggleName, type BoardSearch } from "./search";
 import { needsYouPill } from "./view";
 
 /** Toolbar controls sit on the page ground as surface blocks; a set filter takes the accent tint. */
@@ -26,7 +28,7 @@ interface ToolbarProps {
   search: BoardSearch;
   onSearch: (next: BoardSearch) => void;
   labels: readonly BoardLabel[];
-  agents: readonly ProjectAgent[];
+  owners: readonly OwnerOption[];
   /** null while the board loads; the button then shows `–`. */
   needsYou: number | null;
   summary: string;
@@ -34,39 +36,44 @@ interface ToolbarProps {
   phone: boolean;
 }
 
-function choiceItems(
-  names: readonly string[],
-  current: string | undefined,
-  anyLabel: string,
-  choose: (value: string | undefined) => void,
+/** Tick boxes for each entry, OR inside the menu. Clear always leads the list, inactive while nothing is ticked, so a tick never moves the rows under the pointer. */
+function tickItems(
+  options: readonly { key: string; label: string; hint?: string }[],
+  ticked: readonly string[] | undefined,
+  choose: (value: string[] | undefined) => void,
 ): MenuItem[] {
-  const items: MenuItem[] = names.map((name) => ({
-    label: current === name ? `${name} ✓` : name,
-    onSelect: () => {
-      choose(toggleValue(current, name));
+  return [
+    {
+      label: "Clear",
+      icon: X,
+      disabled: ticked === undefined,
+      onSelect: () => {
+        choose(undefined);
+      },
     },
-  }));
-  return current === undefined
-    ? items
-    : [
-        {
-          label: anyLabel,
-          onSelect: () => {
-            choose(undefined);
-          },
-        },
-        ...items,
-      ];
+    ...options.map((option) => ({
+      id: `option:${option.key}`,
+      label: option.label,
+      hint: option.hint,
+      checked: ticked?.includes(option.key) ?? false,
+      onSelect: () => {
+        choose(toggleName(ticked, option.key));
+      },
+    })),
+  ];
 }
 
 function OtherFilters({
   search,
   set,
   labels,
-  agents,
-}: Pick<ToolbarProps, "search" | "labels" | "agents"> & {
+  owners,
+}: Pick<ToolbarProps, "search" | "labels" | "owners"> & {
   set: (patch: Partial<BoardSearch>) => void;
 }) {
+  const ownerNames = (search.owner ?? []).map(
+    (key) => owners.find((owner) => owner.key === key)?.label ?? key,
+  );
   return (
     <>
       <Menu
@@ -75,14 +82,16 @@ function OtherFilters({
             icon={<Tag aria-hidden="true" size={16} />}
             className={cn(CONTROL, search.label && PRESSED)}
           >
-            {search.label ? `Label: ${search.label}` : "Labels"}
+            {choiceTitle(
+              { none: "Labels", one: "Label", many: "Labels" },
+              search.label ?? [],
+            )}
             <ChevronDown aria-hidden="true" size={14} className="-ml-2" />
           </Button>
         }
-        items={choiceItems(
-          labels.map((label) => label.name),
+        items={tickItems(
+          labels.map((label) => ({ key: label.name, label: label.name })),
           search.label,
-          "Any label",
           (label) => {
             set({ label });
           },
@@ -91,21 +100,19 @@ function OtherFilters({
       <Menu
         trigger={
           <Button
-            icon={<Bot aria-hidden="true" size={16} />}
-            className={cn(CONTROL, search.agent && PRESSED)}
+            icon={<UserRound aria-hidden="true" size={16} />}
+            className={cn(CONTROL, search.owner && PRESSED)}
           >
-            {search.agent ? `Agent: ${search.agent}` : "Agent"}
+            {choiceTitle(
+              { none: "Owner", one: "Owner", many: "Owners" },
+              ownerNames,
+            )}
             <ChevronDown aria-hidden="true" size={14} className="-ml-2" />
           </Button>
         }
-        items={choiceItems(
-          agents.map((agent) => agent.name),
-          search.agent,
-          "Any agent",
-          (agent) => {
-            set({ agent });
-          },
-        )}
+        items={tickItems(owners, search.owner, (owner) => {
+          set({ owner });
+        })}
       />
       <Button
         aria-pressed={search.blocked === true}
@@ -125,7 +132,7 @@ export function BoardToolbar({
   search,
   onSearch,
   labels,
-  agents,
+  owners,
   needsYou,
   summary,
   phone,
@@ -134,7 +141,7 @@ export function BoardToolbar({
   const set = (patch: Partial<BoardSearch>) => {
     onSearch({ ...search, ...patch });
   };
-  const othersSet = Boolean(search.label ?? search.agent ?? search.blocked);
+  const othersSet = Boolean(search.label ?? search.owner ?? search.blocked);
   return (
     <div
       className={cn(
@@ -199,8 +206,8 @@ export function BoardToolbar({
               <IconButton
                 aria-label={
                   othersSet
-                    ? "Filters: labels, agent, blocked only; one is set"
-                    : "Filters: labels, agent, blocked only"
+                    ? "Filters: labels, owner, blocked only; a filter is set"
+                    : "Filters: labels, owner, blocked only"
                 }
                 className={cn(
                   SURFACE,
@@ -223,7 +230,7 @@ export function BoardToolbar({
                 search={search}
                 set={set}
                 labels={labels}
-                agents={agents}
+                owners={owners}
               />
             </div>
           </Popover>
@@ -232,7 +239,7 @@ export function BoardToolbar({
             search={search}
             set={set}
             labels={labels}
-            agents={agents}
+            owners={owners}
           />
         )}
       </div>
