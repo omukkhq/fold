@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT w.id AS \"id!: i64\", w.agent_id, g.name AS agent, w.role, w.area_id, a.name AS \"area?: String\",\n                      w.model, w.session_id, w.pid, w.state, w.started_by, w.started_at, w.stopped_at,\n                      w.idle_since, w.turns, w.cost_micro_usd, w.cache_read_tokens, w.cache_write_tokens,\n                      w.context_tokens, w.exit_code, w.failed_reason, w.last_error, w.last_error_at,\n                      w.failed_turns, w.fold_fingerprint\n               FROM worker_processes w JOIN agents g ON g.id = w.agent_id LEFT JOIN areas a ON a.id = w.area_id\n               ORDER BY w.id",
+  "query": "SELECT w.id AS \"id!: i64\", w.agent_id, g.name AS agent, w.role, w.area_id, a.name AS \"area?: String\",\n                      w.model, w.session_id, w.pid, w.state, w.started_by, w.started_at, w.stopped_at,\n                      w.idle_since, w.turns, w.cost_micro_usd, w.cache_read_tokens, w.cache_write_tokens,\n                      w.context_tokens, w.exit_code, w.failed_reason, w.last_error, w.last_error_at,\n                      w.failed_turns, w.fold_fingerprint, pa.name AS \"parked_by?: String\", w.parked_for,\n                      w.parked_at\n               FROM worker_processes w JOIN agents g ON g.id = w.agent_id LEFT JOIN areas a ON a.id = w.area_id\n               LEFT JOIN agents pa ON pa.id = w.parked_by\n               ORDER BY w.id",
   "describe": {
     "columns": [
       {
@@ -277,6 +277,39 @@
             "name": "fold_fingerprint"
           }
         }
+      },
+      {
+        "name": "parked_by?: String",
+        "ordinal": 25,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "parked_for",
+        "ordinal": 26,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "parked_for"
+          }
+        }
+      },
+      {
+        "name": "parked_at",
+        "ordinal": 27,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "parked_at"
+          }
+        }
       }
     ],
     "parameters": {
@@ -307,8 +340,11 @@
       true,
       true,
       false,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "0a593e4aad96301577602032d8aede31ac7c73445eb02beacf4f94c2d93dba88"
+  "hash": "098a7e73205adbf981ffaf7563db9a338274bf8e8f41b8bf67f28817504de8df"
 }

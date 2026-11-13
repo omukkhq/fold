@@ -80,6 +80,16 @@ export function isPausedWorker(state: WorkerState, paused: boolean): boolean {
 
 const PAUSED_PILL: StatePill = { label: "paused", tone: "paused" };
 
+/** A parked worker waits for its lead's go in the neutral tone of a stop: nobody else needs to act. */
+const PARKED_PILL: StatePill = { label: "parked", tone: "stopped" };
+
+/** `waits for @web-lead's go: my go after the T-288 migration`, the step of a parked worker. */
+export function parkedStep(
+  parked: NonNullable<WorkerProcess["parked"]>,
+): string {
+  return `waits for @${parked.by}'s go: ${parked.wait_for}`;
+}
+
 /** The interactive main agent has no process fold runs; its pill is the agent's presence. */
 export function mainPill(presence: AgentView["presence"]): StatePill {
   switch (presence) {
@@ -485,7 +495,18 @@ function workerRow(
       restart: false,
     };
   }
+  if (worker.parked !== null && !isRunning(worker.state)) {
+    return {
+      ...runningRow(worker, input, child),
+      pill: PARKED_PILL,
+      step: sentence(parkedStep(worker.parked)),
+    };
+  }
   return runningRow(worker, input, child);
+}
+
+function isRunning(state: WorkerState): boolean {
+  return state !== "stopped" && state !== "failed" && state !== "stopping";
 }
 
 function runningRow(

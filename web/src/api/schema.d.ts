@@ -2037,10 +2037,10 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @description What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, and `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free. `working`, `stopped` and `waits_for_slot` are never stalls.
+         * @description What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free, and `parked` while it waits for the go of the agent that stopped it with `stop_worker`'s `wait_for`. `working`, `stopped`, `waits_for_slot` and `parked` are never stalls.
          * @enum {string}
          */
-        ActivityState: "working" | "silent" | "long_call" | "stopped" | "failed" | "waits_for_slot";
+        ActivityState: "working" | "silent" | "long_call" | "stopped" | "failed" | "waits_for_slot" | "parked";
         /** @description One comment on the version the human read, as its own `comment` review. */
         AddCommentBody: components["schemas"]["CommentBody"] & {
             /**
@@ -2230,6 +2230,7 @@ export interface components {
             version: number;
         };
         AttentionItem: {
+            action: components["schemas"]["PersonAction"] | null;
             /** @description For a `question`: one of the task's open asks is closable, so a human can mark it answered with the asks route, because it is no worker's `AskUserQuestion`, which only a reply in its thread ends. False for every other kind. */
             closable: boolean;
             kind: components["schemas"]["AttentionKind"];
@@ -3036,7 +3037,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed" | "review.plan_created" | "review.plan_changed" | "review.plan_joined" | "review.plan_left" | "review.plan_wait_ended" | "review.plan_started" | "review.plan_ended" | "review.batch_integrated" | "review.batch_waiting" | "review.batch_wait_ended" | "review.batch_ready" | "notify.target_changed" | "folder.agent_changed" | "folder.agent_change_cleared" | "shared.changed" | "shared.changes_dismissed" | "shared.paths_changed" | "stash.discarded" | "worker.stalled";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed" | "review.plan_created" | "review.plan_changed" | "review.plan_joined" | "review.plan_left" | "review.plan_wait_ended" | "review.plan_started" | "review.plan_ended" | "review.batch_integrated" | "review.batch_waiting" | "review.batch_wait_ended" | "review.batch_ready" | "notify.target_changed" | "folder.agent_changed" | "folder.agent_change_cleared" | "shared.changed" | "shared.changes_dismissed" | "shared.paths_changed" | "stash.discarded" | "worker.stalled" | "claim.needs_person" | "worker.parked";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -3566,9 +3567,11 @@ export interface components {
         /** @description What fold saw of a workspace's worker, as the stall rule decides it. fold keeps the times of the worker's output in memory, so after a daemon start it counts from that start. */
         LiveActivity: {
             call: components["schemas"]["LiveCall"] | null;
+            /** @description The agent that parked a `parked` worker, whose go it waits for; null for the other states. */
+            parked_by: string | null;
             /**
              * Format: int64
-             * @description UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, or the time the work came that fold owes a `waits_for_slot` worker.
+             * @description UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, the time the work came that fold owes a `waits_for_slot` worker, or the time a `parked` worker was parked.
              */
             since: number;
             slot: components["schemas"]["LiveSlot"] | null;
@@ -3577,6 +3580,8 @@ export interface components {
             supervised: boolean;
             /** @description The agents fold told of the stall: the worker's lead, or else the main agents. Empty while the worker works, and for a stall no agent can act on, which needs a person at once. */
             told: string[];
+            /** @description What a `parked` worker waits for, in the words of the agent that parked it; null for the other states. */
+            wait_for: string | null;
         };
         /**
          * @description The kind of an open call.
@@ -3782,6 +3787,7 @@ export interface components {
         };
         /** @description One item that waits for a human. Only the ids its kind has are set. */
         NeedsYouEntry: {
+            action: components["schemas"]["PersonAction"] | null;
             activity: components["schemas"]["LiveActivity"] | null;
             /**
              * @description The agent that asks.
@@ -3877,7 +3883,7 @@ export interface components {
          * @description Why an item waits for a human.
          * @enum {string}
          */
-        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable" | "worker_model_unreachable" | "claude_not_found" | "notify_target_off" | "agent_change" | "shared_changed" | "worker_stalled";
+        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable" | "worker_model_unreachable" | "claude_not_found" | "notify_target_off" | "agent_change" | "shared_changed" | "worker_stalled" | "stale_claim";
         /** @description Every item that waits for a human, oldest first. */
         NeedsYouList: {
             items: components["schemas"]["NeedsYouEntry"][];
@@ -4075,6 +4081,11 @@ export interface components {
              */
             paused_since: number | null;
         };
+        /**
+         * @description What a person does about a stalled worker or a stale claim: `restart_worker` starts the worker again in a new session, because fold runs it and its process runs or stalled; `message_worker` messages it, because its process ended, so the message resumes it in its own session, or because fold does not run its session.
+         * @enum {string}
+         */
+        PersonAction: "restart_worker" | "message_worker";
         /** @description An agent's presence after it crossed a boundary: `active` after a call of an agent that was not active, and the new presence once an active agent's window passes or its last session ends. It is the `data` of the live `agent.presence_changed` event. */
         PresenceChange: {
             /** @example frontend */
@@ -6064,6 +6075,24 @@ export interface components {
              */
             tool: string | null;
         };
+        /** @description A park of a worker: an agent stopped it with `stop_worker`'s `wait_for`. */
+        WorkerParkEntry: {
+            /**
+             * @description The agent whose go the worker waits for.
+             * @example web-lead
+             */
+            by: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the park.
+             */
+            since: number;
+            /**
+             * @description What the worker waits for, in that agent's words.
+             * @example my go after the T-288 migration
+             */
+            wait_for: string;
+        };
         /**
          * @description One worker agent and its supervised Claude Code process. The totals add up over every process of the worker.
          *
@@ -6135,6 +6164,7 @@ export interface components {
             name: string;
             /** @description The worker is idle or working in a session that last read other skill text than the fld that runs the daemon writes for its role. Its next turn starts with a note to load its role skill again, and once fold writes that turn this is false; false for a worker that is starting or stopping or does not run. */
             older_fold: boolean;
+            parked: components["schemas"]["WorkerParkEntry"] | null;
             /** @description The sessions the worker had before its current one, oldest first. */
             previous_sessions: components["schemas"]["PreviousSessionEntry"][];
             /** @description The proposals a reviewer is bound to. */

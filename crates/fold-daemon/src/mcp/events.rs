@@ -45,7 +45,7 @@ pub struct GetEventsInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct WaitForEventsInput {
-    /// Wake only for these exact event types, such as proposal.integrated. Leave it out to wake for every type. A new message to you ends the wait whatever this says, and so does a worker.stalled that fold tells you, and, for the main agent and an area lead, a request that waits for a drafter.
+    /// Wake only for these exact event types, such as proposal.integrated. Leave it out to wake for every type. A new message to you ends the wait whatever this says, and so does a worker.stalled or claim.stale that fold tells you, and, for the main agent and an area lead, a request that waits for a drafter.
     #[serde(default)]
     pub types: Vec<String>,
     /// Wake only for events about this task, such as T-12.
@@ -68,7 +68,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             WAIT_FOR_EVENTS,
-            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. A new message to you also ends the wait, whatever the filter says; the result then carries your new messages in `inbox`, so call get_inbox only when it says more wait. For the main agent and an area lead, a request that another agent or a human created or released and that nobody drafts ends the wait too; the result names it in `requests`: read it with get_request, then claim_request it when it is yours. A worker.stalled that fold tells you of ends the wait too, with a hint to call restart_worker. Use it instead of polling get_events.",
+            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. A new message to you also ends the wait, whatever the filter says; the result then carries your new messages in `inbox`, so call get_inbox only when it says more wait. For the main agent and an area lead, a request that another agent or a human created or released and that nobody drafts ends the wait too; the result names it in `requests`: read it with get_request, then claim_request it when it is yours. A worker.stalled or claim.stale that fold tells you of ends the wait too, with a hint to call restart_worker. Use it instead of polling get_events.",
             schema_for_type::<WaitForEventsInput>(),
         ),
     ]
@@ -118,7 +118,7 @@ pub const REQUESTS_HINT: &str =
     "a request in requests waits for a drafter; call get_request, then claim_request";
 
 /// The hint of a wait whose page holds a stall that fold told the agent of.
-pub const STALL_HINT: &str = "a worker in worker.stalled waits for you to act; call restart_worker, or send_message to wake it";
+pub const STALL_HINT: &str = "a worker in worker.stalled or claim.stale waits for you to act; call restart_worker, or send_message to wake it";
 
 /// The page of a wait, with the messages in it that wait for the worker and, in `inbox`, those that nothing had shown it yet, as many as fit, and the requests in it that wait for an orchestrator to draft them.
 fn wait_json(

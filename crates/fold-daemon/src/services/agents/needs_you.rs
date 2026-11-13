@@ -16,6 +16,8 @@ use fold_store::{Store, StoreError, messages};
 
 use crate::live::{LiveActivity, LiveState};
 use crate::services::reviews::awaiting_human_review;
+use crate::services::tasks::PersonAction;
+use fold_store::tasks::claims::{self, ClaimForPerson, ClaimTarget};
 
 /// What waits for a human.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +58,8 @@ pub enum NeedsYouKind {
     SharedChanged,
     /// A worker's stall that fold told its lead, or else the main agent, of and that lasted one more stall window, or that no agent can act on: `agent` names the worker, `task` its task, `activity` what fold saw and `reason` what the human does. It lives in memory, as the stall does, and ends when the worker works again.
     WorkerStalled,
+    /// A claim went stale: its holder made no fold call for the lease, fold told the holder's lead, or else the main agent, and one more stall window passed without a renewal, or no agent can act on it. `agent` names the holder, `task` its task, `proposal` the proposal of a review claim, `action` and `reason` what the human does. The item ends when the holder renews the claim, which any of its fold calls does, or when the claim is released or taken over.
+    StaleClaim,
 }
 
 /// The screen on which a human answers an item.
@@ -92,6 +96,7 @@ impl NeedsYouKind {
             NeedsYouKind::AgentChange => "agent_change",
             NeedsYouKind::SharedChanged => "shared_changed",
             NeedsYouKind::WorkerStalled => "worker_stalled",
+            NeedsYouKind::StaleClaim => "stale_claim",
         }
     }
 
@@ -101,9 +106,10 @@ impl NeedsYouKind {
             NeedsYouKind::Permission => Screen::Worker,
             NeedsYouKind::HumanReview => Screen::Proposal,
             NeedsYouKind::RequestDraft => Screen::Request,
-            NeedsYouKind::HumanTask | NeedsYouKind::Blocker | NeedsYouKind::WorkerStalled => {
-                Screen::Task
-            }
+            NeedsYouKind::HumanTask
+            | NeedsYouKind::Blocker
+            | NeedsYouKind::WorkerStalled
+            | NeedsYouKind::StaleClaim => Screen::Task,
             NeedsYouKind::HumanChange
             | NeedsYouKind::HeadMoved
             | NeedsYouKind::FolderHeld
@@ -163,6 +169,8 @@ pub struct NeedsYouItem {
     pub agents: Vec<AgentName>,
     /// What fold saw of the worker of a `WorkerStalled`.
     pub activity: Option<LiveActivity>,
+    /// What the human does about the worker of a `WorkerStalled` or a `StaleClaim`.
+    pub action: Option<PersonAction>,
 }
 
 impl NeedsYouItem {
@@ -206,6 +214,7 @@ impl NeedsYouItem {
             target: None,
             agents: Vec::new(),
             activity: None,
+            action: None,
         }
     }
 
@@ -217,15 +226,57 @@ impl NeedsYouItem {
         now: Timestamp,
     ) -> Self {
         let mut item = Self::new(NeedsYouKind::WorkerStalled, activity.since);
-        item.title = fold_core::stall::activity_text(activity.activity(), agent.as_str(), now);
+        item.title = activity.text(agent.as_str(), now);
         item.reason = Some(if activity.supervised {
             format!("restart it in a new session: `fld worker restart {agent}`")
         } else {
             "fold does not run its session; check the session where it runs".to_owned()
         });
+        item.action = Some(if activity.supervised {
+            PersonAction::RestartWorker
+        } else {
+            PersonAction::MessageWorker
+        });
         item.agent = Some(agent);
         item.task = task;
         item.activity = Some(activity);
+        item
+    }
+
+    /// The `StaleClaim` item of `claim`, held by `agent`, with what the human does: `running` is whether fold runs the holder's process now, `None` when fold does not run it.
+    pub fn stale_claim(claim: &ClaimForPerson, running: Option<bool>) -> Self {
+        let agent = claim.worker.agent();
+        let mut item = Self::new(NeedsYouKind::StaleClaim, claim.since);
+        match claim.target {
+            ClaimTarget::Task(task) => item.task = Some(task),
+            ClaimTarget::Review { proposal, task } => {
+                item.task = Some(task);
+                item.proposal = Some(proposal);
+            }
+        }
+        let (action, reason) = match running {
+            Some(true) => (
+                PersonAction::RestartWorker,
+                format!(
+                    "it runs but makes no fold call; restart it in a new session: `fld worker restart {agent}`"
+                ),
+            ),
+            Some(false) => (
+                PersonAction::MessageWorker,
+                format!(
+                    "its process ended; message @{agent} to resume it in its session, or restart it in a new session: `fld worker restart {agent}`"
+                ),
+            ),
+            None => (
+                PersonAction::MessageWorker,
+                format!(
+                    "fold does not run its session; message @{agent}, or check the session where it runs"
+                ),
+            ),
+        };
+        item.action = Some(action);
+        item.reason = Some(reason);
+        item.agent = Some(agent);
         item
     }
 
@@ -329,7 +380,19 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         item.header = row.header;
         items.push(item);
     }
-    for row in agents::list_worker_processes(&mut conn).await? {
+    let processes = agents::list_worker_processes(&mut conn).await?;
+    let running: std::collections::HashMap<AgentName, bool> = processes
+        .iter()
+        .map(|row| (row.agent.clone(), row.state.is_running()))
+        .collect();
+    for claim in claims::claims_for_person(&mut *conn).await? {
+        let holder = claim.worker.agent();
+        items.push(NeedsYouItem::stale_claim(
+            &claim,
+            running.get(&holder).copied(),
+        ));
+    }
+    for row in processes {
         if model_unreachable(row.failed_turns, row.state) {
             let mut item = NeedsYouItem::new(
                 NeedsYouKind::WorkerModelUnreachable,

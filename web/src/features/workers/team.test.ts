@@ -25,6 +25,7 @@ import {
   hasNoLeads,
   heldBatch,
   isPausedWorker,
+  parkedStep,
   isEmptyTeam,
   isSupervisedMain,
   MAIN_STOP_NOTE,
@@ -289,6 +290,40 @@ describe("steps", () => {
     expect(pillSpec("paused").fill).toBe("bg-warn-soft");
     const [running] = teamGroups(input({ workers: workerList({ workers }) }));
     expect(running?.rows[0]?.pill).toEqual(workerPill("working"));
+  });
+
+  it("shows a parked worker as parked with what it waits for, and a worker that runs again as running", () => {
+    const parked = {
+      by: "web-lead",
+      wait_for: "my go after the T-2 migration",
+      since: 1_760_000_000_000,
+    };
+    const workers = [
+      workerProcess("web-lead", { state: "working" }),
+      workerProcess("web-worker", {
+        state: "stopped",
+        role: "task_worker",
+        parked,
+      }),
+      workerProcess("api-worker", {
+        state: "working",
+        role: "task_worker",
+        parked,
+      }),
+    ];
+    const [group] = teamGroups(input({ workers: workerList({ workers }) }));
+    const row = (name: string) => group?.rows.find((r) => r.name === name);
+    expect(row("web-worker")).toMatchObject({
+      pill: { label: "parked", tone: "stopped" },
+      step: {
+        tool: null,
+        text: "waits for @web-lead's go: my go after the T-2 migration",
+      },
+    });
+    expect(row("api-worker")?.pill).toEqual(workerPill("working"));
+    expect(parkedStep(parked)).toBe(
+      "waits for @web-lead's go: my go after the T-2 migration",
+    );
   });
 
   it("marks a worker whose session still holds an older fold's skill, and never the main agent", () => {

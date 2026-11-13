@@ -166,7 +166,8 @@ pub async fn refresh_session(
         "UPDATE worker_processes
          SET session_id = ?2, state = 'starting', started_at = ?3, stopped_at = NULL, idle_since = NULL,
              pid = NULL, exit_code = NULL, context_tokens = 0, handoff_asked_at = NULL,
-             handoff_asked_turns = NULL, failed_reason = NULL, session_cost_micro_usd = 0, held_at = NULL
+             handoff_asked_turns = NULL, failed_reason = NULL, session_cost_micro_usd = 0, held_at = NULL,
+             parked_by = NULL, parked_for = NULL, parked_at = NULL
          WHERE id = ?1",
         worker_process_id,
         session_id,

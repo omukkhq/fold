@@ -8,7 +8,7 @@ const make = boardCard;
 const ui = { name: "ui", color: "sage" };
 const data = { name: "data", color: "gold" };
 const attention = (kind: AttentionKind) => [
-  { kind, closable: kind === "question" },
+  { kind, closable: kind === "question", action: null },
 ];
 
 const cards = [

@@ -151,6 +151,19 @@ describe("eventLine", () => {
     expect(line("claim.taken_over", { kind: "implementation" })).toBe(
       "took over T-12",
     );
+    expect(line("claim.needs_person", { kind: "implementation" })).toBe(
+      "the stale claim on T-12 waits for a person",
+    );
+    expect(line("claim.needs_person", { kind: "review" })).toBe(
+      "the stale review claim on P-4 waits for a person",
+    );
+    expect(
+      line("worker.parked", {
+        agent: "web-worker",
+        by: "web-lead",
+        wait_for: "my go",
+      }),
+    ).toBe("parked web-worker to wait for its go");
     expect(line("workspace.created", { kind: "review", version: 2 })).toBe(
       "checked out P-4 v2 in ws-9",
     );

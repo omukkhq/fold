@@ -13,6 +13,10 @@ pub fn item_key(item: &NeedsYouItem) -> String {
         NeedsYouKind::HumanTask | NeedsYouKind::Blocker | NeedsYouKind::WorkerStalled => {
             item.task.map(|id| id.to_string())
         }
+        NeedsYouKind::StaleClaim => item
+            .proposal
+            .map(|id| id.to_string())
+            .or_else(|| item.task.map(|id| id.to_string())),
         NeedsYouKind::WorkerUnreachable
         | NeedsYouKind::WorkerModelUnreachable
         | NeedsYouKind::ClaudeNotFound => item.agent.as_ref().map(ToString::to_string),
@@ -97,6 +101,7 @@ fn title(item: &NeedsYouItem) -> String {
         NeedsYouKind::WorkerStalled => {
             format!("{}{on_task}", own(&item.title, &format!("{agent} stalled")))
         }
+        NeedsYouKind::StaleClaim => format!("The claim of {agent}{on_task} went stale"),
     }
 }
 
@@ -118,7 +123,10 @@ fn path(item: &NeedsYouItem) -> String {
         NeedsYouKind::RequestDraft => {
             format!("requests/{}", id(item.request.map(|r| r.to_string())))
         }
-        NeedsYouKind::HumanTask | NeedsYouKind::Blocker | NeedsYouKind::WorkerStalled => {
+        NeedsYouKind::HumanTask
+        | NeedsYouKind::Blocker
+        | NeedsYouKind::WorkerStalled
+        | NeedsYouKind::StaleClaim => {
             format!("t/{}", id(item.task.map(|t| t.to_string())))
         }
         NeedsYouKind::HumanChange
@@ -230,6 +238,8 @@ mod tests {
                 since: Timestamp::from_millis(9).unwrap(),
                 supervised: true,
                 told: vec!["web-lead".to_owned()],
+                parked_by: None,
+                wait_for: None,
             },
             Timestamp::from_millis(9 + 12 * 60_000).unwrap(),
         );

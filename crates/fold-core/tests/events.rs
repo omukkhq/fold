@@ -146,6 +146,8 @@ fn all_equals_the_plans_event_types() {
         "shared.paths_changed",
         "stash.discarded",
         "worker.stalled",
+        "claim.needs_person",
+        "worker.parked",
     ]);
     assert_eq!(declared, expected);
 }

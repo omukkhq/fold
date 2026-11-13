@@ -208,6 +208,7 @@ mod webhook_notices_failpoints;
 mod worker_activity;
 mod worker_cost;
 mod worker_limits;
+mod worker_park;
 mod worker_questions;
 mod worker_restart;
 mod worker_resume;

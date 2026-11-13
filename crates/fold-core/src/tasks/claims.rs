@@ -30,6 +30,25 @@ pub fn lease_start(renewed_at: Timestamp, runs: HolderRuns, now: Timestamp) -> T
     }
 }
 
+/// The holder's runs as its lease sees them when an agent parked the holder with `stop_worker`'s `wait_for`: the holder waits for that agent's go and makes no calls, so while the agent that parked it runs, its lease holds as during a run of its own. Once that agent ends, the lease counts again from its last renewal.
+pub fn with_park(runs: HolderRuns, parked_by_running_agent: bool) -> HolderRuns {
+    if parked_by_running_agent {
+        HolderRuns::Running
+    } else {
+        runs
+    }
+}
+
+/// Whether a stale claim, marked at `stale_at`, needs a person at `now`: no agent was told of it (`told` is false), or the agent told, the holder's lead or else the main agent, let one more `window_minutes` pass without renewing, releasing or taking over the claim.
+pub fn stale_needs_person(
+    now: Timestamp,
+    stale_at: Timestamp,
+    told: bool,
+    window_minutes: u64,
+) -> bool {
+    !told || is_stale(stale_at, now, window_minutes)
+}
+
 /// A claim lapsed: it is stale by [`is_stale`] counted from [`lease_start`], so a takeover is allowed.
 pub fn is_lapsed(
     renewed_at: Timestamp,
@@ -168,6 +187,41 @@ mod tests {
             lease_start(at(10 * MINUTE), HolderRuns::Running, at(5 * MINUTE)),
             at(10 * MINUTE),
             "a renewal later than now stays"
+        );
+    }
+
+    #[test]
+    fn a_parked_holders_claim_never_lapses_while_the_agent_that_parked_it_runs() {
+        let renewed = at(0);
+        for minutes in [30, 60, 24 * 60] {
+            let now = at(minutes * MINUTE);
+            let held = with_park(HolderRuns::None, true);
+            assert_eq!(held, HolderRuns::Running);
+            assert!(!is_lapsed(renewed, held, now, 30), "{minutes} min");
+        }
+        assert_eq!(with_park(HolderRuns::None, false), HolderRuns::None);
+        let ended = HolderRuns::Ended { at: at(5) };
+        assert_eq!(with_park(ended, false), ended);
+        assert!(
+            is_lapsed(
+                renewed,
+                with_park(HolderRuns::None, false),
+                at(30 * MINUTE),
+                30
+            ),
+            "once the agent that parked it ends, the lease counts again"
+        );
+    }
+
+    #[test]
+    fn a_stale_claim_goes_to_the_lead_first_and_to_a_person_one_window_later() {
+        let stale = at(30 * MINUTE);
+        assert!(!stale_needs_person(stale, stale, true, 5));
+        assert!(!stale_needs_person(at(35 * MINUTE - 1), stale, true, 5));
+        assert!(stale_needs_person(at(35 * MINUTE), stale, true, 5));
+        assert!(
+            stale_needs_person(stale, stale, false, 5),
+            "no agent can act, so a person at once"
         );
     }
 }

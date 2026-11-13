@@ -158,6 +158,8 @@ pub enum NeedsYouItemKind {
     SharedChanged,
     /// The worker `agent` on `task` stalled, fold told its lead, or else the main agent, and one more stall window passed without a fix, or no agent can act on it: `activity` says what fold saw and `reason` what the human does. The web's Restart worker calls `restart_worker`. The item ends when the worker works again. fold keeps it in memory, so after a daemon start it counts from that start.
     WorkerStalled,
+    /// The claim of the worker `agent` on `task`, or its review claim on `proposal`, went stale: it made no fold call for the lease, fold told its lead, or else the main agent, and one more stall window passed without a renewal, or no agent can act on it. `action` and `reason` say what the human does. The item ends when the worker renews the claim with any fold call, or when the claim is released or taken over.
+    StaleClaim,
 }
 
 /// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task, `repository` the history of main and `settings` the project's notice targets.
@@ -235,6 +237,9 @@ pub struct NeedsYouEntry {
     /// What fold saw of the worker of a `worker_stalled`; null for every other kind.
     #[schema(required = true)]
     pub activity: Option<LiveActivity>,
+    /// What the human does about the worker of a `worker_stalled` or a `stale_claim`; null for every other kind.
+    #[schema(required = true)]
+    pub action: Option<crate::http::tasks::PersonAction>,
 }
 
 impl From<NeedsYouItem> for NeedsYouEntry {
@@ -258,6 +263,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::AgentChange => NeedsYouItemKind::AgentChange,
             NeedsYouKind::SharedChanged => NeedsYouItemKind::SharedChanged,
             NeedsYouKind::WorkerStalled => NeedsYouItemKind::WorkerStalled,
+            NeedsYouKind::StaleClaim => NeedsYouItemKind::StaleClaim,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,
@@ -292,6 +298,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             target: item.target.map(|target| target.to_string()),
             agents: item.agents.iter().map(ToString::to_string).collect(),
             activity: item.activity,
+            action: item.action.map(crate::http::tasks::PersonAction::from),
         }
     }
 }

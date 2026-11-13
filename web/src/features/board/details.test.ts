@@ -6,7 +6,7 @@ describe("cardDetails", () => {
   it("leaves the stall to the note under the activity line and gives no sentence for it alone", () => {
     const card = boardCard("T-9", {
       status: "in_progress",
-      attention: [{ kind: "stalled", closable: false }],
+      attention: [{ kind: "stalled", closable: false, action: null }],
     });
     expect(cardDetails(card, null, 0).why).toBeNull();
   });
@@ -57,8 +57,8 @@ describe("cardDetails", () => {
         review_claim: null,
       },
       attention: [
-        { kind: "stalled", closable: false },
-        { kind: "stale_claim", closable: false },
+        { kind: "stalled", closable: false, action: null },
+        { kind: "stale_claim", closable: false, action: null },
       ],
     });
     const details = cardDetails(
@@ -118,7 +118,9 @@ describe("cardDetails", () => {
       name: "Files",
       text: "3 files",
     });
-    expect(details.why).toBe("Stale claim: the worker's lease ran out.");
+    expect(details.why).toBe(
+      "Stale claim: the worker made no fold call for its lease, and its lead did not act or no agent can.",
+    );
     expect(details.notes).toEqual(["rp-2 waits for T-9 until the next check"]);
   });
 

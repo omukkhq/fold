@@ -118,6 +118,9 @@ pub struct StartWorkerInput {
 pub struct StopWorkerInput {
     /// The worker's agent name, such as web-worker.
     pub name: String,
+    /// Park the worker instead of a plain stop, when it waits for your go: a few words on one line (at most 200 characters) on what it waits for, such as "my go after the T-288 migration". While you run, fold keeps its claims from going stale and every view shows it waiting for your go, never stalled; your send_message to it is the go, which resumes it in its own session. Leave it out for a plain stop.
+    #[serde(default)]
+    pub wait_for: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -206,7 +209,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             STOP_WORKER,
-            "Stop a worker that fold runs: its turn is interrupted and its process ends. It keeps its session, so fold can resume it later.",
+            "Stop a worker that fold runs: its turn is interrupted and its process ends. It keeps its session and its claims, so fold can resume it later. When the worker waits for your go, such as a migration queue you run in order, pass wait_for to park it: fold keeps its claims from going stale while you run, shows it as waiting for your go, and your send_message to it resumes it in its session. wait_for also parks a worker that has stopped already.",
             schema_for_type::<StopWorkerInput>(),
         ),
         Tool::new(
@@ -278,6 +281,13 @@ fn worker_process_json(row: &WorkerProcessRow) -> Value {
     }
     if turn_errors::model_unreachable(row.failed_turns, row.state) {
         value["hint"] = json!(turn_errors::MODEL_UNREACHABLE_HINT);
+    }
+    if let Some(park) = &row.park {
+        value["parked"] = json!({
+            "by": park.by.as_str(),
+            "wait_for": park.wait_for,
+            "hint": format!("waits for the go of {}: its send_message resumes it in its session", park.by),
+        });
     }
     value
 }
@@ -408,11 +418,11 @@ pub async fn stop_worker(server: &FoldServer, arguments: &JsonObject) -> Result<
     let input: StopWorkerInput = parse(arguments)?;
     let name = AgentName::parse(&input.name)?;
     let actor = server.actor().await?;
-    let worker = server
-        .agents
-        .stop_worker(&actor, &name)
-        .await
-        .map_err(from_agent)?;
+    let worker = match input.wait_for.as_deref() {
+        Some(wait_for) => server.agents.park_worker(&actor, &name, wait_for).await,
+        None => server.agents.stop_worker(&actor, &name).await,
+    }
+    .map_err(from_agent)?;
     Ok(json!({ "worker": worker_process_json(&worker) }))
 }
 

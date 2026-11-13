@@ -20,6 +20,8 @@ function seen(over: Partial<LiveActivity> = {}): LiveActivity {
     since: NOW - 8 * MINUTE,
     supervised: true,
     told: [],
+    parked_by: null,
+    wait_for: null,
     ...over,
   };
 }
@@ -158,6 +160,61 @@ describe("a resume that waits for a free slot", () => {
   });
 });
 
+describe("a worker that waits for its lead's go", () => {
+  const parked = seen({
+    state: "parked",
+    call: null,
+    since: NOW - 40 * MINUTE,
+    parked_by: "backend-lead",
+    wait_for: "my go after the T-288 migration",
+  });
+
+  it("names the agent whose go it waits for, with no time", () => {
+    expect(activityText(parked, "backend-worker", NOW)).toBe(
+      "Waits for @backend-lead's go",
+    );
+    expect(activityVerb(parked, NOW)).toBe("waits for @backend-lead's go");
+    expect(activityText({ ...parked, parked_by: null }, "w", NOW)).toBe(
+      "Waits for its lead's go",
+    );
+  });
+
+  it("is neutral: never a stall, never a person's, never a restart, also when the daemon flags it", () => {
+    expect(isStall("parked")).toBe(false);
+    const view = workerActivity(
+      { activity: parked, stalled: true, worker: "backend-worker" },
+      NOW,
+    );
+    expect(view).toMatchObject({
+      state: "parked",
+      stall: false,
+      needsYou: false,
+      restart: null,
+      waitFor: "my go after the T-288 migration",
+    });
+    expect(view === null ? null : toldText(view)).toBe(
+      "Stopped to wait: my go after the T-288 migration. The go resumes it in its session; nobody else needs to act",
+    );
+  });
+
+  it("keeps only a park's own words: another state has none", () => {
+    expect(
+      workerActivity(
+        {
+          activity: seen({ wait_for: "stale words" }),
+          stalled: false,
+          worker: "w",
+        },
+        NOW,
+      )?.waitFor,
+    ).toBeNull();
+  });
+
+  it("counts a state this build does not know as no stall", () => {
+    expect(isStall("later")).toBe(false);
+  });
+});
+
 describe("workerActivity", () => {
   it("is null without a frame or without anything to say", () => {
     expect(workerActivity(undefined, NOW)).toBeNull();
@@ -191,6 +248,7 @@ describe("workerActivity", () => {
       restart: null,
       told: ["web-lead"],
       since: silent.since,
+      waitFor: null,
     });
     const flagged = workerActivity(
       { activity: silent, stalled: true, worker: "frontend/ui" },
@@ -218,6 +276,7 @@ describe("toldText", () => {
     needsYou: false,
     restart: null,
     since: 0,
+    waitFor: null,
   };
 
   it("names whom fold told, and says when a person must act", () => {

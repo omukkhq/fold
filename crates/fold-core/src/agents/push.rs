@@ -113,6 +113,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::REVIEW_BATCH_READY,
         types::FOLDER_AGENT_CHANGED,
         types::WORKER_STALLED,
+        types::CLAIM_STALE,
     ]
     .contains(&event.event_type)
 }
@@ -613,6 +614,9 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
     if kind == types::WORKER_STALLED {
         return stall_rule(event);
     }
+    if kind == types::CLAIM_STALE {
+        return stale_claim_rule(event);
+    }
     if let Some(rule) = request_rule(event, ctx) {
         return Some(rule);
     }
@@ -759,6 +763,31 @@ fn stall_rule(event: &Event) -> Option<(Vec<AgentName>, String, &'static str)> {
         _ => return None,
     };
     Some((told, text, next))
+}
+
+/// A claim that went stale goes to the agents fold names in `told`, the holder's lead or else the main agents, as a stall does: they get one stall window to wake, resume, restart or park the holder before a person hears of it.
+fn stale_claim_rule(event: &Event) -> Option<(Vec<AgentName>, String, &'static str)> {
+    let data = &event.data;
+    let worker = data.get("worker")?.as_str()?;
+    let task = event.task?;
+    let told: Vec<AgentName> = data
+        .get("told")?
+        .as_array()?
+        .iter()
+        .filter_map(|name| AgentName::parse(name.as_str()?).ok())
+        .collect();
+    let claim = match event.proposal {
+        Some(proposal)
+            if data.get("kind").and_then(serde_json::Value::as_str) == Some("review") =>
+        {
+            format!("the review claim of {worker} on {proposal}")
+        }
+        _ => format!("the claim of {worker} on {task}"),
+    };
+    let text = format!(
+        "{claim} went stale: it made no fold call for the lease; send_message wakes it or resumes it in its session, restart_worker starts it in a new session, and stop_worker with wait_for parks a worker that waits for your go"
+    );
+    Some((told, text, "send_message"))
 }
 
 /// A ready task nobody claimed goes to whoever starts its builder. A task of Main goes to the main agent, which claims and builds it itself; the lead of any other area starts a task worker; while the area has no lead, the main agent starts one; a task in no area waits for the main agent to give it an area label. Both an approved request card and a dependent of an integrated task turn ready through `task.status_changed`, so this one rule routes them.
