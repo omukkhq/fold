@@ -1,13 +1,17 @@
 import { z } from "zod";
 
-const text = z.string().trim().min(1).max(200).optional().catch(undefined);
-const flag = z.literal(true).optional().catch(undefined);
+/**
+ * The router reads a bare value as JSON, so `?label=2025` comes as a number and `?label=true` as a boolean; each is read back as the text of the link.
+ * A number whose JSON text differs from the link's, such as `1e3` or `1.0`, comes back in its JSON form (`1000`, `1`), and `null` is dropped: the router keeps no trace of the original.
+ */
 const name = z
-  .union([z.string(), z.number()])
+  .union([z.string(), z.number(), z.boolean()])
   .transform(String)
   .pipe(z.string().trim().min(1).max(200));
+const text = name.optional().catch(undefined);
+const flag = z.literal(true).optional().catch(undefined);
 
-/** The router reads `?label=ui` as one string, `?label=2025` as a number and a JSON array as an array, so each shape gives a list; a malformed entry is dropped. */
+/** One bare value or a JSON array, as the router gives them, is a list; a malformed entry is dropped. */
 function readNames(value: unknown): string[] | undefined {
   const list: unknown[] = Array.isArray(value) ? value : [value];
   const names: string[] = [];

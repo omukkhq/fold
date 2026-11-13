@@ -37,6 +37,17 @@ describe("boardSearchSchema", () => {
     expect(boardSearchSchema.parse({ label: 2025 }).label).toEqual(["2025"]);
   });
 
+  it("reads a bare value that the router gives as a number or a boolean as the text of the link", () => {
+    expect(boardSearchSchema.parse({ label: true, owner: false })).toEqual({
+      label: ["true"],
+      owner: ["false"],
+    });
+    expect(boardSearchSchema.parse({ q: 2025 }).q).toBe("2025");
+    expect(boardSearchSchema.parse({ q: true }).q).toBe("true");
+    // The router gives `?label=1e3` as 1000 and keeps no trace of the link's text.
+    expect(boardSearchSchema.parse({ label: 1e3 }).label).toEqual(["1000"]);
+  });
+
   it("drops a malformed value instead of failing", () => {
     const parsed = boardSearchSchema.parse({
       label: "",
