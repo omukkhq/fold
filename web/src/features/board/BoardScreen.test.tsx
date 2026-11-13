@@ -574,6 +574,12 @@ describe("BoardScreen", () => {
     expect(
       screen.getAllByRole("menuitemcheckbox").map((item) => item.textContent),
     ).toEqual(["Human", "Main agent", "api-lead api", "web-lead web"]);
+    // Clear leads the list from the start, so a tick moves no row under the pointer.
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Clear" })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
     await userEvent.click(
       screen.getByRole("menuitemcheckbox", { name: "web-lead web" }),
     );
@@ -583,7 +589,7 @@ describe("BoardScreen", () => {
     expect(
       screen.getByRole("button", { name: "Owner: web-lead", hidden: true }),
     ).toBeTruthy();
-    // The menu stays open, and Clear leads it once an entry is ticked.
+    // The menu stays open, and Clear resets the filter.
     await userEvent.click(screen.getByRole("menuitem", { name: "Clear" }));
     expect(router.state.location.search).toEqual({});
     expect(screen.getByRole("button", { name: "Owner" })).toBeTruthy();
@@ -643,7 +649,7 @@ describe("BoardScreen", () => {
     expect(screen.getByRole("button", { name: "Labels: 2" })).toBeTruthy();
   });
 
-  it("opens a link from before the filters took several values, and searches", async () => {
+  it("opens a link with one bare label and an agent param, and searches", async () => {
     const { router } = setup(
       demoBoard(),
       "/p/demo/board?label=ui&agent=frontend",

@@ -29,7 +29,7 @@ describe("boardSearchSchema", () => {
     expect(boardSearchSchema.parse({})).toEqual({});
   });
 
-  it("opens a link from before the filters took several values", () => {
+  it("reads one bare value as a list of one and leaves out an agent param", () => {
     // The router reads `?label=ui&agent=frontend` as two strings and `?label=2025` as a number.
     expect(boardSearchSchema.parse({ label: "ui", agent: "frontend" })).toEqual(
       { label: ["ui"] },

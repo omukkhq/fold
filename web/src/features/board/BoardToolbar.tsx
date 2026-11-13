@@ -36,33 +36,31 @@ interface ToolbarProps {
   phone: boolean;
 }
 
-/** Tick boxes for each entry, OR inside the menu; Clear leads the list once something is ticked. */
+/** Tick boxes for each entry, OR inside the menu. Clear always leads the list, inactive while nothing is ticked, so a tick never moves the rows under the pointer. */
 function tickItems(
   options: readonly { key: string; label: string; hint?: string }[],
   ticked: readonly string[] | undefined,
   choose: (value: string[] | undefined) => void,
 ): MenuItem[] {
-  const items: MenuItem[] = options.map((option) => ({
-    id: `option:${option.key}`,
-    label: option.label,
-    hint: option.hint,
-    checked: ticked?.includes(option.key) ?? false,
-    onSelect: () => {
-      choose(toggleName(ticked, option.key));
+  return [
+    {
+      label: "Clear",
+      icon: X,
+      disabled: ticked === undefined,
+      onSelect: () => {
+        choose(undefined);
+      },
     },
-  }));
-  return ticked === undefined
-    ? items
-    : [
-        {
-          label: "Clear",
-          icon: X,
-          onSelect: () => {
-            choose(undefined);
-          },
-        },
-        ...items,
-      ];
+    ...options.map((option) => ({
+      id: `option:${option.key}`,
+      label: option.label,
+      hint: option.hint,
+      checked: ticked?.includes(option.key) ?? false,
+      onSelect: () => {
+        choose(toggleName(ticked, option.key));
+      },
+    })),
+  ];
 }
 
 function OtherFilters({

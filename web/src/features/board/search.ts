@@ -24,7 +24,7 @@ const names = z.unknown().transform(readNames).optional();
 
 /**
  * The board filters as URL search params, so a filtered board can be shared by link. A malformed value is dropped, never an error.
- * `label` and `owner` hold every ticked entry; a link from before they took several values still opens, and an `agent` param is left out.
+ * `label` and `owner` hold every ticked entry; one bare value reads as a list of one, and an `agent` param is left out.
  */
 export const boardSearchSchema = z.object({
   label: names,

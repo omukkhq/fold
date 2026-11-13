@@ -579,7 +579,7 @@ describe("the task dialog route", () => {
   it("opens from a board card with the board's filters and shows the sections the task payload has data for", async () => {
     const { router, queryClient } = setup("/p/demo/board?label=ui");
     const link = await screen.findByRole("link", { name: TITLE }, WAIT);
-    // A link from before labels took several values keeps its filter, written as a list.
+    // A bare label in the link reads as a list of one, and the board writes it back as a list.
     expect(link.getAttribute("href")).toBe(`/p/demo/t/T-2?${UI_LABEL}`);
     await userEvent.click(link);
     const dialog = await screen.findByRole("dialog", {}, WAIT);
