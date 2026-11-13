@@ -72,6 +72,7 @@ fn one_turn(steps: Vec<Step>, reply: &str) -> Script {
             when: None,
             steps,
             reply: Some(reply.to_owned()),
+            error: None,
         }],
     }
 }
@@ -488,6 +489,7 @@ fn counts_worker(tasks: &Tasks) -> Script {
             ),
         ],
         reply: Some("Updated ${proposal}.".to_owned()),
+        error: None,
     });
     script
 }
