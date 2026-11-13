@@ -5,6 +5,11 @@ import {
   type People,
   type PersonKind,
 } from "@/people/names";
+import {
+  agentHref,
+  NO_AGENT_LINKS,
+  type AgentLinks,
+} from "@/features/board/agentLink";
 import { idHref, projectPath, withQuery } from "@/routes/paths";
 
 /** `#T-12`: a fold item by its public id. */
@@ -197,10 +202,15 @@ export function splitMentions(
 }
 
 /** The screen a mention opens; a human has none. */
-export function mentionHref(slug: string, mention: Mention): string | null {
+export function mentionHref(
+  slug: string,
+  mention: Mention,
+  links: AgentLinks = NO_AGENT_LINKS,
+): string | null {
   if (isPerson(mention)) {
-    // The Agents screen lists every agent and worker; the board filters by owner, which a name alone does not tell.
-    return mention.person === "agent" ? projectPath(slug, "agents") : null;
+    return mention.person === "agent"
+      ? agentHref(slug, mention.name, links)
+      : null;
   }
   if (mention.mark === "@") {
     const query: Record<string, string> =

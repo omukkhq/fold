@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { agentBarQuery } from "../api/agentBar";
-import { projectQuery, sessionQuery } from "../api/queries";
+import { projectQuery, sessionQuery, workersQuery } from "../api/queries";
+import { agentHref, agentLinksOf } from "../features/board/agentLink";
 import { buttonClasses } from "../components/button/buttonStyles";
 import { cn } from "../lib/cn";
 import { focusRing, insetFocusRing } from "../lib/focus";
@@ -58,6 +59,8 @@ export function AgentsControl({ slug }: { slug: string }) {
   const [open, setOpen] = useState(false);
   const paused = isPaused(project.data?.overview?.paused_since);
   const list = agents.data ?? [];
+  const workers = useQuery(workersQuery(slug));
+  const links = agentLinksOf(workers.data, agents.data);
   const note = listNote(listState(agents), list.length, {
     loading: "Loading the agents",
     failed: "The agents could not load.",
@@ -130,7 +133,7 @@ export function AgentsControl({ slug }: { slug: string }) {
                 const error = chipErrorTitle(agent);
                 const row = (
                   <HrefLink
-                    href={projectPath(slug, "agents")}
+                    href={agentHref(slug, agent.name, links)}
                     onClick={close}
                     className={cn(
                       "flex items-center gap-12 rounded-s px-10 py-8 text-14 hover:bg-sunken",
@@ -175,7 +178,7 @@ export function AgentsControl({ slug }: { slug: string }) {
             </ul>
           )}
           <div className="flex shrink-0 items-center justify-between gap-12 px-16 pt-8 pb-14 text-13 text-text-2">
-            <span>Choose an agent to see it on the Agents tab.</span>
+            <span>Choose a lead to see its area's tasks on the board.</span>
             <HrefLink
               href={projectPath(slug, "agents")}
               onClick={close}

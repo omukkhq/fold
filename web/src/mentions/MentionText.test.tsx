@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { keys } from "@/api/keys";
+import { agent } from "@/test/agents";
+import { areaEntry, workerList } from "@/test/workers";
 import { Markdown } from "@/components/text/Markdown";
 import { MentionText } from "./MentionText";
 
@@ -12,8 +14,14 @@ function client(): QueryClient {
   const queryClient = new QueryClient();
   queryClient.setQueryData(keys.humans(), ["tanim"]);
   queryClient.setQueryData(keys.agentBar("demo"), [
-    { name: "frontend", workers: [{ name: "frontend" }] },
+    agent("frontend"),
+    agent("web-lead"),
+    agent("main", { tags: ["main"] }),
   ]);
+  queryClient.setQueryData(
+    keys.workers("demo"),
+    workerList({ areas: [areaEntry("web", "frontend", { lead: "web-lead" })] }),
+  );
   return queryClient;
 }
 
@@ -54,6 +62,36 @@ describe("person mentions", () => {
     expect(container.querySelector('[data-mention="agent"]')?.textContent).toBe(
       "@frontend",
     );
+  });
+
+  it("opens a lead's area and the main agent's tasks on the board, in text and in Markdown", () => {
+    const owner = (key: string) =>
+      `/p/demo/board?owner=${encodeURIComponent(JSON.stringify([key]))}`;
+    const hrefs = (container: HTMLElement) =>
+      [...container.querySelectorAll('a[data-mention="agent"]')].map((a) =>
+        a.getAttribute("href"),
+      );
+    const text = render(
+      wrap(<MentionText text="@web-lead @main @frontend" slug="demo" />),
+    );
+    expect(hrefs(text.container)).toEqual([
+      owner("area:web"),
+      owner("main"),
+      "/p/demo/agents",
+    ]);
+    cleanup();
+    const markdown = render(
+      wrap(
+        <Markdown mentions={{ slug: "demo" }}>
+          {"@web-lead @main @frontend"}
+        </Markdown>,
+      ),
+    );
+    expect(hrefs(markdown.container)).toEqual([
+      owner("area:web"),
+      owner("main"),
+      "/p/demo/agents",
+    ]);
   });
 });
 

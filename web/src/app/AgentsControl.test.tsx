@@ -15,6 +15,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { ProjectAgent } from "../api/agentBar";
 import { keys } from "../api/keys";
 import { agent, claim, worker } from "../test/agents";
+import { areaEntry, workerList } from "../test/workers";
 import { liveStatusStore } from "../live/status";
 import { AgentsControl } from "./AgentsControl";
 import { StreamAnnouncer, StreamStatus } from "./StreamStatus";
@@ -41,7 +42,7 @@ function wrap(client: QueryClient) {
   );
 }
 
-/** The chips under a root route, with the Agents screen a row opens. */
+/** The chips under a root route, with the board and the Agents screen a row opens. */
 async function renderChips(client: QueryClient) {
   const root = createRootRoute({
     component: () => (
@@ -61,8 +62,16 @@ async function renderChips(client: QueryClient) {
     path: "/p/$slug/agents",
     component: () => <p>Agents screen</p>,
   });
+  const board = createRoute({
+    getParentRoute: () => root,
+    path: "/p/$slug/board",
+    component: function Board() {
+      const search: { owner?: unknown } = board.useSearch();
+      return <p>Board for {JSON.stringify(search.owner)}</p>;
+    },
+  });
   const router = createRouter({
-    routeTree: root.addChildren([index, agents]),
+    routeTree: root.addChildren([index, agents, board]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   render(<RouterProvider router={router} />, { wrapper: wrap(client) });
@@ -158,10 +167,45 @@ describe("AgentsControl", () => {
     expect(screen.getByRole("button", { name: "Reconnecting…" })).toBeTruthy();
   });
 
-  it("opens the Agents screen from a row and closes", async () => {
+  it("opens a lead's area and the main agent's tasks on the board, and any other agent on the Agents screen", async () => {
+    liveStatusStore.set({ state: "live" });
+    const client = cacheOnly();
+    client.setQueryData(keys.agentBar("demo"), [
+      agent("api-lead"),
+      agent("main", { tags: ["main"] }),
+      frontend,
+    ]);
+    client.setQueryData(
+      keys.workers("demo"),
+      workerList({
+        areas: [areaEntry("api", "backend", { lead: "api-lead" })],
+      }),
+    );
+    const router = await renderChips(client);
+    const href = (name: RegExp) =>
+      screen.getByRole("link", { name }).getAttribute("href");
+    expect(href(/api-lead/)).toBe(
+      `/p/demo/board?owner=${encodeURIComponent('["area:api"]')}`,
+    );
+    expect(href(/^@?main/)).toBe(
+      `/p/demo/board?owner=${encodeURIComponent('["main"]')}`,
+    );
+    expect(href(/frontend/)).toBe("/p/demo/agents");
+    expect(
+      screen.getByText("Choose a lead to see its area's tasks on the board."),
+    ).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("link", { name: /api-lead/ }));
+    expect(await screen.findByText('Board for ["area:api"]')).toBeTruthy();
+    expect(router.state.location.pathname).toBe("/p/demo/board");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("opens the Agents screen from a task worker's row and closes", async () => {
     liveStatusStore.set({ state: "live" });
     const client = cacheOnly();
     client.setQueryData(keys.agentBar("demo"), [frontend]);
+    client.setQueryData(keys.workers("demo"), workerList());
     const router = await renderChips(client);
     const row = screen.getByRole("link", { name: /frontend/ });
     expect(row.getAttribute("href")).toBe("/p/demo/agents");
