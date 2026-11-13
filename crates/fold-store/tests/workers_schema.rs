@@ -971,6 +971,112 @@ async fn a_failed_turn_keeps_its_error_until_a_turn_ends_without_one() {
 }
 
 #[tokio::test]
+async fn a_turn_that_waits_keeps_its_start_counts_its_tries_and_counts_no_failed_turn() {
+    use fold_core::turn_waits::{LimitKind, TurnWait, WaitGroup, WaitReason};
+    let (_dir, store) = seeded().await;
+    let lead = process(&store, 1, Role::ReviewLead, None, "s1").await;
+    let row = async || {
+        let mut conn = store.read().acquire().await.unwrap();
+        agents::find_worker_process(&mut conn, &AgentName::parse("web-lead").unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    let waited = async |wait: TurnWait, now: i64| {
+        store
+            .write(async |tx| {
+                agents::record_turn_wait(tx, lead, "API Error: no route", &wait, at(now)).await
+            })
+            .await
+            .unwrap()
+    };
+    let weekly = TurnWait::UsageLimit {
+        kind: LimitKind::Weekly,
+        reset: Some("Mon 12:00am".to_owned()),
+        resets_at: None,
+    };
+    assert_eq!(waited(TurnWait::Network, 20).await, Some(true));
+    assert_eq!(waited(TurnWait::Network, 30).await, Some(false));
+    let again = row().await;
+    let wait = again.wait.clone().unwrap();
+    assert_eq!(
+        (
+            wait.reason,
+            wait.limit,
+            wait.since,
+            wait.tried_at,
+            wait.tries
+        ),
+        (WaitReason::Network, None, at(20), at(30), 1)
+    );
+    assert_eq!(again.failed_turns, 0);
+    assert_eq!(again.last_error_at, Some(at(30)));
+    assert_eq!(
+        waited(weekly.clone(), 25).await,
+        Some(true),
+        "another cause starts a new wait, also on a clock that stepped back"
+    );
+    let limit = row().await.wait.unwrap();
+    assert_eq!(
+        (
+            limit.group(),
+            limit.since,
+            limit.tries,
+            limit.reset.as_deref()
+        ),
+        (
+            WaitGroup::limit(LimitKind::Weekly),
+            at(25),
+            0,
+            Some("Mon 12:00am")
+        )
+    );
+    assert_eq!(
+        store
+            .write(async |tx| agents::clear_turn_wait(tx, lead).await)
+            .await
+            .unwrap(),
+        Some(WaitGroup::limit(LimitKind::Weekly))
+    );
+    assert_eq!(row().await.wait, None);
+    assert_eq!(
+        store
+            .write(async |tx| agents::clear_turn_wait(tx, lead).await)
+            .await
+            .unwrap(),
+        None
+    );
+    store
+        .write(async |tx| agents::set_worker_state(tx, lead, WorkerState::Stopping, at(50)).await)
+        .await
+        .unwrap();
+    assert_eq!(
+        waited(TurnWait::Network, 60).await,
+        None,
+        "a stopping row is left as it is"
+    );
+    assert_eq!(row().await.wait, None);
+    for change in [
+        format!(
+            "UPDATE worker_processes SET wait_reason = 'tired', wait_since = 1, wait_tried_at = 1 WHERE id = {lead}"
+        ),
+        format!(
+            "UPDATE worker_processes SET wait_reason = 'network', wait_since = 1, wait_tried_at = 1, wait_limit = 'weekly' WHERE id = {lead}"
+        ),
+        format!(
+            "UPDATE worker_processes SET wait_reason = 'usage_limit', wait_since = 1, wait_tried_at = 1 WHERE id = {lead}"
+        ),
+        format!(
+            "UPDATE worker_processes SET wait_reason = 'network', wait_tried_at = 1 WHERE id = {lead}"
+        ),
+        format!("UPDATE worker_processes SET wait_tries = 2 WHERE id = {lead}"),
+        format!("UPDATE worker_processes SET wait_reset = 'Mon' WHERE id = {lead}"),
+    ] {
+        assert!(exec(&store, &change).await.is_err(), "{change}");
+    }
+}
+
+#[tokio::test]
 async fn a_made_up_model_is_forgotten_and_a_real_one_kept() {
     let (_dir, store) = seeded().await;
     let lead = process(&store, 1, Role::ReviewLead, None, "s1").await;

@@ -107,6 +107,8 @@ pub struct TurnTotals {
     pub cache_write_tokens: u64,
     /// The turn ended in Claude Code's error.
     pub failed: bool,
+    /// The turn ended for a cause outside the worker, the network or a usage limit, and fold runs it again: it is no turn of the worker's own count, so a wait never uses up the turns a lead has for its hand-off note.
+    pub waited: bool,
 }
 
 pub(super) fn db_count(value: u64) -> i64 {
@@ -734,7 +736,7 @@ pub async fn forget_made_up_model(tx: &mut WriteTx, id: i64) -> Result<(), Store
     Ok(())
 }
 
-/// Counts one finished turn, appends its `worker_turns` row with the cost [`fold_core::cost::session_turn`] finds in the reported total, adds that cost to the row and makes the worker idle.
+/// Counts one finished turn, except one that [`TurnTotals::waited`], appends its `worker_turns` row with the cost [`fold_core::cost::session_turn`] finds in the reported total, adds that cost to the row and makes the worker idle.
 pub async fn record_turn(
     tx: &mut WriteTx,
     id: i64,
@@ -762,10 +764,11 @@ pub async fn record_turn(
     let session = db_count(session);
     let read = db_count(totals.cache_read_tokens);
     let write = db_count(totals.cache_write_tokens);
+    let counted = i64::from(!totals.waited);
     let now = now.as_millis();
     sqlx::query!(
         "UPDATE worker_processes
-         SET turns = turns + 1, cost_micro_usd = ?2, session_cost_micro_usd = ?3,
+         SET turns = turns + ?7, cost_micro_usd = ?2, session_cost_micro_usd = ?3,
              cache_read_tokens = cache_read_tokens + ?4, cache_write_tokens = cache_write_tokens + ?5,
              state = CASE WHEN state IN ('starting', 'working') THEN 'idle' ELSE state END,
              idle_since = CASE WHEN state IN ('starting', 'working') THEN ?6 ELSE idle_since END
@@ -775,7 +778,8 @@ pub async fn record_turn(
         session,
         read,
         write,
-        now
+        now,
+        counted
     )
     .execute(tx.conn())
     .await?;

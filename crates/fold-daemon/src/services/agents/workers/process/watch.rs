@@ -181,6 +181,7 @@ impl Supervisor {
                     cache_read_tokens: usage.cache_read_input_tokens,
                     cache_write_tokens: usage.cache_creation_input_tokens,
                     failed: error.is_some(),
+                    waited: error.as_ref().is_some_and(|error| error.wait.is_some()),
                 };
                 let _ =
                     process
@@ -243,7 +244,7 @@ impl Supervisor {
         }
     }
 
-    /// Records the context size of a request the model answered. A model that answers ends the worker's wait for the network or a usage limit at once, with `worker.wait_ended`, and releases the turns that wait for the same cause, so the turn that runs again shows as work while it works.
+    /// Records the context size of a request the model answered. A model that answers ends the worker's wait for the network or a usage limit at once, with the wait's error and with `worker.wait_ended`, and releases the turns that wait for the same cause, so the turn that runs again shows as work while it works.
     async fn record_context(
         &self,
         process: &Process,
@@ -264,6 +265,8 @@ impl Supervisor {
                 }
                 let cleared = agents::clear_turn_wait(tx, id).await?;
                 if let Some(group) = cleared {
+                    // The error was the wait's own text, which no longer holds.
+                    agents::clear_turn_error(tx, id).await?;
                     buffer.append(tx, &wait_ended(agent, group)?, now).await?;
                 }
                 Ok(cleared)

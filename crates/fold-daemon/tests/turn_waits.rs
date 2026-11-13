@@ -471,3 +471,47 @@ async fn a_pause_holds_the_waiting_turns_and_its_resume_runs_them() {
     assert_eq!(runs.len(), 2);
     assert!(runs[1].has("--resume"));
 }
+
+/// The re-run of a waiting turn ends the wait and its error as soon as the model answers, while the turn still works, and the turns that waited count as none of the worker's turns, so they never use up a lead's turns for its hand-off note.
+#[tokio::test]
+async fn the_first_answer_of_the_model_ends_the_wait_and_waiting_turns_count_as_no_turns() {
+    let dir = TempDir::new().unwrap();
+    let (fake, turn) = fake_with_turn(&dir, &read_fixture("network_error"));
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    let first = until_idle(&harness, &lead, |row| row.wait.is_some()).await;
+    assert_eq!(first.turns, 0, "a turn that waits is no turn of the worker");
+    // A turn that the model answers and that has not ended yet.
+    let answering: String = read_fixture("result")
+        .lines()
+        .filter(|line| !line.contains(r#""type":"result""#))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    set_turn(&turn, &answering);
+    advance(&harness, NETWORK_FIRST_WAIT);
+    let working = eventually(WAIT, async || {
+        let row = worker(&harness, &lead).await;
+        if row.state == WorkerState::Working && row.wait.is_none() {
+            Ok(row)
+        } else {
+            Err((row.state, row.wait))
+        }
+    })
+    .await;
+    assert_eq!(
+        working.last_error, None,
+        "the wait's error goes with the wait"
+    );
+    assert_eq!(working.turns, 0);
+    assert_eq!(
+        events_of(&harness, "worker.wait_ended").await,
+        [json!({"agent": "web-lead", "reason": "network", "limit": null})]
+    );
+    let (_, workers) = harness
+        .http(Method::GET, "/api/v1/projects/demo/workers", None, "ana")
+        .await;
+    assert_eq!(workers["workers"][0]["waits_for"], Value::Null);
+    assert_eq!(workers["workers"][0]["last_error"], Value::Null);
+}

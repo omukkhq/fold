@@ -12,9 +12,7 @@ ALTER TABLE worker_processes ADD COLUMN wait_since INTEGER
     CONSTRAINT worker_processes_wait_since_iff_reason CHECK ((wait_since IS NULL) = (wait_reason IS NULL));
 
 ALTER TABLE worker_processes ADD COLUMN wait_tried_at INTEGER
-    CONSTRAINT worker_processes_wait_tried_at_iff_reason CHECK (
-        (wait_tried_at IS NULL) = (wait_reason IS NULL) AND (wait_tried_at IS NULL OR wait_tried_at >= wait_since)
-    );
+    CONSTRAINT worker_processes_wait_tried_at_iff_reason CHECK ((wait_tried_at IS NULL) = (wait_reason IS NULL));
 
 ALTER TABLE worker_processes ADD COLUMN wait_tries INTEGER NOT NULL DEFAULT 0
     CONSTRAINT worker_processes_wait_tries_count CHECK (wait_tries >= 0 AND (wait_reason IS NOT NULL OR wait_tries = 0));
