@@ -1112,6 +1112,12 @@ describe("creating a task", () => {
         .getAllByRole("option")
         .map((o) => o.textContent),
     ).toEqual(["auth"]);
+    // A long list stops at the room Radix measures for the popover and scrolls inside.
+    const popup = list.parentElement;
+    expect(popup?.className).toContain(
+      "max-h-(--radix-popover-content-available-height)",
+    );
+    expect(popup?.className).not.toContain("--radix-dropdown-menu");
     await userEvent.type(box, "zz");
     expect(await screen.findByText("No label matches.", {}, WAIT)).toBeTruthy();
     await userEvent.clear(box);
