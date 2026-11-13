@@ -1369,8 +1369,14 @@ impl Pipeline {
         view.edits_after_version = scanned.edits_after_version;
         // The scan after a new version clears the flag as the stall rule would. A proposal that came back to its author is the stall check's to decide, so only an edit clears the flag then.
         let turn = std::mem::take(&mut self.new_version).then_some(ProposalTurn::Others);
-        if scanned.moved
-            || stall::present_workspace(view.edits_after_version, turn) == WorkspaceFact::Sent
+        // A failed process does no more work, so a file the watcher sees after its end, such as its last write, leaves the stall as it is.
+        let ended = view
+            .activity
+            .as_ref()
+            .is_some_and(|activity| activity.state == ActivityState::Failed);
+        if !ended
+            && (scanned.moved
+                || stall::present_workspace(view.edits_after_version, turn) == WorkspaceFact::Sent)
         {
             view.stalled = false;
             view.activity = view.activity.filter(|activity| !activity.is_stall());
