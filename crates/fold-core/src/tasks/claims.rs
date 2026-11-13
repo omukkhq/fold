@@ -30,9 +30,43 @@ pub fn lease_start(renewed_at: Timestamp, runs: HolderRuns, now: Timestamp) -> T
     }
 }
 
-/// The holder's runs as its lease sees them when an agent parked the holder with `stop_worker`'s `wait_for`: the holder waits for that agent's go and makes no calls, so while the agent that parked it runs, its lease holds as during a run of its own. Once that agent ends, the lease counts again from its last renewal.
-pub fn with_park(runs: HolderRuns, parked_by_running_agent: bool) -> HolderRuns {
-    if parked_by_running_agent {
+/// What one claim of a holder waits for from others, as its lease sees it. The holder makes no calls while it waits, and a person has nothing to do about its claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ClaimWait {
+    /// An implementation claim whose task has an open proposal that waits on reviewers or the integration: not back with its author by requested changes, a conflict or failed checks.
+    pub sent: bool,
+    /// An implementation claim whose task has an ask that waits for a person.
+    pub asks_person: bool,
+    /// An implementation claim whose task has an open report that waits for the lead's check.
+    pub reported: bool,
+    /// A review claim whose holder gave its verdict on the proposal's newest version.
+    pub verdict_given: bool,
+}
+
+impl ClaimWait {
+    pub fn waits_on_others(self) -> bool {
+        self.sent || self.asks_person || self.reported || self.verdict_given
+    }
+}
+
+/// Why a claim's holder waits for others as its lease sees it: the holder makes no calls, and its next move is someone else's. A new kind of wait, such as a turn that waits for the network, is one more field here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HolderWait {
+    /// An agent parked the holder with `stop_worker`'s `wait_for`, and that agent runs.
+    pub parked_by_running_agent: bool,
+    /// Every claim the holder holds waits on others, by [`ClaimWait::waits_on_others`].
+    pub claims_wait_on_others: bool,
+}
+
+impl HolderWait {
+    pub fn waits(self) -> bool {
+        self.parked_by_running_agent || self.claims_wait_on_others
+    }
+}
+
+/// The holder's runs as its lease sees them: while the holder waits for others (see [`HolderWait`]) its lease holds as during a run of its own, and once the wait ends, the lease counts again from the last renewal, which the sweeper made while the wait lasted.
+pub fn holding(runs: HolderRuns, wait: HolderWait) -> HolderRuns {
+    if wait.waits() {
         HolderRuns::Running
     } else {
         runs
@@ -195,22 +229,64 @@ mod tests {
         let renewed = at(0);
         for minutes in [30, 60, 24 * 60] {
             let now = at(minutes * MINUTE);
-            let held = with_park(HolderRuns::None, true);
+            let held = holding(
+                HolderRuns::None,
+                HolderWait {
+                    parked_by_running_agent: true,
+                    claims_wait_on_others: false,
+                },
+            );
             assert_eq!(held, HolderRuns::Running);
             assert!(!is_lapsed(renewed, held, now, 30), "{minutes} min");
         }
-        assert_eq!(with_park(HolderRuns::None, false), HolderRuns::None);
+        assert_eq!(
+            holding(HolderRuns::None, HolderWait::default()),
+            HolderRuns::None
+        );
         let ended = HolderRuns::Ended { at: at(5) };
-        assert_eq!(with_park(ended, false), ended);
+        assert_eq!(holding(ended, HolderWait::default()), ended);
         assert!(
             is_lapsed(
                 renewed,
-                with_park(HolderRuns::None, false),
+                holding(HolderRuns::None, HolderWait::default()),
                 at(30 * MINUTE),
                 30
             ),
             "once the agent that parked it ends, the lease counts again"
         );
+    }
+
+    #[test]
+    fn a_claim_that_waits_on_others_never_lapses() {
+        for wait in [
+            ClaimWait {
+                sent: true,
+                ..ClaimWait::default()
+            },
+            ClaimWait {
+                asks_person: true,
+                ..ClaimWait::default()
+            },
+            ClaimWait {
+                reported: true,
+                ..ClaimWait::default()
+            },
+            ClaimWait {
+                verdict_given: true,
+                ..ClaimWait::default()
+            },
+        ] {
+            assert!(wait.waits_on_others(), "{wait:?}");
+            let held = holding(
+                HolderRuns::None,
+                HolderWait {
+                    parked_by_running_agent: false,
+                    claims_wait_on_others: wait.waits_on_others(),
+                },
+            );
+            assert!(!is_lapsed(at(0), held, at(24 * 60 * MINUTE), 30));
+        }
+        assert!(!ClaimWait::default().waits_on_others());
     }
 
     #[test]

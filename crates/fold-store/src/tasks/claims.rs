@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use fold_core::claims::ClaimWait;
 use fold_core::{CheckRunId, ProposalId, TaskId, Timestamp, WorkerName};
 use sqlx::SqliteExecutor;
 
@@ -241,6 +242,57 @@ pub async fn unreleased_of_agent(
             })
         })
         .collect()
+}
+
+/// What one unreleased claim waits for from others, by its holder's `workers.id`; see [`fold_core::claims::ClaimWait`].
+pub async fn claim_waits(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<(i64, ClaimWait)>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT c.worker_id AS "worker!: i64",
+                  (c.kind = 'implementation' AND EXISTS (
+                       SELECT 1 FROM proposals p
+                       WHERE p.task_id = c.task_id AND p.state = 'open'
+                         AND NOT p.conflicted AND NOT p.checks_failed
+                         AND NOT (
+                             (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) = 'request_changes'
+                             AND EXISTS (SELECT 1 FROM reviews r
+                                         WHERE r.verdict = 'request_changes'
+                                           AND r.version_id = (SELECT v.id FROM proposal_versions v
+                                                               WHERE v.proposal_id = p.id
+                                                               ORDER BY v.version DESC LIMIT 1))))) AS "sent!: bool",
+                  (c.kind = 'implementation' AND EXISTS (
+                       SELECT 1 FROM open_human_questions q WHERE q.task_id = c.task_id)) AS "asks_person!: bool",
+                  (c.kind = 'implementation' AND EXISTS (
+                       SELECT 1 FROM task_reports r
+                       WHERE r.task_id = c.task_id AND r.resolution IS NULL)) AS "reported!: bool",
+                  (c.kind = 'review' AND EXISTS (
+                       SELECT 1 FROM reviews r
+                       JOIN workers rw ON rw.id = r.reviewer_worker_id
+                       WHERE rw.agent_id = (SELECT w.agent_id FROM workers w WHERE w.id = c.worker_id)
+                         AND r.version_id = (SELECT v.id FROM proposal_versions v
+                                             WHERE v.proposal_id = c.proposal_id
+                                             ORDER BY v.version DESC LIMIT 1))) AS "verdict_given!: bool"
+           FROM claims c
+           WHERE c.released_at IS NULL
+           ORDER BY c.id"#
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.worker,
+                ClaimWait {
+                    sent: row.sent,
+                    asks_person: row.asks_person,
+                    reported: row.reported,
+                    verdict_given: row.verdict_given,
+                },
+            )
+        })
+        .collect())
 }
 
 /// An unreleased claim that [`mark_stale`] marked, or that [`mark_needs_person`] passed to a person.

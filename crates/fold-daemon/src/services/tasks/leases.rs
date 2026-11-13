@@ -1,6 +1,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use fold_core::claims::{HolderRuns, is_lapsed, near_stale_cutoff, stale_needs_person, with_park};
+use fold_core::claims::{
+    HolderRuns, HolderWait, holding, is_lapsed, near_stale_cutoff, stale_needs_person,
+};
 use fold_core::events::types;
 use fold_core::stall::stall_receivers;
 use fold_core::{AgentName, EventActor, NewEvent, Timestamp};
@@ -27,7 +29,7 @@ impl TaskService {
     }
 }
 
-/// Marks each unreleased claim of `project` whose lease ran out at `now` and that is not marked yet, with one `claim.stale` per claim, in one write transaction; the events reach the bus after the commit. The lease is the project's `lease_minutes`, counted by [`is_lapsed`]: in the same transaction the claims of each holder whose own check run goes are renewed at `now`, because the holder waits for the run and makes no calls, and so are the claims of each holder that an agent parked while that agent runs, because the holder waits for its go; so no such claim runs out, and every reader of `renewed_at` agrees. `claim.stale` names in `told` the agents that hear of it first, the holder's lead or else the main agents, as a stall does: the claim needs a person at once when that list is empty, and else once one more `stall_minutes` passed without a renewal, which appends `claim.needs_person`. A marked claim keeps its holder, its workspace and its task's status: only `takeover_claim` moves it, and a renewal clears the mark. Returns the claims it marked.
+/// Marks each unreleased claim of `project` whose lease ran out at `now` and that is not marked yet, with one `claim.stale` per claim, in one write transaction; the events reach the bus after the commit. The lease is the project's `lease_minutes`, counted by [`is_lapsed`]: in the same transaction the claims of each holder whose own check run goes are renewed at `now`, because the holder waits for the run and makes no calls, and so are the claims of each holder that an agent parked while that agent runs, because the holder waits for its go, and of each holder whose every claim waits on others ([`fold_core::claims::ClaimWait`]): a sent proposal, an ask to a person, an open report or a verdict it gave. So no such claim runs out, a person never hears of a claim they can do nothing about, and every reader of `renewed_at` agrees. `claim.stale` names in `told` the agents that hear of it first, the holder's lead or else the main agents, as a stall does: the claim needs a person at once when that list is empty, and else once one more `stall_minutes` passed without a renewal, which appends `claim.needs_person`. A marked claim keeps its holder, its workspace and its task's status: only `takeover_claim` moves it, and a renewal clears the mark. Returns the claims it marked.
 pub async fn sweep_leases(
     project: &ProjectHandle,
     now: Timestamp,
@@ -46,15 +48,25 @@ pub async fn sweep_leases(
                 .filter(|(_, parker_runs)| *parker_runs)
                 .map(|(worker, _)| worker)
                 .collect();
+            // A holder waits on others only while every claim it holds does.
+            let mut waits: HashMap<i64, bool> = HashMap::new();
+            for (worker, wait) in claims::claim_waits(tx.conn()).await? {
+                let all = waits.entry(worker).or_insert(true);
+                *all = *all && wait.waits_on_others();
+            }
             let runs_of = |worker: i64| {
-                with_park(
+                holding(
                     runs.get(&worker).copied().unwrap_or_default(),
-                    parked.contains(&worker),
+                    HolderWait {
+                        parked_by_running_agent: parked.contains(&worker),
+                        claims_wait_on_others: waits.get(&worker).copied().unwrap_or(false),
+                    },
                 )
             };
             let running: Vec<i64> = runs
                 .keys()
                 .chain(parked.iter())
+                .chain(waits.keys())
                 .copied()
                 .collect::<BTreeSet<i64>>()
                 .into_iter()

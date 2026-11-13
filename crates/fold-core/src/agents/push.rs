@@ -785,7 +785,7 @@ fn stale_claim_rule(event: &Event) -> Option<(Vec<AgentName>, String, &'static s
         _ => format!("the claim of {worker} on {task}"),
     };
     let text = format!(
-        "{claim} went stale: it made no fold call for the lease; send_message wakes it or resumes it in its session, restart_worker starts it in a new session, and stop_worker with wait_for parks a worker that waits for your go"
+        "{claim} went stale; send_message resumes it, restart_worker starts it anew, or stop_worker with wait_for parks it"
     );
     Some((told, text, "send_message"))
 }
@@ -2044,6 +2044,46 @@ mod tests {
             json!({"agent": longest, "reason": "silent", "minutes": 9_999, "told": ["main"]}),
         );
         assert!(notice_for(&widest, &ctx())[0].text.len() <= MAX_NOTICE_LEN);
+    }
+
+    #[test]
+    fn a_stale_claim_tells_the_agents_the_daemon_named_first() {
+        let stale = |data: serde_json::Value| with_data(event(types::CLAIM_STALE, "fold"), data);
+        let implementation = stale(
+            json!({"kind": "implementation", "worker": "web-worker", "renewed_at": 0, "told": ["web-lead"]}),
+        );
+        assert!(is_pushed(&implementation));
+        assert_eq!(
+            sent(&notice_for(&implementation, &ctx())),
+            vec![row(
+                "web-lead",
+                "fold: the claim of web-worker on T-12 went stale; send_message resumes it, restart_worker starts it anew, or stop_worker with wait_for parks it. Call send_message.",
+                "send_message"
+            )]
+        );
+        let review = with_data(
+            Event {
+                proposal: Some(ProposalId::from_number(4).unwrap()),
+                ..event(types::CLAIM_STALE, "fold")
+            },
+            json!({"kind": "review", "proposal": "P-4", "worker": "review-4", "renewed_at": 0, "told": ["main"]}),
+        );
+        assert!(
+            notice_for(&review, &ctx())[0]
+                .text
+                .starts_with("fold: the review claim of review-4 on P-4 went stale")
+        );
+        let nobody = stale(json!({"kind": "implementation", "worker": "web-worker", "told": []}));
+        assert!(notice_for(&nobody, &ctx()).is_empty());
+        let longest = with_data(
+            Event {
+                task: Some(TaskId::from_number(99_999).unwrap()),
+                proposal: Some(ProposalId::from_number(99_999).unwrap()),
+                ..event(types::CLAIM_STALE, "fold")
+            },
+            json!({"kind": "review", "worker": "w".repeat(32), "told": ["main"]}),
+        );
+        assert!(notice_for(&longest, &ctx())[0].text.len() <= MAX_NOTICE_LEN);
     }
 
     #[test]

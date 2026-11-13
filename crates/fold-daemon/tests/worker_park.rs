@@ -301,3 +301,40 @@ async fn once_the_lead_ends_the_parked_claim_goes_stale_to_the_lead_first_and_na
     );
     assert!(needs_you(&harness, "stale_claim").await.is_none());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_claim_whose_holder_waits_on_others_never_goes_stale_or_reaches_a_person() {
+    let fake = FakeClaude::new("result");
+    let (harness, _work) =
+        crate::worker_resume::proposed_by_a_task_worker(&fake, &[("page.html", "<p>page</p>\n")])
+            .await;
+    for _ in 0..3 {
+        harness.project.clock().advance(LEASE + STALL).unwrap();
+        assert_eq!(sweep(&harness).await, 0, "the proposal waits for review");
+    }
+    assert_eq!(stale_at(&harness).await, None);
+    assert!(attention(&harness, "T-1").await.is_empty());
+    assert!(needs_you(&harness, "stale_claim").await.is_none());
+
+    crate::worker_resume::request_changes(&harness, "P-1", "Use a dialog.").await;
+    let back = harness.events().await;
+    assert!(back.iter().any(|event| event.kind == "review.submitted"));
+    harness.project.clock().advance(LEASE).unwrap();
+    sweep(&harness).await;
+    let stale: Vec<_> = harness
+        .events()
+        .await
+        .into_iter()
+        .filter(|event| event.kind == "claim.stale")
+        .collect();
+    assert!(
+        stale.iter().all(|event| event.data["worker"] != "review"),
+        "the reviewer gave its verdict, so its claim waits on others"
+    );
+    assert!(
+        stale
+            .iter()
+            .any(|event| event.data["worker"] == TASK_WORKER),
+        "once the proposal is back with its author, the author's silence counts again"
+    );
+}
