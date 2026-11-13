@@ -19,7 +19,7 @@ use crate::init::{self, InitArgs, InitError};
 use crate::output;
 use crate::serve::{self, Dirs, ServeError};
 use agent::Agent;
-use scripts::{API_LEAD, LIMIT_WORKER, REVIEW_LEAD, ROUTES_WORKER, Tasks, WEB_LEAD};
+use scripts::{API_LEAD, LIMIT_WORKER, PARK_ROUTES, REVIEW_LEAD, ROUTES_WORKER, Tasks, WEB_LEAD};
 
 /// The human the seed acts as; `make seed-dev` sets `FOLD_HUMAN` to the same name.
 const HUMAN: &str = "dev";
@@ -318,7 +318,35 @@ impl Seeder {
             .await?;
         }
         self.container(&tasks).await?;
-        self.settled(&tasks).await
+        self.settled(&tasks).await?;
+
+        // The api lead parks the routes worker until its go, so its card shows the wait instead of a stall or a stale claim.
+        self.main
+            .call(
+                "send_message",
+                json!({
+                    "to": [API_LEAD],
+                    "body": format!("Please {PARK_ROUTES} until the users migration is on main."),
+                    "task": tasks.routes,
+                }),
+            )
+            .await?;
+        self.wait("the park of the routes worker", async || {
+            let workers = self
+                .main
+                .call("list_workers", json!({"include_stopped": true}))
+                .await?;
+            Ok(workers["workers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|worker| {
+                    worker["name"] == ROUTES_WORKER
+                        && worker["state"] == "stopped"
+                        && !worker["parked"].is_null()
+                }))
+        })
+        .await
     }
 
     /// Labels, and every task with its edges. Each column is reached later by the work done on the tasks.

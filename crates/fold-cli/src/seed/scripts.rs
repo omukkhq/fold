@@ -228,8 +228,12 @@ fn review_lead(tasks: &Tasks) -> Script {
     )
 }
 
+/// The words that ask the api lead to park the routes worker, which its second turn waits for.
+pub const PARK_ROUTES: &str = "park api-routes";
+
+/// The api lead starts its task workers, and later parks the routes worker until its go, as a lead that lets one migration into main at a time does.
 fn api_lead(tasks: &Tasks) -> Script {
-    one_turn(
+    let mut script = one_turn(
         vec![
             task_worker("api-schema", &tasks.schema),
             integrated(&tasks.schema),
@@ -246,7 +250,16 @@ fn api_lead(tasks: &Tasks) -> Script {
             ),
         ],
         "The api tasks have their workers.",
-    )
+    );
+    script.turns.push(Turn {
+        when: Some(PARK_ROUTES.to_owned()),
+        steps: vec![call(
+            "stop_worker",
+            json!({"name": ROUTES_WORKER, "wait_for": "my go after the users migration"}),
+        )],
+        reply: Some("Parked api-routes until my go.".to_owned()),
+    });
+    script
 }
 
 fn web_lead(tasks: &Tasks) -> Script {
