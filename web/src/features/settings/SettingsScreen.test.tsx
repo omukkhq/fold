@@ -184,7 +184,9 @@ describe("SettingsScreen", () => {
     });
     show();
     expect(
-      await screen.findByText(/only a person changes where notices go/),
+      await screen.findByText(
+        /only a person changes the account and where notices go/,
+      ),
     ).toBeTruthy();
     const list = await screen.findByRole("list", { name: "Targets" });
     const host = within(list).getByRole("listitem", { name: "Release bot" });

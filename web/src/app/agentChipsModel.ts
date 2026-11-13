@@ -35,6 +35,7 @@ const FAILED_REASONS: Readonly<Record<string, string>> = {
   mcp_unavailable: "no fold connection",
   fld_missing: "fld not found",
   claude_not_found: "claude not found",
+  account_not_found: "account not found",
 };
 
 /** `failed`, followed by the reason when the chip has words for it. */
