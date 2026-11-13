@@ -17,7 +17,6 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { agent } from "../../test/agents";
 import type { Board } from "@/api/board";
 import { keys } from "@/api/keys";
 import { formatAsOf } from "@/format/time";
@@ -25,8 +24,9 @@ import { applyEvent } from "@/live/apply";
 import { isEventEnvelope } from "@/live/envelope";
 import { LiveRetryContext } from "@/live/retry";
 import { liveStatusStore } from "@/live/status";
-import { daemon, ok } from "@/test/daemon";
+import { daemon, ok, refuse } from "@/test/daemon";
 import { boardCard, boardView } from "@/test/payloads";
+import { areaEntry, workerList } from "@/test/workers";
 import { BoardScreen } from "./BoardScreen";
 import { boardSearchSchema, cleanSearch } from "./search";
 
@@ -126,6 +126,16 @@ function demoBoard(): Board {
   );
 }
 
+/** Two areas over the board's labels: `web` owns the `ui` tasks and `api` the `auth` tasks. */
+function demoWorkers() {
+  return workerList({
+    areas: [
+      areaEntry("api", "auth", { lead: "api-lead" }),
+      areaEntry("web", "ui", { lead: "web-lead" }),
+    ],
+  });
+}
+
 function setup(
   data: Board | null = demoBoard(),
   path = "/p/demo/board",
@@ -136,11 +146,7 @@ function setup(
   });
   if (data) {
     client.setQueryData(keys.board("demo"), data);
-    client.setQueryData(keys.agentBar("demo"), [
-      agent("frontend"),
-      agent("backend"),
-      agent("review", { presence: "idle" }),
-    ]);
+    client.setQueryData(keys.workers("demo"), demoWorkers());
   }
   const router = makeRouter(path);
   render(
@@ -185,10 +191,12 @@ function makeRouter(path: string) {
   });
 }
 
-const column = (name: string) => screen.getByRole("region", { name });
+// An open menu hides the page from the accessibility tree, and the cards behind a menu of tick boxes still change.
+const column = (name: string) =>
+  screen.getByRole("region", { name, hidden: true });
 const tasksIn = (name: string) =>
   within(column(name))
-    .queryAllByRole("link")
+    .queryAllByRole("link", { hidden: true })
     .map((link) => link.closest("[data-task]")?.getAttribute("data-task"))
     .filter((task) => task !== undefined);
 
@@ -555,53 +563,153 @@ describe("BoardScreen", () => {
     expect(tasksIn("In progress")).toEqual(["T-7"]);
   });
 
-  it("filters by an agent from the Agent menu, and the toolbar draws no agent pills", async () => {
+  it("filters by owner from the Owner menu, and the toolbar draws no agent pills", async () => {
     const { router } = setup();
     await screen.findByRole("region", { name: "Backlog" });
     expect(screen.queryByRole("group", { name: "Agents" })).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Show only backend's tasks" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Agent/ })).toBeNull();
 
-    const trigger = screen.getByRole("button", { name: "Agent" });
-    trigger.focus();
+    screen.getByRole("button", { name: "Owner" }).focus();
     await userEvent.keyboard("{Enter}");
-    await userEvent.click(screen.getByRole("menuitem", { name: "frontend" }));
-    expect(router.state.location.search).toEqual({ agent: "frontend" });
-    expect(tasksIn("Review")).toEqual([]);
+    expect(
+      screen.getAllByRole("menuitemcheckbox").map((item) => item.textContent),
+    ).toEqual(["Human", "Main agent", "api-lead api", "web-lead web"]);
+    await userEvent.click(
+      screen.getByRole("menuitemcheckbox", { name: "web-lead web" }),
+    );
+    expect(router.state.location.search).toEqual({ owner: ["area:web"] });
     expect(tasksIn("In progress")).toEqual(["T-2"]);
-    screen.getByRole("button", { name: "Agent: frontend" }).focus();
-    await userEvent.keyboard("{Enter}");
-    await userEvent.click(screen.getByRole("menuitem", { name: "Any agent" }));
+    expect(tasksIn("To do")).toEqual(["T-6"]);
+    expect(
+      screen.getByRole("button", { name: "Owner: web-lead", hidden: true }),
+    ).toBeTruthy();
+    // The menu stays open, and Clear leads it once an entry is ticked.
+    await userEvent.click(screen.getByRole("menuitem", { name: "Clear" }));
     expect(router.state.location.search).toEqual({});
+    expect(screen.getByRole("button", { name: "Owner" })).toBeTruthy();
   });
 
-  it("filters by a label from the Labels menu", async () => {
-    const { router } = setup();
+  it("ticks two labels and two owners: any tick inside a menu, every filter together, and the link opens the same board", async () => {
+    const board = demoBoard();
+    const human = boardCard("T-11", {
+      title: "Sign the release",
+      kind: "human",
+      labels: [ui],
+    });
+    const mainTask = boardCard("T-12", {
+      title: "Route the backlog",
+      labels: [{ name: "main", color: "ink" }],
+    });
+    board.columns[1]?.cards.push(human, mainTask);
+    const { router } = setup(board);
     await screen.findByRole("region", { name: "Backlog" });
+
     screen.getByRole("button", { name: "Labels" }).focus();
     await userEvent.keyboard("{Enter}");
-    await userEvent.click(screen.getByRole("menuitem", { name: "auth" }));
-    expect(router.state.location.search).toEqual({ label: "auth" });
-    expect(tasksIn("To do")).toEqual(["T-1", "T-6"]);
-    expect(tasksIn("Backlog")).toEqual([]);
+    await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "ui" }));
+    await userEvent.click(
+      screen.getByRole("menuitemcheckbox", { name: "main" }),
+    );
+    expect(router.state.location.search).toEqual({ label: ["ui", "main"] });
+    expect(tasksIn("To do")).toEqual(["T-6", "T-11", "T-12"]);
+    expect(tasksIn("In progress")).toEqual(["T-2"]);
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: "Labels: 2" })).toBeTruthy();
+
+    screen.getByRole("button", { name: "Owner" }).focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.click(
+      screen.getByRole("menuitemcheckbox", { name: "Human" }),
+    );
+    await userEvent.click(
+      screen.getByRole("menuitemcheckbox", { name: "api-lead api" }),
+    );
+    expect(router.state.location.search).toEqual({
+      label: ["ui", "main"],
+      owner: ["human", "area:api"],
+    });
+    // T-6 carries ui and auth, T-11 is a human task with ui; T-12 and T-2 have no ticked owner, T-1 no ticked label.
+    expect(tasksIn("To do")).toEqual(["T-6", "T-11"]);
+    expect(tasksIn("In progress")).toEqual([]);
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: "Owners: 2" })).toBeTruthy();
+
+    const href = router.state.location.href;
+    cleanup();
+    setup(board, href);
+    await screen.findByRole("region", { name: "Backlog" });
+    expect(tasksIn("To do")).toEqual(["T-6", "T-11"]);
+    expect(tasksIn("In progress")).toEqual([]);
+    expect(screen.getByRole("button", { name: "Labels: 2" })).toBeTruthy();
   });
 
-  it("reads the filters from a shared link and searches", async () => {
+  it("opens a link from before the filters took several values, and searches", async () => {
     const { router } = setup(
       demoBoard(),
       "/p/demo/board?label=ui&agent=frontend",
     );
     await screen.findByRole("region", { name: "Backlog" });
-    // T-6 carries the label but nobody is responsible for it.
-    expect(tasksIn("To do")).toEqual([]);
+    expect(tasksIn("To do")).toEqual(["T-6"]);
     expect(tasksIn("In progress")).toEqual(["T-2"]);
+    expect(screen.getByRole("button", { name: "Label: ui" })).toBeTruthy();
     await userEvent.type(
       screen.getByRole("searchbox", { name: "Search tasks" }),
       "nothing",
     );
-    expect(router.state.location.search).toMatchObject({ q: "nothing" });
+    // The next change of a filter writes the link again without the agent.
+    expect(router.state.location.search).toEqual({
+      label: ["ui"],
+      q: "nothing",
+    });
     expect(tasksIn("In progress")).toEqual([]);
+  });
+
+  it("waits for the workers answer before it filters by a lead, and says when it fails", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { staleTime: Infinity, retry: false } },
+    });
+    client.setQueryData(keys.board("demo"), demoBoard());
+    let answer: () => void = () => undefined;
+    daemon.on(
+      "GET /api/v1/projects/:slug/workers",
+      () =>
+        new Promise((resolve) => {
+          answer = () => {
+            resolve(ok(demoWorkers()));
+          };
+        }),
+    );
+    render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={makeRouter("/p/demo/board?owner=area:web")} />
+      </QueryClientProvider>,
+    );
+    expect(
+      await screen.findAllByRole("status", { name: "Loading" }),
+    ).not.toHaveLength(0);
+    expect(screen.getByText("Loading the board…")).toBeTruthy();
+    act(() => {
+      answer();
+    });
+    await waitFor(() => {
+      expect(tasksIn("To do")).toEqual(["T-6"]);
+    });
+    cleanup();
+
+    daemon.reset();
+    daemon.on("GET /api/v1/projects/:slug/workers", refuse(500, "internal"));
+    const failing = new QueryClient({
+      defaultOptions: { queries: { staleTime: Infinity, retry: false } },
+    });
+    failing.setQueryData(keys.board("demo"), demoBoard());
+    render(
+      <QueryClientProvider client={failing}>
+        <RouterProvider
+          router={makeRouter('/p/demo/board?owner=["human","main"]')}
+        />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("The owners could not load.")).toBeTruthy();
   });
 
   it("shows the empty state with the next step for an empty project", async () => {
@@ -697,7 +805,7 @@ describe("BoardScreen", () => {
       expect(screen.queryByRole("button", { name: "Blocked only" })).toBeNull();
       await userEvent.click(
         screen.getByRole("button", {
-          name: "Filters: labels, agent, blocked only",
+          name: "Filters: labels, owner, blocked only",
         }),
       );
       await userEvent.click(
@@ -706,7 +814,7 @@ describe("BoardScreen", () => {
       expect(router.state.location.search).toEqual({ blocked: true });
       expect(
         screen.getByRole("button", {
-          name: "Filters: labels, agent, blocked only; one is set",
+          name: "Filters: labels, owner, blocked only; a filter is set",
         }),
       ).toBeTruthy();
     } finally {

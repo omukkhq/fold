@@ -6,6 +6,8 @@ import { menuContent, menuItem } from "./menuStyles";
 
 export interface MenuItem {
   label: string;
+  /** Tells apart items that share a label; the label without it. */
+  id?: string;
   icon?: LucideIcon;
   onSelect: () => void;
   danger?: boolean;
@@ -67,7 +69,7 @@ export function Menu({ trigger, items, align = "start" }: MenuProps) {
             if (item.checked === undefined) {
               return (
                 <DropdownMenu.Item
-                  key={item.label}
+                  key={item.id ?? item.label}
                   disabled={item.disabled}
                   onSelect={item.onSelect}
                   className={className}
@@ -78,7 +80,7 @@ export function Menu({ trigger, items, align = "start" }: MenuProps) {
             }
             return (
               <DropdownMenu.CheckboxItem
-                key={item.label}
+                key={item.id ?? item.label}
                 checked={item.checked}
                 disabled={item.disabled}
                 onCheckedChange={item.onSelect}
