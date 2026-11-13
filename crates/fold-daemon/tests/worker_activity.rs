@@ -195,9 +195,10 @@ async fn a_process_that_failed_without_a_report_is_a_stall_at_once() {
     let before = state(&harness, &work).await.view.last_activity_at;
     advance(&harness, Duration::from_secs(1));
     work.write(&[("late.txt", "written as the process ended\n")]);
+    // The scan that takes the write drops a stall from the view until the next decision, which can read the workspace before the scan, so wait for a decision after it.
     let late = eventually(WAIT, async || {
         let view = state(&harness, &work).await.view;
-        if view.last_activity_at > before {
+        if view.last_activity_at > before && view.activity.is_some() {
             Ok(view)
         } else {
             Err(view.last_activity_at)
