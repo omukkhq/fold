@@ -33,6 +33,11 @@ impl DaemonConfig {
         self.data_dir.join("notices")
     }
 
+    /// The host's Claude accounts with their tokens, outside every project folder.
+    pub fn accounts_dir(&self) -> PathBuf {
+        self.data_dir.join(fold_core::layout::ACCOUNTS_DIR)
+    }
+
     pub fn lock_path(&self) -> PathBuf {
         self.runtime_dir.join(LOCK_FILE)
     }

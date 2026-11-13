@@ -21,6 +21,7 @@ use crate::services::tasks::{TaskError, renew_leases};
 use crate::services::workspaces::WorkspaceLocks;
 
 /// Claude Code's headless stream-json protocol as fold reads and writes it, the oldest Claude Code fold drives, and the sign-in answer of `claude auth status`. It is public because `fld doctor` checks the installed Claude Code with the same version and sign-in types.
+pub mod accounts;
 pub mod claude;
 mod context;
 mod cost;
@@ -48,8 +49,9 @@ pub use presence::SeenPresence;
 #[cfg(feature = "dev-launcher")]
 pub use workers::{DEV_STUB_COMMAND, DEV_STUB_DIR};
 pub use workers::{
-    Launcher, MCP_RETRY_TURN, PAUSE_TURN, PauseState, RESTART_TURN, StartWorker, StartedWorker,
-    StopTimeouts, StreamFacts, Supervisor, WorkerLimitsChanged, WorkerStreams, new_session_id,
+    Launcher, MCP_RETRY_TURN, PAUSE_TURN, PauseState, ProjectAccount, RESTART_TURN, StartWorker,
+    StartedWorker, StopTimeouts, StreamFacts, Supervisor, WorkerLimitsChanged, WorkerStreams,
+    new_session_id,
 };
 pub(crate) use workers::{code_of, starter_of};
 

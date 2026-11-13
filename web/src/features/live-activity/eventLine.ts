@@ -1101,6 +1101,7 @@ const SPECS: Record<EventType, Spec> = {
         : parts.join(", and ");
     },
   },
+  "workers.account_changed": { icon: Bot, text: accountChangedText },
 };
 
 /** The line of a notice target's change. The data does not tell a person's add from an edit, so a person's line names the state the target is in. */
@@ -1128,6 +1129,14 @@ function notifyTargetText(event: DurableEvent): string {
     default:
       return `changed ${target}`;
   }
+}
+
+/** The account change names accounts only: Claude Code's own login stands for none. */
+function accountChangedText(event: DurableEvent): string {
+  const account = text(event.data.new);
+  return account === null
+    ? "gave the workers Claude Code's own login"
+    : `gave the workers the account ${account}`;
 }
 
 function notifyTargetLook(event: DurableEvent): Look {

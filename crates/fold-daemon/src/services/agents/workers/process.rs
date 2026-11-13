@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use fold_core::accounts::AccountStamp;
 use fold_core::transcript::claude_config_dir;
 use fold_core::{AgentName, Clock, ProjectPaths, Role};
 use fold_store::Store;
@@ -20,6 +21,7 @@ use crate::support::lock;
 use questions::Waiter;
 use watch::watch_done;
 
+mod account;
 mod fresh;
 mod gate;
 mod launch;
@@ -58,6 +60,8 @@ pub struct Launcher {
     pub env: Vec<(String, String)>,
     /// The fingerprint of the skill texts that the fld which runs the daemon writes for a session of each role (see [`fold_core::roles::session_fingerprint`]), given by the caller because the skills ship only in the binary that writes the skill files. A worker records it with its session, and a resume under another one tells the worker to load its role skill again. A role without one is never told.
     pub fingerprints: BTreeMap<Role, String>,
+    /// The folder of the host's Claude accounts, whose token a worker of a project that names an account starts with; `None` knows no account, so such a worker cannot start.
+    pub accounts: Option<PathBuf>,
 }
 
 impl Default for Launcher {
@@ -67,6 +71,7 @@ impl Default for Launcher {
             fold: None,
             env: Vec::new(),
             fingerprints: BTreeMap::new(),
+            accounts: None,
         }
     }
 }
@@ -150,6 +155,8 @@ struct Running {
     reaped: Arc<AtomicBool>,
     /// The user turns written to the process's stdin that no result has ended yet. Claude Code queues a turn written during another one, and a worker whose next turn waits in that queue has not answered it.
     open_turns: Arc<AtomicU64>,
+    /// The account whose token the process started with, `None` for Claude Code's own login. A process whose account is no longer the project's continues in its own session with the project's account once it is idle.
+    account: Option<AccountStamp>,
 }
 
 /// The worker processes of one project, in memory, with the task that stops a short-lived worker once its work is done. Every process is spawned with `kill_on_drop`, so none outlives the handle.
@@ -204,6 +211,8 @@ struct Inner {
     tool_windows: Arc<ToolWindows>,
     /// What each running process wrote last and which of its calls are open, for the stall rule.
     streams: Arc<WorkerStreams>,
+    /// The workers that continue in their own session with another account, whose notices wait for the new process meanwhile.
+    switching: Mutex<HashSet<AgentName>>,
 }
 
 impl Drop for Inner {
@@ -272,6 +281,7 @@ impl Supervisor {
                 cleanup_due: Mutex::new(None),
                 tool_windows: Arc::default(),
                 streams: Arc::default(),
+                switching: Mutex::new(HashSet::new()),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();
@@ -283,6 +293,11 @@ impl Supervisor {
     /// The fingerprint of the skill texts the installed fld writes for a session of `role`; see [`Launcher::fingerprints`].
     pub fn fingerprint(&self, role: Role) -> Option<String> {
         lock(&self.inner.launcher).fingerprints.get(&role).cloned()
+    }
+
+    /// The folder of the host's accounts that the launcher names.
+    pub fn accounts_dir(&self) -> Option<PathBuf> {
+        lock(&self.inner.launcher).accounts.clone()
     }
 
     pub fn set_launcher(&self, launcher: Launcher) {
@@ -376,7 +391,9 @@ impl Supervisor {
             .is_some_and(|run| run.generation == process.generation)
         {
             running.remove(&process.agent);
-            self.inner.push.clear_stdin(&process.agent);
+            if !lock(&self.inner.switching).contains(&process.agent) {
+                self.inner.push.clear_stdin(&process.agent);
+            }
         }
     }
 

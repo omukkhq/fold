@@ -358,8 +358,25 @@ pub(crate) fn collect(
     let answering = socket
         .as_deref()
         .filter(|_| matches!(daemon, status::Daemon::Running { .. }));
+    let listed = host_paths(&host.dirs)
+        .and_then(|paths| fold_daemon::services::agents::accounts::list(&paths.accounts_dir()));
+    let mut used: Vec<fold_core::accounts::AccountName> = registered
+        .iter()
+        .filter_map(|(_, root)| accounts::named_account(root))
+        .collect();
+    used.sort();
+    used.dedup();
+    sections[0]
+        .checks
+        .push(accounts::accounts_verdict(&listed, &used, &report, now));
     for (label, root) in projects {
         let mut checks = project_checks(&root, host, now, runtime);
+        if root.is_dir() {
+            checks.push(accounts::project_account_verdict(
+                accounts::named_account(&root).as_ref(),
+                &listed,
+            ));
+        }
         let slug = push::slug_of(&registered, &root);
         checks.push(push::push_check(socket.as_deref(), slug.as_deref()));
         checks.push(workers::workers_check(
@@ -1428,6 +1445,7 @@ fn shadowing_checks(root: &Path, home: Option<&Path>) -> Vec<Check> {
         .collect()
 }
 
+mod accounts;
 mod daemon;
 mod environment;
 mod push;
