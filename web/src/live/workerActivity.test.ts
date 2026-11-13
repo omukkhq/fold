@@ -171,10 +171,10 @@ describe("a turn that waits for the network or a usage limit", () => {
       "Waiting for the network",
     );
     expect(activityText(limit, "web-worker", NOW)).toBe(
-      "Waits for the usage limit",
+      "Waits for the usage limit reset",
     );
     expect(activityVerb(network, NOW)).toBe("waiting for the network");
-    expect(activityVerb(limit, NOW)).toBe("waits for the usage limit");
+    expect(activityVerb(limit, NOW)).toBe("waits for the usage limit reset");
   });
 
   it("is neutral: never a stall, never a person's, never a restart, also once the daemon flags it", () => {

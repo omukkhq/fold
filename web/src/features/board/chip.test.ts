@@ -314,12 +314,12 @@ describe("metaFact", () => {
     const limit = {
       ...working,
       state: "waits_for_usage_limit" as const,
-      text: "Waits for the usage limit",
+      text: "Waits for the usage limit reset",
     };
     expect(cardChip(card, null, limit)).toEqual({
       tone: "neutral",
       icon: Gauge,
-      text: "Waits for the usage limit",
+      text: "Waits for the usage limit reset",
     });
   });
 

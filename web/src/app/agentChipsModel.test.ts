@@ -170,7 +170,7 @@ describe("agentStateText of a supervised agent", () => {
       "waiting for the network · 1 stalled",
     );
     expect(agentStateText(waiting("usage_limit"))).toBe(
-      "waits for the usage limit · 1 stalled",
+      "waits for the usage limit reset · 1 stalled",
     );
   });
 

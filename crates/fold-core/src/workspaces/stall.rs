@@ -419,10 +419,10 @@ pub fn activity(
 /// The words of a worker whose turn waits for the network, in every view.
 pub const WAITS_FOR_NETWORK: &str = "Waiting for the network";
 
-/// The words of a worker whose turn waits for a usage limit, in every view.
-pub const WAITS_FOR_USAGE_LIMIT: &str = "Waits for the usage limit";
+/// The words of a worker whose turn waits for the reset of a usage limit, in every view.
+pub const WAITS_FOR_USAGE_LIMIT: &str = "Waits for the usage limit reset";
 
-/// What fold saw of the worker `worker`, in the words that the board's chip, the task, Activity, Needs you and the notices all use: `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed`, `Waiting for a free slot`, `Waiting for the network` or `Waits for the usage limit`. The time is the span from the activity's start to `now`, rounded down, in seconds, minutes, hours or days. `None` for [`Activity::Quiet`].
+/// What fold saw of the worker `worker`, in the words that the board's chip, the task, Activity, Needs you and the notices all use: `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed`, `Waiting for a free slot`, `Waiting for the network` or `Waits for the usage limit reset`. The time is the span from the activity's start to `now`, rounded down, in seconds, minutes, hours or days. `None` for [`Activity::Quiet`].
 pub fn activity_text(activity: Activity, worker: &str, now: Timestamp) -> Option<String> {
     let span = |since: Timestamp| {
         let seconds = now
@@ -1424,7 +1424,7 @@ mod tests {
         );
         assert_eq!(
             activity_text(Activity::WaitsForUsageLimit { since: at(0) }, "w", late).as_deref(),
-            Some("Waits for the usage limit")
+            Some("Waits for the usage limit reset")
         );
     }
 

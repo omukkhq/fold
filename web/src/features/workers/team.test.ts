@@ -348,7 +348,7 @@ describe("steps", () => {
           waits_for: "usage_limit",
         }),
       )?.title,
-    ).toBe("waits for the usage limit");
+    ).toBe("waits for the usage limit reset");
     const [group] = teamGroups(
       input({ workers: workerList({ workers: [failing] }) }),
     );

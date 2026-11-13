@@ -9,7 +9,7 @@ type LiveCall = components["schemas"]["LiveCall"];
 export interface WorkerActivity {
   /** The state the daemon decided, which the chip draws its icon from. */
   state: LiveActivity["state"];
-  /** `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed`, `Waiting for a free slot`, `Waiting for the network` or `Waits for the usage limit`. */
+  /** `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed`, `Waiting for a free slot`, `Waiting for the network` or `Waits for the usage limit reset`. */
   text: string;
   /** Silent, a call that ran long, or a process that failed: someone must act. Work in progress, a process that was stopped on purpose, a resume that waits for a free slot and a turn that waits for the network or a usage limit, which fold runs again, are never a stall. */
   stall: boolean;
@@ -38,7 +38,7 @@ const SLOT_WAIT = "Waiting for a free slot";
 export const NETWORK_WAIT = "Waiting for the network";
 
 /** A turn that reached a usage limit, which fold runs again after the reset. */
-export const USAGE_LIMIT_WAIT = "Waits for the usage limit";
+export const USAGE_LIMIT_WAIT = "Waits for the usage limit reset";
 
 const LONG: Readonly<Record<LiveCall, string>> = {
   command: "A command",
@@ -81,7 +81,7 @@ export function activityText(
   }
 }
 
-/** What fold saw, after the worker's name: `running a command for 8 min`, `no activity for 12 min`, `a command has run for 25 min`, `stopped`, `failed`, `waiting for a free slot`, `waiting for the network` or `waits for the usage limit`. */
+/** What fold saw, after the worker's name: `running a command for 8 min`, `no activity for 12 min`, `a command has run for 25 min`, `stopped`, `failed`, `waiting for a free slot`, `waiting for the network` or `waits for the usage limit reset`. */
 export function activityVerb(activity: LiveActivity, now: number): string {
   const time = formatAge(now, activity.since);
   switch (activity.state) {
@@ -104,7 +104,7 @@ export function activityVerb(activity: LiveActivity, now: number): string {
     case "waits_for_network":
       return "waiting for the network";
     case "waits_for_usage_limit":
-      return "waits for the usage limit";
+      return "waits for the usage limit reset";
   }
 }
 
