@@ -719,13 +719,13 @@ describe("needsYouGroups", () => {
       limitText(
         {
           limit: "session",
-          account: "system-default",
+          account: "default",
           reset: null,
           resets_at: null,
         },
         now,
       ),
-    ).toBe("Claude Code reached its session limit");
+    ).toBe("default reached its session limit");
     expect(
       limitText(
         { limit: "opus", account: "work-b", reset: null, resets_at: null },

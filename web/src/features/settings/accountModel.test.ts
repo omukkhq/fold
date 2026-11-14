@@ -2,18 +2,17 @@ import { describe, expect, it } from "vitest";
 import { ApiError } from "@/api/errors";
 import type { ProjectAccount } from "@/api/workers";
 import {
-  SYSTEM_DEFAULT,
+  DEFAULT_ACCOUNT,
   accountFailure,
   accountHint,
-  accountLabel,
   accountOptions,
   shownValue,
 } from "./accountModel";
 
 function view(fields: Partial<ProjectAccount> = {}): ProjectAccount {
   return {
-    account: SYSTEM_DEFAULT,
-    accounts: [SYSTEM_DEFAULT, "work-a", "work-b"],
+    account: DEFAULT_ACCOUNT,
+    accounts: [DEFAULT_ACCOUNT, "work-a", "work-b"],
     ...fields,
   };
 }
@@ -23,11 +22,11 @@ function refused(code: string): ApiError {
 }
 
 describe("accountModel", () => {
-  it("offers system-default first, then each account, and keeps a missing one shown", () => {
+  it("offers default first, then each account, by name only, and keeps a missing one shown", () => {
     expect(accountOptions(view())).toEqual([
       {
-        value: SYSTEM_DEFAULT,
-        label: "system-default (Claude Code's own login)",
+        value: DEFAULT_ACCOUNT,
+        label: "default",
       },
       { value: "work-a", label: "work-a" },
       { value: "work-b", label: "work-b" },
@@ -37,11 +36,10 @@ describe("accountModel", () => {
       label: "gone (not on this host)",
     });
     expect(accountOptions(view({ account: "work-a" }))).toHaveLength(3);
-    expect(accountLabel("work-a")).toBe("work-a");
   });
 
   it("shows the choice under way, else the project's account", () => {
-    expect(shownValue(view(), undefined)).toBe(SYSTEM_DEFAULT);
+    expect(shownValue(view(), undefined)).toBe(DEFAULT_ACCOUNT);
     expect(shownValue(view({ account: "work-a" }), undefined)).toBe("work-a");
     expect(shownValue(view({ account: "work-a" }), "work-b")).toBe("work-b");
   });
@@ -51,11 +49,21 @@ describe("accountModel", () => {
     expect(accountHint(view(), false)).toContain(
       "continues in its own session",
     );
-    expect(accountHint(view({ accounts: [SYSTEM_DEFAULT] }), false)).toContain(
+    expect(accountHint(view({ accounts: [DEFAULT_ACCOUNT] }), false)).toContain(
       "fld account add <name>",
     );
     expect(accountHint(view({ account: "gone" }), false)).toContain(
       "fld account add gone",
+    );
+    // A host without Claude Code's own login lists no default, and a project that still names it needs that login.
+    expect(
+      accountHint(
+        view({ accounts: ["work-a"], account: DEFAULT_ACCOUNT }),
+        false,
+      ),
+    ).toContain("claude /login");
+    expect(accountHint(view({ accounts: [] }), false)).toContain(
+      "claude /login",
     );
   });
 

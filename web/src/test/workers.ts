@@ -77,7 +77,7 @@ export function workerList(fields: Partial<WorkerList> = {}): WorkerList {
     limits: null,
     pause: { paused_since: null, paused_by: null },
     main_supervised: false,
-    account: { account: "system-default", accounts: ["system-default"] },
+    account: { account: "default", accounts: ["default"] },
     ...fields,
   };
 }

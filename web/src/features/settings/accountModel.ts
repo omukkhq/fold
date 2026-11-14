@@ -3,25 +3,17 @@ import type { ProjectAccount } from "@/api/workers";
 import { failureText } from "@/format/failure";
 import type { Failure } from "../workers/startLead";
 
-/** The account that stands for Claude Code's own login, which the daemon lists first. */
-export const SYSTEM_DEFAULT = "system-default";
+/** The reserved account that stands for Claude Code's own login, which the daemon lists first when the host has that login. */
+export const DEFAULT_ACCOUNT = "default";
 
 export interface AccountOption {
   value: string;
   label: string;
 }
 
-/** The words of an account in a list: `system-default` says that it is Claude Code's own login. */
-export function accountLabel(name: string): string {
-  return name === SYSTEM_DEFAULT ? `${name} (Claude Code's own login)` : name;
-}
-
-/** The choices of the select, in the daemon's order: `system-default` first, then the host's accounts. An account the config names that the host lacks stays shown, so the select never claims another choice. */
+/** The choices of the select, in the daemon's order: `default` first when the daemon lists it, then the host's accounts. An account the config names that the host lacks stays shown, so the select never claims another choice. */
 export function accountOptions(view: ProjectAccount): AccountOption[] {
-  const options = view.accounts.map((name) => ({
-    value: name,
-    label: accountLabel(name),
-  }));
+  const options = view.accounts.map((name) => ({ value: name, label: name }));
   if (!view.accounts.includes(view.account)) {
     options.push({
       value: view.account,
@@ -45,9 +37,11 @@ export function accountHint(view: ProjectAccount, pending: boolean): string {
     return "Saving…";
   }
   if (!view.accounts.includes(view.account)) {
-    return `This host has no account ${view.account}, so no worker can start. Add it with fld account add ${view.account}, or choose another one.`;
+    return view.account === DEFAULT_ACCOUNT
+      ? "This host has no Claude Code login, so no worker can start. Run claude /login, or choose another account."
+      : `This host has no account ${view.account}, so no worker can start. Add it with fld account add ${view.account}, or choose another one.`;
   }
-  if (view.accounts.every((name) => name === SYSTEM_DEFAULT)) {
+  if (view.accounts.every((name) => name === DEFAULT_ACCOUNT)) {
     return "This host has no account of its own yet. Run claude setup-token, then fld account add <name> with the token on stdin.";
   }
   return "After a change, each worker continues in its own session with the new account when its current turn ends, an idle one at once. A running fld claude session keeps its account until it starts again.";

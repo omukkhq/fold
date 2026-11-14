@@ -37,7 +37,7 @@ function select(): HTMLSelectElement {
 
 describe("AccountPanel", () => {
   it("chooses an account and stays pending until the daemon answers", async () => {
-    let chosen = "system-default";
+    let chosen = "default";
     let answer: () => void = () => {};
     const answered = new Promise<void>((resolve) => {
       answer = resolve;
@@ -46,7 +46,7 @@ describe("AccountPanel", () => {
       [WORKERS]: () =>
         workers({
           account: chosen,
-          accounts: ["system-default", "work-a", "work-b"],
+          accounts: ["default", "work-a", "work-b"],
         }),
       [CHOOSE]: async () => {
         await answered;
@@ -54,14 +54,14 @@ describe("AccountPanel", () => {
         return {
           body: {
             account: "work-b",
-            accounts: ["system-default", "work-a", "work-b"],
+            accounts: ["default", "work-a", "work-b"],
           },
         };
       },
     });
     show();
     expect((await screen.findByLabelText("Account")).tagName).toBe("SELECT");
-    expect(select().value).toBe("system-default");
+    expect(select().value).toBe("default");
     expect(screen.getByText(/continues in its own session/)).toBeTruthy();
     await userEvent.selectOptions(select(), "work-b");
     expect(await screen.findByText("Saving…")).toBeTruthy();
@@ -78,11 +78,11 @@ describe("AccountPanel", () => {
   });
 
   it("shows a refused choice with its code, keeps the project's account and reads the accounts again", async () => {
-    let accounts = ["system-default", "work-a", "work-b"];
+    let accounts = ["default", "work-a", "work-b"];
     stubFetch({
       [WORKERS]: () => workers({ account: "work-a", accounts }),
       [CHOOSE]: () => {
-        accounts = ["system-default", "work-a"];
+        accounts = ["default", "work-a"];
         return errorReply(404, "account_not_found");
       },
     });
@@ -96,7 +96,7 @@ describe("AccountPanel", () => {
     expect(select().value).toBe("work-a");
     await waitFor(() => {
       expect([...select().options].map((option) => option.value)).toEqual([
-        "system-default",
+        "default",
         "work-a",
       ]);
     });
@@ -105,8 +105,8 @@ describe("AccountPanel", () => {
   it("lets nobody but a signed-in person choose, and shows a failed read", async () => {
     stubFetch({
       [WORKERS]: workers({
-        account: "system-default",
-        accounts: ["system-default"],
+        account: "default",
+        accounts: ["default"],
       }),
     });
     show(false);
