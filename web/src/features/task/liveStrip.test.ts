@@ -200,6 +200,19 @@ describe("liveStrip", () => {
     expect(strip?.activity?.waitFor).toBe("my go after the T-288 migration");
   });
 
+  it("says a new workspace has no edits yet instead of giving its creation as an edit's time", () => {
+    const strip = liveStrip(
+      task({ activity: null }),
+      live({ files: [], last_activity_at: NOW - 3 * MINUTE }),
+      NOW,
+    );
+    expect(strip).toMatchObject({
+      verb: "has no edits yet",
+      file: null,
+      wait: null,
+    });
+  });
+
   it("says a stalled worker without a recorded edit has none", () => {
     const strip = liveStrip(
       task({

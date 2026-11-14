@@ -406,7 +406,20 @@ describe("activityLine", () => {
       edits_after_version: null,
     };
     expect(activityLine(bare, undefined, NOW)).toBeNull();
-    expect(activityLine(bare, live(NOW, 0), NOW)?.text).toBe("Last edit");
+    expect(activityLine(bare, live(NOW, 0), NOW)).toMatchObject({
+      text: "No edits yet",
+      since: null,
+    });
+  });
+
+  it("says a new workspace has no edits yet instead of giving its creation as an edit's time", () => {
+    expect(activityLine(card(null), live(NOW - 3 * MINUTE, 0), NOW)).toEqual({
+      text: "No edits yet",
+      since: null,
+      stalled: false,
+      run: null,
+      files: 0,
+    });
   });
 
   it("shows a live workspace that the payload has no activity for", () => {

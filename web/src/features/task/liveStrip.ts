@@ -127,7 +127,9 @@ export function liveStrip(
   }
   const [only, ...others] = live?.files ?? [];
   const liveFile = only !== undefined && others.length === 0 ? only.path : null;
-  const edited = Number.isFinite(lastEdit);
+  // A workspace without an edit takes its creation as its last activity, which is no edit's time.
+  const edited =
+    (activity !== null || only !== undefined) && Number.isFinite(lastEdit);
   let verb = edited ? "last edited" : "has no edits yet";
   if (run !== null) {
     const text = checkRunText(run, task.proposal);
