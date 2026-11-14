@@ -3,6 +3,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use fold_core::accounts::{ACCOUNT_ENV, AccountName, AccountStamp, AccountToken, OAUTH_TOKEN_ENV};
 use fold_core::config::RoleSettings;
 use fold_core::events::types;
 use fold_core::layout::{
@@ -14,7 +15,7 @@ use fold_core::roles::{
     CLAUDE_NOT_FOUND, FLD_MISSING, area_prompt, needs_restart, needs_update_note, with_update_note,
 };
 use fold_core::{
-    AgentName, AreaName, EventActor, NewEvent, ProjectPaths, Role, WorkerState, codes,
+    AgentName, AreaName, EventActor, FoldError, NewEvent, ProjectPaths, Role, WorkerState, codes,
 };
 use fold_store::StoreError;
 use fold_store::agents::{self, ProcessEnd, WorkerProcessRow};
@@ -29,9 +30,9 @@ use super::project_claude;
 use super::stderr::StderrTail;
 use super::{Input, Launcher, Process, Running, StartWatch, Supervisor, lock, own_binary};
 use crate::push::StdinSink;
-use crate::services::agents::AgentError;
 use crate::services::agents::claude::{ClaudeInput, OutgoingRequest};
 use crate::services::agents::workers::code_of;
+use crate::services::agents::{AgentError, accounts};
 use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
 use crate::support::SESSION_ENV;
@@ -82,6 +83,23 @@ impl Supervisor {
             }
         }
         let launcher = lock(&self.inner.launcher).clone();
+        let account = match config.account.as_ref() {
+            None => None,
+            Some(name) => match account_token(&launcher, name).await {
+                Ok(Some(found)) => Some(found),
+                Ok(None) => {
+                    tracing::warn!(agent = %row.agent, account = %name, "the project names an account this host does not have");
+                    self.fail(row.id, &row.agent, codes::ACCOUNT_NOT_FOUND)
+                        .await?;
+                    return Ok(None);
+                }
+                Err(error) => {
+                    tracing::warn!(agent = %row.agent, code = error.code(), "could not read the project's account for a worker");
+                    self.fail(row.id, &row.agent, error.code()).await?;
+                    return Ok(None);
+                }
+            },
+        };
         let fingerprint = launcher.fingerprints.get(&row.role).cloned();
         let files = write_files(
             &self.inner.paths,
@@ -165,6 +183,13 @@ impl Supervisor {
             .envs(launcher.env.iter().map(|(key, value)| (key, value)))
             // A daemon that `fld claude`'s session started inherits its `main` tag request, which a worker never makes.
             .env_remove(AGENT_TAGS_ENV);
+        // After the launcher's environment, so the account's token takes the place of one the worker would inherit.
+        match &account {
+            Some((stamp, token)) => command
+                .env(OAUTH_TOKEN_ENV, token.expose())
+                .env(ACCOUNT_ENV, stamp.name.as_str()),
+            None => command.env_remove(ACCOUNT_ENV),
+        };
         match &start {
             Some(start) => command
                 .env(START_DIR_ENV, start)
@@ -234,6 +259,7 @@ impl Supervisor {
             detached: Arc::clone(&detached),
             reaped: Arc::clone(&reaped),
             open_turns,
+            account: account.map(|(stamp, _)| stamp),
         };
         lock(&self.inner.running).insert(row.agent.clone(), run.clone());
         self.inner
@@ -390,9 +416,16 @@ impl Supervisor {
         mut update: Option<Update>,
     ) {
         while let Some(input) = inputs.recv().await {
+            let input = match input {
+                Input::Turn(text) => match self.holds_for_switch(&process, text).await {
+                    Some(text) => Input::KeptTurn(text),
+                    None => continue,
+                },
+                other => other,
+            };
             let (line, turn) = match input {
                 Input::Line(line) => (line, None),
-                Input::Turn(text) => {
+                Input::Turn(text) | Input::KeptTurn(text) => {
                     let noted = update.take();
                     let text = match &noted {
                         Some(noted) => with_update_note(noted.role, &text),
@@ -427,6 +460,20 @@ impl Supervisor {
             }
         }
     }
+}
+
+/// The stamp and token of the account `name` from the launcher's accounts folder; `None` when the host has no such account or the launcher knows no folder.
+pub(super) async fn account_token(
+    launcher: &Launcher,
+    name: &AccountName,
+) -> Result<Option<(AccountStamp, AccountToken)>, FoldError> {
+    let Some(dir) = launcher.accounts.clone() else {
+        return Ok(None);
+    };
+    let name = name.clone();
+    tokio::task::spawn_blocking(move || accounts::token(&dir, &name))
+        .await
+        .map_err(|_| FoldError::new(codes::INTERNAL_ERROR, "the read of the account stopped"))?
 }
 
 /// Whether a failed spawn of `program` means that Claude Code is not installed where the daemon looks: the program is the launcher's `claude`, the system found no such file, and no file is at that path either, which tells it apart from a script whose interpreter is missing. Blocking, for one `stat`.

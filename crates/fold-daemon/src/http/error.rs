@@ -180,6 +180,12 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::NOTIFY_SETTINGS_IO => Some(StatusCode::INTERNAL_SERVER_ERROR),
         codes::RECORD_NEEDS_CONFIRMATION => Some(StatusCode::CONFLICT),
         codes::AGENT_CHANGE_NOT_FOUND => Some(StatusCode::NOT_FOUND),
+        codes::INVALID_ACCOUNT_NAME | codes::INVALID_ACCOUNT_TOKEN => Some(StatusCode::BAD_REQUEST),
+        codes::ACCOUNT_NOT_FOUND => Some(StatusCode::NOT_FOUND),
+        codes::ACCOUNT_IN_USE => Some(StatusCode::CONFLICT),
+        codes::ACCOUNTS_IO => Some(StatusCode::INTERNAL_SERVER_ERROR),
+        codes::ACCOUNT_EXISTS => Some(StatusCode::CONFLICT),
+        codes::ACCOUNT_RESERVED => Some(StatusCode::BAD_REQUEST),
         _ => None,
     }
 }

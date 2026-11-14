@@ -1,5 +1,5 @@
 import * as RadixCheckbox from "@radix-ui/react-checkbox";
-import { Check } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import { forwardRef, type ComponentProps } from "react";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
@@ -47,6 +47,9 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
   },
 );
 
+/** The browser's own arrow ignores the padding and sits at the edge, so the select draws none and leaves room for its chevron, which sits as far in as the text does. */
+const SELECT_ARROW_ROOM = "appearance-none pr-40";
+
 export type SelectProps = Omit<ComponentProps<"select">, "id" | "ref"> &
   FieldProps;
 
@@ -55,14 +58,26 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
     return (
       <Field label={label} hint={hint} error={error}>
         {(control) => (
-          <select
-            {...rest}
-            {...control}
-            ref={ref}
-            className={cn(controlClasses, focusRing, className)}
-          >
-            {children}
-          </select>
+          <div className="relative">
+            <select
+              {...rest}
+              {...control}
+              ref={ref}
+              className={cn(
+                controlClasses,
+                focusRing,
+                SELECT_ARROW_ROOM,
+                className,
+              )}
+            >
+              {children}
+            </select>
+            <ChevronDown
+              aria-hidden="true"
+              size={16}
+              className="pointer-events-none absolute top-1/2 right-12 -translate-y-1/2 text-text-2"
+            />
+          </div>
         )}
       </Field>
     );

@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use fold_core::accounts::AccountStamp;
 use fold_core::transcript::claude_config_dir;
 use fold_core::{AgentName, Clock, ProjectPaths, Role};
 use fold_store::Store;
@@ -20,6 +21,7 @@ use crate::support::lock;
 use questions::Waiter;
 use watch::watch_done;
 
+mod account;
 mod fresh;
 mod gate;
 mod launch;
@@ -34,9 +36,11 @@ mod resume;
 mod send_back;
 mod stderr;
 mod stop;
+mod waits;
 mod watch;
 
 pub use restart::{MCP_RETRY_TURN, PAUSE_TURN, RESTART_TURN};
+pub use stop::Park;
 
 /// The folder below a project's `.fold/` that, in a build for development, makes every worker of the project run fld's scripted stand-in for Claude Code instead of `claude`. It holds one script per agent, `<agent>.json`; the development seed writes it.
 #[cfg(feature = "dev-launcher")]
@@ -58,6 +62,8 @@ pub struct Launcher {
     pub env: Vec<(String, String)>,
     /// The fingerprint of the skill texts that the fld which runs the daemon writes for a session of each role (see [`fold_core::roles::session_fingerprint`]), given by the caller because the skills ship only in the binary that writes the skill files. A worker records it with its session, and a resume under another one tells the worker to load its role skill again. A role without one is never told.
     pub fingerprints: BTreeMap<Role, String>,
+    /// The folder of the host's Claude accounts, whose token a worker of a project that names an account starts with; `None` knows no account, so such a worker cannot start.
+    pub accounts: Option<PathBuf>,
 }
 
 impl Default for Launcher {
@@ -67,6 +73,7 @@ impl Default for Launcher {
             fold: None,
             env: Vec::new(),
             fingerprints: BTreeMap::new(),
+            accounts: None,
         }
     }
 }
@@ -135,6 +142,8 @@ impl Default for StopTimeouts {
 enum Input {
     Line(String),
     Turn(String),
+    /// A turn that goes to this process whatever account it runs with, because its switch did not happen.
+    KeptTurn(String),
     Close,
 }
 
@@ -150,6 +159,8 @@ struct Running {
     reaped: Arc<AtomicBool>,
     /// The user turns written to the process's stdin that no result has ended yet. Claude Code queues a turn written during another one, and a worker whose next turn waits in that queue has not answered it.
     open_turns: Arc<AtomicU64>,
+    /// The account whose token the process started with, `None` for Claude Code's own login. A process whose account is no longer the project's continues in its own session with the project's account once it is idle.
+    account: Option<AccountStamp>,
 }
 
 /// The worker processes of one project, in memory, with the task that stops a short-lived worker once its work is done. Every process is spawned with `kill_on_drop`, so none outlives the handle.
@@ -204,6 +215,12 @@ struct Inner {
     tool_windows: Arc<ToolWindows>,
     /// What each running process wrote last and which of its calls are open, for the stall rule.
     streams: Arc<WorkerStreams>,
+    /// The workers that continue in their own session with another account, whose notices wait for the new process meanwhile.
+    switching: Mutex<HashSet<AgentName>>,
+    /// The turns that came for idle processes that run with another account than the project's, by worker, which the switch gives the new process, or the old one when no switch happens.
+    switch_turns: Mutex<HashMap<AgentName, Vec<String>>>,
+    /// The turns fold owes workers whose last turn ended for a cause outside them.
+    owed: Mutex<waits::OwedTurns>,
 }
 
 impl Drop for Inner {
@@ -272,6 +289,9 @@ impl Supervisor {
                 cleanup_due: Mutex::new(None),
                 tool_windows: Arc::default(),
                 streams: Arc::default(),
+                switching: Mutex::new(HashSet::new()),
+                switch_turns: Mutex::default(),
+                owed: Mutex::default(),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();
@@ -283,6 +303,29 @@ impl Supervisor {
     /// The fingerprint of the skill texts the installed fld writes for a session of `role`; see [`Launcher::fingerprints`].
     pub fn fingerprint(&self, role: Role) -> Option<String> {
         lock(&self.inner.launcher).fingerprints.get(&role).cloned()
+    }
+
+    /// Whether Claude Code has its own login on the host, as the workers' environment finds it (see [`crate::services::agents::accounts::claude_login`]); false for a launcher without an accounts folder, which knows no account.
+    pub async fn claude_login(&self) -> bool {
+        let (env, known) = {
+            let launcher = lock(&self.inner.launcher);
+            (launcher.env.clone(), launcher.accounts.is_some())
+        };
+        if !known {
+            return false;
+        }
+        tokio::task::spawn_blocking(move || {
+            crate::services::agents::accounts::claude_login(|name| {
+                env_value(&env, name).or_else(|| std::env::var_os(name))
+            })
+        })
+        .await
+        .unwrap_or(false)
+    }
+
+    /// The folder of the host's accounts that the launcher names.
+    pub fn accounts_dir(&self) -> Option<PathBuf> {
+        lock(&self.inner.launcher).accounts.clone()
     }
 
     pub fn set_launcher(&self, launcher: Launcher) {
@@ -376,7 +419,9 @@ impl Supervisor {
             .is_some_and(|run| run.generation == process.generation)
         {
             running.remove(&process.agent);
-            self.inner.push.clear_stdin(&process.agent);
+            if !lock(&self.inner.switching).contains(&process.agent) {
+                self.inner.push.clear_stdin(&process.agent);
+            }
         }
     }
 

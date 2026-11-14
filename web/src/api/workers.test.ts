@@ -13,6 +13,7 @@ import {
   listWorkerQuestions,
   listWorkers,
   restartWorker,
+  setProjectAccount,
   startWorker,
   stopWorker,
 } from "./workers";
@@ -44,6 +45,26 @@ describe("workers", () => {
     expect(started.state).toBe("starting");
     expect(calls[1]?.body).toEqual({ role: "area_lead", area: "web" });
     expect((await stopWorker("demo", "web-lead")).state).toBe("stopping");
+  });
+
+  it("chooses the project's account by name and refuses an unknown one", async () => {
+    const calls = stubFetch({
+      [`PUT ${BASE}/account`]: {
+        body: { account: "work-b", accounts: ["work-a", "work-b"] },
+      },
+    });
+    expect(await setProjectAccount("demo", "work-b")).toEqual({
+      account: "work-b",
+      accounts: ["work-a", "work-b"],
+    });
+    expect(calls[0]?.body).toEqual({ account: "work-b" });
+    stubFetch({
+      [`PUT ${BASE}/account`]: errorReply(404, "account_not_found"),
+    });
+    const refused = await setProjectAccount("demo", "gone").catch(
+      (error: unknown) => error,
+    );
+    expect(isApiError(refused, "account_not_found")).toBe(true);
   });
 
   it("starts a worker in a new session with the instructions", async () => {

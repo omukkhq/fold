@@ -405,6 +405,7 @@ async fn a_claim_idle_for_the_lease_gets_one_stale_event() {
             "kind": "implementation",
             "worker": "frontend",
             "renewed_at": claimed_at.as_millis(),
+            "told": [],
         })
     );
     assert_eq!(event.created_at, stale_at);
@@ -490,6 +491,7 @@ async fn a_review_claim_is_marked_and_reported_like_a_task_claim() {
             "proposal": proposal.to_string(),
             "worker": "backend",
             "renewed_at": reviewed_at.as_millis(),
+            "told": [],
         })
     );
     let review = reviews::unreleased_review_claim(fx.project.store().read(), proposal)
@@ -1221,6 +1223,19 @@ async fn a_claim_stays_alive_while_its_holders_check_run_goes_and_lapses_a_full_
     let stored = fx.stale_events().await;
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].data["renewed_at"], json!(end.as_millis()));
+    assert_eq!(
+        stored[0].data["told"],
+        json!(["main"]),
+        "the main agent hears first"
+    );
+    assert!(
+        !fx.attention("T-1")
+            .await
+            .contains(&"stale_claim".to_owned()),
+        "the main agent gets one stall window"
+    );
+    fx.advance(STALL);
+    fx.sweep().await;
     assert!(
         fx.attention("T-1")
             .await

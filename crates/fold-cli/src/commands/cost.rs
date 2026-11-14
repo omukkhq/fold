@@ -207,18 +207,30 @@ fn dollars(micro: u64) -> String {
     format!("${}.{:02}", cents / 100, cents % 100)
 }
 
-/// `980`, `64.5k` or `1.2M` tokens.
+/// `980`, `64.5k`, `1.2M`, `2.01B` or `1.25T` tokens: thousands and millions with one decimal, billions and trillions with two, as the web's cost view writes them. A count that rounds up to 1000 of a unit shows in the next unit, so no text reads `1000.0M`.
 fn tokens_text(count: u64) -> String {
-    let tenths = |unit: u64| (u128::from(count) * 10 + u128::from(unit) / 2) / u128::from(unit);
+    // The count in `unit`s, rounded half up to `parts` parts of a unit.
+    let rounded = |unit: u64, parts: u64| {
+        let unit = u128::from(unit);
+        (u128::from(count) * u128::from(parts) + unit / 2) / unit
+    };
     if count < 1_000 {
         return count.to_string();
     }
-    let thousands = tenths(1_000);
+    let thousands = rounded(1_000, 10);
     if thousands < 10_000 {
         return format!("{}.{}k", thousands / 10, thousands % 10);
     }
-    let millions = tenths(1_000_000);
-    format!("{}.{}M", millions / 10, millions % 10)
+    let millions = rounded(1_000_000, 10);
+    if millions < 10_000 {
+        return format!("{}.{}M", millions / 10, millions % 10);
+    }
+    let billions = rounded(1_000_000_000, 100);
+    if billions < 100_000 {
+        return format!("{}.{:02}B", billions / 100, billions % 100);
+    }
+    let trillions = rounded(1_000_000_000_000, 100);
+    format!("{}.{:02}T", trillions / 100, trillions % 100)
 }
 
 /// The total of the `tokens` of `value`.
@@ -710,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn tokens_read_as_thousands_and_millions() {
+    fn tokens_read_as_thousands_millions_billions_and_trillions() {
         assert_eq!(tokens_text(0), "0");
         assert_eq!(tokens_text(999), "999");
         assert_eq!(tokens_text(1_000), "1.0k");
@@ -718,6 +730,15 @@ mod tests {
         assert_eq!(tokens_text(999_949), "999.9k");
         assert_eq!(tokens_text(999_950), "1.0M");
         assert_eq!(tokens_text(12_345_678), "12.3M");
+        assert_eq!(tokens_text(999_949_999), "999.9M");
+        assert_eq!(tokens_text(999_950_000), "1.00B");
+        assert_eq!(tokens_text(2_015_700_000), "2.02B");
+        assert_eq!(tokens_text(2_014_900_000), "2.01B");
+        assert_eq!(tokens_text(999_994_999_999), "999.99B");
+        assert_eq!(tokens_text(999_995_000_000), "1.00T");
+        assert_eq!(tokens_text(1_250_000_000_000), "1.25T");
+        assert_eq!(tokens_text(12_345_000_000_000), "12.35T");
+        assert_eq!(tokens_text(u64::MAX), "18446744.07T");
     }
 
     fn east(hours: i32) -> FixedOffset {

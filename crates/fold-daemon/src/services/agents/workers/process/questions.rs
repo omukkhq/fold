@@ -737,11 +737,37 @@ impl AgentService {
     pub async fn needs_you(
         &self,
     ) -> Result<Vec<crate::services::agents::NeedsYouItem>, AgentError> {
-        let items = crate::services::agents::needs_you(&self.store).await?;
+        let mut items = crate::services::agents::needs_you(&self.store).await?;
+        self.offer_account_switches(&mut items).await;
         Ok(crate::services::agents::needs_you::with_stalls(
             items,
             self.live.as_ref(),
         ))
+    }
+
+    /// Gives each usage-limit item the project's account and one switch to every account other than the project's, by name, after its pause: `default` first when the project runs on another account and Claude Code has its own login on the host.
+    async fn offer_account_switches(&self, items: &mut [crate::services::agents::NeedsYouItem]) {
+        use crate::services::agents::{NeedsYouAction, NeedsYouKind};
+        if !items
+            .iter()
+            .any(|item| item.kind == NeedsYouKind::UsageLimit)
+        {
+            return;
+        }
+        let view = self.project_account().await;
+        let others: Vec<NeedsYouAction> = view
+            .accounts
+            .into_iter()
+            .filter(|name| name != &view.account)
+            .map(NeedsYouAction::SwitchAccount)
+            .collect();
+        for item in items
+            .iter_mut()
+            .filter(|item| item.kind == NeedsYouKind::UsageLimit)
+        {
+            item.account = Some(view.account.clone());
+            item.actions.extend(others.iter().cloned());
+        }
     }
 
     /// The open permission questions of every worker, oldest first. `AskUserQuestion` calls are not among them: they are question messages.

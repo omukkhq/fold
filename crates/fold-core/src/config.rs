@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::accounts::AccountName;
 use crate::agents::roles::{
     CacheTtl, HandoffAt, Role, WorkerLimits, is_command_word as plain_word,
 };
@@ -32,6 +33,12 @@ pub struct ProjectConfig {
     /// The settings of each worker role by role name, as `[roles.<role>]` sections; a role without one takes its defaults.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub roles: BTreeMap<String, RoleConfig>,
+    /// The host account whose Claude subscription every worker of the project and the main agent's `fld claude` run with; `None` for `default`, Claude Code's own login, which the key left out and `account = "default"` both mean, as does `account = "system-default"`.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "stored_account"
+    )]
+    pub account: Option<AccountName>,
 }
 
 /// The `[workers]` section: how many short-lived workers of each role fold runs at once, and optionally how many task workers in one area. The leads are outside these limits. A limit of 0 lets no worker of its role start.
@@ -143,6 +150,14 @@ pub const INTEGRATION_SECTION: &str = "integration";
 pub const WORKERS_SECTION: &str = "workers";
 pub const MAIN_SECTION: &str = "main";
 pub const ROLES_SECTION: &str = "roles";
+fn stored_account<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<AccountName>, D::Error> {
+    Ok(Option::<AccountName>::deserialize(deserializer)?.and_then(AccountName::stored))
+}
+
+/// The top-level key that names the project's account.
+pub const ACCOUNT_KEY: &str = "account";
 
 /// The `[integration]` section.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,6 +198,7 @@ impl Default for ProjectConfig {
             workers: WorkersConfig::default(),
             main: MainConfig::default(),
             roles: BTreeMap::new(),
+            account: None,
         }
     }
 }
@@ -233,6 +249,18 @@ impl ProjectConfig {
             }
             if key == MAIN_SECTION {
                 check_main_section(value)?;
+                continue;
+            }
+            if key == ACCOUNT_KEY {
+                let name = value.as_str().ok_or_else(|| {
+                    refused(ACCOUNT_KEY, "must be the name of an account in quotes")
+                })?;
+                AccountName::parse(name).map_err(|_| {
+                    refused(
+                        ACCOUNT_KEY,
+                        "must be 1 to 32 characters of a-z, 0-9, - and _, starting with a letter or digit",
+                    )
+                })?;
                 continue;
             }
             if !known.contains(key) {
@@ -616,6 +644,30 @@ mod tests {
         // Only comments: the file as written changes nothing.
         let as_written = ProjectConfig::from_toml(CONFIG_TEMPLATE).unwrap();
         assert_eq!(as_written, ProjectConfig::default());
+    }
+
+    #[test]
+    fn the_account_names_an_account_and_nothing_else() {
+        let config =
+            ProjectConfig::from_toml("account = \"work-a\"\n[workers]\nreviewer = 2\n").unwrap();
+        assert_eq!(
+            config.account.as_ref().map(AccountName::as_str),
+            Some("work-a")
+        );
+        assert_eq!(ProjectConfig::default().account, None);
+        let old = ProjectConfig::from_toml("account = \"system-default\"\n").unwrap();
+        assert_eq!(old.account, None, "the old name reads as default");
+        let default = ProjectConfig::from_toml("account = \"default\"\n").unwrap();
+        assert_eq!(default.account, None, "default is Claude Code's own login");
+        for bad in [
+            "account = 3\n",
+            "account = \"Work A\"\n",
+            "account = \"\"\n",
+        ] {
+            let error = ProjectConfig::from_toml(bad).unwrap_err();
+            assert_eq!(error.code(), codes::INVALID_CONFIG, "{bad}");
+            assert_eq!(error.details().unwrap()["key"], "account");
+        }
     }
 
     #[test]

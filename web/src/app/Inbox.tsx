@@ -10,6 +10,7 @@ import {
   FileWarning,
   FileX,
   FolderClock,
+  Gauge,
   GitBranch,
   GitMerge,
   GitPullRequest,
@@ -60,9 +61,11 @@ import { HrefLink } from "./HrefLink";
 import { SharedChangeDismiss, SharedFilesDialog } from "./SharedChangeDismiss";
 import { RestartStalled } from "@/features/workers/RestartStalled";
 import { listNote, listState } from "./listNote";
+import { LimitActions } from "./LimitActions";
 import { PanelNote } from "./PanelNote";
 import {
   fullTitle,
+  wrapsWhole,
   itemsFor,
   needsYouGroups,
   type FilesSummary,
@@ -89,6 +92,8 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   agent_change: Bot,
   shared_changed: Link2,
   worker_stalled: Hand,
+  usage_limit: Gauge,
+  stale_claim: Hand,
 };
 
 const MINUTE_MS = 60_000;
@@ -171,13 +176,10 @@ function NeedLine({
           {formatAsOfMinute(now, line.since)}
         </span>
         {!line.inline && line.title ? (
-          // A row that opens nothing has no tooltip to give a cut title, and a stalled worker's title is the command that restarts it, so each wraps whole.
           <span
             className={cn(
               "min-w-0 basis-full text-13 text-text-2",
-              line.href === null || line.restart !== null
-                ? "wrap-anywhere"
-                : "truncate",
+              wrapsWhole(line) ? "wrap-anywhere" : "truncate",
             )}
           >
             <CodeText text={line.title} caption />
@@ -202,7 +204,9 @@ function NeedLine({
             )}
           </span>
         ) : null}
-        {choices ? <span className="basis-full pt-4">{choices}</span> : null}
+        {choices && line.href === null ? (
+          <span className="basis-full pt-4">{choices}</span>
+        ) : null}
       </span>
     </>
   );
@@ -231,7 +235,16 @@ function NeedLine({
     </HrefLink>
   );
   return (
-    <li>{full === null ? link : <Tooltip content={full}>{link}</Tooltip>}</li>
+    <li>
+      {full === null ? link : <Tooltip content={full}>{link}</Tooltip>}
+      {choices ? (
+        // A control inside the link would open the line's screen too, so the controls of a line that opens one sit under it, in line with its words.
+        <div className="flex gap-10 px-10 pb-8">
+          <span aria-hidden="true" className="w-16 shrink-0" />
+          <div className="min-w-0 flex-1">{choices}</div>
+        </div>
+      ) : null}
+    </li>
   );
 }
 
@@ -485,6 +498,11 @@ export function Inbox({ slug }: { slug: string }) {
                               />
                             ) : line.restart !== null ? (
                               <RestartStalled slug={slug} name={line.restart} />
+                            ) : line.actions.includes("pause") ? (
+                              <LimitActions
+                                slug={slug}
+                                accounts={line.switchTo}
+                              />
                             ) : line.dismiss === null ? undefined : (
                               <SharedChangeDismiss
                                 slug={slug}

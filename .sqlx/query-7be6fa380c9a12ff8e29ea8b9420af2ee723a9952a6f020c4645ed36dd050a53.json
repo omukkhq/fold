@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_processes\n         SET turns = turns + ?7, cost_micro_usd = ?2, session_cost_micro_usd = ?3,\n             cache_read_tokens = cache_read_tokens + ?4, cache_write_tokens = cache_write_tokens + ?5,\n             state = CASE WHEN state IN ('starting', 'working') THEN 'idle' ELSE state END,\n             idle_since = CASE WHEN state IN ('starting', 'working') THEN ?6 ELSE idle_since END\n         WHERE id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "7be6fa380c9a12ff8e29ea8b9420af2ee723a9952a6f020c4645ed36dd050a53"
+}

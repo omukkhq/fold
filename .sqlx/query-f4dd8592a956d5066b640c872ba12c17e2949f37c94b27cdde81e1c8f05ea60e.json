@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.id AS \"id!: i64\", c.kind, t.number AS \"task!: i64\",\n                  p.number AS \"proposal?: i64\", w.name AS worker, c.renewed_at,\n                  c.stale_at AS \"stale_at!: i64\"\n           FROM claims c\n           JOIN workers w ON w.id = c.worker_id\n           LEFT JOIN proposals p ON p.id = c.proposal_id\n           JOIN tasks t ON t.id = COALESCE(c.task_id, p.task_id)\n           WHERE c.released_at IS NULL AND c.stale_at IS NOT NULL\n             AND c.stale_needs_person_at IS NULL\n           ORDER BY c.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "task!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "proposal?: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "worker",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "renewed_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "renewed_at"
+          }
+        }
+      },
+      {
+        "name": "stale_at!: i64",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "stale_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "f4dd8592a956d5066b640c872ba12c17e2949f37c94b27cdde81e1c8f05ea60e"
+}

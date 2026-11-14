@@ -38,11 +38,13 @@ export function workerProcess(
     last_error_at: null,
     failed_turns: 0,
     model_unreachable: false,
+    waits_for: null,
     hint: null,
     cache_ttl: "1h",
     older_fold: false,
     session_id: "0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13",
     previous_sessions: [],
+    parked: null,
     transcript:
       "/home/tanim/.claude/projects/-home-tanim-ledger/0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13.jsonl",
     ...fields,
@@ -75,6 +77,7 @@ export function workerList(fields: Partial<WorkerList> = {}): WorkerList {
     limits: null,
     pause: { paused_since: null, paused_by: null },
     main_supervised: false,
+    account: { account: "default", accounts: ["default"] },
     ...fields,
   };
 }
@@ -118,6 +121,12 @@ export function needsItem(fields: Partial<NeedsYouItem> = {}): NeedsYouItem {
     target: null,
     agents: [],
     activity: null,
+    limit: null,
+    account: null,
+    reset: null,
+    resets_at: null,
+    actions: [],
+    action: null,
     ...fields,
   };
 }

@@ -21,6 +21,7 @@ use crate::services::tasks::{TaskError, renew_leases};
 use crate::services::workspaces::WorkspaceLocks;
 
 /// Claude Code's headless stream-json protocol as fold reads and writes it, the oldest Claude Code fold drives, and the sign-in answer of `claude auth status`. It is public because `fld doctor` checks the installed Claude Code with the same version and sign-in types.
+pub mod accounts;
 pub mod claude;
 mod context;
 mod cost;
@@ -39,17 +40,20 @@ pub use context::{
     render as render_session_context,
 };
 pub use cost::{ProjectCost, cost_totals};
-pub use needs_you::{NeedsYouItem, NeedsYouKind, Screen, needs_you, with_folder_attention};
+pub use needs_you::{
+    NeedsYouAction, NeedsYouItem, NeedsYouKind, Screen, needs_you, with_folder_attention,
+};
 pub use overview::{
     AgentAttention, AgentOverview, ClaimSummary, MAX_OVERVIEW_EVENTS, OverviewFilter,
-    ProcessSummary, ProposalSummary, SessionSummary, WorkerOverview, WorkspaceSummary,
+    ProcessSummary, ProposalSummary, SessionSummary, WorkerOverview, WorkspaceSummary, waits_for,
 };
 pub use presence::SeenPresence;
 #[cfg(feature = "dev-launcher")]
 pub use workers::{DEV_STUB_COMMAND, DEV_STUB_DIR};
 pub use workers::{
-    Launcher, MCP_RETRY_TURN, PAUSE_TURN, PauseState, RESTART_TURN, StartWorker, StartedWorker,
-    StopTimeouts, StreamFacts, Supervisor, WorkerLimitsChanged, WorkerStreams, new_session_id,
+    Launcher, MCP_RETRY_TURN, PAUSE_TURN, PauseState, ProjectAccount, RESTART_TURN, StartWorker,
+    StartedWorker, StopTimeouts, StreamFacts, Supervisor, WorkerLimitsChanged, WorkerStreams,
+    new_session_id,
 };
 pub(crate) use workers::{code_of, starter_of};
 
@@ -407,7 +411,7 @@ impl AgentService {
         Ok(worker.ok_or_else(worker_not_found)?)
     }
 
-    /// Stamps the session and the worker with the time of a tool call and renews the claims of that worker in the same transaction. The worker's activity is the tool name, followed by the task id when there is one. After the commit it sends a live `agent.presence_changed` when the call made the agent active.
+    /// Stamps the session and the worker with the time of a tool call and renews the claims of that worker in the same transaction, with a `claim.renewed` for each claim whose stale mark the renewal cleared, published after the commit. The worker's activity is the tool name, followed by the task id when there is one. After the commit it sends a live `agent.presence_changed` when the call made the agent active.
     pub async fn record_call(
         &self,
         ctx: &SessionContext,
@@ -420,6 +424,7 @@ impl AgentService {
             Some(task) => format!("{tool} {task}"),
             None => tool.to_owned(),
         };
+        let mut buffer = EventBuffer::new();
         let (before, after) = self
             .store
             .write(async |tx| {
@@ -427,13 +432,14 @@ impl AgentService {
                 agents::touch_session(tx, ctx.session_id, now).await?;
                 agents::touch_worker(tx, worker.id, now, &activity).await?;
                 let after = agents::open_session_calls(tx.conn(), worker.agent_id).await?;
-                renew_leases(tx, &[worker.id], now).await?;
-                Ok::<_, StoreError>((
+                renew_leases::<AgentError>(tx, &mut buffer, &[worker.id], now).await?;
+                Ok::<_, AgentError>((
                     presence_of(now, &presence::facts(&before)),
                     presence_of(now, &presence::facts(&after)),
                 ))
             })
             .await?;
+        self.bus.publish(buffer);
         self.seen
             .after_call(&self.bus, &worker.name.agent(), before, after)
             .await?;

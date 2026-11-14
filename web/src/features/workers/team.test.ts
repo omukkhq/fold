@@ -25,6 +25,7 @@ import {
   hasNoLeads,
   heldBatch,
   isPausedWorker,
+  parkedStep,
   isEmptyTeam,
   isSupervisedMain,
   MAIN_STOP_NOTE,
@@ -201,6 +202,7 @@ describe("steps", () => {
         title: "cannot reach the model",
         text: "Invalid API key",
         hint: null,
+        waits: false,
       }),
     ).toBe("cannot reach the model: Invalid API key");
   });
@@ -291,6 +293,85 @@ describe("steps", () => {
     expect(running?.rows[0]?.pill).toEqual(workerPill("working"));
   });
 
+  it("shows an idle worker whose turn waits as waiting, with the wait in its step, never idle or its next turn", () => {
+    const workers = [
+      workerProcess("web-lead", { state: "working" }),
+      workerProcess("web-worker", {
+        state: "idle",
+        role: "task_worker",
+        last_error: "You've hit your weekly limit",
+        waits_for: "usage_limit",
+      }),
+      workerProcess("api-worker", {
+        state: "idle",
+        role: "task_worker",
+        last_error: "API Error: Can't reach the API server",
+        waits_for: "network",
+      }),
+      workerProcess("db-worker", { state: "idle", role: "task_worker" }),
+      workerProcess("ui-worker", {
+        state: "idle",
+        role: "task_worker",
+        waits_for: "usage_limit",
+      }),
+    ];
+    const [group] = teamGroups(input({ workers: workerList({ workers }) }));
+    const row = (name: string) => group?.rows.find((r) => r.name === name);
+    expect(row("web-worker")).toMatchObject({
+      pill: { label: "waiting", tone: "idle" },
+      errorInStep: true,
+      error: { title: "waits for the usage limit reset", waits: true },
+      step: { tool: null, text: "waits for the usage limit reset" },
+    });
+    expect(row("api-worker")).toMatchObject({
+      pill: { label: "waiting", tone: "idle" },
+      errorInStep: true,
+      error: { title: "waiting for the network", waits: true },
+    });
+    expect(row("db-worker")?.pill).toEqual(workerPill("idle"));
+    expect(row("ui-worker")).toMatchObject({
+      pill: { label: "waiting", tone: "idle" },
+      errorInStep: false,
+      step: { tool: null, text: "waits for the usage limit reset" },
+    });
+  });
+
+  it("shows a parked worker as parked with what it waits for and no Restart, and a worker that runs again as running", () => {
+    const parked = {
+      by: "web-lead",
+      wait_for: "my go after the T-2 migration",
+      since: 1_760_000_000_000,
+    };
+    const workers = [
+      workerProcess("web-lead", { state: "working" }),
+      workerProcess("web-worker", {
+        state: "stopped",
+        role: "task_worker",
+        parked,
+      }),
+      workerProcess("api-worker", {
+        state: "working",
+        role: "task_worker",
+        parked,
+      }),
+    ];
+    const [group] = teamGroups(input({ workers: workerList({ workers }) }));
+    const row = (name: string) => group?.rows.find((r) => r.name === name);
+    expect(row("web-worker")).toMatchObject({
+      pill: { label: "parked", tone: "stopped" },
+      restart: false,
+      step: {
+        tool: null,
+        text: "waits for @web-lead's go: my go after the T-2 migration",
+      },
+    });
+    expect(row("api-worker")?.pill).toEqual(workerPill("working"));
+    expect(row("api-worker")?.restart).toBe(true);
+    expect(parkedStep(parked)).toBe(
+      "waits for @web-lead's go: my go after the T-2 migration",
+    );
+  });
+
   it("marks a worker whose session still holds an older fold's skill, and never the main agent", () => {
     const older = workerProcess("web-lead", { older_fold: true });
     const [group] = teamGroups(
@@ -307,7 +388,12 @@ describe("steps", () => {
     expect(rowError(workerProcess("web-lead"))).toBeNull();
     expect(
       rowError(workerProcess("web-lead", { last_error: "Reached max turns" })),
-    ).toEqual({ title: "last error", text: "Reached max turns", hint: null });
+    ).toEqual({
+      title: "last error",
+      text: "Reached max turns",
+      hint: null,
+      waits: false,
+    });
     const failing = workerProcess("web-lead", {
       state: "idle",
       last_error: "Invalid key",
@@ -319,7 +405,30 @@ describe("steps", () => {
       title: "cannot reach the model",
       text: "Invalid key",
       hint: "check the sign-in, or run `fld doctor`",
+      waits: false,
     });
+    expect(
+      rowError(
+        workerProcess("web-lead", {
+          state: "idle",
+          last_error: "API Error: Can't reach the API server",
+          waits_for: "network",
+        }),
+      ),
+    ).toEqual({
+      title: "waiting for the network",
+      text: "API Error: Can't reach the API server",
+      hint: null,
+      waits: true,
+    });
+    expect(
+      rowError(
+        workerProcess("web-lead", {
+          last_error: "You've hit your weekly limit",
+          waits_for: "usage_limit",
+        }),
+      )?.title,
+    ).toBe("waits for the usage limit reset");
     const [group] = teamGroups(
       input({ workers: workerList({ workers: [failing] }) }),
     );

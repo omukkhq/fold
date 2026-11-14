@@ -9,6 +9,7 @@ use clap::Args;
 use fold_cli::claude_files;
 use fold_cli::daemon_client::{ClientConfig, ClientError};
 use fold_core::Clock;
+use fold_core::accounts::{ACCOUNT_ENV, OAUTH_TOKEN_ENV};
 use fold_daemon::config::{LOCK_FILE, SOCKET_FILE};
 use fold_daemon::projects::FolderFiles;
 use fold_daemon::services::agents::Launcher;
@@ -243,6 +244,7 @@ fn write_skills(root: &Path) {
     }
 }
 
+/// A daemon that a `fld claude` session started, through its `fld mcp`, inherits the token of that session's project, marked by `FOLD_ACCOUNT`; it drops both, so a project without an account never runs on another project's subscription.
 pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
     tracing_subscriber::fmt()
         .json()
@@ -253,6 +255,13 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
         .init();
     #[cfg(feature = "failpoints")]
     let _failpoints = fold_daemon::failpoints_from_env();
+    if std::env::var_os(ACCOUNT_ENV).is_some() {
+        // SAFETY: no other thread runs yet: the tokio runtime is built below, and neither the log subscriber nor the failpoints start one, so nothing reads the environment while it changes.
+        unsafe {
+            std::env::remove_var(ACCOUNT_ENV);
+            std::env::remove_var(OAUTH_TOKEN_ENV);
+        }
+    }
     let dirs = Dirs::from_env();
     let file = read_file_config(&dirs.config_file()?)?;
     let config = build_config(args, &dirs, &file)?;
@@ -272,6 +281,7 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
         fold: None,
         env: chosen.workers,
         fingerprints: claude_files::worker_fingerprints(),
+        accounts: Some(config.accounts_dir()),
     }
     .with_claude_location(|name| std::env::var_os(name));
     let runtime = tokio::runtime::Builder::new_multi_thread()

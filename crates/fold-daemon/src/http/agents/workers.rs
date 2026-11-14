@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::extract::Path;
 use axum::http::StatusCode;
+use fold_core::accounts::AccountName;
 use fold_core::roles::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, WorkerLimits, WorkerLimitsChange,
 };
@@ -15,7 +16,7 @@ use super::super::Project;
 use super::super::actor::Human;
 use super::super::error::{ApiError, ApiJson, ErrorEnvelope, fold};
 use crate::daemon::AppState;
-use crate::services::agents::{PauseState, StartWorker};
+use crate::services::agents::{PauseState, ProjectAccount, StartWorker};
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -27,6 +28,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(set_worker_limits))
         .routes(routes!(pause_project))
         .routes(routes!(resume_project))
+        .routes(routes!(set_project_account))
 }
 
 /// The areas and every worker fold runs or ran.
@@ -47,6 +49,38 @@ pub struct WorkerList {
     pub pause: PauseEntry,
     /// Whether `supervised = true` under `[main]` has fold run the main agent as the worker of role `main`; false when fold cannot read `.fold/config.toml`. With it off, the main agent is the user's own `fld claude` session, and a row of role `main` is left from a time it was on.
     pub main_supervised: bool,
+    pub account: ProjectAccountEntry,
+}
+
+/// The Claude account of the project's workers and the host's accounts it can choose, by name only; a token never leaves the host's data folder.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectAccountEntry {
+    /// The account that `.fold/config.toml` names; `default`, Claude Code's own login, when it names none, also when that login is gone from the host.
+    #[schema(example = "work-a")]
+    pub account: String,
+    /// The accounts a person can choose: `default` first while Claude Code has its own login on the host (`claude login`), then the host's accounts in name order, as `fld account add` added them.
+    pub accounts: Vec<String>,
+}
+
+impl From<ProjectAccount> for ProjectAccountEntry {
+    fn from(view: ProjectAccount) -> Self {
+        Self {
+            account: view.account.as_str().to_owned(),
+            accounts: view
+                .accounts
+                .into_iter()
+                .map(|name| name.as_str().to_owned())
+                .collect(),
+        }
+    }
+}
+
+/// The account a person chooses for the project.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetProjectAccountBody {
+    /// The name of one of the host's accounts, or `default` for Claude Code's own login; null and `system-default` mean `default` too.
+    #[schema(required = true, example = "work-a")]
+    pub account: Option<String>,
 }
 
 /// Whether the project's agents are paused. While paused, fold runs no worker process; a worker that was working, idle or starting keeps that state and runs again in its own session at the resume.
@@ -205,6 +239,23 @@ impl From<fold_core::WorkerState> for WorkerProcessState {
     }
 }
 
+/// The cause outside a worker that its last turn waits for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnWaitReason {
+    Network,
+    UsageLimit,
+}
+
+impl From<fold_core::turn_waits::WaitReason> for TurnWaitReason {
+    fn from(reason: fold_core::turn_waits::WaitReason) -> Self {
+        match reason {
+            fold_core::turn_waits::WaitReason::Network => Self::Network,
+            fold_core::turn_waits::WaitReason::UsageLimit => Self::UsageLimit,
+        }
+    }
+}
+
 /// One worker agent and its supervised Claude Code process. The totals add up over every process of the worker.
 ///
 /// The agents route has its own `WorkerEntry`, so the schema takes another name: two schemas of one name leave only one in the OpenAPI document.
@@ -258,6 +309,9 @@ pub struct WorkerEntry {
     pub failed_turns: u64,
     /// The worker's turns failed often enough in a row without reaching the model that it cannot work until a human fixes Claude Code; the daemon decides it, and the human's list of what waits for them holds an item for it.
     pub model_unreachable: bool,
+    /// What the idle worker's last turn waits for: `network` when Claude Code could not reach the model, `usage_limit` when the account reached a usage limit. fold runs the turn again in the worker's session once the cause has passed, so the worker is neither stalled nor failing; null when it waits for nothing.
+    #[schema(required = true)]
+    pub waits_for: Option<TurnWaitReason>,
     /// What the human checks for a worker that cannot reach the model; null otherwise.
     #[schema(
         required = true,
@@ -279,6 +333,23 @@ pub struct WorkerEntry {
     pub transcript: Option<String>,
     /// The worker is idle or working in a session that last read other skill text than the fld that runs the daemon writes for its role. Its next turn starts with a note to load its role skill again, and once fold writes that turn this is false; false for a worker that is starting or stopping or does not run.
     pub older_fold: bool,
+    /// The agent that stopped the worker to wait for its go, with what it waits for; null for a worker nobody parked. The agent's message resumes it in its session, and every start ends the park.
+    #[schema(required = true)]
+    pub parked: Option<WorkerParkEntry>,
+}
+
+/// A park of a worker: an agent stopped it with `stop_worker`'s `wait_for`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WorkerParkEntry {
+    /// The agent whose go the worker waits for.
+    #[schema(example = "web-lead")]
+    pub by: String,
+    /// What the worker waits for, in that agent's words.
+    #[schema(example = "my go after the T-288 migration")]
+    pub wait_for: String,
+    /// UTC milliseconds of the park.
+    #[schema(value_type = i64)]
+    pub since: fold_core::Timestamp,
 }
 
 /// Why a worker left a session for a new one: `handoff` (a fresh context after its hand-off note), `lost` (Claude Code no longer had the session) or `requested` (a human or the main agent asked for a new session).
@@ -333,6 +404,7 @@ impl WorkerEntry {
         let cache_ttl = config.map(|config| config.role(row.role).cache_ttl.as_str().to_owned());
         let model_unreachable =
             fold_core::turn_errors::model_unreachable(row.failed_turns, row.state);
+        let waits_for = crate::services::agents::waits_for(&row).map(Into::into);
         Self {
             name: row.agent.to_string(),
             role: row.role.into(),
@@ -355,6 +427,7 @@ impl WorkerEntry {
             last_error_at: row.last_error_at,
             failed_turns: row.failed_turns,
             model_unreachable,
+            waits_for,
             hint: model_unreachable
                 .then(|| fold_core::turn_errors::MODEL_UNREACHABLE_HINT.to_owned()),
             cache_ttl,
@@ -362,6 +435,11 @@ impl WorkerEntry {
             previous_sessions: previous.into_iter().map(Into::into).collect(),
             transcript,
             older_fold,
+            parked: row.park.map(|park| WorkerParkEntry {
+                by: park.by.to_string(),
+                wait_for: park.wait_for,
+                since: park.at,
+            }),
         }
     }
 }
@@ -484,6 +562,7 @@ pub async fn list_workers(project: Project) -> Result<Json<WorkerList>, ApiError
         limits: config.as_ref().map(|config| config.workers.limits().into()),
         pause: agents.pause_state().await?.into(),
         main_supervised: config.as_ref().is_some_and(|config| config.main.supervised),
+        account: agents.project_account().await.into(),
     }))
 }
 
@@ -782,6 +861,38 @@ pub async fn pause_project(human: Human, project: Project) -> Result<Json<PauseE
 pub async fn resume_project(human: Human, project: Project) -> Result<Json<PauseEntry>, ApiError> {
     let state = project.0.agents().resume_project(&human.actor()).await?;
     Ok(Json(state.into()))
+}
+
+/// A named human chooses the Claude account of the project's workers, one of the host's accounts or `default` for Claude Code's own login, which a config states by leaving the key out. The name goes into `.fold/config.toml`; each running worker continues in its own session with the new account when its current turn ends, an idle one at once. The interactive main agent of `fld claude` keeps its account until it starts again. The answer names accounts only, never a token.
+#[utoipa::path(
+    put,
+    path = "/api/v1/projects/{slug}/account",
+    operation_id = "set_project_account",
+    params(("slug" = String, Path, description = "The project slug")),
+    request_body = SetProjectAccountBody,
+    responses(
+        (status = 200, description = "The project's account after the change", body = ProjectAccountEntry),
+        (status = 400, description = "`invalid_account_name`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`project_not_found`, or `account_not_found` with the name in `details.account`: the host has no such account, or the account is `default` while Claude Code has no login of its own on the host", body = ErrorEnvelope),
+        (status = 409, description = "`invalid_config`: `.fold/config.toml` is not valid", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "`accounts_io` or internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn set_project_account(
+    human: Human,
+    project: Project,
+    ApiJson(body): ApiJson<SetProjectAccountBody>,
+) -> Result<Json<ProjectAccountEntry>, ApiError> {
+    let account = fold(body.account.as_deref().map(AccountName::parse).transpose())?
+        .and_then(AccountName::stored);
+    let chosen = project
+        .0
+        .agents()
+        .set_account(&human.actor(), account)
+        .await?;
+    Ok(Json(chosen.into()))
 }
 
 #[cfg(test)]

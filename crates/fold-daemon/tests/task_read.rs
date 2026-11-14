@@ -41,6 +41,10 @@ async fn a_task_with_a_workspace_names_it_and_its_rule() {
     assert_eq!(info.behind, 0);
     assert!(view.proposal.is_none() && view.integration.is_none());
     assert!(view.changesets.is_empty());
+    assert_eq!(view.activity, None, "a new workspace has no edit yet");
+    let board = fx.tasks.board().await.unwrap();
+    let card = &column(&board, TaskStatus::InProgress).cards[0];
+    assert_eq!((card.workspace, card.activity.clone()), (Some(ws(1)), None));
     let types: Vec<&str> = view.history.iter().map(|e| e.event_type.as_str()).collect();
     assert_eq!(types.first(), Some(&"task.status_changed"));
     assert!(types.contains(&"task.created") && types.contains(&"workspace.created"));
@@ -218,6 +222,11 @@ async fn a_closed_proposal_is_not_shown_and_the_board_reports_the_last_edit() {
     assert!(card.proposal.is_none());
     assert_eq!(card.workspace, Some(ws(1)));
 
+    // An edit always comes after the workspace's creation, which is no edit.
+    fx.project
+        .clock()
+        .advance(std::time::Duration::from_secs(60))
+        .unwrap();
     let at = fx.project.now();
     fx.project
         .store()

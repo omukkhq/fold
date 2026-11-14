@@ -62,10 +62,12 @@ async function renderInbox(
   items: NeedsYouItem[],
   human: string | null,
   slug = "demo",
+  routes: Parameters<typeof stubFetch>[0] = {},
 ) {
-  stubFetch({
+  const calls = stubFetch({
     "GET /api/v1/session": { body: { human, authenticated: true } },
     [`GET /api/v1/projects/${slug}/needs-you`]: { body: { items } },
+    ...routes,
   });
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -106,7 +108,7 @@ async function renderInbox(
     </QueryClientProvider>,
   );
   await screen.findByText("Home");
-  return { client, router };
+  return { client, router, calls };
 }
 
 const permission = needsItem({
@@ -214,6 +216,7 @@ describe("Inbox, Needs you", () => {
     expect(inbox.querySelector("[title]")).toBeNull();
     expect(screen.queryByRole("tooltip")).toBeNull();
     const link = within(inbox).getByRole("link");
+    expect(link.getAttribute("data-state")).toBe("closed");
     act(() => {
       link.focus();
     });
@@ -288,6 +291,8 @@ describe("Inbox, Needs you", () => {
             since: 1_760_000_000_000,
             supervised: true,
             told: ["web-lead"],
+            parked_by: null,
+            wait_for: null,
           },
         }),
       ],
@@ -308,6 +313,73 @@ describe("Inbox, Needs you", () => {
         name: "Restart a-worker-with-a-long-name in a new session",
       }),
     ).toBeTruthy();
+  });
+
+  it("shows the whole advice of a usage limit, which a cut line would hide, with no tooltip that repeats it", async () => {
+    await renderInbox(
+      [
+        needsItem({
+          kind: "usage_limit",
+          screen: "worker",
+          agents: ["web-lead", "api-worker"],
+          limit: "weekly",
+          account: "work-a",
+          reason:
+            "fold runs each waiting turn again after the reset; pause the agents to start no new turns until then",
+          actions: [{ action: "pause" }],
+        }),
+      ],
+      null,
+    );
+    const inbox = await openInbox();
+    const project = within(inbox).getByRole("region", { name: "Project" });
+    const title = within(project)
+      .getByText(/pause the agents to start no new turns until then/)
+      .closest(".basis-full");
+    expect(title?.className).toContain("wrap-anywhere");
+    expect(title?.className).not.toContain("truncate");
+    // The line shows the advice whole, so it opens no tooltip that repeats it.
+    const link = within(project).getByRole("link");
+    expect(link.hasAttribute("data-state")).toBe(false);
+    act(() => {
+      link.focus();
+    });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("offers the usage limit's targets in one Switch account control under the line, outside its link, with no separate switch button", async () => {
+    const { calls } = await renderInbox(
+      [
+        needsItem({
+          kind: "usage_limit",
+          screen: "worker",
+          agents: ["web-lead"],
+          limit: "weekly",
+          account: "work-a",
+          reason: "fold runs each waiting turn again after the reset",
+          actions: [
+            { action: "pause" },
+            { action: "switch_account", account: "default" },
+            { action: "switch_account", account: "work-b" },
+          ],
+        }),
+      ],
+      "tanim",
+    );
+    const inbox = await openInbox();
+    const project = within(inbox).getByRole("region", { name: "Project" });
+    // The list and the switch itself are the LimitActions tests'; the line holds the one opener next to Pause.
+    const opener = await within(project).findByRole("button", {
+      name: "Switch account",
+    });
+    expect(opener.getAttribute("aria-haspopup")).toBe("menu");
+    expect(opener.closest("a")).toBeNull();
+    expect(
+      within(project).queryAllByRole("button", {
+        name: /Switch to|Choose an account/,
+      }),
+    ).toHaveLength(0);
+    expect(calls.some((call) => call.method === "PUT")).toBe(false);
   });
 
   it("shows main's invalid checks file as a line that opens nothing and counts it", async () => {

@@ -516,7 +516,7 @@ async fn restart_recovery(stop: Stop) {
     );
     assert_store_consistent(&store, harness.project.paths()).await;
 
-    // Step 8: 31 minutes later the lease sweeper marks each claim stale once.
+    // Step 8: 31 minutes later the lease sweeper marks backend's claim stale once. frontend sent P-1, which waits for review, so its claim waits on others and keeps its lease.
     let marked = last_seq(&store).await;
     let (stop_jobs, stopped) = watch::channel(false);
     let sweeper = spawn_lease_sweeper(harness.state.clone(), Duration::from_millis(10), stopped);
@@ -539,7 +539,22 @@ async fn restart_recovery(stop: Stop) {
     .fetch_all(store.read())
     .await
     .unwrap();
-    assert_eq!(stale, [Some(1), Some(2)], "one claim.stale for each claim");
+    assert_eq!(
+        stale,
+        [Some(2)],
+        "one claim.stale for the claim that waits on nobody"
+    );
+    let kept = fold_store::tasks::claims::unreleased_for_task(
+        store.read(),
+        fold_core::TaskId::from_number(1).unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        kept.stale_at, None,
+        "the claim of the sent proposal keeps its lease"
+    );
 }
 
 /// Acceptance 8 after a graceful stop.

@@ -96,6 +96,18 @@ pub fn can_set_worker_limits(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
+/// The account is the user's own Claude subscription, which the project's workers spend, so only a named human chooses it.
+pub fn can_set_account(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::Human => Ok(()),
+        _ => Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human chooses the Claude account of the project",
+            hint: "ask the user to run `fld account use <name>` in the project folder or to choose the account in the project's Settings",
+        }),
+    }
+}
+
 /// The main agent or a named human starts the leads; an area lead starts the task workers of its own area; the review lead starts the reviewers. A short-lived worker and a lead of another kind start nothing, and nobody starts the supervised main: fold runs it when the project's setting says so.
 pub fn can_start_worker(starter: &Starter, role: Role) -> Result<(), PolicyDenied> {
     match (role, starter) {
@@ -357,6 +369,23 @@ mod tests {
         }
         assert!(can_stop_worker(&Starter::Human, Role::Main, None).is_ok());
         assert!(can_stop_worker(&Starter::ReviewLead, Role::Main, None).is_err());
+    }
+
+    #[test]
+    fn only_a_human_chooses_the_account() {
+        assert!(can_set_account(&Starter::Human).is_ok());
+        for starter in [
+            Starter::MainAgent,
+            Starter::Unsupervised,
+            Starter::AreaLead(area("web")),
+            Starter::ReviewLead,
+            Starter::ShortLived,
+            Starter::System,
+        ] {
+            let refused = can_set_account(&starter).unwrap_err();
+            assert_eq!(refused.code(), codes::HUMAN_REQUIRED);
+            assert!(refused.hint().contains("fld account use"));
+        }
     }
 
     #[test]

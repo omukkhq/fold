@@ -66,6 +66,8 @@ describe("activityLine", () => {
         since: NOW - 8 * MINUTE,
         supervised: true,
         told: [],
+        parked_by: null,
+        wait_for: null,
       },
     };
     expect(activityLine(card(null), frame, NOW)).toMatchObject({
@@ -99,7 +101,7 @@ describe("activityLine", () => {
     );
     expect(
       activityLine(
-        card(null, [{ kind: "stalled", closable: false }]),
+        card(null, [{ kind: "stalled", closable: false, action: null }]),
         frame,
         NOW,
       )?.stalled,
@@ -117,6 +119,8 @@ describe("activityLine", () => {
         since: NOW - 3 * MINUTE,
         supervised: true,
         told: [],
+        parked_by: null,
+        wait_for: null,
       },
     });
     expect(activityLine(card(null), ended("stopped"), NOW)).toMatchObject({
@@ -132,6 +136,30 @@ describe("activityLine", () => {
     );
   });
 
+  it("says a parked worker waits for its lead's go, never that it edits", () => {
+    const parked = {
+      ...live(NOW - 50 * MINUTE, 3),
+      worker: "backend-worker",
+      activity: {
+        state: "parked" as const,
+        slot: null,
+        call: null,
+        since: NOW - 40 * MINUTE,
+        supervised: true,
+        told: [],
+        parked_by: "backend-lead",
+        wait_for: "my go after the T-288 migration",
+      },
+    };
+    expect(
+      activityLine(card({ path: "a.ts", at: NOW - 50 * MINUTE }), parked, NOW),
+    ).toMatchObject({
+      text: "Waits for @backend-lead's go",
+      since: "40 min ago",
+      stalled: false,
+    });
+  });
+
   it("is null with no activity and no live workspace", () => {
     expect(activityLine(card(null), undefined, NOW)).toBeNull();
   });
@@ -144,7 +172,7 @@ describe("activityLine", () => {
         NOW,
       ),
     ).toEqual({
-      text: "Editing src/routes/login.tsx",
+      text: "Edited src/routes/login.tsx",
       since: "12 s ago",
       stalled: false,
       run: null,
@@ -152,16 +180,16 @@ describe("activityLine", () => {
     });
   });
 
-  it("says Editing alone when the daemon names no file", () => {
+  it("says Last edit alone when the daemon names no file", () => {
     expect(
       activityLine(card({ path: null, at: NOW }), undefined, NOW)?.text,
-    ).toBe("Editing");
+    ).toBe("Last edit");
   });
 
   it("says no edits for n min when the attention list has stalled", () => {
     const line = activityLine(
       card({ path: "a.ts", at: NOW - 6 * MINUTE }, [
-        { kind: "stalled", closable: false },
+        { kind: "stalled", closable: false, action: null },
       ]),
       undefined,
       NOW,
@@ -178,7 +206,7 @@ describe("activityLine", () => {
       activityLine(
         card(
           { path: "a.ts", at: NOW - 6 * MINUTE },
-          [{ kind: "stalled", closable: false }],
+          [{ kind: "stalled", closable: false, action: null }],
           true,
         ),
         undefined,
@@ -188,7 +216,7 @@ describe("activityLine", () => {
     expect(
       activityLine(card({ path: "a.ts", at: NOW }, [], true), undefined, NOW)
         ?.text,
-    ).toBe("Editing a.ts");
+    ).toBe("Edited a.ts");
   });
 
   it("does not call a quiet card stalled without the attention item", () => {
@@ -198,7 +226,7 @@ describe("activityLine", () => {
       NOW,
     );
     expect(line?.stalled).toBe(false);
-    expect(line?.text).toBe("Editing a.ts");
+    expect(line?.text).toBe("Edited a.ts");
   });
 
   it("moves the time forward with a later live frame and counts its files", () => {
@@ -208,7 +236,7 @@ describe("activityLine", () => {
       NOW,
     );
     expect(line).toMatchObject({
-      text: "Editing a.ts",
+      text: "Edited a.ts",
       since: "3 s ago",
       files: 4,
     });
@@ -225,16 +253,16 @@ describe("activityLine", () => {
 
   it("names the one changed file of a live frame when the payload has no activity", () => {
     expect(activityLine(card(null), live(NOW - 3 * SECOND, 1), NOW)?.text).toBe(
-      "Editing f0.ts",
+      "Edited f0.ts",
     );
-    expect(activityLine(card(null), live(NOW, 3), NOW)?.text).toBe("Editing");
+    expect(activityLine(card(null), live(NOW, 3), NOW)?.text).toBe("Last edit");
   });
 
   it("says the holder sent the version and what it waits for while the files are that version", () => {
     const sent = {
       ...card({ path: "a.ts", at: NOW - 6 * MINUTE }, [
-        { kind: "stalled", closable: false },
-        { kind: "human_review", closable: false },
+        { kind: "stalled", closable: false, action: null },
+        { kind: "human_review", closable: false, action: null },
       ]),
       proposal: {
         id: "P-1",
@@ -261,7 +289,7 @@ describe("activityLine", () => {
         { ...frame, edits_after_version: true },
         NOW,
       )?.text,
-    ).toBe("Editing a.ts");
+    ).toBe("Edited a.ts");
     expect(
       activityLine(
         { ...sent, edits_after_version: true },
@@ -300,7 +328,7 @@ describe("activityLine", () => {
   it("says the stall while a sent version is back with its author", () => {
     const back = {
       ...card({ path: "a.ts", at: NOW - 6 * MINUTE }, [
-        { kind: "stalled", closable: false },
+        { kind: "stalled", closable: false, action: null },
       ]),
       proposal: {
         id: "P-1",
@@ -334,7 +362,7 @@ describe("activityLine", () => {
     };
     const waiting = {
       ...card({ path: "a.ts", at: NOW - 9 * MINUTE }, [
-        { kind: "stalled", closable: false },
+        { kind: "stalled", closable: false, action: null },
       ]),
       check_run: run,
       proposal: {
@@ -378,12 +406,25 @@ describe("activityLine", () => {
       edits_after_version: null,
     };
     expect(activityLine(bare, undefined, NOW)).toBeNull();
-    expect(activityLine(bare, live(NOW, 0), NOW)?.text).toBe("Editing");
+    expect(activityLine(bare, live(NOW, 0), NOW)).toMatchObject({
+      text: "No edits yet",
+      since: null,
+    });
+  });
+
+  it("says a new workspace has no edits yet instead of giving its creation as an edit's time", () => {
+    expect(activityLine(card(null), live(NOW - 3 * MINUTE, 0), NOW)).toEqual({
+      text: "No edits yet",
+      since: null,
+      stalled: false,
+      run: null,
+      files: 0,
+    });
   });
 
   it("shows a live workspace that the payload has no activity for", () => {
     expect(activityLine(card(null), live(NOW - MINUTE, 2), NOW)).toEqual({
-      text: "Editing",
+      text: "Last edit",
       since: "1 min ago",
       stalled: false,
       run: null,
@@ -394,7 +435,7 @@ describe("activityLine", () => {
 
 describe("liveFilesText", () => {
   const base = {
-    text: "Editing",
+    text: "Last edit",
     since: "12 s ago",
     stalled: false,
     run: null,

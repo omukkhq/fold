@@ -151,6 +151,22 @@ describe("eventLine", () => {
     expect(line("claim.taken_over", { kind: "implementation" })).toBe(
       "took over T-12",
     );
+    expect(line("claim.needs_person", { kind: "implementation" })).toBe(
+      "the stale claim on T-12 waits for a person",
+    );
+    expect(line("claim.needs_person", { kind: "review" })).toBe(
+      "the stale review claim on P-4 waits for a person",
+    );
+    expect(line("claim.renewed", { task: "T-12", agent: "web-worker" })).toBe(
+      "web-worker renewed its stale claim on T-12",
+    );
+    expect(
+      line("worker.parked", {
+        agent: "web-worker",
+        by: "web-lead",
+        wait_for: "my go",
+      }),
+    ).toBe("parked web-worker to wait for its go");
     expect(line("workspace.created", { kind: "review", version: 2 })).toBe(
       "checked out P-4 v2 in ws-9",
     );
@@ -349,6 +365,27 @@ describe("eventLine", () => {
     expect(line("worker.model_unreachable", { agent: "web-lead" })).toBe(
       "web-lead cannot reach the model",
     );
+    expect(line("workers.account_changed", { old: null, new: "work-a" })).toBe(
+      "gave the workers the account work-a",
+    );
+    expect(line("workers.account_changed", { old: "work-a", new: null })).toBe(
+      "gave the workers the account default",
+    );
+    expect(
+      line("worker.waiting", { agent: "web-lead", reason: "network" }),
+    ).toBe(
+      "the turn of web-lead could not reach the model; fold runs it again",
+    );
+    expect(
+      line("worker.waiting", {
+        agent: "web-lead",
+        reason: "usage_limit",
+        limit: "weekly",
+      }),
+    ).toBe("the turn of web-lead reached the weekly limit; fold runs it again");
+    expect(
+      line("worker.wait_ended", { agent: "web-lead", reason: "network" }),
+    ).toBe("the turn of web-lead waits no more");
     expect(
       line("worker.stalled", {
         agent: "web-worker",

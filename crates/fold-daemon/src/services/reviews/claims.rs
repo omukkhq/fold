@@ -1,4 +1,3 @@
-use fold_core::claims::is_stale;
 use fold_core::events::types;
 use fold_core::reviews::{MAX_REASON_CHARS, ScopeChoice};
 use fold_core::{
@@ -196,7 +195,7 @@ pub(super) async fn take_review_claim(
                 .await?
                 .ok_or(error)?;
             if holder.worker_id == worker.id {
-                renew_leases(tx, &[worker.id], now).await?;
+                renew_leases::<ReviewError>(tx, buffer, &[worker.id], now).await?;
                 return Ok(ReviewClaimView {
                     proposal,
                     holder: holder.worker,
@@ -205,7 +204,11 @@ pub(super) async fn take_review_claim(
                     stale: false,
                 });
             }
-            if !is_stale(holder.renewed_at, now, lease_minutes) {
+            // The holder's runs as the lease sweeper sees them, so a reviewer that waits for others is never taken over before the sweeper's next renewal.
+            let runs = crate::services::tasks::Holders::read(tx.conn())
+                .await?
+                .runs_of(holder.worker_id);
+            if !fold_core::claims::is_lapsed(holder.renewed_at, runs, now, lease_minutes) {
                 return Err(already_claimed(&holder));
             }
             reviews::release_review_claim(tx, proposal, TAKEN_OVER, now).await?;

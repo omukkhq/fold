@@ -3,7 +3,6 @@ import type { ProjectAgent } from "../api/agentBar";
 import { agent as baseAgent, claim, worker, workspace } from "../test/agents";
 import { INITIAL_STATUS, type LiveStatus } from "../live/status";
 import {
-  agentBoardPath,
   agentStateText,
   checkingCount,
   panelAgents,
@@ -98,7 +97,13 @@ const supervised = (
   },
 ): ProjectAgent => ({
   ...agent({ presence: "offline", ...options }),
-  process: { state, failed_reason: failedReason, ...error },
+  process: {
+    state,
+    failed_reason: failedReason,
+    waits_for: null,
+    parked_by: null,
+    ...error,
+  },
 });
 
 describe("agentStateText of a supervised agent", () => {
@@ -107,6 +112,25 @@ describe("agentStateText of a supervised agent", () => {
     expect(agentStateText(supervised("starting"))).toBe("starting");
     expect(agentStateText(supervised("stopping"))).toBe("stopping");
     expect(agentStateText(supervised("stopped"))).toBe("stopped");
+  });
+
+  it("names whose go a parked worker waits for instead of saying that it stopped", () => {
+    const parked = (
+      state: "stopped" | "working",
+      by: string | null,
+    ): ProjectAgent => {
+      const base = supervised(state);
+      return {
+        ...base,
+        process:
+          base.process === null ? null : { ...base.process, parked_by: by },
+      };
+    };
+    expect(agentStateText(parked("stopped", "web-lead"))).toBe(
+      "waits for @web-lead's go",
+    );
+    expect(agentStateText(parked("stopped", null))).toBe("stopped");
+    expect(agentStateText(parked("working", "web-lead"))).toBe("working");
   });
 
   it("counts the claims of a working one and the stalled tasks of a working or idle one", () => {
@@ -155,6 +179,26 @@ describe("agentStateText of a supervised agent", () => {
     expect(chipErrorTitle(agent({ presence: "active" }))).toBeUndefined();
   });
 
+  it("says that a process whose turn waits for the network or a usage limit waits, never that it fails", () => {
+    const waiting = (waits: "network" | "usage_limit") => ({
+      ...supervised("idle", { stalled: 1 }),
+      process: {
+        state: "idle" as const,
+        failed_reason: null,
+        last_error: "API Error",
+        model_unreachable: false,
+        parked_by: null,
+        waits_for: waits,
+      },
+    });
+    expect(agentStateText(waiting("network"))).toBe(
+      "waiting for the network · 1 stalled",
+    );
+    expect(agentStateText(waiting("usage_limit"))).toBe(
+      "waits for the usage limit reset · 1 stalled",
+    );
+  });
+
   it("names the failures a person can act on", () => {
     expect(agentStateText(supervised("failed", {}, "mcp_unavailable"))).toBe(
       "failed: no fold connection",
@@ -164,6 +208,9 @@ describe("agentStateText of a supervised agent", () => {
     );
     expect(agentStateText(supervised("failed", {}, "claude_not_found"))).toBe(
       "failed: claude not found",
+    );
+    expect(agentStateText(supervised("failed", {}, "account_not_found"))).toBe(
+      "failed: account not found",
     );
     expect(agentStateText(supervised("failed", {}, "exited"))).toBe("failed");
     expect(failedText(null)).toBe("failed");
@@ -339,13 +386,5 @@ describe("panelAgents", () => {
     ];
     const shown = panelAgents(input, false);
     expect(shown.map((a) => a.name)).toEqual(["b", "c", "d", "e", "a"]);
-  });
-});
-
-describe("agentBoardPath", () => {
-  it("opens the board with the agent filter", () => {
-    expect(agentBoardPath("demo", "frontend")).toBe(
-      "/p/demo/board?agent=frontend",
-    );
   });
 });

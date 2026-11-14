@@ -19,12 +19,26 @@ export type Behavior = Schemas["Behavior"];
 export type NeedsYouItem = Schemas["NeedsYouEntry"];
 export type NeedsYouKind = Schemas["NeedsYouItemKind"];
 export type WorkerOutput = Schemas["WorkerOutput"];
+export type ProjectAccount = Schemas["ProjectAccountEntry"];
 
 /** The areas in name order and every worker fold runs or ran, in start order. */
 export function listWorkers(slug: string): Promise<WorkerList> {
   return unwrap(
     api.GET("/api/v1/projects/{slug}/workers", {
       params: { path: { slug } },
+    }),
+  );
+}
+
+/** A named human chooses the project's Claude account, `default` for Claude Code's own login; it answers with the account and the accounts it can choose, by name only. Rejects with `account_not_found` or `invalid_account_name`. */
+export function setProjectAccount(
+  slug: string,
+  account: string,
+): Promise<ProjectAccount> {
+  return unwrap(
+    api.PUT("/api/v1/projects/{slug}/account", {
+      params: { path: { slug } },
+      body: { account },
     }),
   );
 }

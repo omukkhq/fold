@@ -25,6 +25,13 @@ pub struct ChecklistCounts {
     pub linked_total: u32,
 }
 
+/// A workspace's last activity, which starts at its creation, and its creation: the two are equal until fold sees an edit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkspaceTimes {
+    pub last_activity_at: Timestamp,
+    pub created_at: Timestamp,
+}
+
 /// Everything the board and the graph draw, read in one transaction so the tasks, edges and claims agree. Archived tasks are left out of every map.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BoardSnapshot {
@@ -41,8 +48,8 @@ pub struct BoardSnapshot {
     pub messages: BTreeMap<TaskId, u32>,
     /// When the completion record was written.
     pub completions: BTreeMap<TaskId, Timestamp>,
-    /// The last tracked edit in the live task workspace, for a workspace that has one.
-    pub activity: BTreeMap<TaskId, Timestamp>,
+    /// The last tracked activity and the creation of the live task workspace, for a workspace that has a last activity.
+    pub activity: BTreeMap<TaskId, WorkspaceTimes>,
     /// The open or integrated proposal of each task.
     pub proposals: BTreeMap<TaskId, ProposalSummary>,
     /// The note of each open report, on tasks without a proposal.
@@ -169,7 +176,7 @@ pub async fn board_snapshot(pool: &SqlitePool) -> Result<BoardSnapshot, StoreErr
 
     let mut activity = BTreeMap::new();
     let rows = sqlx::query!(
-        r#"SELECT t.number AS "task!: i64", w.last_activity_at AS "at!: i64"
+        r#"SELECT t.number AS "task!: i64", w.last_activity_at AS "at!: i64", w.created_at AS "created!: i64"
            FROM workspaces w
            JOIN tasks t ON t.id = w.task_id
            WHERE w.kind = 'task' AND w.state IN ('active', 'missing') AND t.archived_at IS NULL
@@ -180,7 +187,10 @@ pub async fn board_snapshot(pool: &SqlitePool) -> Result<BoardSnapshot, StoreErr
     for row in rows {
         activity.insert(
             task_id(row.task)?,
-            timestamp(row.at, "workspaces.last_activity_at")?,
+            WorkspaceTimes {
+                last_activity_at: timestamp(row.at, "workspaces.last_activity_at")?,
+                created_at: timestamp(row.created, "workspaces.created_at")?,
+            },
         );
     }
 

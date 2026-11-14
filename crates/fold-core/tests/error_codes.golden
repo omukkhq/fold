@@ -191,3 +191,10 @@ notify_target_inactive
 invalid_intent
 record_needs_confirmation
 agent_change_not_found
+invalid_account_name
+invalid_account_token
+account_not_found
+account_in_use
+accounts_io
+account_exists
+account_reserved

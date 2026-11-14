@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.id AS \"worker!: i64\",\n                  (EXISTS (SELECT 1 FROM worker_processes q\n                           WHERE q.agent_id = p.parked_by AND q.state IN ('starting', 'working', 'idle', 'stopping'))\n                   OR EXISTS (SELECT 1 FROM sessions s\n                              WHERE s.agent_id = p.parked_by AND s.ended_at IS NULL)) AS \"parker_runs!: bool\"\n           FROM worker_processes p JOIN workers w ON w.agent_id = p.agent_id\n           WHERE p.parked_at IS NOT NULL\n           ORDER BY w.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "worker!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "parker_runs!: bool",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "cd7c88d7b704e89866d46e0b1bca44002d94abf5578c75db57e17b068acd896e"
+}

@@ -4,6 +4,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { keys } from "@/api/keys";
+import { agent } from "@/test/agents";
 import { Markdown } from "./Markdown";
 
 afterEach(cleanup);
@@ -212,9 +213,7 @@ describe("Markdown text", () => {
 function withPeople(node: ReactNode) {
   const client = new QueryClient();
   client.setQueryData(keys.humans(), ["tanim"]);
-  client.setQueryData(keys.agentBar("demo"), [
-    { name: "frontend", workers: [{ name: "frontend" }] },
-  ]);
+  client.setQueryData(keys.agentBar("demo"), [agent("frontend")]);
   return <QueryClientProvider client={client}>{node}</QueryClientProvider>;
 }
 

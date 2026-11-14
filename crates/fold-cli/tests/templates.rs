@@ -174,7 +174,7 @@ const FOLD_TOOLS: [&str; 99] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 184] = [
+const FOLD_ERROR_CODES: [&str; 188] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -359,6 +359,10 @@ const FOLD_ERROR_CODES: [&str; 184] = [
     "invalid_intent",
     "record_needs_confirmation",
     "agent_change_not_found",
+    "account_in_use",
+    "account_reserved",
+    "account_exists",
+    "account_not_found",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
@@ -383,7 +387,7 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 69] = [
+const NON_TOOL_NAMES: [&str; 71] = [
     "file_count",
     "human_review",
     "fold_failed",
@@ -453,6 +457,8 @@ const NON_TOOL_NAMES: [&str; 69] = [
     "agent_changed",
     "shared_changed",
     "owed_resume_waits",
+    "wait_for",
+    "needs_person",
 ];
 
 /// The sections of the index before the shared ones.
