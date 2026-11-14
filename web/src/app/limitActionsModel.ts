@@ -1,12 +1,12 @@
 import { accountLabel } from "../features/settings/accountModel";
 
-/** One option of the Switch account dropdown: the account the choice makes the project's, and its words. */
+/** One entry of the Switch account list: the account a choice picks, and its words. */
 export interface SwitchItem {
   account: string;
   label: string;
 }
 
-/** The options of the usage-limit line's one Switch account dropdown, in the daemon's order, whatever their number; null without a target, which leaves the dropdown out. `system-default` reads as Claude Code's own login. */
+/** The entries of the usage-limit line's one Switch account list, in the daemon's order, whatever their number; null without a target, which leaves the control out. `system-default` reads as Claude Code's own login. */
 export function switchItems(accounts: readonly string[]): SwitchItem[] | null {
   if (accounts.length === 0) {
     return null;
@@ -17,10 +17,25 @@ export function switchItems(accounts: readonly string[]): SwitchItem[] | null {
   }));
 }
 
-/** The dropdown's name, which its first option shows until a person chooses. */
-export const SWITCH_ACCOUNT = "Switch account";
+/** The chosen account while it is still a target; null before a choice, and once a new read of the item no longer lists it. */
+export function chosenTarget(
+  chosen: string | null,
+  accounts: readonly string[],
+): string | null {
+  return chosen !== null && accounts.includes(chosen) ? chosen : null;
+}
 
-/** The first option of the dropdown, which stays the shown value so no target is ever chosen ahead: `Switch account`, or `Switching to work-b…` while the daemon has not answered a switch. */
-export function switchPlaceholder(pending: string | undefined): string {
-  return pending === undefined ? SWITCH_ACCOUNT : `Switching to ${pending}…`;
+/** The words of the list's trigger: `Switch account` before a choice, then the chosen account. */
+export function triggerLabel(chosen: string | null): string {
+  return chosen === null ? "Switch account" : accountLabel(chosen);
+}
+
+/** The name of the switch button, which only a choice enables. */
+export function switchButtonLabel(chosen: string | null): string {
+  return chosen === null ? "Choose an account first" : `Switch to ${chosen}`;
+}
+
+/** The words of the control while the daemon has not answered a switch. */
+export function switchPendingLabel(account: string): string {
+  return `Switching to ${account}…`;
 }

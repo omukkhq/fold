@@ -8,14 +8,7 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import {
-  act,
-  cleanup,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { TaskStatus } from "@/api/board";
@@ -354,8 +347,8 @@ describe("Inbox, Needs you", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
-  it("offers the usage limit's two targets in one Switch account dropdown under the line, which switches at once and opens nothing", async () => {
-    const { router, calls } = await renderInbox(
+  it("offers the usage limit's targets in one Switch account control under the line, outside its link, with nothing sent before a choice", async () => {
+    const { calls } = await renderInbox(
       [
         needsItem({
           kind: "usage_limit",
@@ -372,39 +365,23 @@ describe("Inbox, Needs you", () => {
         }),
       ],
       "tanim",
-      "demo",
-      {
-        "PUT /api/v1/projects/demo/account": {
-          body: {
-            account: "work-b",
-            accounts: ["system-default", "work-a", "work-b"],
-          },
-        },
-      },
     );
     const inbox = await openInbox();
     const project = within(inbox).getByRole("region", { name: "Project" });
-    const dropdown =
-      await within(project).findByLabelText<HTMLSelectElement>(
-        "Switch account",
-      );
-    expect([...dropdown.options].map((option) => option.textContent)).toEqual([
-      "Switch account",
-      "system-default (Claude Code's own login)",
-      "work-b",
-    ]);
-    expect(dropdown.value).toBe("");
-    expect(dropdown.closest("a")).toBeNull();
-    expect(
-      within(project).queryByRole("button", { name: /Switch/ }),
-    ).toBeNull();
-    await userEvent.selectOptions(dropdown, "work-b");
-    await waitFor(() => {
-      expect(calls.find((call) => call.method === "PUT")?.body).toEqual({
-        account: "work-b",
-      });
+    // The list and the switch itself are the LimitActions tests'; the line holds one control of two parts.
+    const opener = await within(project).findByRole("button", {
+      name: "Switch account",
     });
-    expect(router.state.location.pathname).toBe("/");
+    expect(opener.getAttribute("aria-haspopup")).toBe("menu");
+    expect(opener.closest("a")).toBeNull();
+    const send = within(project).getByRole<HTMLButtonElement>("button", {
+      name: "Choose an account first",
+    });
+    expect(send.disabled).toBe(true);
+    expect(
+      within(project).queryAllByRole("button", { name: /Switch to/ }),
+    ).toHaveLength(0);
+    expect(calls.some((call) => call.method === "PUT")).toBe(false);
   });
 
   it("shows main's invalid checks file as a line that opens nothing and counts it", async () => {
