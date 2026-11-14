@@ -9,7 +9,7 @@ fn fold(args: &[&str]) -> io::Result<Output> {
 fn version_flag_prints_the_version_line() -> io::Result<()> {
     let output = fold(&["--version"])?;
     assert!(output.status.success());
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "fld 0.8.1\n");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "fld 0.9.0\n");
     Ok(())
 }
 
