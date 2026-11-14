@@ -55,7 +55,7 @@ pub use workers::{
     clear_turn_error, forget_made_up_model, process_starts, record_turn_error, set_exit_error,
     set_fold_fingerprint,
 };
-pub use workers::{park_worker, parked_holders};
+pub use workers::{park_worker, parked_holders, turn_waiting_holders};
 
 /// Row ids of these tables stay inside the daemon; the public handles are the names.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.id AS \"worker!: i64\", p.state\n           FROM worker_processes p JOIN workers w ON w.agent_id = p.agent_id\n           WHERE p.wait_reason IS NOT NULL\n           ORDER BY w.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "worker!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "state"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "10a3cfddd6fd59c822e41a91046f6224c82c478ec87690a5b5be64662c359a96"
+}

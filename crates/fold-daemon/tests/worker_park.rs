@@ -338,3 +338,82 @@ async fn a_claim_whose_holder_waits_on_others_never_goes_stale_or_reaches_a_pers
         "once the proposal is back with its author, the author's silence counts again"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_claim_whose_holders_turn_waits_for_the_network_keeps_its_lease_and_counts_again_from_the_end()
+ {
+    use crate::turn_waits::{fake_with_turn, read_fixture, set_turn};
+    let dir = tempfile::TempDir::new().unwrap();
+    let (fake, turn) = fake_with_turn(&dir, &read_fixture("result"));
+    let mut harness = task_worker_for(&fake, &["Add the report table"], WorkerState::Idle).await;
+    harness.start_work(TASK_WORKER, "T-1").await;
+    harness.disconnect(TASK_WORKER).await;
+    set_turn(&turn, &read_fixture("network_error"));
+    harness
+        .send("web-lead", &[TASK_WORKER], "Add the totals row too")
+        .await;
+    eventually(WAIT, async || {
+        let row = worker(&harness, TASK_WORKER).await;
+        if row.wait.is_some() && row.state == WorkerState::Idle {
+            Ok(())
+        } else {
+            Err((row.state, row.wait))
+        }
+    })
+    .await;
+
+    for _ in 0..3 {
+        harness.project.clock().advance(LEASE).unwrap();
+        assert_eq!(sweep(&harness).await, 0, "the turn waits for the network");
+        assert_eq!(stale_at(&harness).await, None);
+    }
+    assert!(attention(&harness, "T-1").await.is_empty());
+
+    // The model answers again; fold runs the waiting turn on its own schedule, while the sweeper keeps renewing the claim.
+    set_turn(&turn, &read_fixture("result"));
+    let answered_at = harness.project.now();
+    eventually(WAIT, async || {
+        harness
+            .project
+            .clock()
+            .advance(Duration::from_secs(30))
+            .unwrap();
+        let row = worker(&harness, TASK_WORKER).await;
+        if row.wait.is_none() {
+            return Ok(());
+        }
+        sweep(&harness).await;
+        Err(row.wait)
+    })
+    .await;
+    let renewed = claims::unreleased_for_task(
+        harness.project.store().read(),
+        TaskId::from_number(1).unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .renewed_at;
+    assert!(renewed >= answered_at, "renewed while the wait lasted");
+    let lapse = renewed
+        .checked_add(LEASE)
+        .unwrap()
+        .duration_since(harness.project.now())
+        .unwrap();
+    harness
+        .project
+        .clock()
+        .advance(lapse - Duration::from_millis(1))
+        .unwrap();
+    assert_eq!(
+        sweep(&harness).await,
+        0,
+        "a full lease from the end of the wait"
+    );
+    harness
+        .project
+        .clock()
+        .advance(Duration::from_millis(1))
+        .unwrap();
+    assert_eq!(sweep(&harness).await, 1, "then the lease counts again");
+}

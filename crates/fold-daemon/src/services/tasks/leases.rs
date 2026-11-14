@@ -29,7 +29,7 @@ impl TaskService {
     }
 }
 
-/// Marks each unreleased claim of `project` whose lease ran out at `now` and that is not marked yet, with one `claim.stale` per claim, in one write transaction; the events reach the bus after the commit. The lease is the project's `lease_minutes`, counted by [`is_lapsed`]: in the same transaction the claims of each holder whose own check run goes are renewed at `now`, because the holder waits for the run and makes no calls, and so are the claims of each holder that an agent parked while that agent runs, because the holder waits for its go, and of each holder whose every claim waits on others ([`fold_core::claims::ClaimWait`]): a sent proposal, an ask to a person, an open report or a verdict it gave. So no such claim runs out, a person never hears of a claim they can do nothing about, and every reader of `renewed_at` agrees. `claim.stale` names in `told` the agents that hear of it first, the holder's lead or else the main agents, as a stall does: the claim needs a person at once when that list is empty, and else once one more `stall_minutes` passed without a renewal, which appends `claim.needs_person`. A marked claim keeps its holder, its workspace and its task's status: only `takeover_claim` moves it, and a renewal clears the mark. Returns the claims it marked.
+/// Marks each unreleased claim of `project` whose lease ran out at `now` and that is not marked yet, with one `claim.stale` per claim, in one write transaction; the events reach the bus after the commit. The lease is the project's `lease_minutes`, counted by [`is_lapsed`]: in the same transaction the claims of each holder whose own check run goes are renewed at `now`, because the holder waits for the run and makes no calls, and so are the claims of each holder that an agent parked while that agent runs, because the holder waits for its go, and of each holder whose every claim waits on others ([`fold_core::claims::ClaimWait`]): a sent proposal, an ask to a person, an open report or a verdict it gave, and of each holder whose turn waits for the network or a usage limit, which fold runs again itself; once a wait ends, the lease counts from the last renewal. So no such claim runs out, a person never hears of a claim they can do nothing about, and every reader of `renewed_at` agrees. `claim.stale` names in `told` the agents that hear of it first, the holder's lead or else the main agents, as a stall does: the claim needs a person at once when that list is empty, and else once one more `stall_minutes` passed without a renewal, which appends `claim.needs_person`. A marked claim keeps its holder, its workspace and its task's status: only `takeover_claim` moves it, and a renewal clears the mark. Returns the claims it marked.
 pub async fn sweep_leases(
     project: &ProjectHandle,
     now: Timestamp,
@@ -54,12 +54,19 @@ pub async fn sweep_leases(
                 let all = waits.entry(worker).or_insert(true);
                 *all = *all && wait.waits_on_others();
             }
+            let turn_waits: HashSet<i64> = agents::turn_waiting_holders(tx.conn())
+                .await?
+                .into_iter()
+                .filter(|(_, state)| fold_core::turn_waits::shows_wait(*state))
+                .map(|(worker, _)| worker)
+                .collect();
             let runs_of = |worker: i64| {
                 holding(
                     runs.get(&worker).copied().unwrap_or_default(),
                     HolderWait {
                         parked_by_running_agent: parked.contains(&worker),
                         claims_wait_on_others: waits.get(&worker).copied().unwrap_or(false),
+                        turn_waits: turn_waits.contains(&worker),
                     },
                 )
             };
@@ -67,6 +74,7 @@ pub async fn sweep_leases(
                 .keys()
                 .chain(parked.iter())
                 .chain(waits.keys())
+                .chain(turn_waits.iter())
                 .copied()
                 .collect::<BTreeSet<i64>>()
                 .into_iter()

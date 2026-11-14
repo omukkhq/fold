@@ -751,6 +751,27 @@ pub async fn parked_holders(
         .collect())
 }
 
+/// The workers, by `workers.id`, whose agent's row holds a turn that waits for the network or a usage limit, each with the row's state, which says whether the wait shows (see [`fold_core::turn_waits::shows_wait`]).
+pub async fn turn_waiting_holders(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<(i64, WorkerState)>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT w.id AS "worker!: i64", p.state
+           FROM worker_processes p JOIN workers w ON w.agent_id = p.agent_id
+           WHERE p.wait_reason IS NOT NULL
+           ORDER BY w.id"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let state = WorkerState::parse(&row.state)
+                .ok_or(StoreError::Corrupt("worker_processes.state"))?;
+            Ok((row.worker, state))
+        })
+        .collect()
+}
+
 /// Whether a human stopped row `id` and nothing started it since.
 pub async fn worker_held<'e>(db: impl SqliteExecutor<'e>, id: i64) -> Result<bool, StoreError> {
     let held = sqlx::query_scalar!(

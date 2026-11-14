@@ -56,11 +56,13 @@ pub struct HolderWait {
     pub parked_by_running_agent: bool,
     /// Every claim the holder holds waits on others, by [`ClaimWait::waits_on_others`].
     pub claims_wait_on_others: bool,
+    /// The holder's last turn waits for the network or a usage limit while its process runs (see [`crate::turn_waits::shows_wait`]): fold runs the turn again itself once the cause has passed.
+    pub turn_waits: bool,
 }
 
 impl HolderWait {
     pub fn waits(self) -> bool {
-        self.parked_by_running_agent || self.claims_wait_on_others
+        self.parked_by_running_agent || self.claims_wait_on_others || self.turn_waits
     }
 }
 
@@ -233,7 +235,7 @@ mod tests {
                 HolderRuns::None,
                 HolderWait {
                     parked_by_running_agent: true,
-                    claims_wait_on_others: false,
+                    ..HolderWait::default()
                 },
             );
             assert_eq!(held, HolderRuns::Running);
@@ -280,8 +282,8 @@ mod tests {
             let held = holding(
                 HolderRuns::None,
                 HolderWait {
-                    parked_by_running_agent: false,
                     claims_wait_on_others: wait.waits_on_others(),
+                    ..HolderWait::default()
                 },
             );
             assert!(!is_lapsed(at(0), held, at(24 * 60 * MINUTE), 30));
@@ -299,5 +301,42 @@ mod tests {
             stale_needs_person(stale, stale, false, 5),
             "no agent can act, so a person at once"
         );
+    }
+
+    #[test]
+    fn a_holder_whose_turn_waits_for_the_network_or_a_usage_limit_keeps_its_lease_and_counts_again_from_the_end()
+     {
+        let waits = HolderWait {
+            turn_waits: true,
+            ..HolderWait::default()
+        };
+        assert!(waits.waits());
+        let renewed = at(0);
+        for minutes in [30, 60, 5 * 60] {
+            let now = at(minutes * MINUTE);
+            assert_eq!(holding(HolderRuns::None, waits), HolderRuns::Running);
+            assert!(!is_lapsed(
+                renewed,
+                holding(HolderRuns::None, waits),
+                now,
+                30
+            ));
+        }
+        // The sweeper renewed the claim while the wait lasted; once it ends, the lease counts from that renewal.
+        let wait_ended = at(5 * 60 * MINUTE);
+        let after = holding(HolderRuns::None, HolderWait::default());
+        assert!(!is_lapsed(
+            wait_ended,
+            after,
+            at(5 * 60 * MINUTE + 30 * MINUTE - 1),
+            30
+        ));
+        assert!(is_lapsed(
+            wait_ended,
+            after,
+            at(5 * 60 * MINUTE + 30 * MINUTE),
+            30
+        ));
+        assert!(!HolderWait::default().waits());
     }
 }
