@@ -516,6 +516,14 @@ function workerRow(
       restart: false,
     };
   }
+  if (worker.waits_for !== null && worker.state === "idle") {
+    // The pill says the wait, so the step keeps the worker's last step; the open row still shows Claude Code's message.
+    return {
+      ...runningRow(worker, input, child),
+      pill: { label: waitWords(worker.waits_for), tone: "idle" },
+      errorInStep: false,
+    };
+  }
   return runningRow(worker, input, child);
 }
 
