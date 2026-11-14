@@ -5,7 +5,7 @@ use clap::{Args, Subcommand};
 use fold_core::accounts::{AccountName, check_token};
 use fold_core::{Clock, FoldError, HostPaths};
 use fold_daemon::SystemClock;
-use fold_daemon::services::agents::accounts::{self, Added};
+use fold_daemon::services::agents::accounts;
 use hyper::Method;
 use serde_json::json;
 use thiserror::Error;
@@ -26,14 +26,16 @@ pub struct AccountArgs {
 
 #[derive(Subcommand, Debug)]
 enum AccountCommand {
-    /// Add a Claude subscription under a name, with the token that `claude setup-token` printed, read from stdin; the name again gives the account a new token
+    /// Add a Claude subscription under a new name, with the token that `claude setup-token` printed, read from stdin
     Add(NameArgs),
-    /// List the accounts: name, when the token was added and which projects use each, never the token
+    /// List the accounts, system-default (Claude Code's own login) first: name, when the token was added and which projects use each, never the token
     List,
     /// Remove an account and its token; refused while a project uses it
     Remove(NameArgs),
-    /// Make the account the one of the project in this folder: each worker continues in its own session with it when its turn ends
+    /// Make the account the one of the project in this folder, system-default for Claude Code's own login: each worker continues in its own session with it when its turn ends
     Use(UseArgs),
+    /// Give an account a new token from stdin, as for an expired or revoked one
+    Update(NameArgs),
 }
 
 #[derive(Args, Debug)]
@@ -99,27 +101,28 @@ pub fn run(
     match &args.command {
         AccountCommand::Add(args) => {
             let name = AccountName::parse(&args.name)?;
-            let text = if terminal {
-                read_hidden_line()?
-            } else {
-                read_piped(input)?
-            };
-            let token = check_token(&text)?;
+            name.check_not_reserved()?;
+            let token = check_token(&read_token(input, terminal)?)?;
             let dir = host_paths(dirs)?.accounts_dir();
-            let added = accounts::add(&dir, &name, &token, SystemClock.now())?;
-            output::line(out, &added_line(&name, added))?;
+            accounts::add(&dir, &name, &token, SystemClock.now())?;
+            output::line(out, &added_line(&name))?;
+        }
+        AccountCommand::Update(args) => {
+            let name = AccountName::parse(&args.name)?;
+            name.check_not_reserved()?;
+            let token = check_token(&read_token(input, terminal)?)?;
+            let dir = host_paths(dirs)?.accounts_dir();
+            accounts::update(&dir, &name, &token, SystemClock.now())?;
+            output::line(out, &updated_line(&name))?;
         }
         AccountCommand::List => {
             let host = host_paths(dirs)?;
             let runtime = current_thread_runtime().map_err(AccountError::Runtime)?;
             let usage = runtime.block_on(accounts::usage_on_host(&host))?;
             let listed = accounts::list(&host.accounts_dir())?;
-            if listed.is_empty() {
-                output::line(
-                    out,
-                    "no accounts: every project uses Claude Code's own login",
-                )?;
-            }
+            let default = AccountName::system_default();
+            let projects = usage.get(&default).map(Vec::as_slice).unwrap_or(&[]);
+            output::line(out, &default_line(projects))?;
             for account in listed {
                 let projects = usage.get(&account.name).map(Vec::as_slice).unwrap_or(&[]);
                 output::line(
@@ -160,24 +163,45 @@ fn remove(host: &HostPaths, name: &AccountName) -> Result<(), AccountError> {
     Ok(())
 }
 
-fn added_line(name: &AccountName, added: Added) -> String {
-    match added {
-        Added::New => format!(
-            "added account {name}; run `fld account use {name}` in a project folder to give its workers this subscription"
-        ),
-        Added::Replaced => format!(
-            "account {name} has the new token; each worker of a project that uses it continues in its own session with it after its next turn, and every new start takes it"
-        ),
-    }
+fn added_line(name: &AccountName) -> String {
+    format!(
+        "added account {name}; run `fld account use {name}` in a project folder to give its workers this subscription"
+    )
 }
 
-fn list_line(name: &AccountName, added: &str, projects: &[String]) -> String {
-    let used = if projects.is_empty() {
+fn updated_line(name: &AccountName) -> String {
+    format!(
+        "account {name} has the new token: each running worker of a project that uses it restarts in its own session with it when its next turn ends, and every worker that starts or resumes from now on starts with it"
+    )
+}
+
+fn used_by(projects: &[String]) -> String {
+    if projects.is_empty() {
         "no project".to_owned()
     } else {
         projects.join(", ")
-    };
-    format!("{name} added {added} used by {used}")
+    }
+}
+
+fn default_line(projects: &[String]) -> String {
+    format!(
+        "{} Claude Code's own login used by {}",
+        fold_core::accounts::SYSTEM_DEFAULT,
+        used_by(projects)
+    )
+}
+
+fn list_line(name: &AccountName, added: &str, projects: &[String]) -> String {
+    format!("{name} added {added} used by {}", used_by(projects))
+}
+
+/// The token: one hidden line on a terminal, else everything the pipe gives.
+fn read_token(input: &mut impl Read, terminal: bool) -> Result<String, AccountError> {
+    if terminal {
+        read_hidden_line()
+    } else {
+        read_piped(input)
+    }
 }
 
 fn use_line(name: &AccountName) -> String {
@@ -248,8 +272,12 @@ mod tests {
             ),
             "work-a added 2026-11-14 10:00 used by demo, shop"
         );
-        assert!(added_line(&name("work-a"), Added::New).contains("fld account use work-a"));
-        assert!(added_line(&name("work-a"), Added::Replaced).contains("new token"));
+        assert!(added_line(&name("work-a")).contains("fld account use work-a"));
+        assert!(updated_line(&name("work-a")).contains("when its next turn ends"));
+        assert_eq!(
+            default_line(&["app".to_owned()]),
+            "system-default Claude Code's own login used by app"
+        );
         assert!(use_line(&name("work-b")).contains("fld claude"));
     }
 

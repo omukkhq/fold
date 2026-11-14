@@ -27,7 +27,7 @@ fn holding(dir: &Path, token: &str) -> usize {
         .count()
 }
 
-/// A stop after the new token's file and before the index keeps the old account whole; the next change, or the daemon's start, removes the file the stop left, which holds a token.
+/// A stop of an update or an add after the new token's file and before the index keeps the old account whole; the next change, or the daemon's start, removes the file the stop left, which holds a token.
 #[test]
 fn a_stop_before_the_index_keeps_the_old_account_and_leaves_no_token_for_long() {
     let scenario = fail::FailScenario::setup();
@@ -42,7 +42,7 @@ fn a_stop_before_the_index_keeps_the_old_account_and_leaves_no_token_for_long() 
     )
     .unwrap();
     fail::cfg("accounts_after_token_file", "return").unwrap();
-    let stopped = accounts::add(
+    let stopped = accounts::update(
         &dir,
         &name("work-a"),
         &check_token(TOKEN_B).unwrap(),
@@ -75,7 +75,7 @@ fn a_stop_before_the_index_keeps_the_old_account_and_leaves_no_token_for_long() 
     scenario.teardown();
 }
 
-/// A stop after the index names the new token, before the old token's file goes, gives the new account whole; the old file goes with the next change.
+/// A stop of an update after the index names the new token, before the old token's file goes, gives the account its new token whole; the old file goes with the next change.
 #[test]
 fn a_stop_after_the_index_gives_the_new_account_and_the_old_file_goes_next() {
     let scenario = fail::FailScenario::setup();
@@ -91,7 +91,7 @@ fn a_stop_after_the_index_gives_the_new_account_and_the_old_file_goes_next() {
     .unwrap();
     fail::cfg("accounts_after_index", "return").unwrap();
     assert!(
-        accounts::add(
+        accounts::update(
             &dir,
             &name("work-a"),
             &check_token(TOKEN_B).unwrap(),

@@ -212,6 +212,8 @@ define_codes! {
     ACCOUNT_NOT_FOUND = "account_not_found",
     ACCOUNT_IN_USE = "account_in_use",
     ACCOUNTS_IO = "accounts_io",
+    ACCOUNT_EXISTS = "account_exists",
+    ACCOUNT_RESERVED = "account_reserved",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

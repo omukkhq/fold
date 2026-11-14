@@ -55,17 +55,17 @@ pub struct WorkerList {
 /// The Claude account of the project's workers and the host's accounts it can choose, by name only; a token never leaves the host's data folder.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ProjectAccountEntry {
-    /// The account that `.fold/config.toml` names; null when the workers use Claude Code's own login.
-    #[schema(required = true, example = "work-a")]
-    pub account: Option<String>,
-    /// The host's accounts, in name order, as `fld account add` added them.
+    /// The account that `.fold/config.toml` names; `system-default`, Claude Code's own login, when it names none.
+    #[schema(example = "work-a")]
+    pub account: String,
+    /// `system-default` first, then the host's accounts in name order, as `fld account add` added them.
     pub accounts: Vec<String>,
 }
 
 impl From<ProjectAccount> for ProjectAccountEntry {
     fn from(view: ProjectAccount) -> Self {
         Self {
-            account: view.account.map(|name| name.as_str().to_owned()),
+            account: view.account.as_str().to_owned(),
             accounts: view
                 .accounts
                 .into_iter()
@@ -78,7 +78,7 @@ impl From<ProjectAccount> for ProjectAccountEntry {
 /// The account a person chooses for the project.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SetProjectAccountBody {
-    /// The name of one of the host's accounts, or null for Claude Code's own login.
+    /// The name of one of the host's accounts, or `system-default` for Claude Code's own login; null means `system-default` too.
     #[schema(required = true, example = "work-a")]
     pub account: Option<String>,
 }
@@ -841,7 +841,7 @@ pub async fn resume_project(human: Human, project: Project) -> Result<Json<Pause
     Ok(Json(state.into()))
 }
 
-/// A named human chooses the Claude account of the project's workers, one of the host's accounts or null for Claude Code's own login. The name goes into `.fold/config.toml`; each running worker continues in its own session with the new account when its current turn ends, an idle one at once. The interactive main agent of `fld claude` keeps its account until it starts again. The answer names accounts only, never a token.
+/// A named human chooses the Claude account of the project's workers, one of the host's accounts or `system-default` for Claude Code's own login, which a config states by leaving the key out. The name goes into `.fold/config.toml`; each running worker continues in its own session with the new account when its current turn ends, an idle one at once. The interactive main agent of `fld claude` keeps its account until it starts again. The answer names accounts only, never a token.
 #[utoipa::path(
     put,
     path = "/api/v1/projects/{slug}/account",
@@ -863,7 +863,8 @@ pub async fn set_project_account(
     project: Project,
     ApiJson(body): ApiJson<SetProjectAccountBody>,
 ) -> Result<Json<ProjectAccountEntry>, ApiError> {
-    let account = fold(body.account.as_deref().map(AccountName::parse).transpose())?;
+    let account = fold(body.account.as_deref().map(AccountName::parse).transpose())?
+        .and_then(AccountName::stored);
     let chosen = project
         .0
         .agents()

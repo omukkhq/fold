@@ -33,8 +33,11 @@ pub struct ProjectConfig {
     /// The settings of each worker role by role name, as `[roles.<role>]` sections; a role without one takes its defaults.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub roles: BTreeMap<String, RoleConfig>,
-    /// The host account whose Claude subscription every worker of the project and the main agent's `fld claude` run with; without it they use Claude Code's own login.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The host account whose Claude subscription every worker of the project and the main agent's `fld claude` run with; `None` for `system-default`, Claude Code's own login, which the key left out and `account = "system-default"` both mean.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "stored_account"
+    )]
     pub account: Option<AccountName>,
 }
 
@@ -147,6 +150,12 @@ pub const INTEGRATION_SECTION: &str = "integration";
 pub const WORKERS_SECTION: &str = "workers";
 pub const MAIN_SECTION: &str = "main";
 pub const ROLES_SECTION: &str = "roles";
+fn stored_account<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<AccountName>, D::Error> {
+    Ok(Option::<AccountName>::deserialize(deserializer)?.and_then(AccountName::stored))
+}
+
 /// The top-level key that names the project's account.
 pub const ACCOUNT_KEY: &str = "account";
 
@@ -646,6 +655,11 @@ mod tests {
             Some("work-a")
         );
         assert_eq!(ProjectConfig::default().account, None);
+        let default = ProjectConfig::from_toml("account = \"system-default\"\n").unwrap();
+        assert_eq!(
+            default.account, None,
+            "system-default is Claude Code's own login"
+        );
         for bad in [
             "account = 3\n",
             "account = \"Work A\"\n",

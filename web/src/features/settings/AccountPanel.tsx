@@ -14,7 +14,6 @@ import {
   accountFailure,
   accountHint,
   accountOptions,
-  chosenAccount,
   shownValue,
 } from "./accountModel";
 
@@ -31,7 +30,7 @@ export function AccountPanel({
   const workers = useQuery(workersQuery(slug));
   const client = useQueryClient();
   const save = useMutation({
-    mutationFn: (account: string | null) => setProjectAccount(slug, account),
+    mutationFn: (account: string) => setProjectAccount(slug, account),
     onSuccess: () => client.invalidateQueries({ queryKey: keys.workers(slug) }),
   });
   if (workers.isError) {
@@ -65,7 +64,7 @@ export function AccountPanel({
           value={value}
           disabled={!canWrite || save.isPending}
           onChange={(event) => {
-            save.mutate(chosenAccount(event.target.value));
+            save.mutate(event.target.value);
           }}
         >
           {accountOptions(view).map((option) => (

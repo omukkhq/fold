@@ -12,10 +12,10 @@ use super::super::{AgentError, AgentService, accounts};
 use super::limits::{REWRITE, config_io, joined, replace, restore};
 use crate::services::events::EventBuffer;
 
-/// The project's account and the accounts of the host it can choose, by name only.
+/// The project's account and the accounts of the host it can choose, by name only: `system-default`, Claude Code's own login, first, then the host's accounts in name order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectAccount {
-    pub account: Option<AccountName>,
+    pub account: AccountName,
     pub accounts: Vec<AccountName>,
 }
 
@@ -61,10 +61,14 @@ impl AgentService {
         self.workers.as_ref()?.accounts_dir()
     }
 
-    /// The account `.fold/config.toml` names and the names of the host's accounts. A file that cannot be read names none; accounts that cannot be read list none.
+    /// The account `.fold/config.toml` names, `system-default` without one, and `system-default` with the names of the host's accounts. A file that cannot be read names `system-default`; accounts that cannot be read list `system-default` only.
     pub async fn project_account(&self) -> ProjectAccount {
-        let account = self.worker_config().await.and_then(|config| config.account);
-        let accounts = match self.accounts_dir() {
+        let account = self
+            .worker_config()
+            .await
+            .and_then(|config| config.account)
+            .unwrap_or_else(AccountName::system_default);
+        let host: Vec<AccountName> = match self.accounts_dir() {
             Some(dir) => tokio::task::spawn_blocking(move || accounts::list(&dir))
                 .await
                 .ok()
@@ -75,6 +79,9 @@ impl AgentService {
                 .collect(),
             None => Vec::new(),
         };
+        let accounts = std::iter::once(AccountName::system_default())
+            .chain(host)
+            .collect();
         ProjectAccount { account, accounts }
     }
 

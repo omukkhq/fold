@@ -220,7 +220,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** A named human chooses the Claude account of the project's workers, one of the host's accounts or null for Claude Code's own login. The name goes into `.fold/config.toml`; each running worker continues in its own session with the new account when its current turn ends, an idle one at once. The interactive main agent of `fld claude` keeps its account until it starts again. The answer names accounts only, never a token. */
+        /** A named human chooses the Claude account of the project's workers, one of the host's accounts or `system-default` for Claude Code's own login, which a config states by leaving the key out. The name goes into `.fold/config.toml`; each running worker continues in its own session with the new account when its current turn ends, an idle one at once. The interactive main agent of `fld claude` keeps its account until it starts again. The answer names accounts only, never a token. */
         put: operations["set_project_account"];
         post?: never;
         delete?: never;
@@ -4145,11 +4145,11 @@ export interface components {
         /** @description The Claude account of the project's workers and the host's accounts it can choose, by name only; a token never leaves the host's data folder. */
         ProjectAccountEntry: {
             /**
-             * @description The account that `.fold/config.toml` names; null when the workers use Claude Code's own login.
+             * @description The account that `.fold/config.toml` names; `system-default`, Claude Code's own login, when it names none.
              * @example work-a
              */
-            account: string | null;
-            /** @description The host's accounts, in name order, as `fld account add` added them. */
+            account: string;
+            /** @description `system-default` first, then the host's accounts in name order, as `fld account add` added them. */
             accounts: string[];
         };
         ProjectAgent: {
@@ -5307,7 +5307,7 @@ export interface components {
         /** @description The account a person chooses for the project. */
         SetProjectAccountBody: {
             /**
-             * @description The name of one of the host's accounts, or null for Claude Code's own login.
+             * @description The name of one of the host's accounts, or `system-default` for Claude Code's own login; null means `system-default` too.
              * @example work-a
              */
             account: string | null;

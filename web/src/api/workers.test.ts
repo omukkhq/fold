@@ -61,7 +61,7 @@ describe("workers", () => {
     stubFetch({
       [`PUT ${BASE}/account`]: errorReply(404, "account_not_found"),
     });
-    const refused = await setProjectAccount("demo", null).catch(
+    const refused = await setProjectAccount("demo", "gone").catch(
       (error: unknown) => error,
     );
     expect(isApiError(refused, "account_not_found")).toBe(true);

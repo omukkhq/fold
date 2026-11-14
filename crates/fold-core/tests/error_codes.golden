@@ -196,3 +196,5 @@ invalid_account_token
 account_not_found
 account_in_use
 accounts_io
+account_exists
+account_reserved

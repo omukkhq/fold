@@ -37,23 +37,31 @@ function select(): HTMLSelectElement {
 
 describe("AccountPanel", () => {
   it("chooses an account and stays pending until the daemon answers", async () => {
-    let chosen: string | null = null;
+    let chosen = "system-default";
     let answer: () => void = () => {};
     const answered = new Promise<void>((resolve) => {
       answer = resolve;
     });
     const calls = stubFetch({
       [WORKERS]: () =>
-        workers({ account: chosen, accounts: ["work-a", "work-b"] }),
+        workers({
+          account: chosen,
+          accounts: ["system-default", "work-a", "work-b"],
+        }),
       [CHOOSE]: async () => {
         await answered;
         chosen = "work-b";
-        return { body: { account: "work-b", accounts: ["work-a", "work-b"] } };
+        return {
+          body: {
+            account: "work-b",
+            accounts: ["system-default", "work-a", "work-b"],
+          },
+        };
       },
     });
     show();
     expect((await screen.findByLabelText("Account")).tagName).toBe("SELECT");
-    expect(select().value).toBe("");
+    expect(select().value).toBe("system-default");
     expect(screen.getByText(/continues in its own session/)).toBeTruthy();
     await userEvent.selectOptions(select(), "work-b");
     expect(await screen.findByText("Saving…")).toBeTruthy();
@@ -71,13 +79,16 @@ describe("AccountPanel", () => {
 
   it("shows a refused choice with its code and keeps the project's account", async () => {
     stubFetch({
-      [WORKERS]: workers({ account: "work-a", accounts: ["work-a", "work-b"] }),
+      [WORKERS]: workers({
+        account: "work-a",
+        accounts: ["system-default", "work-a", "work-b"],
+      }),
       [CHOOSE]: errorReply(404, "account_not_found"),
     });
     show();
     await screen.findByLabelText("Account");
     expect(select().value).toBe("work-a");
-    await userEvent.selectOptions(select(), "");
+    await userEvent.selectOptions(select(), "system-default");
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("no such account");
     expect(alert.textContent).toContain("code: account_not_found");
@@ -86,7 +97,10 @@ describe("AccountPanel", () => {
 
   it("lets nobody but a signed-in person choose, and shows a failed read", async () => {
     stubFetch({
-      [WORKERS]: workers({ account: null, accounts: [] }),
+      [WORKERS]: workers({
+        account: "system-default",
+        accounts: ["system-default"],
+      }),
     });
     show(false);
     await screen.findByLabelText("Account");

@@ -24,6 +24,9 @@ pub const OVERRIDING_ENV: [&str; 5] = [
 /// A token from `claude setup-token` lasts one year, so fold names one that was added more than 11 months ago.
 pub const OLD_TOKEN_AGE: Duration = Duration::from_secs(334 * 24 * 60 * 60);
 
+/// The account that stands for Claude Code's own login: always there, first in every list, and never holding a token of fold's. A project on it gives its workers no token, and a config without the key `account` means it.
+pub const SYSTEM_DEFAULT: &str = "system-default";
+
 const MAX_ACCOUNT_NAME_LEN: usize = 32;
 const MIN_TOKEN_LEN: usize = 20;
 const MAX_TOKEN_LEN: usize = 1024;
@@ -55,6 +58,33 @@ impl AccountName {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// [`SYSTEM_DEFAULT`], Claude Code's own login.
+    pub fn system_default() -> Self {
+        Self(SYSTEM_DEFAULT.to_owned())
+    }
+
+    pub fn is_system_default(&self) -> bool {
+        self.0 == SYSTEM_DEFAULT
+    }
+
+    /// The account a choice of this name stores: `None` for [`SYSTEM_DEFAULT`], which a config states by leaving the key out.
+    pub fn stored(self) -> Option<Self> {
+        (!self.is_system_default()).then_some(self)
+    }
+
+    /// Refuses [`SYSTEM_DEFAULT`] for a change of the host's accounts: it holds no token, and nobody adds, updates or removes it.
+    pub fn check_not_reserved(&self) -> Result<(), FoldError> {
+        if self.is_system_default() {
+            return Err(FoldError::new(
+                codes::ACCOUNT_RESERVED,
+                "system-default is Claude Code's own login, which fold keeps no token of; it cannot be added, updated or removed",
+            )
+            .with_hint("sign in with `claude auth login` to change that login, or add your token under another name, such as `fld account add work-a`")
+            .with_details([("account", serde_json::json!(SYSTEM_DEFAULT))]));
+        }
+        Ok(())
     }
 }
 
@@ -171,6 +201,20 @@ mod tests {
         let parsed: AccountName = serde_json::from_str("\"work-a\"").unwrap();
         assert_eq!(parsed.to_string(), "work-a");
         assert!(serde_json::from_str::<AccountName>("\"Work\"").is_err());
+    }
+
+    #[test]
+    fn system_default_is_a_name_that_stores_as_none_and_is_reserved() {
+        let default = AccountName::parse(SYSTEM_DEFAULT).unwrap();
+        assert_eq!(default, AccountName::system_default());
+        assert!(default.is_system_default());
+        assert_eq!(default.clone().stored(), None);
+        let refused = default.check_not_reserved().unwrap_err();
+        assert_eq!(refused.code(), codes::ACCOUNT_RESERVED);
+        assert!(refused.hint().unwrap().contains("fld account add"));
+        let work = AccountName::parse("work-a").unwrap();
+        assert_eq!(work.clone().stored(), Some(work.clone()));
+        assert!(work.check_not_reserved().is_ok());
     }
 
     #[test]

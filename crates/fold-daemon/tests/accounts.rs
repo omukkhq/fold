@@ -115,7 +115,7 @@ async fn a_change_of_the_account_resumes_each_idle_worker_in_its_own_session_wit
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         body,
-        json!({"account": "work-a", "accounts": ["work-a", "work-b"]})
+        json!({"account": "work-a", "accounts": ["system-default", "work-a", "work-b"]})
     );
     let runs = until_started(&fake, LEAD, 2).await;
     assert_eq!(runs[1].flag("--resume"), Some(session.as_str()));
@@ -153,7 +153,7 @@ async fn a_change_of_the_account_resumes_each_idle_worker_in_its_own_session_wit
     assert_eq!(status, StatusCode::OK);
     let (status, body) = choose(&harness, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["account"], Value::Null);
+    assert_eq!(body["account"], "system-default");
     let runs = until_started(&fake, LEAD, 4).await;
     assert!(ran_with(&runs[3], None), "Claude Code's own login again");
     assert_eq!(runs[3].flag("--resume"), Some(session.as_str()));
@@ -285,7 +285,7 @@ async fn a_new_token_of_the_same_account_reaches_each_worker_after_its_next_turn
     until_started(&fake, LEAD, 2).await;
     until_state(&harness, LEAD, WorkerState::Idle).await;
     clock.advance(std::time::Duration::from_secs(60)).unwrap();
-    accounts::add(
+    accounts::update(
         &dir,
         &AccountName::parse("work-a").unwrap(),
         &check_token(TOKEN_B).unwrap(),
@@ -324,7 +324,7 @@ async fn the_route_names_accounts_only_and_refuses_an_unknown_one() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         listed["account"],
-        json!({"account": null, "accounts": ["work-a", "work-b"]})
+        json!({"account": "system-default", "accounts": ["system-default", "work-a", "work-b"]})
     );
     let (status, unknown) = choose(&harness, Some("work-c")).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{unknown}");
@@ -358,6 +358,16 @@ async fn the_route_names_accounts_only_and_refuses_an_unknown_one() {
         files_holding(root, TOKEN_A).is_empty(),
         "a file of the project folder holds the token"
     );
+    let (status, back) = choose(&harness, Some("system-default")).await;
+    assert_eq!(status, StatusCode::OK, "{back}");
+    assert_eq!(back["account"], "system-default");
+    let config = std::fs::read_to_string(root.join(".fold/config.toml")).unwrap_or_default();
+    assert!(
+        !config.contains("account"),
+        "system-default is stored as no key: {config}"
+    );
+    let runs = until_started(&fake, LEAD, 3).await;
+    assert!(ran_with(&runs[2], None), "system-default passes no token");
 }
 
 #[tokio::test]
@@ -425,7 +435,11 @@ async fn a_usage_limit_offers_the_other_accounts_and_a_switch_runs_the_waiting_t
         .expect("a usage-limit item");
     assert_eq!(
         limit["actions"],
-        json!([{"action": "pause"}, {"action": "switch_account", "account": "work-b"}]),
+        json!([
+            {"action": "pause"},
+            {"action": "switch_account", "account": "system-default"},
+            {"action": "switch_account", "account": "work-b"}
+        ]),
         "one switch per other account, by name"
     );
     let text = serde_json::to_string(&items).unwrap();

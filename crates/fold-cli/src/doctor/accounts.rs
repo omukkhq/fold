@@ -34,7 +34,7 @@ pub(crate) fn accounts_verdict(
     if accounts.is_empty() {
         return Check::ok(
             NAME,
-            "no accounts: every project uses Claude Code's own login",
+            "no accounts but system-default: every project uses Claude Code's own login",
         );
     }
     let overriding: Vec<&str> = match report {
@@ -78,7 +78,7 @@ pub(crate) fn accounts_verdict(
                 words.join(", ")
             ),
             format!(
-                "run `claude setup-token`, then `fld account add {}` with the new token on stdin",
+                "run `claude setup-token`, then `fld account update {}` with the new token on stdin",
                 first.name
             ),
         );
@@ -102,7 +102,10 @@ pub(crate) fn project_account_verdict(
     listed: &Result<Vec<AccountEntry>, FoldError>,
 ) -> Check {
     let Some(name) = named else {
-        return Check::ok(PROJECT_NAME, "the workers use Claude Code's own login");
+        return Check::ok(
+            PROJECT_NAME,
+            "the workers use system-default, Claude Code's own login",
+        );
     };
     match listed {
         Ok(accounts) if accounts.iter().any(|account| &account.name == name) => Check::ok(
@@ -172,7 +175,7 @@ mod tests {
         assert_eq!(aged.status, Status::Warn);
         assert!(aged.message.contains("work-b (added "), "{}", aged.message);
         assert!(!aged.message.contains("work-a"));
-        assert!(aged.fix.unwrap().contains("fld account add work-b"));
+        assert!(aged.fix.unwrap().contains("fld account update work-b"));
         let used = [AccountName::parse("work-a").unwrap()];
         let accounts = Ok(vec![entry("work-a", young)]);
         for variable in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] {

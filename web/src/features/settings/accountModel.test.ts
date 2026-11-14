@@ -2,17 +2,20 @@ import { describe, expect, it } from "vitest";
 import { ApiError } from "@/api/errors";
 import type { ProjectAccount } from "@/api/workers";
 import {
-  OWN_LOGIN,
+  SYSTEM_DEFAULT,
   accountFailure,
   accountHint,
+  accountLabel,
   accountOptions,
-  chosenAccount,
-  selectedValue,
   shownValue,
 } from "./accountModel";
 
 function view(fields: Partial<ProjectAccount> = {}): ProjectAccount {
-  return { account: null, accounts: ["work-a", "work-b"], ...fields };
+  return {
+    account: SYSTEM_DEFAULT,
+    accounts: [SYSTEM_DEFAULT, "work-a", "work-b"],
+    ...fields,
+  };
 }
 
 function refused(code: string): ApiError {
@@ -20,9 +23,12 @@ function refused(code: string): ApiError {
 }
 
 describe("accountModel", () => {
-  it("offers Claude Code's own login and each account, and keeps a missing one shown", () => {
+  it("offers system-default first, then each account, and keeps a missing one shown", () => {
     expect(accountOptions(view())).toEqual([
-      { value: OWN_LOGIN, label: "Claude Code's own login" },
+      {
+        value: SYSTEM_DEFAULT,
+        label: "system-default (Claude Code's own login)",
+      },
       { value: "work-a", label: "work-a" },
       { value: "work-b", label: "work-b" },
     ]);
@@ -31,16 +37,13 @@ describe("accountModel", () => {
       label: "gone (not on this host)",
     });
     expect(accountOptions(view({ account: "work-a" }))).toHaveLength(3);
+    expect(accountLabel("work-a")).toBe("work-a");
   });
 
-  it("maps the select's value to the account and back", () => {
-    expect(selectedValue(view())).toBe(OWN_LOGIN);
-    expect(selectedValue(view({ account: "work-b" }))).toBe("work-b");
-    expect(chosenAccount(OWN_LOGIN)).toBeNull();
-    expect(chosenAccount("work-a")).toBe("work-a");
+  it("shows the choice under way, else the project's account", () => {
+    expect(shownValue(view(), undefined)).toBe(SYSTEM_DEFAULT);
     expect(shownValue(view({ account: "work-a" }), undefined)).toBe("work-a");
     expect(shownValue(view({ account: "work-a" }), "work-b")).toBe("work-b");
-    expect(shownValue(view({ account: "work-a" }), null)).toBe(OWN_LOGIN);
   });
 
   it("says what a change does, how to add an account and what a missing one means", () => {
@@ -48,7 +51,7 @@ describe("accountModel", () => {
     expect(accountHint(view(), false)).toContain(
       "continues in its own session",
     );
-    expect(accountHint(view({ accounts: [] }), false)).toContain(
+    expect(accountHint(view({ accounts: [SYSTEM_DEFAULT] }), false)).toContain(
       "fld account add <name>",
     );
     expect(accountHint(view({ account: "gone" }), false)).toContain(

@@ -36,14 +36,6 @@ pub struct AccountEntry {
     pub added_at: Timestamp,
 }
 
-/// What an add did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Added {
-    New,
-    /// The account was there and has the new token now.
-    Replaced,
-}
-
 fn accounts_io(kind: io::ErrorKind) -> FoldError {
     FoldError::new(
         codes::ACCOUNTS_IO,
@@ -185,15 +177,56 @@ pub fn token(
     )))
 }
 
-/// Adds the account `name` with `token`, or gives the account of that name the new token and date. The token goes into a new file first; the index's rename then makes the change, and only after it the old token file goes. A stop before the rename keeps the old account and leaves a token file that the next change removes; a stop after it leaves the old token file, which the next change removes too. Blocking.
+/// The refusal of an add of a name the host has already.
+fn exists(name: &AccountName) -> FoldError {
+    FoldError::new(
+        codes::ACCOUNT_EXISTS,
+        format!("this host has an account {name} already"),
+    )
+    .with_hint(format!(
+        "to give it a new token, run `fld account update {name}` with the token on stdin; to keep both, add the new one under another name"
+    ))
+    .with_details([("account", serde_json::json!(name.as_str()))])
+}
+
+/// Adds the account `name` with `token`, refused for a name the host has already ([`codes::ACCOUNT_EXISTS`]) and for `system-default`. See [`put`] for the order of the writes. Blocking.
 pub fn add(
     dir: &Path,
     name: &AccountName,
     token: &AccountToken,
     now: Timestamp,
-) -> Result<Added, FoldError> {
+) -> Result<(), FoldError> {
+    name.check_not_reserved()?;
+    put(dir, name, token, now, false)
+}
+
+/// Gives the account `name` the new `token` and `now` as its date, refused for a name the host does not have and for `system-default`. See [`put`]. Blocking.
+pub fn update(
+    dir: &Path,
+    name: &AccountName,
+    token: &AccountToken,
+    now: Timestamp,
+) -> Result<(), FoldError> {
+    name.check_not_reserved()?;
+    put(dir, name, token, now, true)
+}
+
+/// Writes the token into a new file first; the index's rename then makes the change, and only after it the old token file goes. A stop before the rename keeps the accounts as they were and leaves a token file that the next change removes; a stop after it leaves the old token file, which the next change removes too. `replace` says whether the account must exist or must not.
+fn put(
+    dir: &Path,
+    name: &AccountName,
+    token: &AccountToken,
+    now: Timestamp,
+    replace: bool,
+) -> Result<(), FoldError> {
     let _lock = lock(dir)?;
     let mut index = read_index(dir)?;
+    let known = index.accounts.iter().any(|found| &found.name == name);
+    match (replace, known) {
+        (true, false) => return Err(not_found(name)),
+        (false, true) => return Err(exists(name)),
+        _ => {}
+    }
     remove_leftovers_locked(dir, &index)?;
     let file = random_file()?;
     write_private_here(dir, &file, token.expose().as_bytes()).map_err(|error| io_error(&error))?;
@@ -221,17 +254,15 @@ pub fn add(
     fail::fail_point!("accounts_after_index", |_| Err(accounts_io(
         io::ErrorKind::Interrupted
     )));
-    match old {
-        Some(old) => {
-            remove_file(&dir.join(old.file))?;
-            Ok(Added::Replaced)
-        }
-        None => Ok(Added::New),
+    if let Some(old) = old {
+        remove_file(&dir.join(old.file))?;
     }
+    Ok(())
 }
 
 /// Removes the account `name`: the index first, then its token file. A stop between them leaves a token file that the next change removes. Blocking.
 pub fn remove(dir: &Path, name: &AccountName) -> Result<(), FoldError> {
+    name.check_not_reserved()?;
     let _lock = lock(dir)?;
     let mut index = read_index(dir)?;
     let Some(at) = index.accounts.iter().position(|entry| &entry.name == name) else {
@@ -246,7 +277,7 @@ pub fn remove(dir: &Path, name: &AccountName) -> Result<(), FoldError> {
     remove_file(&dir.join(gone.file))
 }
 
-/// The slugs of the registered projects whose `.fold/config.toml` names each account, read without a running daemon. A project whose config cannot be read names none; a host without a registry has no project.
+/// The slugs of the registered projects whose `.fold/config.toml` names each account, `system-default` for a config that names none, read without a running daemon. A project whose config cannot be read is left out; a host without a registry has no project.
 pub async fn usage_on_host(
     host: &HostPaths,
 ) -> Result<BTreeMap<AccountName, Vec<String>>, FoldError> {
@@ -276,11 +307,15 @@ pub async fn usage_on_host(
         let mut usage: BTreeMap<AccountName, Vec<String>> = BTreeMap::new();
         for row in rows {
             let path = ProjectPaths::new(&row.root).config();
-            let named = std::fs::read_to_string(path)
-                .ok()
-                .and_then(|text| ProjectConfig::from_toml(&text).ok())
-                .and_then(|config| config.account);
-            if let Some(name) = named {
+            let config = match std::fs::read_to_string(&path) {
+                Ok(text) => ProjectConfig::from_toml(&text).ok(),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    Some(ProjectConfig::default())
+                }
+                Err(_) => None,
+            };
+            if let Some(config) = config {
+                let name = config.account.unwrap_or_else(AccountName::system_default);
                 usage.entry(name).or_default().push(row.slug);
             }
         }
@@ -354,10 +389,7 @@ mod tests {
         let dir = temp.path().join("accounts");
         assert_eq!(list(&dir).unwrap(), Vec::new());
         let given = check_token(TOKEN_A).unwrap();
-        assert_eq!(
-            add(&dir, &name("work-a"), &given, at(10)).unwrap(),
-            Added::New
-        );
+        add(&dir, &name("work-a"), &given, at(10)).unwrap();
         assert_eq!(mode(&dir), 0o700);
         assert_eq!(mode(temp.path()), 0o755, "the data folder keeps its mode");
         let index = std::fs::read_to_string(dir.join(INDEX_FILE)).unwrap();
@@ -380,15 +412,35 @@ mod tests {
     }
 
     #[test]
-    fn an_add_of_a_known_name_replaces_its_token_and_a_remove_leaves_no_file() {
+    fn an_update_replaces_a_token_an_add_never_does_and_a_remove_leaves_no_file() {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path().join("accounts");
         add(&dir, &name("work-b"), &check_token(TOKEN_A).unwrap(), at(1)).unwrap();
         add(&dir, &name("work-a"), &check_token(TOKEN_A).unwrap(), at(2)).unwrap();
-        assert_eq!(
-            add(&dir, &name("work-b"), &check_token(TOKEN_B).unwrap(), at(3)).unwrap(),
-            Added::Replaced
-        );
+        let twice = add(&dir, &name("work-b"), &check_token(TOKEN_B).unwrap(), at(3)).unwrap_err();
+        assert_eq!(twice.code(), codes::ACCOUNT_EXISTS);
+        assert!(twice.hint().unwrap().contains("fld account update work-b"));
+        let unknown =
+            update(&dir, &name("work-c"), &check_token(TOKEN_B).unwrap(), at(3)).unwrap_err();
+        assert_eq!(unknown.code(), codes::ACCOUNT_NOT_FOUND);
+        update(&dir, &name("work-b"), &check_token(TOKEN_B).unwrap(), at(3)).unwrap();
+        for refused in [
+            add(
+                &dir,
+                &AccountName::system_default(),
+                &check_token(TOKEN_B).unwrap(),
+                at(4),
+            ),
+            update(
+                &dir,
+                &AccountName::system_default(),
+                &check_token(TOKEN_B).unwrap(),
+                at(4),
+            ),
+            remove(&dir, &AccountName::system_default()),
+        ] {
+            assert_eq!(refused.unwrap_err().code(), codes::ACCOUNT_RESERVED);
+        }
         let (stamp, read) = token(&dir, &name("work-b")).unwrap().unwrap();
         assert!(read.expose() == TOKEN_B);
         assert_eq!(stamp.added_at, at(3));

@@ -3,21 +3,26 @@ import type { ProjectAccount } from "@/api/workers";
 import { failureText } from "@/format/failure";
 import type { Failure } from "../workers/startLead";
 
-/** The select's value for Claude Code's own login, which names no account. */
-export const OWN_LOGIN = "";
+/** The account that stands for Claude Code's own login, which the daemon lists first. */
+export const SYSTEM_DEFAULT = "system-default";
 
 export interface AccountOption {
   value: string;
   label: string;
 }
 
-/** The choices of the select: Claude Code's own login, then each of the host's accounts. An account the config names that the host lacks stays shown, so the select never claims another choice. */
+/** The words of an account in a list: `system-default` says that it is Claude Code's own login. */
+export function accountLabel(name: string): string {
+  return name === SYSTEM_DEFAULT ? `${name} (Claude Code's own login)` : name;
+}
+
+/** The choices of the select, in the daemon's order: `system-default` first, then the host's accounts. An account the config names that the host lacks stays shown, so the select never claims another choice. */
 export function accountOptions(view: ProjectAccount): AccountOption[] {
-  const options: AccountOption[] = [
-    { value: OWN_LOGIN, label: "Claude Code's own login" },
-    ...view.accounts.map((name) => ({ value: name, label: name })),
-  ];
-  if (view.account !== null && !view.accounts.includes(view.account)) {
+  const options = view.accounts.map((name) => ({
+    value: name,
+    label: accountLabel(name),
+  }));
+  if (!view.accounts.includes(view.account)) {
     options.push({
       value: view.account,
       label: `${view.account} (not on this host)`,
@@ -26,37 +31,24 @@ export function accountOptions(view: ProjectAccount): AccountOption[] {
   return options;
 }
 
-/** The select's value for the account the project names. */
-export function selectedValue(view: ProjectAccount): string {
-  return view.account ?? OWN_LOGIN;
-}
-
 /** The select's value: the choice under way while one is saved, else the project's account. `pending` is `undefined` when no choice is under way. */
 export function shownValue(
   view: ProjectAccount,
-  pending: string | null | undefined,
+  pending: string | undefined,
 ): string {
-  if (pending === undefined) {
-    return selectedValue(view);
-  }
-  return pending ?? OWN_LOGIN;
+  return pending ?? view.account;
 }
 
-/** The account a select value chooses, `null` for Claude Code's own login. */
-export function chosenAccount(value: string): string | null {
-  return value === OWN_LOGIN ? null : value;
-}
-
-/** The note under the select: while a choice is saved, what a change does, or how to add the first account. */
+/** The note under the select: while a choice is saved, what a change does, or how to add a first account of your own. */
 export function accountHint(view: ProjectAccount, pending: boolean): string {
   if (pending) {
     return "Saving…";
   }
-  if (view.account !== null && !view.accounts.includes(view.account)) {
+  if (!view.accounts.includes(view.account)) {
     return `This host has no account ${view.account}, so no worker can start. Add it with fld account add ${view.account}, or choose another one.`;
   }
-  if (view.accounts.length === 0) {
-    return "This host has no account yet. Run claude setup-token, then fld account add <name> with the token on stdin.";
+  if (view.accounts.every((name) => name === SYSTEM_DEFAULT)) {
+    return "This host has no account of its own yet. Run claude setup-token, then fld account add <name> with the token on stdin.";
   }
   return "After a change, each worker continues in its own session with the new account when its current turn ends, an idle one at once. A running fld claude session keeps its account until it starts again.";
 }

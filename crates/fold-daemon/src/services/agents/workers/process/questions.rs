@@ -745,7 +745,7 @@ impl AgentService {
         ))
     }
 
-    /// Gives each usage-limit item one switch to every account of the host other than the project's, by name, after its pause.
+    /// Gives each usage-limit item one switch to every account other than the project's, by name, after its pause: `system-default` first when the project runs on another account.
     async fn offer_account_switches(&self, items: &mut [crate::services::agents::NeedsYouItem]) {
         use crate::services::agents::{NeedsYouAction, NeedsYouKind};
         if !items
@@ -758,7 +758,7 @@ impl AgentService {
         let others: Vec<NeedsYouAction> = view
             .accounts
             .into_iter()
-            .filter(|name| Some(name) != view.account.as_ref())
+            .filter(|name| name != &view.account)
             .map(NeedsYouAction::SwitchAccount)
             .collect();
         for item in items

@@ -183,7 +183,7 @@ fn add_reads_the_token_from_stdin_into_a_private_file_and_list_never_shows_it() 
     assert!(empty.status.success(), "{empty:?}");
     assert_eq!(
         stdout(&empty),
-        "no accounts: every project uses Claude Code's own login\n"
+        "system-default Claude Code's own login used by no project\n"
     );
     let added = sandbox.fold_with_input(&["account", "add", "work-a"], &format!("{TOKEN_A}\n"));
     assert!(added.status.success(), "{}", stderr(&added));
@@ -203,16 +203,35 @@ fn add_reads_the_token_from_stdin_into_a_private_file_and_list_never_shows_it() 
     let listed = sandbox.fold(&["account", "list"]);
     assert!(listed.status.success(), "{listed:?}");
     holds_no_token(&listed);
+    let text = stdout(&listed);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(
-        stdout(&listed).starts_with("work-a added "),
-        "{}",
-        stdout(&listed)
+        lines[0].starts_with("system-default "),
+        "system-default comes first"
     );
-    assert!(stdout(&listed).ends_with(" used by no project\n"));
+    assert!(lines[1].starts_with("work-a added "), "{lines:?}");
+    assert!(lines[1].ends_with(" used by no project"));
 
-    let renewed = sandbox.fold_with_input(&["account", "add", "work-a"], TOKEN_B);
+    let again = sandbox.fold_with_input(&["account", "add", "work-a"], TOKEN_B);
+    assert!(!again.status.success());
+    assert!(stderr(&again).contains("account_exists: "), "{again:?}");
+    assert!(stderr(&again).contains("fld account update work-a"));
+    holds_no_token(&again);
+    let missing = sandbox.fold_with_input(&["account", "update", "work-b"], TOKEN_B);
+    assert!(
+        stderr(&missing).contains("account_not_found: "),
+        "{missing:?}"
+    );
+    let renewed = sandbox.fold_with_input(&["account", "update", "work-a"], TOKEN_B);
     assert!(renewed.status.success(), "{}", stderr(&renewed));
+    holds_no_token(&renewed);
     assert!(stdout(&renewed).starts_with("account work-a has the new token"));
+    assert!(stdout(&renewed).contains("when its next turn ends"));
+    for entry in fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        assert_eq!(mode(&path), 0o600, "{}", path.display());
+    }
     let files: Vec<String> = fs::read_dir(&dir)
         .unwrap()
         .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap_or_default())
@@ -266,6 +285,26 @@ fn a_token_comes_only_from_stdin_and_a_bad_one_is_refused_with_its_reason() {
         "{unknown:?}"
     );
     assert!(stderr(&unknown).contains("hint: run `fld account list`"));
+    for args in [
+        &["account", "add", "system-default"][..],
+        &["account", "update", "system-default"][..],
+        &["account", "remove", "system-default"][..],
+    ] {
+        let reserved = sandbox.fold_with_input(args, TOKEN_A);
+        assert!(!reserved.status.success(), "{args:?}");
+        let text = stderr(&reserved);
+        assert!(text.contains("account_reserved: "), "{text}");
+        assert!(text.contains("hint: "), "{text}");
+        holds_no_token(&reserved);
+    }
+    let written = fs::read_dir(sandbox.accounts())
+        .map(|entries| {
+            entries.flatten().any(|entry| {
+                fs::read_to_string(entry.path()).is_ok_and(|text| text.contains(TOKEN_A))
+            })
+        })
+        .unwrap_or(false);
+    assert!(!written, "no token was written");
 }
 
 #[test]
@@ -306,6 +345,19 @@ fn use_goes_through_the_daemon_and_remove_is_refused_while_a_project_uses_the_ac
     assert!(text.contains("project app"), "{text}");
     assert!(text.contains("hint: choose another account"), "{text}");
     assert!(sandbox.fold(&["account", "list"]).status.success());
+    let back = sandbox.use_account(&project, "system-default");
+    assert!(back.status.success(), "{}", stderr(&back));
+    let config = fs::read_to_string(project.join(".fold/config.toml")).unwrap();
+    assert_eq!(ProjectConfig::from_toml(&config).unwrap().account, None);
+    assert!(
+        !config.contains("account ="),
+        "system-default removes the key"
+    );
+    let listed = sandbox.fold(&["account", "list"]);
+    assert!(
+        stdout(&listed).starts_with("system-default Claude Code's own login used by app\n"),
+        "{listed:?}"
+    );
     let log = fs::read_to_string(sandbox.path("daemon.log")).unwrap();
     assert!(!log.contains(TOKEN_A), "the daemon's log holds the token");
 }

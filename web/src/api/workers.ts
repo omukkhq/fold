@@ -30,10 +30,10 @@ export function listWorkers(slug: string): Promise<WorkerList> {
   );
 }
 
-/** A named human chooses the project's Claude account, or `null` for Claude Code's own login; it answers with the account and the host's accounts, by name only. Rejects with `account_not_found` or `invalid_account_name`. */
+/** A named human chooses the project's Claude account, `system-default` for Claude Code's own login; it answers with the account and the accounts it can choose, by name only. Rejects with `account_not_found` or `invalid_account_name`. */
 export function setProjectAccount(
   slug: string,
-  account: string | null,
+  account: string,
 ): Promise<ProjectAccount> {
   return unwrap(
     api.PUT("/api/v1/projects/{slug}/account", {
