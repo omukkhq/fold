@@ -1161,12 +1161,9 @@ function notifyTargetText(event: DurableEvent): string {
   }
 }
 
-/** The account change names accounts only: Claude Code's own login stands for none. */
+/** The account change names accounts only; a change that names none chose `default`, Claude Code's own login. */
 function accountChangedText(event: DurableEvent): string {
-  const account = text(event.data.new);
-  return account === null
-    ? "gave the workers Claude Code's own login"
-    : `gave the workers the account ${account}`;
+  return `gave the workers the account ${text(event.data.new) ?? "default"}`;
 }
 
 function notifyTargetLook(event: DurableEvent): Look {

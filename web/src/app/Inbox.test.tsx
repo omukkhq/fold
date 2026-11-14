@@ -347,7 +347,7 @@ describe("Inbox, Needs you", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
-  it("offers the usage limit's targets in one Switch account control under the line, outside its link, with nothing sent before a choice", async () => {
+  it("offers the usage limit's targets in one Switch account control under the line, outside its link, with no separate switch button", async () => {
     const { calls } = await renderInbox(
       [
         needsItem({
@@ -359,7 +359,7 @@ describe("Inbox, Needs you", () => {
           reason: "fold runs each waiting turn again after the reset",
           actions: [
             { action: "pause" },
-            { action: "switch_account", account: "system-default" },
+            { action: "switch_account", account: "default" },
             { action: "switch_account", account: "work-b" },
           ],
         }),
@@ -368,18 +368,16 @@ describe("Inbox, Needs you", () => {
     );
     const inbox = await openInbox();
     const project = within(inbox).getByRole("region", { name: "Project" });
-    // The list and the switch itself are the LimitActions tests'; the line holds one control of two parts.
+    // The list and the switch itself are the LimitActions tests'; the line holds the one opener next to Pause.
     const opener = await within(project).findByRole("button", {
       name: "Switch account",
     });
     expect(opener.getAttribute("aria-haspopup")).toBe("menu");
     expect(opener.closest("a")).toBeNull();
-    const send = within(project).getByRole<HTMLButtonElement>("button", {
-      name: "Choose an account first",
-    });
-    expect(send.disabled).toBe(true);
     expect(
-      within(project).queryAllByRole("button", { name: /Switch to/ }),
+      within(project).queryAllByRole("button", {
+        name: /Switch to|Choose an account/,
+      }),
     ).toHaveLength(0);
     expect(calls.some((call) => call.method === "PUT")).toBe(false);
   });

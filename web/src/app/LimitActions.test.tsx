@@ -29,13 +29,13 @@ function show(accounts: readonly string[] = ["work-b", "personal"]) {
   return { client, invalidated };
 }
 
-/** The left part of the control, which opens the list. */
-function trigger(): HTMLButtonElement {
+/** The control's opener, which opens the list. */
+function opener(): HTMLButtonElement {
   const found = screen
     .getAllByRole<HTMLButtonElement>("button")
     .find((button) => button.getAttribute("aria-haspopup") === "menu");
   if (found === undefined) {
-    throw new Error("no Switch account trigger");
+    throw new Error("no Switch account opener");
   }
   return found;
 }
@@ -50,30 +50,22 @@ async function openList(): Promise<string[]> {
   );
 }
 
-async function choose(name: string) {
-  await openList();
-  await userEvent.click(screen.getByRole("menuitem", { name }));
-}
-
 describe("LimitActions", () => {
-  it("offers one target in the list under Switch account, with the switch button off until a choice", async () => {
+  it("offers one target in the list under Switch account, by its name only, and no separate switch button", async () => {
     stubFetch({
       [SESSION]: { body: { human: "tanim", authenticated: true } },
     });
-    show(["work-b"]);
-    expect(await openList()).toEqual(["work-b"]);
+    show(["default"]);
+    await screen.findByRole("button", { name: "Switch account" });
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(opener().className).toContain("w-switch-account");
+    expect(await openList()).toEqual(["default"]);
     expect(screen.getByRole("menu").className).toContain(
       "min-w-(--radix-dropdown-menu-trigger-width)",
     );
-    await userEvent.keyboard("{Escape}");
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", {
-        name: "Choose an account first",
-      }).disabled,
-    ).toBe(true);
   });
 
-  it("only picks an account on a choice, and switches to it on the switch button, pending until the daemon answers", async () => {
+  it("switches at once to the chosen account of two and stays pending on the opener until the daemon answers", async () => {
     let answer: () => void = () => {};
     const answered = new Promise<void>((resolve) => {
       answer = resolve;
@@ -90,83 +82,49 @@ describe("LimitActions", () => {
     show();
     expect(await openList()).toEqual(["work-b", "personal"]);
     await userEvent.click(screen.getByRole("menuitem", { name: "work-b" }));
-    expect(trigger().textContent).toBe("work-b");
-    // One width before and after a choice, so choosing never moves the control.
-    expect(trigger().className).toContain("w-switch-account");
-    expect(calls.some((call) => call.method === "PUT")).toBe(false);
-    const send = screen.getByRole<HTMLButtonElement>("button", {
-      name: "Switch to work-b",
-    });
-    expect(send.disabled).toBe(false);
-    await userEvent.click(send);
     expect(
       await screen.findByRole("button", { name: "Switching to work-b…" }),
     ).toBeTruthy();
-    expect(trigger().disabled).toBe(true);
-    // The switch button is off too while the write is in flight.
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", {
-        name: "Switch to work-b",
-      }).disabled,
-    ).toBe(true);
+    expect(opener().disabled).toBe(true);
+    await waitFor(() => {
+      expect(calls.find((call) => call.method === "PUT")?.body).toEqual({
+        account: "work-b",
+      });
+    });
     answer();
     await screen.findByRole("button", { name: "Switch account" });
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", {
-        name: "Choose an account first",
-      }).disabled,
-    ).toBe(true);
-    expect(calls.find((call) => call.method === "PUT")?.body).toEqual({
-      account: "work-b",
-    });
+    expect(opener().disabled).toBe(false);
   });
 
-  it("shows a refused switch with its code, resets the choice and reads the item and the accounts again", async () => {
+  it("shows a refused switch with its code and reads the item and the accounts again", async () => {
     stubFetch({
       [SESSION]: { body: { human: "tanim", authenticated: true } },
       [CHOOSE]: errorReply(404, "account_not_found"),
     });
     const { invalidated } = show();
-    await choose("personal");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Switch to personal" }),
-    );
+    await openList();
+    await userEvent.click(screen.getByRole("menuitem", { name: "personal" }));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("no such account");
     expect(alert.textContent).toContain("account_not_found");
     const keysRead = invalidated.mock.calls.map((call) => call[0]?.queryKey);
     expect(keysRead).toContainEqual(keys.needsYou("demo"));
     expect(keysRead).toContainEqual(keys.workers("demo"));
-    expect(trigger().textContent).toBe("Switch account");
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", {
-        name: "Choose an account first",
-      }).disabled,
-    ).toBe(true);
+    expect(opener().textContent).toBe("Switch account");
+    expect(opener().disabled).toBe(false);
   });
 
-  it("lists three or more targets in the same list, Claude Code's own login by its name", async () => {
+  it("lists three or more targets in the same list, default by its name", async () => {
     stubFetch({
       [SESSION]: { body: { human: "tanim", authenticated: true } },
     });
-    show(["system-default", "work-b", "work-c", "personal"]);
+    show(["default", "work-b", "work-c", "personal"]);
     expect(await openList()).toEqual([
-      "system-default (Claude Code's own login)",
+      "default",
       "work-b",
       "work-c",
       "personal",
     ]);
-    await userEvent.click(
-      screen.getByRole("menuitem", {
-        name: "system-default (Claude Code's own login)",
-      }),
-    );
-    expect(trigger().textContent).toBe(
-      "system-default (Claude Code's own login)",
-    );
-    expect(
-      screen.getByRole("button", { name: "Switch to system-default" }),
-    ).toBeTruthy();
   });
 
   it("offers no switch without a target or to a browser that names no person", async () => {
@@ -177,13 +135,13 @@ describe("LimitActions", () => {
     await waitFor(() => {
       expect(client.getQueryData(sessionQuery().queryKey)).toBeDefined();
     });
-    expect(screen.queryByRole("button", { name: /Switch|Choose/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Switch/ })).toBeNull();
     cleanup();
     stubFetch({ [SESSION]: { body: { human: null, authenticated: true } } });
     const other = show().client;
     await waitFor(() => {
       expect(other.getQueryData(sessionQuery().queryKey)).toBeDefined();
     });
-    expect(screen.queryByRole("button", { name: /Switch|Choose/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Switch/ })).toBeNull();
   });
 });

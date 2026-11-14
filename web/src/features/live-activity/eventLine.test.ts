@@ -369,7 +369,7 @@ describe("eventLine", () => {
       "gave the workers the account work-a",
     );
     expect(line("workers.account_changed", { old: "work-a", new: null })).toBe(
-      "gave the workers Claude Code's own login",
+      "gave the workers the account default",
     );
     expect(
       line("worker.waiting", { agent: "web-lead", reason: "network" }),
