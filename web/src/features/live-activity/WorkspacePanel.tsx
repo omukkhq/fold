@@ -3,13 +3,18 @@ import { TriangleAlert } from "lucide-react";
 import { repositoryQuery } from "@/api/repositoryQueries";
 import { Badge } from "../../components/badge/Badge";
 import { Chip } from "../../components/badge/Chip";
-import { formatSince } from "../../format/time";
 import { useActivityClock } from "../../live/useNow";
 import { PersonName } from "../../people/PersonName";
 import { attentionView, behindTag } from "./attention";
 import { IdLink } from "@/components/id/IdLink";
 import { taskHref } from "./links";
-import { lastActivity, panelHeading, workerOf, type Panel } from "./panels";
+import {
+  lastActivity,
+  lastEditText,
+  panelHeading,
+  workerOf,
+  type Panel,
+} from "./panels";
 import { recordedItems } from "./recorded";
 import { EditingPill, MissingBadge } from "./StatePill";
 import { RecordedZone, WorkingZone } from "./Zones";
@@ -92,9 +97,7 @@ export function WorkspacePanel({
           <span className="whitespace-nowrap">base {base}</span>
           {behind === null ? null : <Chip>{behind}</Chip>}
           <Dot />
-          <span className="whitespace-nowrap">
-            last edit {formatSince(now, activity)}
-          </span>
+          <span className="whitespace-nowrap">{lastEditText(panel, now)}</span>
         </p>
       </header>
       {entry.watch === "degraded" ? (

@@ -10,6 +10,7 @@ import { createLiveStatesStore, shownAsOf } from "./liveStates";
 import {
   buildPanels,
   lastActivity,
+  lastEditText,
   panelHeading,
   seedLive,
   workerOf,
@@ -284,6 +285,37 @@ describe("panels", () => {
         live: null,
       }),
     ).toBe(3);
+  });
+
+  it("says no edits yet while the last activity is the creation, else the time of the last edit", () => {
+    const now = 10 * 60_000;
+    expect(
+      lastEditText(
+        {
+          entry: entry("ws-1", { last_activity_at: 0, created_at: 0 }),
+          live: live("ws-1", 0),
+        },
+        now,
+      ),
+    ).toBe("no edits yet");
+    expect(
+      lastEditText(
+        {
+          entry: entry("ws-1", { last_activity_at: null, created_at: 0 }),
+          live: null,
+        },
+        now,
+      ),
+    ).toBe("no edits yet");
+    expect(
+      lastEditText(
+        {
+          entry: entry("ws-1", { created_at: 0 }),
+          live: live("ws-1", 4 * 60_000),
+        },
+        now,
+      ),
+    ).toBe("last edit 6 min ago");
   });
 
   it("heads a task workspace with its task and the main workspace with its own name", () => {

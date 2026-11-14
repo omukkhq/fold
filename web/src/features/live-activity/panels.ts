@@ -1,6 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { keys } from "../../api/keys";
 import type { WorkspaceEntry } from "../../api/workspaces";
+import { formatSince } from "../../format/time";
 import { isLiveWorkspace, type LiveWorkspace } from "../../live/envelope";
 
 export interface Panel {
@@ -52,6 +53,14 @@ export function lastActivity(panel: Panel): number {
     panel.entry.last_activity_at ??
     panel.entry.created_at
   );
+}
+
+/** `last edit 6 min ago`, or `no edits yet` while the last activity is still the creation, which only a scan that sees an edit moves. */
+export function lastEditText(panel: Panel, now: number): string {
+  const at = lastActivity(panel);
+  return at <= panel.entry.created_at
+    ? "no edits yet"
+    : `last edit ${formatSince(now, at)}`;
 }
 
 /** The task and the title a panel heads with; the main workspace belongs to no task, so it names itself. */
