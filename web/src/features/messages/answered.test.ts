@@ -31,16 +31,18 @@ describe("answeredNote", () => {
 
 describe("taskCanMarkAnswered", () => {
   it("offers the control only for a question a human can close", () => {
-    expect(taskCanMarkAnswered([{ kind: "question", closable: true }])).toBe(
-      true,
-    );
-    expect(taskCanMarkAnswered([{ kind: "question", closable: false }])).toBe(
-      false,
-    );
+    expect(
+      taskCanMarkAnswered([{ kind: "question", closable: true, action: null }]),
+    ).toBe(true);
     expect(
       taskCanMarkAnswered([
-        { kind: "human_review", closable: false },
-        { kind: "stalled", closable: false },
+        { kind: "question", closable: false, action: null },
+      ]),
+    ).toBe(false);
+    expect(
+      taskCanMarkAnswered([
+        { kind: "human_review", closable: false, action: null },
+        { kind: "stalled", closable: false, action: null },
       ]),
     ).toBe(false);
     expect(taskCanMarkAnswered([])).toBe(false);

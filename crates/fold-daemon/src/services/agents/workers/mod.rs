@@ -36,7 +36,9 @@ pub use limits::WorkerLimitsChanged;
 pub use pause::PauseState;
 #[cfg(feature = "dev-launcher")]
 pub use process::{DEV_STUB_COMMAND, DEV_STUB_DIR};
-pub use process::{Launcher, MCP_RETRY_TURN, PAUSE_TURN, RESTART_TURN, StopTimeouts, Supervisor};
+pub use process::{
+    Launcher, MCP_RETRY_TURN, PAUSE_TURN, Park, RESTART_TURN, StopTimeouts, Supervisor,
+};
 pub use streams::{StreamFacts, WorkerStreams};
 
 /// The most default names tried for one start before the start gives up.
@@ -90,6 +92,9 @@ pub fn new_session_id() -> Result<String, FoldError> {
     })?;
     Ok(session_uuid(bytes))
 }
+
+/// The longest `wait_for` of a park, in characters: a few words that fit the chip's details.
+pub const WAIT_FOR_MAX: usize = 200;
 
 fn invalid(message: &str, hint: &str) -> AgentError {
     FoldError::new(codes::INVALID_REQUEST, message)
@@ -718,6 +723,42 @@ impl AgentService {
         } else {
             supervisor.stop(agent).await?;
         }
+        self.get_worker(agent).await
+    }
+
+    /// Stops the worker `agent` as [`AgentService::stop_worker`] does and parks it: it waits for the go of the agent that calls, which `wait_for` describes in a few words. While that agent runs, fold keeps the worker's claims from going stale, and every view shows the wait instead of a stall; the caller's message resumes it in its own session. A worker that has ended already is parked without a stop. Only an agent parks a worker; `wait_for` is refused with `invalid_request` when it is blank, holds a line break or is longer than [`WAIT_FOR_MAX`] characters.
+    pub async fn park_worker(
+        &self,
+        actor: &Actor,
+        agent: &AgentName,
+        wait_for: &str,
+    ) -> Result<WorkerProcessRow, AgentError> {
+        let wait_for = wait_for.trim();
+        if wait_for.is_empty()
+            || wait_for.contains(['\n', '\r'])
+            || wait_for.chars().count() > WAIT_FOR_MAX
+        {
+            return Err(invalid(
+                "wait_for must be a few words on one line, at most 200 characters",
+                "pass what the worker waits for, such as wait_for: \"my go after the T-288 migration\", or leave wait_for out for a plain stop",
+            ));
+        }
+        let Actor::Agent(parker) = actor else {
+            return Err(invalid(
+                "only an agent parks a worker, to wait for its own go",
+                "call stop_worker without wait_for",
+            ));
+        };
+        let supervisor = self.supervisor()?.clone();
+        let row = self.get_worker(agent).await?;
+        let starter = self.starter(actor).await?;
+        policy::can_stop_worker(&starter, row.role, row.area.as_ref()).map_err(FoldError::from)?;
+        let park = Park {
+            actor: actor.event_actor(),
+            by: parker.agent.clone(),
+            wait_for: wait_for.to_owned(),
+        };
+        supervisor.stop_and_park(agent, &park).await?;
         self.get_worker(agent).await
     }
 

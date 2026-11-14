@@ -134,7 +134,7 @@ describe("needsYouGroups", () => {
     expect(new Set(Object.values(GROUP_OF))).toEqual(
       new Set(["ask", "wait", "project"]),
     );
-    expect(Object.keys(GROUP_OF)).toHaveLength(19);
+    expect(Object.keys(GROUP_OF)).toHaveLength(20);
   });
 
   it("drops an empty group and words a missing tool", () => {
@@ -474,6 +474,8 @@ describe("needsYouGroups", () => {
       since: 1_760_000_000_000,
       supervised: true,
       told: ["web-lead"],
+      parked_by: null,
+      wait_for: null,
     };
     const groups = needsYouGroups(
       "demo",
@@ -543,6 +545,60 @@ describe("needsYouGroups", () => {
     expect(failed?.text).toBe("@api-worker failed");
     expect(tool?.text).toBe("A tool call of @db-worker has run for 25 min");
     expect(unknown?.text).toBe("@old-worker stalled");
+  });
+
+  it("shows a stale claim with what the person does, after the stalls, and offers the restart only when the daemon names it", () => {
+    const groups = needsYouGroups("demo", [
+      needsItem({
+        kind: "stale_claim",
+        screen: "task",
+        agent: "backend-worker",
+        task: "T-378",
+        action: "message_worker",
+        reason:
+          "its process ended; message @backend-worker to resume it in its session, or restart it in a new session: `fld worker restart backend-worker`",
+      }),
+      needsItem({
+        kind: "stale_claim",
+        screen: "task",
+        agent: "reviewer-9",
+        task: "T-12",
+        proposal: "P-4",
+        action: "restart_worker",
+        reason:
+          "it runs but makes no fold call; restart it in a new session: `fld worker restart reviewer-9`",
+      }),
+      needsItem({
+        kind: "worker_stalled",
+        screen: "task",
+        agent: "web-worker",
+        task: "T-3",
+      }),
+    ]);
+    expect(groups.map((g) => g.title)).toEqual(["Waiting for you"]);
+    expect(lineKinds(groups)).toEqual([
+      "worker_stalled",
+      "stale_claim",
+      "stale_claim",
+    ]);
+    const [, message, restart] = allLines(groups);
+    expect(message).toMatchObject({
+      person: "backend-worker",
+      chip: null,
+      task: "T-378",
+      text: "holds a stale claim",
+      title:
+        "Its process ended; message @backend-worker to resume it in its session, or restart it in a new session: `fld worker restart backend-worker`",
+      href: "/p/demo/t/T-378",
+      restart: null,
+    });
+    expect(restart).toMatchObject({
+      person: "reviewer-9",
+      task: null,
+      text: "holds a stale review claim on P-4",
+      href: "/p/demo/t/T-12",
+      restart: "reviewer-9",
+    });
   });
 
   it("shows a worker that cannot reach the model with Claude Code's error and what to check, after the workers that cannot reach fold", () => {

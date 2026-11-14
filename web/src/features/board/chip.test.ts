@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   Activity,
+  CirclePause,
   CircleStop,
   Clock,
   CloudOff,
@@ -36,15 +37,15 @@ describe("cardChip", () => {
     expect(
       chipText({
         attention: [
-          { kind: "human_review", closable: false },
-          { kind: "question", closable: true },
+          { kind: "human_review", closable: false, action: null },
+          { kind: "question", closable: true, action: null },
         ],
         blocker: BLOCKER,
       }),
     ).toBe("Question for you");
     expect(
       chipText({
-        attention: [{ kind: "human_review", closable: false }],
+        attention: [{ kind: "human_review", closable: false, action: null }],
         blocker: BLOCKER,
       }),
     ).toBe("Your review");
@@ -57,7 +58,7 @@ describe("cardChip", () => {
         status: "in_progress",
         blocked: true,
         blocked_by: ["T-9"],
-        attention: [{ kind: "stalled", closable: false }],
+        attention: [{ kind: "stalled", closable: false, action: null }],
       }),
     );
     expect(chip?.text).toBe("Blocked by T-9");
@@ -68,15 +69,17 @@ describe("cardChip", () => {
     const stalled = cardChip(
       boardCard("T-1", {
         attention: [
-          { kind: "stale_claim", closable: false },
-          { kind: "stalled", closable: false },
+          { kind: "stale_claim", closable: false, action: null },
+          { kind: "stalled", closable: false, action: null },
         ],
       }),
     );
     expect(stalled?.text).toBe("Stalled · needs you");
     expect(stalled?.tone).toBe("warn");
     expect(
-      chipText({ attention: [{ kind: "stale_claim", closable: false }] }),
+      chipText({
+        attention: [{ kind: "stale_claim", closable: false, action: null }],
+      }),
     ).toBe("Stale claim · needs you");
   });
 
@@ -89,7 +92,7 @@ describe("cardChip", () => {
     };
     const card = boardCard("T-1", {
       status: "in_progress",
-      attention: [{ kind: "stalled", closable: false }],
+      attention: [{ kind: "stalled", closable: false, action: null }],
       proposal: proposal("changes_requested"),
     });
     const chip = cardChip(card, run);
@@ -113,7 +116,7 @@ describe("cardChip", () => {
     };
     const card = boardCard("T-1", {
       status: "in_progress",
-      attention: [{ kind: "stale_claim", closable: false }],
+      attention: [{ kind: "stale_claim", closable: false, action: null }],
     });
     expect(cardChip(card, run)?.text).toBe("Running checks");
     expect(cardChip(card)?.text).toBe("Stale claim · needs you");
@@ -185,7 +188,7 @@ describe("cardChip", () => {
       cardChip(
         boardCard("T-1", {
           status: "done",
-          attention: [{ kind: "question", closable: true }],
+          attention: [{ kind: "question", closable: true, action: null }],
         }),
       ),
     ).toBeNull();
@@ -264,6 +267,7 @@ describe("metaFact", () => {
       restart: null,
       told: [],
       since: 0,
+      waitFor: null,
     };
     expect(cardChip(card, null, working)).toMatchObject({
       tone: "neutral",
@@ -284,7 +288,7 @@ describe("metaFact", () => {
     });
     const stalled = boardCard("T-1", {
       status: "in_progress",
-      attention: [{ kind: "stalled", closable: false }],
+      attention: [{ kind: "stalled", closable: false, action: null }],
     });
     expect(cardChip(stalled, null, working)?.text).toBe(
       "Running a command for 8 min",
@@ -323,6 +327,80 @@ describe("metaFact", () => {
     });
   });
 
+  it("shows a worker that waits for its lead's go in the neutral tone, never as a stall", () => {
+    const card = boardCard("T-1", { status: "in_progress" });
+    const parked = {
+      state: "parked" as const,
+      text: "Waits for @backend-lead's go",
+      stall: false,
+      needsYou: false,
+      restart: null,
+      told: [],
+      since: 0,
+      waitFor: "my go after the T-288 migration",
+    };
+    expect(cardChip(card, null, parked)).toEqual({
+      tone: "neutral",
+      icon: CirclePause,
+      text: "Waits for @backend-lead's go",
+    });
+  });
+
+  it("shows a stale claim that waits for a person over a neutral activity, never over a stall that waits for one", () => {
+    const card = boardCard("T-1", {
+      status: "in_progress",
+      attention: [
+        { kind: "stale_claim", closable: false, action: "message_worker" },
+      ],
+    });
+    const parked = {
+      state: "parked" as const,
+      text: "Waits for @backend-lead's go",
+      stall: false,
+      needsYou: false,
+      restart: null,
+      told: [],
+      since: 0,
+      waitFor: null,
+    };
+    expect(cardChip(card, null, parked)).toEqual({
+      tone: "warn",
+      icon: Hand,
+      text: "Stale claim · message worker",
+    });
+    const silent = {
+      ...parked,
+      state: "silent" as const,
+      text: "No activity from @w for 40 min",
+      stall: true,
+      needsYou: true,
+    };
+    expect(cardChip(card, null, silent)?.text).toBe(
+      "No activity from @w for 40 min",
+    );
+  });
+
+  it("names the person's action on the gold chip of a stall or a stale claim that only the daemon's item tells of", () => {
+    const stale = boardCard("T-1", {
+      status: "in_progress",
+      attention: [
+        { kind: "stale_claim", closable: false, action: "message_worker" },
+      ],
+    });
+    expect(cardChip(stale)).toEqual({
+      tone: "warn",
+      icon: Hand,
+      text: "Stale claim · message worker",
+    });
+    const stalled = boardCard("T-1", {
+      status: "in_progress",
+      attention: [
+        { kind: "stalled", closable: false, action: "restart_worker" },
+      ],
+    });
+    expect(cardChip(stalled)?.text).toBe("Stalled · restart worker");
+  });
+
   it("shows a worker stopped on purpose in the neutral tone with the stop icon, and a failed one as a stall", () => {
     const card = boardCard("T-1", { status: "in_progress" });
     const stopped = {
@@ -333,6 +411,7 @@ describe("metaFact", () => {
       restart: null,
       told: [],
       since: 0,
+      waitFor: null,
     };
     expect(cardChip(card, null, stopped)).toEqual({
       tone: "neutral",

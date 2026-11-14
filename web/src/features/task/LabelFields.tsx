@@ -358,7 +358,11 @@ export function LabelsField({
                 event.preventDefault();
               }
             }}
-            className={cn(menuContent, "w-side-panel")}
+            className={cn(
+              menuContent,
+              // A popover, not a dropdown menu: Radix measures its room under the popover's own name.
+              "max-h-(--radix-popover-content-available-height) w-side-panel",
+            )}
           >
             {choices.length === 0 ? (
               <p className="px-8 py-6 text-14 text-text-2">

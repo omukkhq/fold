@@ -17,6 +17,7 @@ import { focusRing } from "@/lib/focus";
 import { MentionLink } from "@/mentions/MentionLink";
 import type { Known } from "@/mentions/parse";
 import { remarkMentions } from "@/mentions/remark";
+import { useAgentLinks } from "@/mentions/useAgentLinks";
 import { usePeople } from "@/mentions/usePeople";
 import { languageForFence } from "@/syntax/languages";
 import type { ClampLines } from "./clamp";
@@ -314,10 +315,15 @@ function WithMentions({
   look: Look;
 }) {
   const people = usePeople(mentions.slug);
+  const links = useAgentLinks(mentions.slug);
   const { slug, known } = mentions;
   const plugins = useMemo(
-    () => [...base, remarkMentions({ slug, known, people }), ...(extra ?? [])],
-    [base, slug, known, people, extra],
+    () => [
+      ...base,
+      remarkMentions({ slug, known, people, links }),
+      ...(extra ?? []),
+    ],
+    [base, slug, known, people, links, extra],
   );
   return (
     <Body plugins={plugins} {...look}>

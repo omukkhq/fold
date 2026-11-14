@@ -120,6 +120,26 @@ pub struct AttentionItem {
     pub kind: AttentionKind,
     /// For a `question`: one of the task's open asks is closable, so a human can mark it answered with the asks route, because it is no worker's `AskUserQuestion`, which only a reply in its thread ends. False for every other kind.
     pub closable: bool,
+    /// For a `stalled` or `stale_claim` item: what the person does about the worker. Null for every other kind.
+    #[schema(required = true)]
+    pub action: Option<PersonAction>,
+}
+
+/// What a person does about a stalled worker or a stale claim: `restart_worker` starts the worker again in a new session, because fold runs it and its process runs or stalled; `message_worker` messages it, because its process ended, so the message resumes it in its own session, or because fold does not run its session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PersonAction {
+    RestartWorker,
+    MessageWorker,
+}
+
+impl From<service::PersonAction> for PersonAction {
+    fn from(action: service::PersonAction) -> Self {
+        match action {
+            service::PersonAction::RestartWorker => Self::RestartWorker,
+            service::PersonAction::MessageWorker => Self::MessageWorker,
+        }
+    }
 }
 
 impl From<service::AttentionKind> for AttentionKind {
@@ -138,6 +158,7 @@ impl From<service::AttentionItem> for AttentionItem {
         Self {
             kind: item.kind.into(),
             closable: item.closable,
+            action: item.action.map(PersonAction::from),
         }
     }
 }
@@ -1788,6 +1809,13 @@ mod tests {
             let wire = serde_json::to_value(AttentionItem::from(service::AttentionItem::of(kind)))
                 .unwrap();
             assert_eq!(wire["kind"], kind.as_str());
+        }
+        for action in [
+            service::PersonAction::RestartWorker,
+            service::PersonAction::MessageWorker,
+        ] {
+            let wire = serde_json::to_value(PersonAction::from(action)).unwrap();
+            assert_eq!(wire, action.as_str());
         }
     }
 }

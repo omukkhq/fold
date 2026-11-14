@@ -17,7 +17,7 @@ import {
   switchLabel,
   switchLayout,
   switchPendingLabel,
-} from "./limitSwitch";
+} from "./limitActionsModel";
 
 /** The usage-limit line's actions: Pause, and a switch to each other account, which makes it the project's account; fold then runs the waiting turns again on it. Up to two targets show as buttons, more as one Switch account menu. A switch stays pending until the daemon answers and Needs you is read again. */
 export function LimitActions({

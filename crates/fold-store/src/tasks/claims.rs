@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use fold_core::claims::ClaimWait;
 use fold_core::{CheckRunId, ProposalId, TaskId, Timestamp, WorkerName};
 use sqlx::SqliteExecutor;
 
@@ -106,7 +107,7 @@ pub async fn unreleased_for_task(
     .transpose()
 }
 
-/// Sets `renewed_at = now` and clears `stale_at` on every unreleased claim, of either kind, held by one of `worker_ids`. Returns how many claims it renewed.
+/// Sets `renewed_at = now` and clears `stale_at` and `stale_needs_person_at` on every unreleased claim, of either kind, held by one of `worker_ids`. Returns how many claims it renewed.
 pub async fn renew(
     tx: &mut WriteTx,
     worker_ids: &[i64],
@@ -118,7 +119,7 @@ pub async fn renew(
     let ids = serde_json::Value::from(worker_ids.to_vec()).to_string();
     let now = now.as_millis();
     let result = sqlx::query!(
-        "UPDATE claims SET renewed_at = ?2, stale_at = NULL
+        "UPDATE claims SET renewed_at = ?2, stale_at = NULL, stale_needs_person_at = NULL
          WHERE released_at IS NULL AND worker_id IN (SELECT value FROM json_each(?1))",
         ids,
         now
@@ -136,7 +137,7 @@ pub async fn renew_for_run(
 ) -> Result<u64, StoreError> {
     let (number, now) = (run.to_db(), now.as_millis());
     let result = sqlx::query!(
-        "UPDATE claims SET renewed_at = MAX(renewed_at, ?2), stale_at = NULL
+        "UPDATE claims SET renewed_at = MAX(renewed_at, ?2), stale_at = NULL, stale_needs_person_at = NULL
          WHERE released_at IS NULL
            AND worker_id = (SELECT worker_id FROM check_runs WHERE number = ?1 AND stage = 'proposal')",
         number,
@@ -151,7 +152,7 @@ pub async fn renew_for_run(
 pub async fn renew_all(tx: &mut WriteTx, now: Timestamp) -> Result<u64, StoreError> {
     let now = now.as_millis();
     let result = sqlx::query!(
-        "UPDATE claims SET renewed_at = ?, stale_at = NULL WHERE released_at IS NULL",
+        "UPDATE claims SET renewed_at = ?, stale_at = NULL, stale_needs_person_at = NULL WHERE released_at IS NULL",
         now
     )
     .execute(tx.conn())
@@ -243,9 +244,62 @@ pub async fn unreleased_of_agent(
         .collect()
 }
 
-/// An unreleased claim that [`mark_stale`] marked.
+/// What one unreleased claim waits for from others, by its holder's `workers.id`; see [`fold_core::claims::ClaimWait`].
+pub async fn claim_waits(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<(i64, ClaimWait)>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT c.worker_id AS "worker!: i64",
+                  (c.kind = 'implementation' AND EXISTS (
+                       SELECT 1 FROM proposals p
+                       WHERE p.task_id = c.task_id AND p.state = 'open'
+                         AND NOT p.conflicted AND NOT p.checks_failed
+                         AND NOT (
+                             (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) = 'request_changes'
+                             AND EXISTS (SELECT 1 FROM reviews r
+                                         WHERE r.verdict = 'request_changes'
+                                           AND r.version_id = (SELECT v.id FROM proposal_versions v
+                                                               WHERE v.proposal_id = p.id
+                                                               ORDER BY v.version DESC LIMIT 1))))) AS "sent!: bool",
+                  (c.kind = 'implementation' AND EXISTS (
+                       SELECT 1 FROM open_human_questions q WHERE q.task_id = c.task_id)) AS "asks_person!: bool",
+                  (c.kind = 'implementation' AND EXISTS (
+                       SELECT 1 FROM task_reports r
+                       WHERE r.task_id = c.task_id AND r.resolution IS NULL)) AS "reported!: bool",
+                  (c.kind = 'review' AND EXISTS (
+                       SELECT 1 FROM reviews r
+                       JOIN workers rw ON rw.id = r.reviewer_worker_id
+                       WHERE rw.agent_id = (SELECT w.agent_id FROM workers w WHERE w.id = c.worker_id)
+                         AND r.version_id = (SELECT v.id FROM proposal_versions v
+                                             WHERE v.proposal_id = c.proposal_id
+                                             ORDER BY v.version DESC LIMIT 1))) AS "verdict_given!: bool"
+           FROM claims c
+           WHERE c.released_at IS NULL
+           ORDER BY c.id"#
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.worker,
+                ClaimWait {
+                    sent: row.sent,
+                    asks_person: row.asks_person,
+                    reported: row.reported,
+                    verdict_given: row.verdict_given,
+                },
+            )
+        })
+        .collect())
+}
+
+/// An unreleased claim that [`mark_stale`] marked, or that [`mark_needs_person`] passed to a person.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaleClaim {
+    /// The claim's row id, which stays inside the daemon.
+    pub id: i64,
     pub target: ClaimTarget,
     pub worker: WorkerName,
     pub renewed_at: Timestamp,
@@ -294,6 +348,7 @@ pub async fn mark_stale(
         .execute(tx.conn())
         .await?;
         marked.push(StaleClaim {
+            id: row.id,
             target,
             worker: WorkerName::parse(&row.worker)
                 .map_err(|_| StoreError::Corrupt("workers.name"))?,
@@ -303,20 +358,139 @@ pub async fn mark_stale(
     Ok(marked)
 }
 
-/// The tasks with a marked claim: an unreleased implementation claim with `stale_at` set, or such a review claim on the task's open proposal.
+/// Sets `stale_needs_person_at = now` on each unreleased claim of `ids` that is marked stale and does not need a person yet.
+pub async fn set_needs_person(
+    tx: &mut WriteTx,
+    ids: &[i64],
+    now: Timestamp,
+) -> Result<(), StoreError> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let ids = serde_json::Value::from(ids.to_vec()).to_string();
+    let now = now.as_millis();
+    sqlx::query!(
+        "UPDATE claims SET stale_needs_person_at = ?2
+         WHERE id IN (SELECT value FROM json_each(?1))
+           AND released_at IS NULL AND stale_at IS NOT NULL AND stale_needs_person_at IS NULL",
+        ids,
+        now
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
+/// Sets `stale_needs_person_at = now` on each unreleased claim marked stale that does not need a person yet and whose `stale_at` passes `needs_person`, and returns them in the order they were taken.
+pub async fn mark_needs_person(
+    tx: &mut WriteTx,
+    now: Timestamp,
+    needs_person: impl Fn(Timestamp) -> bool,
+) -> Result<Vec<StaleClaim>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT c.id AS "id!: i64", c.kind, t.number AS "task!: i64",
+                  p.number AS "proposal?: i64", w.name AS worker, c.renewed_at,
+                  c.stale_at AS "stale_at!: i64"
+           FROM claims c
+           JOIN workers w ON w.id = c.worker_id
+           LEFT JOIN proposals p ON p.id = c.proposal_id
+           JOIN tasks t ON t.id = COALESCE(c.task_id, p.task_id)
+           WHERE c.released_at IS NULL AND c.stale_at IS NOT NULL
+             AND c.stale_needs_person_at IS NULL
+           ORDER BY c.id"#
+    )
+    .fetch_all(tx.conn())
+    .await?;
+    let mut marked = Vec::new();
+    for row in rows {
+        if !needs_person(time(row.stale_at, "claims.stale_at")?) {
+            continue;
+        }
+        let task = TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?;
+        let target = match (row.kind.as_str(), row.proposal) {
+            ("implementation", None) => ClaimTarget::Task(task),
+            ("review", Some(number)) => ClaimTarget::Review {
+                proposal: ProposalId::try_from_db(number)
+                    .ok_or(StoreError::Corrupt("proposals.number"))?,
+                task,
+            },
+            _ => return Err(StoreError::Corrupt("claims.kind")),
+        };
+        marked.push(StaleClaim {
+            id: row.id,
+            target,
+            worker: WorkerName::parse(&row.worker)
+                .map_err(|_| StoreError::Corrupt("workers.name"))?,
+            renewed_at: time(row.renewed_at, "claims.renewed_at")?,
+        });
+    }
+    let ids: Vec<i64> = marked.iter().map(|claim| claim.id).collect();
+    set_needs_person(tx, &ids, now).await?;
+    Ok(marked)
+}
+
+/// A stale claim that needs a person, as Needs you lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimForPerson {
+    pub target: ClaimTarget,
+    pub worker: WorkerName,
+    /// When it started to need a person.
+    pub since: Timestamp,
+}
+
+/// The unreleased claims that need a person, oldest first: an implementation claim, or a review claim on an open proposal.
+pub async fn claims_for_person(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<ClaimForPerson>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT c.kind, t.number AS "task!: i64", p.number AS "proposal?: i64",
+                  w.name AS worker, c.stale_needs_person_at AS "since!: i64"
+           FROM claims c
+           JOIN workers w ON w.id = c.worker_id
+           LEFT JOIN proposals p ON p.id = c.proposal_id
+           JOIN tasks t ON t.id = COALESCE(c.task_id, p.task_id)
+           WHERE c.released_at IS NULL AND c.stale_needs_person_at IS NOT NULL
+             AND (c.kind = 'implementation' OR p.state = 'open')
+           ORDER BY c.stale_needs_person_at, c.id"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let task = TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?;
+            let target = match (row.kind.as_str(), row.proposal) {
+                ("implementation", None) => ClaimTarget::Task(task),
+                ("review", Some(number)) => ClaimTarget::Review {
+                    proposal: ProposalId::try_from_db(number)
+                        .ok_or(StoreError::Corrupt("proposals.number"))?,
+                    task,
+                },
+                _ => return Err(StoreError::Corrupt("claims.kind")),
+            };
+            Ok(ClaimForPerson {
+                target,
+                worker: WorkerName::parse(&row.worker)
+                    .map_err(|_| StoreError::Corrupt("workers.name"))?,
+                since: time(row.since, "claims.stale_needs_person_at")?,
+            })
+        })
+        .collect()
+}
+
+/// The tasks with a stale claim that needs a person: an unreleased implementation claim with `stale_needs_person_at` set, or such a review claim on the task's open proposal. A claim that is only marked stale waits for the agent fold told of it.
 pub async fn tasks_with_stale_claims(
     executor: impl SqliteExecutor<'_>,
 ) -> Result<BTreeSet<TaskId>, StoreError> {
     let rows = sqlx::query_scalar!(
         r#"SELECT t.number AS "task!: i64"
            FROM claims c JOIN tasks t ON t.id = c.task_id
-           WHERE c.kind = 'implementation' AND c.released_at IS NULL AND c.stale_at IS NOT NULL
+           WHERE c.kind = 'implementation' AND c.released_at IS NULL AND c.stale_needs_person_at IS NOT NULL
            UNION
            SELECT t.number
            FROM claims c
            JOIN proposals p ON p.id = c.proposal_id
            JOIN tasks t ON t.id = p.task_id
-           WHERE c.kind = 'review' AND c.released_at IS NULL AND c.stale_at IS NOT NULL
+           WHERE c.kind = 'review' AND c.released_at IS NULL AND c.stale_needs_person_at IS NOT NULL
              AND p.state = 'open'"#
     )
     .fetch_all(executor)

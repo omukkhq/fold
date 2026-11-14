@@ -281,6 +281,59 @@ describe("Menu", () => {
     expect(screen.getByText("The waiting turns run again on it.")).toBeTruthy();
     expect(screen.getAllByRole("menuitem")).toHaveLength(1);
   });
+
+  it("stops at the room Radix measures in the window and scrolls inside", async () => {
+    const items = Array.from({ length: 300 }, (_, n) => ({
+      label: `worker-${String(n)}`,
+      onSelect: () => {},
+    }));
+    render(<Menu trigger={<Button>Agents</Button>} items={items} />);
+    const trigger = screen.getByRole("button", { name: "Agents" });
+    trigger.focus();
+    await userEvent.keyboard("{Enter}");
+    const menu = screen.getByRole("menu");
+    expect(menu.className).toContain(
+      "max-h-(--radix-dropdown-menu-content-available-height)",
+    );
+    expect(menu.className).toContain(
+      "max-w-(--radix-dropdown-menu-content-available-width)",
+    );
+    expect(menu.classList.contains("overflow-y-auto")).toBe(true);
+    // A width of its own content would beat the window's width, so the menu takes none.
+    expect(menu.classList.contains("min-w-max")).toBe(false);
+    // The keyboard reaches the last of hundreds of items; the browser scrolls the focused item into view.
+    await userEvent.keyboard("{End}");
+    expect(document.activeElement?.textContent).toBe("worker-299");
+  });
+
+  it("keeps a menu of tick boxes open while the reader ticks several", async () => {
+    const ticked = new Set<string>(["ui"]);
+    const onTick = vi.fn((name: string) => {
+      ticked.add(name);
+    });
+    render(
+      <Menu
+        trigger={<Button>Labels</Button>}
+        items={["data", "ui"].map((name) => ({
+          label: name,
+          hint: name === "ui" ? "web" : undefined,
+          checked: ticked.has(name),
+          onSelect: () => {
+            onTick(name);
+          },
+        }))}
+      />,
+    );
+    screen.getByRole("button", { name: "Labels" }).focus();
+    await userEvent.keyboard("{Enter}");
+    const ui = screen.getByRole("menuitemcheckbox", { name: "ui web" });
+    expect(ui.getAttribute("aria-checked")).toBe("true");
+    const data = screen.getByRole("menuitemcheckbox", { name: "data" });
+    expect(data.getAttribute("aria-checked")).toBe("false");
+    await userEvent.click(data);
+    expect(onTick).toHaveBeenCalledWith("data");
+    expect(screen.getByRole("menu")).toBeTruthy();
+  });
 });
 
 describe("Popover", () => {

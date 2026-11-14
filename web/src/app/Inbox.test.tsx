@@ -288,6 +288,8 @@ describe("Inbox, Needs you", () => {
             since: 1_760_000_000_000,
             supervised: true,
             told: ["web-lead"],
+            parked_by: null,
+            wait_for: null,
           },
         }),
       ],

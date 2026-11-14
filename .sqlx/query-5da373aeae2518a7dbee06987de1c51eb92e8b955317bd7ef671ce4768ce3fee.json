@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE claims SET renewed_at = ?, stale_at = NULL, stale_needs_person_at = NULL WHERE released_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "5da373aeae2518a7dbee06987de1c51eb92e8b955317bd7ef671ce4768ce3fee"
+}

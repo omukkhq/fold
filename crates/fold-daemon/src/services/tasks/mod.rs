@@ -33,7 +33,7 @@ mod removal;
 mod requests;
 mod views;
 
-pub use attention::{AttentionItem, AttentionKind, attention, stalled_tasks};
+pub use attention::{AttentionItem, AttentionKind, PersonAction, attention, stalled_tasks};
 pub use checklists::{
     ChecklistItemPatch, ChecklistItemView, ChecklistProgress, ChecklistView, ItemContent,
     NewChecklistItem, item_content,

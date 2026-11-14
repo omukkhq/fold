@@ -218,6 +218,54 @@ async fn a_process_that_failed_without_a_report_is_a_stall_at_once() {
     assert_eq!(stalled_events(&harness).await.len(), 1, "told once");
 }
 
+/// A late write keeps a failed worker's stall, and the restart that its lead gives it ends the stall: the new process runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_restart_of_a_failed_worker_ends_its_stall() {
+    let fake = FakeClaude::new("result").failing_with_stderr("Segmentation fault");
+    let mut harness = task_worker_for(&fake, &["Draw the page"], WorkerState::Failed).await;
+    let work = harness.start_work(TASK_WORKER, "T-1").await;
+    harness.disconnect(TASK_WORKER).await;
+    eventually(WAIT, async || {
+        match state(&harness, &work).await.view.activity {
+            Some(seen) if seen.state == ActivityState::Failed => Ok(()),
+            other => Err(other),
+        }
+    })
+    .await;
+    let before = state(&harness, &work).await.view.last_activity_at;
+    advance(&harness, Duration::from_secs(1));
+    work.write(&[("late.txt", "written as the process ended\n")]);
+    eventually(WAIT, async || {
+        let view = state(&harness, &work).await.view;
+        match view.activity {
+            Some(seen) if view.last_activity_at > before && seen.state == ActivityState::Failed => {
+                Ok(())
+            }
+            other => Err(other),
+        }
+    })
+    .await;
+
+    // The new process runs, so its first turn does not fail.
+    let mut launcher = fake.launcher.clone();
+    launcher
+        .env
+        .retain(|(name, _)| name != "FOLD_FAKE_CLAUDE_STDERR");
+    harness.handle.workers.set_launcher(launcher);
+    harness
+        .call("web-lead", "restart_worker", json!({"name": TASK_WORKER}))
+        .await;
+    until_runs(&fake, TASK_WORKER, 2).await;
+    eventually(WAIT, async || {
+        let view = state(&harness, &work).await.view;
+        match view.activity {
+            None if !view.stalled => Ok(()),
+            other => Err((other, view.stalled)),
+        }
+    })
+    .await;
+}
+
 /// A worker whose ask about its task waits for a person is never stalled, however long it waits and whatever call it left open.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_worker_that_waits_for_an_answer_is_not_stalled() {

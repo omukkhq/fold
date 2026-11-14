@@ -4,9 +4,9 @@ import {
   switchLabel,
   switchLayout,
   switchPendingLabel,
-} from "./limitSwitch";
+} from "./limitActionsModel";
 
-describe("limitSwitch", () => {
+describe("limitActionsModel", () => {
   it("names the account the button switches to", () => {
     expect(switchLabel("work-b")).toBe("Switch to work-b");
     expect(switchPendingLabel("work-b")).toBe("Switching to work-b…");

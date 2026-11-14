@@ -40,6 +40,7 @@ mod waits;
 mod watch;
 
 pub use restart::{MCP_RETRY_TURN, PAUSE_TURN, RESTART_TURN};
+pub use stop::Park;
 
 /// The folder below a project's `.fold/` that, in a build for development, makes every worker of the project run fld's scripted stand-in for Claude Code instead of `claude`. It holds one script per agent, `<agent>.json`; the development seed writes it.
 #[cfg(feature = "dev-launcher")]

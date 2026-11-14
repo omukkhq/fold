@@ -178,6 +178,8 @@ define_event_types! {
     WORKERS_ACCOUNT_CHANGED = "workers.account_changed",
     WORKER_WAITING = "worker.waiting",
     WORKER_WAIT_ENDED = "worker.wait_ended",
+    CLAIM_NEEDS_PERSON = "claim.needs_person",
+    WORKER_PARKED = "worker.parked",
 }
 
 impl EventType {

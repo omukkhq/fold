@@ -38,7 +38,7 @@ pub use questions::{
 };
 pub use turns::{CostSlot, CostTotals, cost_groups, cost_slots, cost_totals};
 pub use workers::{
-    AreaRow, BoundWorker, NewWorkerProcess, ProcessEnd, TurnTotals, WorkerProcessRow,
+    AreaRow, BoundWorker, NewWorkerProcess, ProcessEnd, TurnTotals, WorkerPark, WorkerProcessRow,
     bind_proposal, bind_task, claims_held, clear_worker_pid, find_area, find_worker_process,
     hold_worker, insert_area, insert_worker_process, label_id, list_areas, list_worker_processes,
     mark_session_lost, mark_worker_working, proposals_without_verdict, record_exit, record_turn,
@@ -55,6 +55,7 @@ pub use workers::{
     clear_turn_error, forget_made_up_model, process_starts, record_turn_error, set_exit_error,
     set_fold_fingerprint,
 };
+pub use workers::{park_worker, parked_holders, turn_waiting_holders};
 
 /// Row ids of these tables stay inside the daemon; the public handles are the names.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -625,15 +626,16 @@ pub struct HeldClaim {
     pub task: TaskId,
     pub acquired_at: Timestamp,
     pub renewed_at: Timestamp,
-    /// The lease sweeper marked the claim (`stale_at` is set).
-    pub marked_stale: bool,
+    /// The claim is stale and needs a person: the agent fold told of it let a window pass, or no agent can act on it.
+    pub stale_needs_person: bool,
 }
 
 /// Every unreleased claim, oldest first.
 pub async fn held_claims(executor: impl SqliteExecutor<'_>) -> Result<Vec<HeldClaim>, StoreError> {
     let rows = sqlx::query!(
         r#"SELECT c.worker_id, c.kind, COALESCE(t.number, pt.number) AS "task!: i64",
-                  c.acquired_at, c.renewed_at, c.stale_at IS NOT NULL AS "marked_stale!: bool"
+                  c.acquired_at, c.renewed_at,
+                  c.stale_needs_person_at IS NOT NULL AS "stale_needs_person!: bool"
            FROM claims c
            LEFT JOIN tasks t ON t.id = c.task_id
            LEFT JOIN proposals p ON p.id = c.proposal_id
@@ -651,7 +653,7 @@ pub async fn held_claims(executor: impl SqliteExecutor<'_>) -> Result<Vec<HeldCl
                 task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
                 acquired_at: time(row.acquired_at, "claims.acquired_at")?,
                 renewed_at: time(row.renewed_at, "claims.renewed_at")?,
-                marked_stale: row.marked_stale,
+                stale_needs_person: row.stale_needs_person,
             })
         })
         .collect()

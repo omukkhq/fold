@@ -110,6 +110,8 @@ describe("attention", () => {
       since: 0,
       supervised: true,
       told: ["web-lead"],
+      parked_by: null,
+      wait_for: null,
     };
     const told = attentionView([], 0, 12 * 60_000, {
       check_run: null,
@@ -122,7 +124,7 @@ describe("attention", () => {
       stalled: null,
     });
     const flagged = attentionView(
-      [{ kind: "stalled", closable: false }],
+      [{ kind: "stalled", closable: false, action: null }],
       0,
       12 * 60_000,
       {
@@ -146,7 +148,11 @@ describe("attention", () => {
       staleClaim: false,
     });
     expect(
-      attentionView([{ kind: "stalled", closable: false }], 0, 7 * 60_000),
+      attentionView(
+        [{ kind: "stalled", closable: false, action: null }],
+        0,
+        7 * 60_000,
+      ),
     ).toEqual({
       checks: null,
       activity: null,
@@ -154,7 +160,11 @@ describe("attention", () => {
       staleClaim: false,
     });
     expect(
-      attentionView([{ kind: "stale_claim", closable: false }], 0, 1000),
+      attentionView(
+        [{ kind: "stale_claim", closable: false, action: null }],
+        0,
+        1000,
+      ),
     ).toEqual({
       checks: null,
       activity: null,
@@ -164,8 +174,8 @@ describe("attention", () => {
     expect(
       attentionView(
         [
-          { kind: "question", closable: true },
-          { kind: "human_review", closable: false },
+          { kind: "question", closable: true, action: null },
+          { kind: "human_review", closable: false, action: null },
         ],
         0,
         1000,
@@ -209,8 +219,8 @@ describe("attention", () => {
       started_at: 0,
     };
     const items = [
-      { kind: "stalled" as const, closable: false },
-      { kind: "stale_claim" as const, closable: false },
+      { kind: "stalled" as const, closable: false, action: null },
+      { kind: "stale_claim" as const, closable: false, action: null },
     ];
     expect(attentionView(items, 0, 7 * 60_000, { check_run: run })).toEqual({
       checks: "running checks",

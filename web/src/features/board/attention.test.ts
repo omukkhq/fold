@@ -1,10 +1,10 @@
 import { Hand, MessageCircle, UserCheck } from "lucide-react";
 import { describe, expect, it } from "vitest";
 import type { AttentionItem, AttentionKind } from "@/api/board";
-import { attentionMark, hasKind } from "./attention";
+import { actionOf, attentionMark, hasKind } from "./attention";
 
 const items = (...kinds: AttentionKind[]): AttentionItem[] =>
-  kinds.map((kind) => ({ kind, closable: kind === "question" }));
+  kinds.map((kind) => ({ kind, closable: kind === "question", action: null }));
 
 describe("attentionMark per kind", () => {
   it("maps each kind to its icon and text", () => {
@@ -58,7 +58,7 @@ describe("attentionMark", () => {
       [
         "Question: an agent waits for your answer",
         "Human review: a proposal waits for your approval",
-        "Stale claim: the worker's lease ran out",
+        "Stale claim: the worker made no fold call for its lease, and its lead did not act or no agent can",
       ].join(" · "),
     );
   });
@@ -71,5 +71,50 @@ describe("attentionMark", () => {
 
   it("ignores a kind this build does not know", () => {
     expect(attentionMark([{ kind: "later" }])).toBeNull();
+  });
+});
+
+describe("a mark that needs a person", () => {
+  it("names the person's action for a stall or a stale claim", () => {
+    expect(
+      attentionMark([
+        { kind: "stale_claim", closable: false, action: "message_worker" },
+      ]),
+    ).toEqual({
+      icon: Hand,
+      text: "Stale claim · message worker",
+      tooltip:
+        "Stale claim: the worker made no fold call for its lease, and its lead did not act or no agent can; message the worker, which resumes it in its session",
+    });
+    expect(
+      attentionMark([
+        { kind: "stalled", closable: false, action: "restart_worker" },
+      ])?.text,
+    ).toBe("Stalled · restart worker");
+    expect(
+      attentionMark([
+        { kind: "stalled", closable: false, action: "restart_worker" },
+      ])?.tooltip,
+    ).toContain("; restart the worker in a new session");
+  });
+
+  it("says needs you only when the daemon names no action this build knows", () => {
+    expect(
+      attentionMark([{ kind: "stale_claim", closable: false, action: null }])
+        ?.text,
+    ).toBe("Stale claim · needs you");
+    expect(attentionMark([{ kind: "stalled", action: "later" }])?.text).toBe(
+      "Stalled · needs you",
+    );
+    expect(actionOf([{ kind: "stalled", action: "later" }], "stalled")).toBe(
+      null,
+    );
+    expect(
+      actionOf(
+        [{ kind: "stale_claim", closable: false, action: "message_worker" }],
+        "stale_claim",
+      ),
+    ).toBe("message_worker");
+    expect(actionOf([], "stalled")).toBeNull();
   });
 });

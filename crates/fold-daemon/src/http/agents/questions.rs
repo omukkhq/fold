@@ -162,6 +162,8 @@ pub enum NeedsYouItemKind {
     WorkerStalled,
     /// Turns of the project's workers reached Claude Code's usage limit `limit`; one item per limit. `agents` names the workers whose turn waits, `title` holds Claude Code's newest message, `reset` its wording of the reset and `resets_at` the reset instant when the message gives one, `reason` what fold does and `actions` what the human can do. fold runs each turn again in its session after the reset, which ends the item.
     UsageLimit,
+    /// The claim of the worker `agent` on `task`, or its review claim on `proposal`, went stale: it made no fold call for the lease, fold told its lead, or else the main agent, and one more stall window passed without a renewal, or no agent can act on it. `action` and `reason` say what the human does. The item ends when the worker renews the claim with any fold call, or when the claim is released or taken over.
+    StaleClaim,
 }
 
 /// A usage limit of Claude Code: `session`, `weekly`, `opus`, `sonnet`, or `usage` for the older message that names no kind.
@@ -309,6 +311,9 @@ pub struct NeedsYouEntry {
     pub resets_at: Option<fold_core::Timestamp>,
     /// What the human can do from the item, such as `pause` for a `usage_limit`; empty for most kinds.
     pub actions: Vec<NeedsYouActionEntry>,
+    /// What the human does about the worker of a `worker_stalled` or a `stale_claim`; null for every other kind.
+    #[schema(required = true)]
+    pub action: Option<crate::http::tasks::PersonAction>,
 }
 
 impl From<NeedsYouItem> for NeedsYouEntry {
@@ -333,6 +338,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::SharedChanged => NeedsYouItemKind::SharedChanged,
             NeedsYouKind::WorkerStalled => NeedsYouItemKind::WorkerStalled,
             NeedsYouKind::UsageLimit => NeedsYouItemKind::UsageLimit,
+            NeedsYouKind::StaleClaim => NeedsYouItemKind::StaleClaim,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,
@@ -371,6 +377,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             reset: item.reset,
             resets_at: item.resets_at,
             actions: item.actions.into_iter().map(Into::into).collect(),
+            action: item.action.map(crate::http::tasks::PersonAction::from),
         }
     }
 }
@@ -438,7 +445,7 @@ pub async fn answer_worker_question(
     Ok(Json(answered.into()))
 }
 
-/// Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, a worker whose turns fail before they reach the model, the turns that could not reach the model at all and those that reached a usage limit, which fold runs again, a notice target fold turned off, which a person's change of the target or a test send that gets through ends, and the files that changed in the project folder during supervised workers' tool calls, whose paths leave the waiting folder's item. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `stash.discarded`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, `notify.target_changed`, `folder.agent_changed`, `folder.agent_change_cleared`, `worker.waiting` and `worker.wait_ended`, and with the live `worker.output` steps `result` and `result_error`, which end a turn, and with the live `workspace.changed` whose `stalled` changed, which starts or ends a `worker_stalled` item.
+/// Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, a worker whose turns fail before they reach the model, the turns that could not reach the model at all and those that reached a usage limit, which fold runs again, a notice target fold turned off, which a person's change of the target or a test send that gets through ends, and the files that changed in the project folder during supervised workers' tool calls, whose paths leave the waiting folder's item, and stale claims whose holder's lead did not act or that no agent can act on. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `stash.discarded`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, `notify.target_changed`, `folder.agent_changed`, `folder.agent_change_cleared`, `worker.waiting`, `worker.wait_ended`, `claim.*`, and with the live `worker.output` steps `result` and `result_error`, which end a turn, and with the live `workspace.changed` whose `stalled` changed, which starts or ends a `worker_stalled` item.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/needs-you",

@@ -44,6 +44,7 @@ export function workerProcess(
     older_fold: false,
     session_id: "0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13",
     previous_sessions: [],
+    parked: null,
     transcript:
       "/home/tanim/.claude/projects/-home-tanim-ledger/0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13.jsonl",
     ...fields,
@@ -124,6 +125,7 @@ export function needsItem(fields: Partial<NeedsYouItem> = {}): NeedsYouItem {
     reset: null,
     resets_at: null,
     actions: [],
+    action: null,
     ...fields,
   };
 }

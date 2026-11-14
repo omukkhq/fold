@@ -333,6 +333,23 @@ pub struct WorkerEntry {
     pub transcript: Option<String>,
     /// The worker is idle or working in a session that last read other skill text than the fld that runs the daemon writes for its role. Its next turn starts with a note to load its role skill again, and once fold writes that turn this is false; false for a worker that is starting or stopping or does not run.
     pub older_fold: bool,
+    /// The agent that stopped the worker to wait for its go, with what it waits for; null for a worker nobody parked. The agent's message resumes it in its session, and every start ends the park.
+    #[schema(required = true)]
+    pub parked: Option<WorkerParkEntry>,
+}
+
+/// A park of a worker: an agent stopped it with `stop_worker`'s `wait_for`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WorkerParkEntry {
+    /// The agent whose go the worker waits for.
+    #[schema(example = "web-lead")]
+    pub by: String,
+    /// What the worker waits for, in that agent's words.
+    #[schema(example = "my go after the T-288 migration")]
+    pub wait_for: String,
+    /// UTC milliseconds of the park.
+    #[schema(value_type = i64)]
+    pub since: fold_core::Timestamp,
 }
 
 /// Why a worker left a session for a new one: `handoff` (a fresh context after its hand-off note), `lost` (Claude Code no longer had the session) or `requested` (a human or the main agent asked for a new session).
@@ -418,6 +435,11 @@ impl WorkerEntry {
             previous_sessions: previous.into_iter().map(Into::into).collect(),
             transcript,
             older_fold,
+            parked: row.park.map(|park| WorkerParkEntry {
+                by: park.by.to_string(),
+                wait_for: park.wait_for,
+                since: park.at,
+            }),
         }
     }
 }

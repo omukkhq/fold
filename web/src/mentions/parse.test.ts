@@ -205,17 +205,29 @@ describe("person mentions", () => {
     expect(shape("thanks @tanim.")).toEqual([["person", "human", "tanim"]]);
   });
 
-  it("splits text around a person and links an agent to its board", () => {
+  it("splits text around a person and links an agent that leads nothing to the Agents screen", () => {
     const [, person] = splitMentions("hi @frontend now", undefined, people);
     expect(person?.mention && mentionHref("demo", person.mention)).toBe(
-      "/p/demo/board?agent=frontend",
+      "/p/demo/agents",
     );
     const [, worker] = splitMentions("hi @frontend/ui now", undefined, people);
     expect(worker?.mention && mentionHref("demo", worker.mention)).toBe(
-      "/p/demo/board?agent=frontend",
+      "/p/demo/agents",
     );
     const [, human] = splitMentions("hi @tanim now", undefined, people);
     expect(human?.mention && mentionHref("demo", human.mention)).toBeNull();
+  });
+
+  it("links a lead, also by an older worker name, to its area on the board", () => {
+    const links = {
+      leads: new Map([["frontend", "web"]]),
+      main: new Set<string>(),
+    };
+    const board = `/p/demo/board?owner=${encodeURIComponent('["area:web"]')}`;
+    const [, worker] = splitMentions("hi @frontend/ui now", undefined, people);
+    expect(worker?.mention && mentionHref("demo", worker.mention, links)).toBe(
+      board,
+    );
   });
 
   it("finds no person without a list of names", () => {
