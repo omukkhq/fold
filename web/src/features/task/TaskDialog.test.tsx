@@ -572,16 +572,20 @@ async function openLabels(task = "T-2", title = TITLE) {
   return opened;
 }
 
+/** The board's `label` filter of `ui` as the router writes a list into the URL. */
+const UI_LABEL = `label=${encodeURIComponent(JSON.stringify(["ui"]))}`;
+
 describe("the task dialog route", () => {
   it("opens from a board card with the board's filters and shows the sections the task payload has data for", async () => {
     const { router, queryClient } = setup("/p/demo/board?label=ui");
     const link = await screen.findByRole("link", { name: TITLE }, WAIT);
-    expect(link.getAttribute("href")).toBe("/p/demo/t/T-2?label=ui");
+    // A bare label in the link reads as a list of one, and the board writes it back as a list.
+    expect(link.getAttribute("href")).toBe(`/p/demo/t/T-2?${UI_LABEL}`);
     await userEvent.click(link);
     const dialog = await screen.findByRole("dialog", {}, WAIT);
     await within(dialog).findByRole("heading", { name: TITLE }, WAIT);
     expect(router.state.location.pathname).toBe("/p/demo/t/T-2");
-    expect(router.state.location.search).toEqual({ label: "ui" });
+    expect(router.state.location.search).toEqual({ label: ["ui"] });
 
     expect(within(dialog).getByText("In progress")).toBeTruthy();
     for (const name of [
@@ -873,19 +877,19 @@ describe("the task dialog route", () => {
       within(region(dialog, "Subtasks"))
         .getByRole("link", { name: /Form field components/ })
         .getAttribute("href"),
-    ).toBe("/p/demo/t/T-13?label=ui");
+    ).toBe(`/p/demo/t/T-13?${UI_LABEL}`);
     expect(
       within(region(dialog, "Dependencies"))
         .getByRole("link", { name: /Login flow/ })
         .getAttribute("href"),
-    ).toBe("/p/demo/t/T-5?label=ui");
+    ).toBe(`/p/demo/t/T-5?${UI_LABEL}`);
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Close" }),
     );
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/p/demo/board");
     });
-    expect(router.state.location.search).toEqual({ label: "ui" });
+    expect(router.state.location.search).toEqual({ label: ["ui"] });
     expect(screen.queryByRole("dialog")).toBeNull();
   }, 15_000);
 
@@ -1108,6 +1112,12 @@ describe("creating a task", () => {
         .getAllByRole("option")
         .map((o) => o.textContent),
     ).toEqual(["auth"]);
+    // A long list stops at the room Radix measures for the popover and scrolls inside.
+    const popup = list.parentElement;
+    expect(popup?.className).toContain(
+      "max-h-(--radix-popover-content-available-height)",
+    );
+    expect(popup?.className).not.toContain("--radix-dropdown-menu");
     await userEvent.type(box, "zz");
     expect(await screen.findByText("No label matches.", {}, WAIT)).toBeTruthy();
     await userEvent.clear(box);
@@ -1528,6 +1538,12 @@ describe("the human edits", () => {
       expect(screen.getAllByRole("dialog")).toHaveLength(2);
     });
     const popover = screen.getAllByRole("dialog")[1] as HTMLElement;
+    // The project's labels arrive after the popover opens.
+    await within(popover).findByRole(
+      "button",
+      { name: "Add label auth" },
+      WAIT,
+    );
     // Area labels change only through the area.
     expect(
       within(popover)

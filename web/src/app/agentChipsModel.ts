@@ -4,7 +4,6 @@ import { formatAsOfMinute } from "../format/time";
 import type { LiveStatus } from "../live/status";
 import { syncedAt } from "./streamStatusModel";
 import { waitWords } from "../live/turnWaits";
-import { projectPath, withQuery } from "@/routes/paths";
 
 /** Tasks the agent's workers hold an implementation claim on. */
 export function workingCount(agent: ProjectAgent): number {
@@ -191,9 +190,4 @@ export function panelAgents(
     (agent) => chipPresence(agent, paused) === "offline",
   );
   return [...connected, ...offline];
-}
-
-/** The board filtered to the agent's tasks, through the board's `agent` search param. */
-export function agentBoardPath(slug: string, agent: string): string {
-  return withQuery(projectPath(slug, "board"), { agent });
 }
