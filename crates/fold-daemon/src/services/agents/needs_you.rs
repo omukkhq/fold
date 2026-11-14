@@ -64,10 +64,12 @@ pub enum NeedsYouKind {
 }
 
 /// What a human can do about an item from the item itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NeedsYouAction {
     /// Pause every agent of the project.
     Pause,
+    /// Make another of the host's accounts the project's, which runs the waiting turns again on it.
+    SwitchAccount(fold_core::accounts::AccountName),
 }
 
 /// The screen on which a human answers an item.

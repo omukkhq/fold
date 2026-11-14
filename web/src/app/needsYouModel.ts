@@ -36,9 +36,20 @@ export interface NeedsYouLine {
   restart: string | null;
   /** What the human can do from the line, as the daemon lists it for the item, such as `pause` for a usage limit. */
   actions: readonly NeedsYouActionKind[];
+  /** The other accounts of the host that the line's Switch to buttons make the project's, by name, in the daemon's order; empty for every other line. */
+  switchTo: readonly string[];
 }
 
 export type NeedsYouActionKind = NeedsYouItem["actions"][number]["action"];
+
+/** The accounts the item's `switch_account` actions name, in their order; an entry without a name is left out. */
+export function switchTargets(
+  actions: readonly NeedsYouItem["actions"][number][],
+): string[] {
+  return actions.flatMap((entry) =>
+    entry.action === "switch_account" && entry.account ? [entry.account] : [],
+  );
+}
 
 /** The files of an item as the second line names them: how many, the first path and the count of the rest. */
 export interface FilesSummary {
@@ -256,6 +267,7 @@ function lineOf(
     dismiss: null,
     restart: null,
     actions: item.actions.map((entry) => entry.action),
+    switchTo: switchTargets(item.actions),
   };
   switch (item.kind) {
     case "human_task":

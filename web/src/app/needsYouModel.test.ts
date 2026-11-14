@@ -625,6 +625,22 @@ describe("needsYouGroups", () => {
         "@web-lead waits; fold runs each waiting turn again after the reset",
       href: null,
       actions: ["pause"],
+      switchTo: [],
+    });
+    const switching = needsYouGroups("demo", [
+      needsItem({
+        ...limit,
+        actions: [
+          { action: "pause" },
+          { action: "switch_account", account: "work-b" },
+          { action: "switch_account" },
+          { action: "switch_account", account: "personal" },
+        ],
+      }),
+    ]);
+    expect(allLines(switching)[0]).toMatchObject({
+      actions: ["pause", "switch_account", "switch_account", "switch_account"],
+      switchTo: ["work-b", "personal"],
     });
     const now = new Date(2026, 10, 14, 9, 0).getTime();
     const at = new Date(2026, 10, 14, 13, 50).getTime();

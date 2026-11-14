@@ -61,7 +61,7 @@ import { HrefLink } from "./HrefLink";
 import { SharedChangeDismiss, SharedFilesDialog } from "./SharedChangeDismiss";
 import { RestartStalled } from "@/features/workers/RestartStalled";
 import { listNote, listState } from "./listNote";
-import { PauseControl } from "./PauseControl";
+import { LimitActions } from "./LimitActions";
 import { PanelNote } from "./PanelNote";
 import {
   fullTitle,
@@ -489,9 +489,9 @@ export function Inbox({ slug }: { slug: string }) {
                             ) : line.restart !== null ? (
                               <RestartStalled slug={slug} name={line.restart} />
                             ) : line.actions.includes("pause") ? (
-                              <PauseControl
+                              <LimitActions
                                 slug={slug}
-                                className="items-start"
+                                accounts={line.switchTo}
                               />
                             ) : line.dismiss === null ? undefined : (
                               <SharedChangeDismiss

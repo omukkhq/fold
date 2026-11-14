@@ -3800,13 +3800,18 @@ export interface components {
         };
         /** @description One action of an item. */
         NeedsYouActionEntry: {
+            /**
+             * @description The account of a `switch_account`, by name; absent for every other action.
+             * @example work-b
+             */
+            account?: string | null;
             action: components["schemas"]["NeedsYouActionKind"];
         };
         /**
          * @description What a human can do from an item.
          * @enum {string}
          */
-        NeedsYouActionKind: "pause";
+        NeedsYouActionKind: "pause" | "switch_account";
         /** @description One item that waits for a human. Only the ids its kind has are set. */
         NeedsYouEntry: {
             /** @description What the human can do from the item, such as `pause` for a `usage_limit`; empty for most kinds. */

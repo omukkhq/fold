@@ -194,19 +194,30 @@ impl From<fold_core::turn_waits::LimitKind> for UsageLimitKind {
 pub enum NeedsYouActionKind {
     /// Pause every agent of the project, as `pause_project` does.
     Pause,
+    /// Make `account` the project's account, as `PUT /api/v1/projects/{slug}/account` does; each waiting turn then runs again on it.
+    SwitchAccount,
 }
 
 /// One action of an item.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct NeedsYouActionEntry {
     pub action: NeedsYouActionKind,
+    /// The account of a `switch_account`, by name; absent for every other action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "work-b")]
+    pub account: Option<String>,
 }
 
 impl From<NeedsYouAction> for NeedsYouActionEntry {
     fn from(action: NeedsYouAction) -> Self {
-        Self {
-            action: match action {
-                NeedsYouAction::Pause => NeedsYouActionKind::Pause,
+        match action {
+            NeedsYouAction::Pause => Self {
+                action: NeedsYouActionKind::Pause,
+                account: None,
+            },
+            NeedsYouAction::SwitchAccount(name) => Self {
+                action: NeedsYouActionKind::SwitchAccount,
+                account: Some(name.as_str().to_owned()),
             },
         }
     }

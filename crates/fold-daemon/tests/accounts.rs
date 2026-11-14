@@ -386,3 +386,79 @@ async fn a_worker_of_a_project_that_names_an_unknown_account_fails_with_its_reas
     );
     assert_eq!(worker(&harness, LEAD).await.state, WorkerState::Idle);
 }
+
+#[tokio::test]
+async fn a_usage_limit_offers_the_other_accounts_and_a_switch_runs_the_waiting_turn_on_the_new_one()
+{
+    use crate::turn_waits::{
+        fake_with_turn, limit_turn, needs_you, read_fixture, reruns_of, set_turn, until_idle,
+        until_turns,
+    };
+    use fold_core::turn_waits::LIMIT_RERUN_TURN;
+    let clock = ManualClock::new();
+    let (_accounts, dir) = accounts_with_two(&clock);
+    let turns = TempDir::new().unwrap();
+    let (mut fake, turn) = fake_with_turn(&turns, &read_fixture("result"));
+    fake.launcher.accounts = Some(dir);
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    assert_eq!(choose(&harness, Some("work-a")).await.0, StatusCode::OK);
+    until_started(&fake, LEAD, 2).await;
+    until_state(&harness, LEAD, WorkerState::Idle).await;
+    let session = worker(&harness, LEAD).await.session_id;
+
+    set_turn(
+        &turn,
+        &limit_turn("You've hit your weekly limit · resets Mon 12:00am"),
+    );
+    harness
+        .call(
+            MAIN,
+            "send_message",
+            json!({"to": [LEAD], "body": "look at T-1"}),
+        )
+        .await;
+    until_idle(&harness, LEAD, |row| row.wait.is_some()).await;
+    let items = needs_you(&harness).await;
+    let limit = items
+        .iter()
+        .find(|item| item["kind"] == "usage_limit")
+        .expect("a usage-limit item");
+    assert_eq!(
+        limit["actions"],
+        json!([{"action": "pause"}, {"action": "switch_account", "account": "work-b"}]),
+        "one switch per other account, by name"
+    );
+    let text = serde_json::to_string(&items).unwrap();
+    assert!(!text.contains(TOKEN_A) && !text.contains(TOKEN_B));
+
+    assert_eq!(
+        reruns_of(&fake, LEAD, LIMIT_RERUN_TURN),
+        0,
+        "no turn runs again before the switch"
+    );
+    set_turn(&turn, &read_fixture("result"));
+    let (status, body) = choose(&harness, Some("work-b")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let runs = until_turns(&fake, LEAD, LIMIT_RERUN_TURN, 1).await;
+    let rerun = runs
+        .iter()
+        .find(|run| run.stdin.iter().any(|line| line.contains(LIMIT_RERUN_TURN)))
+        .unwrap();
+    assert!(
+        ran_with(rerun, Some(TOKEN_B)),
+        "the waiting turn runs on work-b"
+    );
+    assert_eq!(
+        rerun.flag("--resume"),
+        Some(session.as_str()),
+        "in its own session"
+    );
+    until_idle(&harness, LEAD, |row| row.wait.is_none()).await;
+    assert!(
+        !needs_you(&harness)
+            .await
+            .iter()
+            .any(|item| item["kind"] == "usage_limit"),
+        "the item ends with the wait"
+    );
+}

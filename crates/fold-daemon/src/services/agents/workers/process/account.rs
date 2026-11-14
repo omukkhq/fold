@@ -17,7 +17,7 @@ use crate::services::projects::load_config;
 
 impl Supervisor {
     /// The account the project names now, `None` for Claude Code's own login. An account that cannot be read or that the host lacks gives `Err`, and then no worker changes its account: a start would fail, while the running process can go on.
-    async fn current_account(&self) -> Result<Option<AccountStamp>, ()> {
+    pub(super) async fn current_account(&self) -> Result<Option<AccountStamp>, ()> {
         let config = load_config(&self.inner.paths).await.map_err(|_| ())?;
         let Some(name) = config.account else {
             return Ok(None);
@@ -175,6 +175,8 @@ impl Supervisor {
             return Ok(false);
         };
         tokio::spawn(self.clone().restart_lost(agent.clone(), watch, None));
+        // A turn that waits for a usage limit runs again now, on the new account.
+        self.run_limit_turns_now();
         Ok(true)
     }
 }

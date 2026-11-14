@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use fold_core::accounts::AccountStamp;
 use fold_core::turn_waits::{LimitKind, WaitGroup, WaitingTurn, rerun_plan, rerun_turn};
 use fold_core::{AgentName, Timestamp, WorkerState};
 use fold_store::StoreError;
@@ -93,16 +94,24 @@ impl Supervisor {
             .iter()
             .any(|row| row.wait.is_some() && row.state.is_running())
         {
+            // A release ends the waits there are now; a turn that reaches a limit later waits for its own reset.
+            lock(&self.inner.owed).released.clear();
             return Ok(None);
         }
         if self.is_paused().await? {
             return Ok(Some(None));
         }
+        // A process that started with another account than the project's waits for its own switch, which runs its turn after it with the project's account.
+        let current = self.current_account().await.ok();
         let now = self.inner.clock.now();
         let released = std::mem::take(&mut lock(&self.inner.owed).released);
         let mut waiting: Vec<(&WorkerProcessRow, WaitingTurn<AgentName>)> = rows
             .iter()
-            .filter(|row| row.state == WorkerState::Idle && self.can_take_turn(&row.agent))
+            .filter(|row| {
+                row.state == WorkerState::Idle
+                    && self.can_take_turn(&row.agent)
+                    && self.runs_account(&row.agent, current.as_ref())
+            })
             .filter_map(|row| {
                 let wait = row.wait.as_ref()?;
                 let sent = lock(&self.inner.owed).sent.get(&row.agent) == Some(&wait.tried_at);
@@ -141,6 +150,18 @@ impl Supervisor {
             self.send_turn(agent, &text);
         }
         Ok(Some(plan.next_at))
+    }
+
+    /// Whether the process of `agent` runs with the project's account `current`, or the account cannot be told (`None`), and no restart of it is under way.
+    fn runs_account(&self, agent: &AgentName, current: Option<&Option<AccountStamp>>) -> bool {
+        if lock(&self.inner.refreshing).contains(agent) {
+            return false;
+        }
+        current.is_none_or(|current| {
+            lock(&self.inner.running)
+                .get(agent)
+                .is_some_and(|run| &run.account == current)
+        })
     }
 
     /// Whether `agent` has a running process with no user turn in its queue, which a turn written now starts at once.
