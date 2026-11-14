@@ -5,6 +5,7 @@ import {
   limitText,
   waitersText,
   fullTitle,
+  wrapsWhole,
   itemsFor,
   needsYouGroups,
   reviewsWaitingFor,
@@ -796,14 +797,56 @@ describe("needsYouGroups", () => {
 });
 
 describe("fullTitle", () => {
+  const cut = { href: "/p/demo/t/T-1", restart: null, wholeTitle: false };
+
   it("gives the whole title as plain words, its commands without their marks", () => {
-    expect(fullTitle({ title: "Record changes in an audit log" })).toBe(
+    expect(fullTitle({ ...cut, title: "Record changes in an audit log" })).toBe(
       "Record changes in an audit log",
     );
     expect(
-      fullTitle({ title: "fold-checks.toml line 12: unknown field `tiemout`" }),
+      fullTitle({
+        ...cut,
+        title: "fold-checks.toml line 12: unknown field `tiemout`",
+      }),
     ).toBe("fold-checks.toml line 12: unknown field tiemout");
-    expect(fullTitle({ title: "a \\`b\\` path" })).toBe("a `b` path");
-    expect(fullTitle({ title: null })).toBeNull();
+    expect(fullTitle({ ...cut, title: "a \\`b\\` path" })).toBe("a `b` path");
+    expect(fullTitle({ ...cut, title: null })).toBeNull();
+  });
+
+  it("gives no tooltip to a title the line shows whole", () => {
+    const title = "fold runs each waiting turn again after the reset";
+    expect(wrapsWhole(cut)).toBe(false);
+    for (const whole of [
+      { ...cut, wholeTitle: true },
+      { ...cut, restart: "web-worker" },
+      { ...cut, href: null },
+    ]) {
+      expect(wrapsWhole(whole)).toBe(true);
+      expect(fullTitle({ ...whole, title })).toBeNull();
+    }
+    const [limit, network, stale] = allLines(
+      needsYouGroups("demo", [
+        needsItem({ kind: "usage_limit", agents: ["web-lead"], title }),
+        needsItem({
+          kind: "worker_model_unreachable",
+          agent: null,
+          agents: ["web-lead"],
+          title,
+        }),
+        needsItem({
+          kind: "stale_claim",
+          agent: "web-worker",
+          task: "T-3",
+          action: "message_worker",
+          reason: title,
+        }),
+      ]),
+    );
+    for (const line of [limit, network, stale]) {
+      expect(
+        line === undefined ? null : fullTitle(line),
+        line?.kind,
+      ).toBeNull();
+    }
   });
 });

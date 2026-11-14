@@ -65,6 +65,7 @@ import { LimitActions } from "./LimitActions";
 import { PanelNote } from "./PanelNote";
 import {
   fullTitle,
+  wrapsWhole,
   itemsFor,
   needsYouGroups,
   type FilesSummary,
@@ -175,13 +176,10 @@ function NeedLine({
           {formatAsOfMinute(now, line.since)}
         </span>
         {!line.inline && line.title ? (
-          // A row that opens nothing has no tooltip to give a cut title, and the title of a stalled worker, a stale claim or a wait says what the person or fold does, so each wraps whole.
           <span
             className={cn(
               "min-w-0 basis-full text-13 text-text-2",
-              line.href === null || line.restart !== null || line.wholeTitle
-                ? "wrap-anywhere"
-                : "truncate",
+              wrapsWhole(line) ? "wrap-anywhere" : "truncate",
             )}
           >
             <CodeText text={line.title} caption />

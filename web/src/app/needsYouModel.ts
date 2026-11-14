@@ -534,9 +534,18 @@ export function needsYouGroups(
   })).filter((group) => group.lines.length > 0);
 }
 
-/** The title as plain words, for the tooltip of a title the line cuts; null for a line without one. */
-export function fullTitle(line: Pick<NeedsYouLine, "title">): string | null {
-  if (line.title === null) return null;
+/** Whether the second line shows whole instead of cut: a row that opens nothing has no tooltip to give a cut title, and the title of a stalled worker, a stale claim or a wait says what the person or fold does. */
+export function wrapsWhole(
+  line: Pick<NeedsYouLine, "href" | "restart" | "wholeTitle">,
+): boolean {
+  return line.href === null || line.restart !== null || line.wholeTitle;
+}
+
+/** The title as plain words, for the tooltip of a title the line cuts; null for a line without one, and for a line that shows its title whole. */
+export function fullTitle(
+  line: Pick<NeedsYouLine, "title" | "href" | "restart" | "wholeTitle">,
+): string | null {
+  if (line.title === null || wrapsWhole(line)) return null;
   return codeParts(line.title)
     .map((part) => (typeof part === "string" ? part : part.code))
     .join("");

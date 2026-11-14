@@ -214,6 +214,7 @@ describe("Inbox, Needs you", () => {
     expect(inbox.querySelector("[title]")).toBeNull();
     expect(screen.queryByRole("tooltip")).toBeNull();
     const link = within(inbox).getByRole("link");
+    expect(link.getAttribute("data-state")).toBe("closed");
     act(() => {
       link.focus();
     });
@@ -312,7 +313,7 @@ describe("Inbox, Needs you", () => {
     ).toBeTruthy();
   });
 
-  it("shows the whole advice of a usage limit, which a cut line would hide", async () => {
+  it("shows the whole advice of a usage limit, which a cut line would hide, with no tooltip that repeats it", async () => {
     await renderInbox(
       [
         needsItem({
@@ -335,6 +336,13 @@ describe("Inbox, Needs you", () => {
       .closest(".basis-full");
     expect(title?.className).toContain("wrap-anywhere");
     expect(title?.className).not.toContain("truncate");
+    // The line shows the advice whole, so it opens no tooltip that repeats it.
+    const link = within(project).getByRole("link");
+    expect(link.hasAttribute("data-state")).toBe(false);
+    act(() => {
+      link.focus();
+    });
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   it("offers the usage limit's two targets behind one Switch account trigger, never a button per account", async () => {
