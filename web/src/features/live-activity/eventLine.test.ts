@@ -157,6 +157,9 @@ describe("eventLine", () => {
     expect(line("claim.needs_person", { kind: "review" })).toBe(
       "the stale review claim on P-4 waits for a person",
     );
+    expect(line("claim.renewed", { task: "T-12", agent: "web-worker" })).toBe(
+      "web-worker renewed its stale claim on T-12",
+    );
     expect(
       line("worker.parked", {
         agent: "web-worker",

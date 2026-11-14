@@ -227,7 +227,7 @@ fn add_reads_the_token_from_stdin_into_a_private_file_and_list_never_shows_it() 
     assert!(renewed.status.success(), "{}", stderr(&renewed));
     holds_no_token(&renewed);
     assert!(stdout(&renewed).starts_with("account work-a has the new token"));
-    assert!(stdout(&renewed).contains("when its next turn ends"));
+    assert!(stdout(&renewed).contains("before its next turn"));
     for entry in fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
         assert_eq!(mode(&path), 0o600, "{}", path.display());
@@ -357,6 +357,11 @@ fn use_goes_through_the_daemon_and_remove_is_refused_while_a_project_uses_the_ac
     assert!(
         stdout(&listed).starts_with("system-default Claude Code's own login used by app\n"),
         "{listed:?}"
+    );
+    let reserved = sandbox.fold(&["account", "remove", "system-default"]);
+    assert!(
+        stderr(&reserved).contains("account_reserved: "),
+        "the reserved name is refused before its use: {reserved:?}"
     );
     let log = fs::read_to_string(sandbox.path("daemon.log")).unwrap();
     assert!(!log.contains(TOKEN_A), "the daemon's log holds the token");

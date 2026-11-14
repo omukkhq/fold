@@ -47,7 +47,7 @@ pub enum NeedsYouKind {
     UnstashConflicted,
     /// The checks file on main is not valid, so fold holds the integrations of proposals until a revision of main fixes it; `title` states the file, the line and the problem, and `paths` names the file.
     ChecksFileInvalidOnMain,
-    /// A worker failed because it cannot reach fold: its fold MCP server did not connect, or the fld binary it would start is gone. A new start fails the same way until the daemon runs the installed fld, so `reason` names `fld restart`, after which the daemon start resumes the worker once fld is there; the item ends when the worker runs again, through that resume or through `resume_worker`.
+    /// A worker failed because it cannot reach fold: its fold MCP server did not connect, or the fld binary it would start is gone. A new start fails the same way until the daemon runs the installed fld, so `reason` names `fld restart`, after which the daemon start resumes the worker once fld is there; the item ends when the worker runs again, through that resume or through `resume_worker`. The same kind holds a worker that could not start because the project's account is missing or its token cannot be read: `reason` names `fld account add` or another account, then a message that resumes the worker.
     WorkerUnreachable,
     /// A worker's turns failed [`fold_core::turn_errors::MODEL_UNREACHABLE_TURNS`] times in a row before any token reached the model, so it does no work until a human fixes what Claude Code needs, such as its sign-in: `title` holds Claude Code's error and `reason` what to check. The same kind without an `agent` is the project's one item for the turns that could not reach the model at all: `agents` names the workers whose turn waits, `title` holds Claude Code's newest error and `reason` says that fold runs each turn again once the model answers, which ends the item. The item ends when a turn of the worker reaches the model, with or without an error, or when the worker is stopped. A worker whose process failed cannot be stopped, so it keeps the item until `resume_worker` runs it again and a turn reaches the model; a start that runs a stopped worker again shows the item again until then.
     WorkerModelUnreachable,
@@ -195,6 +195,8 @@ pub struct NeedsYouItem {
     pub actions: Vec<NeedsYouAction>,
     /// What the human does about the worker of a `WorkerStalled` or a `StaleClaim`.
     pub action: Option<PersonAction>,
+    /// The project's account of a `UsageLimit` when fold lists the item, `system-default` for Claude Code's own login.
+    pub account: Option<fold_core::accounts::AccountName>,
 }
 
 impl NeedsYouItem {
@@ -243,6 +245,7 @@ impl NeedsYouItem {
             resets_at: None,
             actions: Vec::new(),
             action: None,
+            account: None,
         }
     }
 

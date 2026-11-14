@@ -8,7 +8,7 @@ use fold_store::StoreError;
 use fold_store::agents::{self, ProcessEnd};
 
 use super::stop::stopped_event;
-use super::{Input, Supervisor, lock};
+use super::{Input, Process, Supervisor, lock};
 use crate::push::StdinSink;
 use crate::services::agents::workers::code_of;
 use crate::services::agents::{AgentError, accounts};
@@ -49,19 +49,80 @@ impl Supervisor {
         });
     }
 
-    /// Ends the idle process of `agent` that started with another account than the project's, without changing its row, and runs Claude Code again in the same session with `--resume` and the project's account, as a daemon start resumes an idle worker: no turn, unless work waits for a lead. A working worker, one with a turn still queued, one that waits for a person's answer, one that fold started to answer a message and one under another restart keep their process, and the end of their next turn looks again. The notices that come while the process changes wait for the new one. A worker that was stopped meanwhile ends `stopped`; in a paused project the row stays for the resume, which reads the account again.
+    /// The turn `text` for `process` when it goes to that process now, or `None` when it waits for the process's switch: the process is idle and runs with another account than the project's, as after `fld account update`, so the turn runs on the project's account in the same session instead. A turn that comes while a switch replaces the process waits for the new one. When the account cannot be read, the process keeps its account and takes the turn.
+    pub(super) async fn holds_for_switch(&self, process: &Process, text: String) -> Option<String> {
+        let agent = &process.agent;
+        if lock(&self.inner.switching).contains(agent) {
+            lock(&self.inner.switch_turns)
+                .entry(agent.clone())
+                .or_default()
+                .push(text);
+            return None;
+        }
+        if process.open_turns.load(Ordering::SeqCst) > 0
+            || lock(&self.inner.refreshing).contains(agent)
+        {
+            return Some(text);
+        }
+        let Some(account) = lock(&self.inner.running)
+            .get(agent)
+            .filter(|run| run.generation == process.generation)
+            .map(|run| run.account.clone())
+        else {
+            return Some(text);
+        };
+        match self.current_account().await {
+            Ok(current) if current != account => {
+                let first = {
+                    let mut turns = lock(&self.inner.switch_turns);
+                    let held = turns.entry(agent.clone()).or_default();
+                    held.push(text);
+                    held.len() == 1
+                };
+                if first {
+                    self.switch_soon(agent);
+                }
+                None
+            }
+            _ => Some(text),
+        }
+    }
+
+    /// Ends the idle process of `agent` that started with another account than the project's, without changing its row, and runs Claude Code again in the same session with `--resume` and the project's account, as a daemon start resumes an idle worker. Its first turn holds the turns that waited for the switch (see [`Supervisor::holds_for_switch`]) and the notices that came while the process changed; without them it runs no turn, unless work waits for a lead. A working worker, one with a turn still queued, one that waits for a person's answer, one that fold started to answer a message and one under another restart keep their process, which takes the turns that waited, and the end of their next turn looks again. A worker that was stopped meanwhile ends `stopped`; in a paused project the row stays for the resume, which reads the account again.
     async fn switch_account(&self, agent: &AgentName) -> Result<(), AgentError> {
+        let (ran, held, result) = match self.switch_process(agent).await {
+            Ok((ran, held)) => (ran, held, Ok(())),
+            Err(error) => (false, Vec::new(), Err(error)),
+        };
+        let mut texts = lock(&self.inner.switch_turns)
+            .remove(agent)
+            .unwrap_or_default();
+        texts.extend(held);
+        if !texts.is_empty() {
+            let text = texts.join("\n\n");
+            if ran {
+                self.send_turn(agent, &text);
+            } else if let Some(run) = lock(&self.inner.running).get(agent) {
+                let _ = run.input.send(Input::KeptTurn(text));
+            }
+        }
+        result
+    }
+
+    /// [`Supervisor::switch_account`] up to the turn: whether a new process runs, and the notices held while the process changed.
+    async fn switch_process(&self, agent: &AgentName) -> Result<(bool, Vec<String>), AgentError> {
+        let none = || Ok((false, Vec::new()));
         let Some(run) = lock(&self.inner.running).get(agent).cloned() else {
-            return Ok(());
+            return none();
         };
         let Ok(current) = self.current_account().await else {
-            return Ok(());
+            return none();
         };
         if run.account == current
             || run.open_turns.load(Ordering::SeqCst) > 0
             || lock(&self.inner.answering).contains(agent)
         {
-            return Ok(());
+            return none();
         }
         let mut conn = self
             .inner
@@ -73,19 +134,19 @@ impl Supervisor {
         let found = agents::find_worker_process(&mut conn, agent).await?;
         drop(conn);
         let Some(row) = found else {
-            return Ok(());
+            return none();
         };
         if row.state != WorkerState::Idle || self.waits_for_answer(&row).await? {
-            return Ok(());
+            return none();
         }
         if row.role == fold_core::Role::Main {
             let config = load_config(&self.inner.paths).await?;
             if self.main_refusal(&config).is_some() {
-                return Ok(());
+                return none();
             }
         }
         if !lock(&self.inner.refreshing).insert(agent.clone()) {
-            return Ok(());
+            return none();
         }
         lock(&self.inner.switching).insert(agent.clone());
         let held: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -105,24 +166,16 @@ impl Supervisor {
             self.inner.push.register_stdin(agent, live);
             lock(&self.inner.switching).remove(agent);
             lock(&self.inner.refreshing).remove(agent);
-            let waiting = std::mem::take(&mut *lock(&held));
-            if !waiting.is_empty() {
-                self.send_turn(agent, &waiting.join("\n\n"));
-            }
-            return Ok(());
+            return Ok((false, std::mem::take(&mut *lock(&held))));
         }
         let switched = self.switch_row(agent, &run, &row).await;
         lock(&self.inner.switching).remove(agent);
         lock(&self.inner.refreshing).remove(agent);
         if !matches!(switched, Ok(true)) {
             self.inner.push.clear_stdin(agent);
-            return switched.map(|_| ());
+            return switched.map(|_| (false, Vec::new()));
         }
-        let waiting = std::mem::take(&mut *lock(&held));
-        if !waiting.is_empty() {
-            self.send_turn(agent, &waiting.join("\n\n"));
-        }
-        Ok(())
+        Ok((true, std::mem::take(&mut *lock(&held))))
     }
 
     /// The part of [`Supervisor::switch_account`] after the notices wait: the end of the process, the row's check and the new start. Returns whether the new process runs.

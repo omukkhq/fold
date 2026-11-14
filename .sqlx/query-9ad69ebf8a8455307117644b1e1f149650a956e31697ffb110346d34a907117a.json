@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT worker_id AS \"worker!: i64\" FROM check_runs WHERE number = ? AND stage = 'proposal'",
+  "describe": {
+    "columns": [
+      {
+        "name": "worker!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "check_runs",
+            "name": "worker_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "9ad69ebf8a8455307117644b1e1f149650a956e31697ffb110346d34a907117a"
+}

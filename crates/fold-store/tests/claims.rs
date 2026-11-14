@@ -215,7 +215,16 @@ async fn renew_touches_only_unreleased_claims_of_the_given_workers() {
         .write(async |tx| claims::renew(tx, &[main, ui], later).await)
         .await
         .unwrap();
-    assert_eq!(renewed, 1);
+    assert_eq!(renewed.count, 1);
+    assert_eq!(
+        renewed
+            .cleared
+            .iter()
+            .map(|claim| claim.task)
+            .collect::<Vec<_>>(),
+        [id(1)],
+        "the renewal names the claim whose stale mark it cleared"
+    );
     let mine = holder(store, id(1)).await.unwrap();
     assert_eq!(
         (mine.renewed_at, mine.stale_at, mine.acquired_at),
@@ -229,7 +238,7 @@ async fn renew_touches_only_unreleased_claims_of_the_given_workers() {
         .write(async |tx| claims::renew(tx, &[], later).await)
         .await
         .unwrap();
-    assert_eq!(none, 0);
+    assert_eq!(none, claims::Renewal::default());
 
     release(store, id(1), ui, later).await.unwrap();
     let after_release = project.clock().advance(Duration::from_secs(60)).unwrap();
@@ -237,5 +246,59 @@ async fn renew_touches_only_unreleased_claims_of_the_given_workers() {
         .write(async |tx| claims::renew(tx, &[ui], after_release).await)
         .await
         .unwrap();
-    assert_eq!(renewed, 0);
+    assert_eq!(renewed.count, 0);
+}
+
+#[tokio::test]
+async fn a_waiting_holders_claim_is_renewed_once_it_is_due_or_marked() {
+    let (project, [_main, ui, other]) = setup().await;
+    let store = project.store();
+    let start = project.now();
+    claim(store, id(1), ui, start).await.unwrap();
+    claim(store, id(2), other, start).await.unwrap();
+    let later = project.clock().advance(Duration::from_secs(600)).unwrap();
+    let early = store
+        .write(async |tx| {
+            claims::renew_due(
+                tx,
+                &[ui, other],
+                start.checked_sub(Duration::from_secs(1)).unwrap(),
+                later,
+            )
+            .await
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        early.count, 0,
+        "a claim renewed after the due time keeps its renewal"
+    );
+    exec(
+        store,
+        "UPDATE claims SET stale_at = 1 WHERE task_id = (SELECT id FROM tasks WHERE number = 2)",
+    )
+    .await
+    .unwrap();
+    let marked = store
+        .write(async |tx| {
+            claims::renew_due(
+                tx,
+                &[ui, other],
+                start.checked_sub(Duration::from_secs(1)).unwrap(),
+                later,
+            )
+            .await
+        })
+        .await
+        .unwrap();
+    assert_eq!(marked.count, 1, "a marked claim is renewed at once");
+    assert_eq!(marked.cleared.len(), 1);
+    assert_eq!(holder(store, id(2)).await.unwrap().renewed_at, later);
+    assert_eq!(holder(store, id(1)).await.unwrap().renewed_at, start);
+    let due = store
+        .write(async |tx| claims::renew_due(tx, &[ui], start, later).await)
+        .await
+        .unwrap();
+    assert_eq!((due.count, due.cleared.len()), (1, 0));
+    assert_eq!(holder(store, id(1)).await.unwrap().renewed_at, later);
 }

@@ -200,7 +200,10 @@ pub(crate) async fn free_reviews_for_start(
                 .await?;
             continue;
         }
-        if !fold_core::claims::is_stale(holder.renewed_at, now, lease_minutes) {
+        let runs = crate::services::tasks::Holders::read(tx.conn())
+            .await?
+            .runs_of(holder.worker_id);
+        if !fold_core::claims::is_lapsed(holder.renewed_at, runs, now, lease_minutes) {
             return Err(start_refusal(
                 &holder,
                 "the holder is running with a valid lease: send_message to the holder, or start the reviewer again once it ends or its lease runs out",

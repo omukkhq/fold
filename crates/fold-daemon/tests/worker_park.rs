@@ -204,6 +204,17 @@ async fn a_worker_that_ended_already_is_parked_without_a_stop() {
         .await;
     assert_eq!(parked["worker"]["state"], "stopped");
     assert_eq!(parked["worker"]["parked"]["by"], "web-lead");
+    let agents = get(&harness, "agents").await;
+    let entry = agents["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["name"] == TASK_WORKER)
+        .expect("the parked worker's agent");
+    assert_eq!(
+        entry["process"]["parked_by"], "web-lead",
+        "the agents answer names whose go it waits for"
+    );
     let row = worker(&harness, TASK_WORKER).await;
     assert_eq!(row.stopped_at, stopped.stopped_at, "no second stop");
     assert!(row.park.is_some());
@@ -234,7 +245,7 @@ async fn a_park_without_words_is_refused_and_changes_nothing() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn once_the_lead_ends_the_parked_claim_goes_stale_to_the_lead_first_and_names_the_persons_action()
+async fn once_the_lead_ends_the_parked_claim_goes_stale_to_the_running_main_agent_first_and_names_the_persons_action()
  {
     let fake = FakeClaude::new("result");
     let (mut harness, work) = parked_worker(&fake).await;
@@ -254,8 +265,8 @@ async fn once_the_lead_ends_the_parked_claim_goes_stale_to_the_lead_first_and_na
         .unwrap();
     assert_eq!(
         stale.data["told"],
-        json!(["web-lead"]),
-        "the lead hears first"
+        json!(["frontend"]),
+        "the lead does not run, so the main agent hears first"
     );
     assert!(
         attention(&harness, "T-1").await.is_empty(),
@@ -300,6 +311,56 @@ async fn once_the_lead_ends_the_parked_claim_goes_stale_to_the_lead_first_and_na
         "any fold call of the holder renews the claim and ends the item"
     );
     assert!(needs_you(&harness, "stale_claim").await.is_none());
+    let renewed: Vec<serde_json::Value> = harness
+        .events()
+        .await
+        .into_iter()
+        .filter(|event| event.kind == "claim.renewed")
+        .map(|event| event.data)
+        .collect();
+    assert_eq!(
+        renewed,
+        [json!({"task": "T-1", "agent": TASK_WORKER})],
+        "the renewal that clears the mark says so once"
+    );
+    harness.inbox(TASK_WORKER).await;
+    assert_eq!(
+        harness
+            .events()
+            .await
+            .iter()
+            .filter(|event| event.kind == "claim.renewed")
+            .count(),
+        1,
+        "a renewal of an unmarked claim adds no event"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stale_claim_needs_a_person_at_once_when_no_agent_that_can_act_runs() {
+    let fake = FakeClaude::new("result");
+    let (mut harness, _work) = parked_worker(&fake).await;
+    harness
+        .call(MAIN, "stop_worker", json!({"name": "web-lead"}))
+        .await;
+    until_state(&harness, "web-lead", WorkerState::Stopped).await;
+    harness.disconnect("web-lead").await;
+    harness.disconnect(MAIN).await;
+
+    harness.project.clock().advance(LEASE).unwrap();
+    assert_eq!(sweep(&harness).await, 1);
+    let stale = harness
+        .events()
+        .await
+        .into_iter()
+        .find(|event| event.kind == "claim.stale")
+        .unwrap();
+    assert_eq!(stale.data["told"], json!([]), "no agent runs to hear of it");
+    assert_eq!(
+        attention(&harness, "T-1").await,
+        [json!({"kind": "stale_claim", "closable": false, "action": "message_worker"})]
+    );
+    assert!(needs_you(&harness, "stale_claim").await.is_some());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

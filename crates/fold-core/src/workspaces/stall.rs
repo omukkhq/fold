@@ -260,6 +260,8 @@ pub struct StallFacts {
     pub owed: Option<OwedTurn>,
     /// The latest time others gave the worker the turn, from [`turn_given_at`]. A process that ended counts as ended until someone gives the worker the turn after its end; a change of the workspace after the end, such as a write the watcher saw late, is not the worker's.
     pub given_at: Option<Timestamp>,
+    /// The time the proposal came back to its author, when it waits for the author (see [`ProposalTurn::Author`]); a park ends only when the worker's work gives it the turn, never at a person's answer.
+    pub returned_at: Option<Timestamp>,
     /// The idle worker's last turn ended for a cause outside it, since the time given, and fold runs it again once the cause has passed (see [`crate::turn_waits`]); `None` when it waits for nothing.
     pub waits: Option<(WaitReason, Timestamp)>,
     /// An agent stopped the worker at this time to wait for its go, with `stop_worker`'s `wait_for`: the next move is that agent's, so the worker's silence says nothing. Every start of the worker's process ends the park.
@@ -278,9 +280,21 @@ impl Default for StallFacts {
             paused: false,
             owed: None,
             given_at: None,
+            returned_at: None,
             waits: None,
             parked: None,
         }
+    }
+}
+
+impl StallFacts {
+    /// The latest time the worker's own work gave it the turn: its proposal came back, its workspace's newest check run ended, or its process started. A person's answer is not in it, because the agent that parked the worker gives the go.
+    fn work_given_at(&self) -> Option<Timestamp> {
+        let checked = match self.checks {
+            WorkspaceChecks::Ended { at } => Some(at),
+            WorkspaceChecks::None | WorkspaceChecks::Running => None,
+        };
+        self.returned_at.max(checked).max(self.worker.started_at)
     }
 }
 
@@ -335,7 +349,7 @@ impl Activity {
     }
 }
 
-/// Decides what the worker of a workspace does at `now`. Nothing is said while the project's agents are paused, nor of a worker without the implementation claim. A worker of an active workspace whose last turn waits for the network or a usage limit is `WaitsForNetwork` or `WaitsForUsageLimit`, never a stall, whatever else holds. Nothing is said either while its check run goes. A worker that an agent parked is `Parked` while its workspace is active or holds its sent version, fold owes it no resume and nobody gave it the turn after the park. Nothing else is said of a workspace that is not active, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A worker whose resume fold owes while the worker limits hold it is `WaitsForSlot`, never a stall; once a place is free for it, it is `Silent` when a stall window from that time, and from `start`, passed without a run. A process that ended is `Failed` at once when it ended without anyone asking and `Stopped` when someone asked for its stop, whatever changed in the workspace after the end, unless others gave the worker the turn after it ended (`given_at`), such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
+/// Decides what the worker of a workspace does at `now`. Nothing is said while the project's agents are paused, nor of a worker without the implementation claim. A worker of an active workspace whose last turn waits for the network or a usage limit is `WaitsForNetwork` or `WaitsForUsageLimit`, never a stall, whatever else holds. Nothing is said either while its check run goes. A worker that an agent parked is `Parked` while its workspace is active or holds its sent version, fold owes it no resume and its work gave it no turn after the park: a proposal that came back, a check run that ended or a start; a person's answer does not end the park. Nothing else is said of a workspace that is not active, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A worker whose resume fold owes while the worker limits hold it is `WaitsForSlot`, never a stall; once a place is free for it, it is `Silent` when a stall window from that time, and from `start`, passed without a run. A process that ended is `Failed` at once when it ended without anyone asking and `Stopped` when someone asked for its stop, whatever changed in the workspace after the end, unless others gave the worker the turn after it ended (`given_at`), such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
 pub fn activity(
     now: Timestamp,
     facts: &StallFacts,
@@ -359,7 +373,7 @@ pub fn activity(
     if let Some(since) = facts.parked
         && matches!(facts.workspace, WorkspaceFact::Active | WorkspaceFact::Sent)
         && facts.owed.is_none()
-        && facts.given_at.is_none_or(|given| given <= since)
+        && facts.work_given_at().is_none_or(|given| given <= since)
     {
         return Activity::Parked { since };
     }
@@ -960,6 +974,7 @@ mod tests {
         paused: false,
         owed: None,
         given_at: None,
+        returned_at: None,
         waits: None,
         parked: None,
     };
@@ -1544,12 +1559,38 @@ mod tests {
         let sent_back = StallFacts {
             parked: Some(parked_at),
             given_at: Some(back),
+            returned_at: Some(back),
             ..CLAIMED
         };
         assert_eq!(
             activity(at(25 * MINUTE), &sent_back, stopped, back, 5),
             Activity::Silent { since: back },
             "a proposal back with its author owes a resume that the park does not hide"
+        );
+        let checked = StallFacts {
+            parked: Some(parked_at),
+            given_at: Some(back),
+            checks: WorkspaceChecks::Ended { at: back },
+            ..CLAIMED
+        };
+        assert_eq!(
+            activity(at(25 * MINUTE), &checked, stopped, back, 5),
+            Activity::Silent { since: back },
+            "a check run that ended after the park gives the worker the turn"
+        );
+        let answered = StallFacts {
+            parked: Some(parked_at),
+            given_at: Some(back),
+            worker: WorkerTurn {
+                answered_at: Some(back),
+                ..IDLE
+            },
+            ..CLAIMED
+        };
+        assert_eq!(
+            activity(at(25 * MINUTE), &answered, stopped, back, 5),
+            Activity::Parked { since: parked_at },
+            "a person's answer about the task leaves the wait for the go"
         );
         let owed = StallFacts {
             parked: Some(parked_at),

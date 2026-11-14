@@ -1077,6 +1077,40 @@ async fn a_turn_that_waits_keeps_its_start_counts_its_tries_and_counts_no_failed
 }
 
 #[tokio::test]
+async fn a_park_needs_its_agent_its_reason_and_an_ended_row() {
+    let (_dir, store) = seeded().await;
+    let lead = process(&store, 1, Role::ReviewLead, None, "s1").await;
+    let parked = |fields: &str| format!("UPDATE worker_processes SET {fields} WHERE id = {lead}");
+    assert!(
+        exec(
+            &store,
+            &parked("parked_by = agent_id, parked_for = 'my go', parked_at = 1")
+        )
+        .await
+        .is_err(),
+        "a running row is never parked"
+    );
+    store
+        .write(async |tx| agents::set_worker_state(tx, lead, WorkerState::Stopped, at(50)).await)
+        .await
+        .unwrap();
+    for fields in [
+        "parked_by = agent_id, parked_for = NULL, parked_at = 1",
+        "parked_by = agent_id, parked_for = '', parked_at = 1",
+        "parked_by = NULL, parked_for = 'my go', parked_at = 1",
+        "parked_by = agent_id, parked_for = 'my go', parked_at = NULL",
+    ] {
+        assert!(exec(&store, &parked(fields)).await.is_err(), "{fields}");
+    }
+    exec(
+        &store,
+        &parked("parked_by = agent_id, parked_for = 'my go', parked_at = 1"),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn a_made_up_model_is_forgotten_and_a_real_one_kept() {
     let (_dir, store) = seeded().await;
     let lead = process(&store, 1, Role::ReviewLead, None, "s1").await;

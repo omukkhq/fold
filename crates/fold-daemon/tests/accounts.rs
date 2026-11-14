@@ -274,7 +274,7 @@ async fn a_notice_that_comes_while_the_process_changes_reaches_the_new_one() {
 }
 
 #[tokio::test]
-async fn a_new_token_of_the_same_account_reaches_each_worker_after_its_next_turn() {
+async fn a_new_token_of_the_same_account_reaches_an_idle_worker_before_its_next_turn() {
     use fold_core::Clock as _;
     let clock = ManualClock::new();
     let (_accounts, dir) = accounts_with_two(&clock);
@@ -300,15 +300,71 @@ async fn a_new_token_of_the_same_account_reaches_each_worker_after_its_next_turn
         )
         .await;
     let runs = until_started(&fake, LEAD, 3).await;
-    assert!(
-        ran_with(&runs[1], Some(TOKEN_A)),
-        "the turn ran with the old token"
-    );
+    assert!(ran_with(&runs[1], Some(TOKEN_A)));
     assert!(
         ran_with(&runs[2], Some(TOKEN_B)),
-        "then the lead continues with the new one"
+        "the lead continues with the new token"
     );
     assert_eq!(runs[2].flag("--resume"), runs[1].flag("--resume"));
+    let holds = |run: &Run| run.stdin.iter().any(|line| line.contains("look at T-1"));
+    assert!(
+        !holds(&runs[1]) && holds(&runs[2]),
+        "the turn runs on the new token, never on the old one"
+    );
+}
+
+#[tokio::test]
+async fn a_turn_that_waits_runs_again_on_the_new_token_of_its_account() {
+    use crate::turn_waits::{
+        advance, fake_with_turn, read_fixture, set_turn, until_idle, until_turns,
+    };
+    use fold_core::Clock as _;
+    use fold_core::turn_waits::{NETWORK_FIRST_WAIT, NETWORK_RERUN_TURN};
+    let clock = ManualClock::new();
+    let (_accounts, dir) = accounts_with_two(&clock);
+    let turns = TempDir::new().unwrap();
+    let (mut fake, turn) = fake_with_turn(&turns, &read_fixture("result"));
+    fake.launcher.accounts = Some(dir.clone());
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    assert_eq!(choose(&harness, Some("work-a")).await.0, StatusCode::OK);
+    until_started(&fake, LEAD, 2).await;
+    until_state(&harness, LEAD, WorkerState::Idle).await;
+    let session = worker(&harness, LEAD).await.session_id;
+    set_turn(&turn, &read_fixture("network_error"));
+    harness
+        .call(
+            MAIN,
+            "send_message",
+            json!({"to": [LEAD], "body": "look at T-1"}),
+        )
+        .await;
+    until_idle(&harness, LEAD, |row| row.wait.is_some()).await;
+
+    clock.advance(std::time::Duration::from_secs(60)).unwrap();
+    accounts::update(
+        &dir,
+        &AccountName::parse("work-a").unwrap(),
+        &check_token(TOKEN_B).unwrap(),
+        clock.now(),
+    )
+    .unwrap();
+    set_turn(&turn, &read_fixture("result"));
+    advance(&harness, NETWORK_FIRST_WAIT);
+    let runs = until_turns(&fake, LEAD, NETWORK_RERUN_TURN, 1).await;
+    let rerun = runs
+        .iter()
+        .find(|run| {
+            run.stdin
+                .iter()
+                .any(|line| line.contains(NETWORK_RERUN_TURN))
+        })
+        .unwrap();
+    assert!(
+        ran_with(rerun, Some(TOKEN_B)),
+        "the turn runs again on the new token"
+    );
+    assert_eq!(rerun.flag("--resume"), Some(session.as_str()));
+    until_idle(&harness, LEAD, |row| row.wait.is_none()).await;
 }
 
 #[tokio::test]
@@ -390,6 +446,19 @@ async fn a_worker_of_a_project_that_names_an_unknown_account_fails_with_its_reas
         .await;
     let row = until_state(&harness, "reviews", WorkerState::Failed).await;
     assert_eq!(row.failed_reason.as_deref(), Some(codes::ACCOUNT_NOT_FOUND));
+    let items = crate::turn_waits::needs_you(&harness).await;
+    let item = items
+        .iter()
+        .find(|item| item["agent"] == "reviews")
+        .expect("an item tells the person what to do");
+    assert_eq!(item["kind"], "worker_unreachable");
+    assert!(
+        item["reason"]
+            .as_str()
+            .unwrap()
+            .contains("fld account add <name>"),
+        "{item}"
+    );
     assert!(
         fake.runs_of("reviews").is_empty(),
         "no Claude Code ran without its account"
@@ -441,6 +510,10 @@ async fn a_usage_limit_offers_the_other_accounts_and_a_switch_runs_the_waiting_t
             {"action": "switch_account", "account": "work-b"}
         ]),
         "one switch per other account, by name"
+    );
+    assert_eq!(
+        limit["account"], "work-a",
+        "the item names the project's account"
     );
     let text = serde_json::to_string(&items).unwrap();
     assert!(!text.contains(TOKEN_A) && !text.contains(TOKEN_B));

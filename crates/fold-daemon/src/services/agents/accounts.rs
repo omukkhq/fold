@@ -61,12 +61,67 @@ pub fn not_found(name: &AccountName) -> FoldError {
 }
 
 fn read_index(dir: &Path) -> Result<Index, FoldError> {
-    match read_private(&dir.join(INDEX_FILE)).map_err(|error| io_error(&error))? {
-        None => Ok(Index::default()),
-        Some(bytes) => {
-            serde_json::from_slice(&bytes).map_err(|_| accounts_io(io::ErrorKind::InvalidData))
-        }
+    let index: Index =
+        match read_private(&dir.join(INDEX_FILE)).map_err(|error| io_error(&error))? {
+            None => return Ok(Index::default()),
+            Some(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|_| accounts_io(io::ErrorKind::InvalidData))?,
+        };
+    if index
+        .accounts
+        .iter()
+        .all(|entry| is_token_file(&entry.file))
+    {
+        Ok(index)
+    } else {
+        Err(accounts_io(io::ErrorKind::InvalidData))
     }
+}
+
+/// Whether `name` is a token file's name as [`random_file`] makes it: the prefix and 32 hex digits, so an index never makes fold read or remove a file outside the folder.
+fn is_token_file(name: &str) -> bool {
+    name.strip_prefix(TOKEN_PREFIX).is_some_and(|hex| {
+        hex.len() == 32
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
+}
+
+/// The bytes of the token file at `path`, `None` when it is gone. A file that the group or others can read is refused, because its token may have leaked already.
+fn read_token_file(path: &Path, name: &AccountName) -> Result<Option<Vec<u8>>, FoldError> {
+    use std::io::Read as _;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use rustix::fs::{Mode, OFlags};
+    let opened = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    );
+    let mut file = match opened {
+        Ok(fd) => std::fs::File::from(fd),
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(error) => return Err(io_error(&error.into())),
+    };
+    let meta = file.metadata().map_err(|error| io_error(&error))?;
+    if !meta.is_file() {
+        return Err(accounts_io(io::ErrorKind::InvalidData));
+    }
+    if meta.permissions().mode() & 0o077 != 0 {
+        return Err(FoldError::new(
+            codes::ACCOUNTS_IO,
+            format!("the token file of the account {name} can be read by other users of this host"),
+        )
+        .with_hint(format!(
+            "the token may have leaked: run `claude setup-token` for a new one, then `fld account update {name}` with it on stdin, which writes a file only you can read"
+        ))
+        .with_details([("account", serde_json::json!(name.as_str()))]));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|error| io_error(&error))?;
+    Ok(Some(bytes))
 }
 
 fn write_index(dir: &Path, index: &Index) -> Result<(), FoldError> {
@@ -151,21 +206,26 @@ pub fn stamp(dir: &Path, name: &AccountName) -> Result<Option<AccountStamp>, Fol
         }))
 }
 
-/// The stamp and the token of the account `name`, `None` when the host has none of that name. A token file the index names but that is gone is an error. Blocking.
+/// The stamp and the token of the account `name`, `None` when the host has none of that name. A token file the index names but that is gone is an error, after one more read of the index: a change that renamed a new index between the two reads removes the old file. Blocking.
 pub fn token(
     dir: &Path,
     name: &AccountName,
 ) -> Result<Option<(AccountStamp, AccountToken)>, FoldError> {
-    let Some(entry) = read_index(dir)?
-        .accounts
-        .into_iter()
-        .find(|entry| &entry.name == name)
-    else {
-        return Ok(None);
+    let mut tries = 0;
+    let (entry, bytes) = loop {
+        let Some(entry) = read_index(dir)?
+            .accounts
+            .into_iter()
+            .find(|entry| &entry.name == name)
+        else {
+            return Ok(None);
+        };
+        match read_token_file(&dir.join(&entry.file), name)? {
+            Some(bytes) => break (entry, bytes),
+            None if tries == 0 => tries += 1,
+            None => return Err(accounts_io(io::ErrorKind::NotFound)),
+        }
     };
-    let bytes = read_private(&dir.join(&entry.file))
-        .map_err(|error| io_error(&error))?
-        .ok_or_else(|| accounts_io(io::ErrorKind::NotFound))?;
     let text = String::from_utf8(bytes).map_err(|_| accounts_io(io::ErrorKind::InvalidData))?;
     let token = check_token(&text).map_err(|_| accounts_io(io::ErrorKind::InvalidData))?;
     Ok(Some((
@@ -325,8 +385,9 @@ pub async fn usage_on_host(
     .map_err(|_| FoldError::new(codes::INTERNAL_ERROR, "the read of the projects stopped"))
 }
 
-/// [`remove`] for `fld account remove`, refused while a registered project names the account: its workers could not start without it.
+/// [`remove`] for `fld account remove`, refused for `system-default` and while a registered project names the account: its workers could not start without it.
 pub async fn remove_on_host(host: &HostPaths, name: &AccountName) -> Result<(), FoldError> {
+    name.check_not_reserved()?;
     if let Some(projects) = usage_on_host(host).await?.remove(name) {
         return Err(FoldError::new(
             codes::ACCOUNT_IN_USE,
@@ -491,5 +552,40 @@ mod tests {
         assert_eq!(error.code(), codes::ACCOUNTS_IO);
         assert!(error.hint().unwrap().contains("accounts/"));
         assert!(!format!("{error:?}").contains(TOKEN_A));
+    }
+
+    #[test]
+    fn a_token_file_others_can_read_is_refused_and_an_index_names_only_token_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("accounts");
+        add(&dir, &name("work-a"), &check_token(TOKEN_A).unwrap(), at(1)).unwrap();
+        let file = files(&dir)
+            .into_iter()
+            .find(|file| file.starts_with(TOKEN_PREFIX))
+            .unwrap();
+        std::fs::set_permissions(dir.join(&file), std::fs::Permissions::from_mode(0o640)).unwrap();
+        let refused = token(&dir, &name("work-a")).unwrap_err();
+        assert_eq!(refused.code(), codes::ACCOUNTS_IO);
+        assert!(
+            refused
+                .hint()
+                .unwrap()
+                .contains("fld account update work-a")
+        );
+        assert!(!format!("{refused:?}").contains(TOKEN_A));
+        update(&dir, &name("work-a"), &check_token(TOKEN_B).unwrap(), at(2)).unwrap();
+        assert!(token(&dir, &name("work-a")).unwrap().unwrap().1.expose() == TOKEN_B);
+
+        let index = std::fs::read_to_string(dir.join(INDEX_FILE)).unwrap();
+        let named = index
+            .split('"')
+            .find(|part| part.starts_with(TOKEN_PREFIX))
+            .unwrap()
+            .to_owned();
+        std::fs::write(dir.join(INDEX_FILE), index.replace(&named, "../outside")).unwrap();
+        assert_eq!(list(&dir).unwrap_err().code(), codes::ACCOUNTS_IO);
+        assert!(!is_token_file("token-0123"));
+        assert!(!is_token_file(&format!("{TOKEN_PREFIX}{}", "A".repeat(32))));
+        assert!(is_token_file(&random_file().unwrap()));
     }
 }

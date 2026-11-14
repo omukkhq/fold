@@ -1,4 +1,4 @@
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
@@ -137,6 +137,7 @@ pub fn run(
         }
         AccountCommand::Remove(args) => {
             let name = AccountName::parse(&args.name)?;
+            name.check_not_reserved()?;
             remove(&host_paths(dirs)?, &name)?;
             output::line(out, &format!("removed account {name} and its token"))?;
         }
@@ -171,7 +172,7 @@ fn added_line(name: &AccountName) -> String {
 
 fn updated_line(name: &AccountName) -> String {
     format!(
-        "account {name} has the new token: each running worker of a project that uses it restarts in its own session with it when its next turn ends, and every worker that starts or resumes from now on starts with it"
+        "account {name} has the new token: each running worker of a project that uses it restarts in its own session with it before its next turn, a working one when its current turn ends, and every worker that starts or resumes from now on starts with it"
     )
 }
 
@@ -224,9 +225,9 @@ fn read_piped(input: &mut impl Read) -> Result<String, AccountError> {
     String::from_utf8(bytes).map_err(|_| AccountError::Read(io::ErrorKind::InvalidData.into()))
 }
 
-/// One line from the terminal, which does not show what the person pastes, after a prompt on stderr. The terminal's echo comes back before the line is checked.
+/// One line from the terminal, which does not show what the person pastes, after a prompt on stderr. The terminal reads byte by byte without echo and without signals, so Ctrl-C ends the read here and the terminal's own settings come back before the line is checked; Ctrl-C and Ctrl-D on an empty line end it without a token.
 fn read_hidden_line() -> Result<String, AccountError> {
-    use rustix::termios::{LocalModes, OptionalActions, tcgetattr, tcsetattr};
+    use rustix::termios::{LocalModes, OptionalActions, SpecialCodeIndex, tcgetattr, tcsetattr};
     let stdin = io::stdin();
     let mut stderr = io::stderr().lock();
     output::line(
@@ -237,17 +238,47 @@ fn read_hidden_line() -> Result<String, AccountError> {
     let saved = tcgetattr(&stdin).ok();
     if let Some(saved) = &saved {
         let mut quiet = saved.clone();
-        quiet.local_modes.remove(LocalModes::ECHO);
+        quiet
+            .local_modes
+            .remove(LocalModes::ECHO | LocalModes::ICANON | LocalModes::ISIG);
+        quiet.special_codes[SpecialCodeIndex::VMIN] = 1;
+        quiet.special_codes[SpecialCodeIndex::VTIME] = 0;
         let _ = tcsetattr(&stdin, OptionalActions::Now, &quiet);
     }
-    let mut line = String::new();
-    let read = stdin.lock().read_line(&mut line);
+    let read = hidden_line(&mut stdin.lock());
     if let Some(saved) = &saved {
         let _ = tcsetattr(&stdin, OptionalActions::Now, saved);
     }
     let _ = output::line(&mut stderr, "");
-    read.map_err(AccountError::Read)?;
-    Ok(line)
+    read
+}
+
+const CTRL_C: u8 = 0x03;
+const CTRL_D: u8 = 0x04;
+const BACKSPACE: u8 = 0x08;
+const DELETE: u8 = 0x7f;
+
+/// The line the person types or pastes into a terminal without line editing: Enter ends it, Backspace and Delete take back a character, Ctrl-C cancels, and Ctrl-D or the end of input end it.
+fn hidden_line(input: &mut impl Read) -> Result<String, AccountError> {
+    let mut line = Vec::new();
+    let mut byte = [0_u8; 1];
+    loop {
+        if input.read(&mut byte).map_err(AccountError::Read)? == 0 {
+            break;
+        }
+        match byte[0] {
+            b'\n' | b'\r' | CTRL_D => break,
+            CTRL_C => return Err(AccountError::Read(io::ErrorKind::Interrupted.into())),
+            BACKSPACE | DELETE => {
+                line.pop();
+            }
+            other => line.push(other),
+        }
+        if line.len() as u64 > MAX_INPUT {
+            return Ok("\n\n".to_owned());
+        }
+    }
+    String::from_utf8(line).map_err(|_| AccountError::Read(io::ErrorKind::InvalidData.into()))
 }
 
 #[cfg(test)]
@@ -273,12 +304,37 @@ mod tests {
             "work-a added 2026-11-14 10:00 used by demo, shop"
         );
         assert!(added_line(&name("work-a")).contains("fld account use work-a"));
-        assert!(updated_line(&name("work-a")).contains("when its next turn ends"));
+        assert!(updated_line(&name("work-a")).contains("before its next turn"));
         assert_eq!(
             default_line(&["app".to_owned()]),
             "system-default Claude Code's own login used by app"
         );
         assert!(use_line(&name("work-b")).contains("fld claude"));
+    }
+
+    #[test]
+    fn a_hidden_line_ends_at_enter_takes_back_a_character_and_cancels_at_ctrl_c() {
+        let mut typed: &[u8] = b"sk-ant-oat01-aaaaaaaaaaaaaaaaaaaaaaaX\x7f\rrest";
+        assert_eq!(
+            hidden_line(&mut typed).unwrap(),
+            "sk-ant-oat01-aaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        let mut cancelled: &[u8] = b"sk-ant\x03";
+        assert!(matches!(
+            hidden_line(&mut cancelled),
+            Err(AccountError::Read(error)) if error.kind() == io::ErrorKind::Interrupted
+        ));
+        let mut ended: &[u8] = b"abc\x04def";
+        assert_eq!(hidden_line(&mut ended).unwrap(), "abc");
+        let mut empty: &[u8] = b"";
+        assert_eq!(hidden_line(&mut empty).unwrap(), "");
+        let huge = vec![b'a'; 70_000];
+        assert_eq!(
+            check_token(&hidden_line(&mut huge.as_slice()).unwrap())
+                .unwrap_err()
+                .code(),
+            fold_core::codes::INVALID_ACCOUNT_TOKEN
+        );
     }
 
     #[test]

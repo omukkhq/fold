@@ -1001,6 +1001,10 @@ const SPECS: Record<EventType, Spec> = {
         ? `the stale review claim on ${proposalOf(e)} waits for a person`
         : `the stale claim on ${taskOf(e)} waits for a person`,
   },
+  "claim.renewed": {
+    icon: Check,
+    text: (e) => `${workerOf(e)} renewed its stale claim on ${taskOf(e)}`,
+  },
   "worker.parked": {
     icon: Pause,
     text: (e) => `parked ${workerOf(e)} to wait for its go`,

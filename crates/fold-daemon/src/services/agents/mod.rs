@@ -411,7 +411,7 @@ impl AgentService {
         Ok(worker.ok_or_else(worker_not_found)?)
     }
 
-    /// Stamps the session and the worker with the time of a tool call and renews the claims of that worker in the same transaction. The worker's activity is the tool name, followed by the task id when there is one. After the commit it sends a live `agent.presence_changed` when the call made the agent active.
+    /// Stamps the session and the worker with the time of a tool call and renews the claims of that worker in the same transaction, with a `claim.renewed` for each claim whose stale mark the renewal cleared, published after the commit. The worker's activity is the tool name, followed by the task id when there is one. After the commit it sends a live `agent.presence_changed` when the call made the agent active.
     pub async fn record_call(
         &self,
         ctx: &SessionContext,
@@ -424,6 +424,7 @@ impl AgentService {
             Some(task) => format!("{tool} {task}"),
             None => tool.to_owned(),
         };
+        let mut buffer = EventBuffer::new();
         let (before, after) = self
             .store
             .write(async |tx| {
@@ -431,13 +432,14 @@ impl AgentService {
                 agents::touch_session(tx, ctx.session_id, now).await?;
                 agents::touch_worker(tx, worker.id, now, &activity).await?;
                 let after = agents::open_session_calls(tx.conn(), worker.agent_id).await?;
-                renew_leases(tx, &[worker.id], now).await?;
-                Ok::<_, StoreError>((
+                renew_leases::<AgentError>(tx, &mut buffer, &[worker.id], now).await?;
+                Ok::<_, AgentError>((
                     presence_of(now, &presence::facts(&before)),
                     presence_of(now, &presence::facts(&after)),
                 ))
             })
             .await?;
+        self.bus.publish(buffer);
         self.seen
             .after_call(&self.bus, &worker.name.agent(), before, after)
             .await?;

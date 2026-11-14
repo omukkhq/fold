@@ -6,7 +6,7 @@ ALTER TABLE worker_processes ADD COLUMN parked_for TEXT;
 ALTER TABLE worker_processes ADD COLUMN parked_at INTEGER
     CONSTRAINT worker_processes_parked_only_ended CHECK (
         (parked_at IS NULL AND parked_by IS NULL AND parked_for IS NULL)
-        OR (parked_at IS NOT NULL AND parked_by IS NOT NULL AND parked_for <> '' AND state IN ('stopping', 'stopped', 'failed'))
+        OR (parked_at IS NOT NULL AND parked_by IS NOT NULL AND parked_for IS NOT NULL AND parked_for <> '' AND state IN ('stopping', 'stopped', 'failed'))
     );
 
 -- When a stale claim started to need a person: at its mark when no agent can act on it, or once the agent fold told, the holder's lead or else the main agent, let one more stall window pass. A renewal clears it with the stale mark.

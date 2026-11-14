@@ -146,7 +146,7 @@ pub enum NeedsYouItemKind {
     UnstashConflicted,
     /// The checks file on main is not valid, so fold holds the integrations of proposals until a revision of main fixes it; `title` states the file, the line and the problem, and `paths` names the file.
     ChecksFileInvalidOnMain,
-    /// The worker `agent` failed because it cannot reach fold: its fold MCP server did not connect, or the fld binary it would start is gone. Starting it again fails the same way until the daemon runs the installed fld; `reason` says what the human does. A daemon start resumes the worker once fld is there. The item ends when the worker runs again, through that resume or through `resume_worker`.
+    /// The worker `agent` failed because it cannot reach fold: its fold MCP server did not connect, or the fld binary it would start is gone. Starting it again fails the same way until the daemon runs the installed fld; `reason` says what the human does. A daemon start resumes the worker once fld is there. The item ends when the worker runs again, through that resume or through `resume_worker`. The same kind holds a worker that could not start because the project's account is missing or its token cannot be read; `reason` says to add the account or choose another, then to message the worker, which resumes it.
     WorkerUnreachable,
     /// The worker `agent` failed several turns in a row before any token reached the model, so it does no work until a human fixes what Claude Code needs, such as its sign-in, its model or its usage limit: `title` holds Claude Code's error and `reason` what to check. The item ends when a turn of the worker reaches the model, with or without an error, or when the worker is stopped. A worker whose process failed cannot be stopped, so it keeps the item until `resume_worker` runs it again and a turn reaches the model; a start that runs a stopped worker again shows the item again until then. The same kind with a null `agent` is the project's one item for turns that could not reach the model at all, such as while the network is down: `agents` names the workers whose turn waits, `title` holds Claude Code's newest error and `reason` says what fold does. fold runs each turn again in its session once the model answers, which ends the item.
     WorkerModelUnreachable,
@@ -314,6 +314,9 @@ pub struct NeedsYouEntry {
     /// What the human does about the worker of a `worker_stalled` or a `stale_claim`; null for every other kind.
     #[schema(required = true)]
     pub action: Option<crate::http::tasks::PersonAction>,
+    /// The project's account of a `usage_limit` when fold lists the item, `system-default` for Claude Code's own login; null for every other kind.
+    #[schema(required = true, example = "work-a")]
+    pub account: Option<String>,
 }
 
 impl From<NeedsYouItem> for NeedsYouEntry {
@@ -378,6 +381,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             resets_at: item.resets_at,
             actions: item.actions.into_iter().map(Into::into).collect(),
             action: item.action.map(crate::http::tasks::PersonAction::from),
+            account: item.account.map(|name| name.as_str().to_owned()),
         }
     }
 }
