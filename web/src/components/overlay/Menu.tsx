@@ -17,9 +17,12 @@ interface MenuProps {
   trigger: ReactNode;
   items: MenuItem[];
   align?: "start" | "center" | "end";
+  /** A line above the items that says what choosing one does. */
+  hint?: string;
 }
 
-export function Menu({ trigger, items, align = "start" }: MenuProps) {
+/** The menu keeps a space of 8 to the window's edges and never grows past the room the window leaves it, so it fits at phone width too. */
+export function Menu({ trigger, items, align = "start", hint }: MenuProps) {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
@@ -27,8 +30,17 @@ export function Menu({ trigger, items, align = "start" }: MenuProps) {
         <DropdownMenu.Content
           align={align}
           sideOffset={4}
-          className={cn(menuContent, "min-w-max")}
+          collisionPadding={8}
+          className={cn(
+            menuContent,
+            "max-h-(--radix-dropdown-menu-content-available-height) w-max max-w-(--radix-dropdown-menu-content-available-width) overflow-y-auto",
+          )}
         >
+          {hint === undefined ? null : (
+            <DropdownMenu.Label className="max-w-measure px-10 pt-6 pb-4 text-13 text-text-2">
+              {hint}
+            </DropdownMenu.Label>
+          )}
           {items.map((item) => {
             const Icon = item.icon;
             return (

@@ -268,6 +268,19 @@ describe("Menu", () => {
     expect(screen.queryByRole("menu")).toBeNull();
     expect(document.activeElement).toBe(trigger);
   });
+
+  it("shows its hint above the items", async () => {
+    render(
+      <Menu
+        trigger={<Button>Switch</Button>}
+        hint="The waiting turns run again on it."
+        items={[{ label: "work-b", onSelect: () => {} }]}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Switch" }));
+    expect(screen.getByText("The waiting turns run again on it.")).toBeTruthy();
+    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
+  });
 });
 
 describe("Popover", () => {

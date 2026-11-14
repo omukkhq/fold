@@ -14,13 +14,13 @@ afterEach(() => {
 const SESSION = "GET /api/v1/session";
 const CHOOSE = "PUT /api/v1/projects/demo/account";
 
-function show() {
+function show(accounts: readonly string[] = ["work-b", "personal"]) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   render(
     <QueryClientProvider client={client}>
-      <LimitActions slug="demo" accounts={["work-b", "personal"]} />
+      <LimitActions slug="demo" accounts={accounts} />
     </QueryClientProvider>,
   );
 }
@@ -77,6 +77,46 @@ describe("LimitActions", () => {
           name: "Switch to personal",
         }).disabled,
       ).toBe(false);
+    });
+  });
+
+  it("offers three or more targets in one menu with its hint", async () => {
+    let answer: () => void = () => {};
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    const calls = stubFetch({
+      [SESSION]: { body: { human: "tanim", authenticated: true } },
+      [CHOOSE]: async () => {
+        await answered;
+        return {
+          body: {
+            account: "work-c",
+            accounts: ["system-default", "work-b", "work-c"],
+          },
+        };
+      },
+    });
+    show(["system-default", "work-b", "work-c"]);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Switch account" }),
+    );
+    expect(screen.queryByRole("button", { name: /Switch to/ })).toBeNull();
+    expect(screen.getByText(/each waiting turn runs again on it/)).toBeTruthy();
+    const items = screen.getAllByRole("menuitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      "system-default (Claude Code's own login)",
+      "work-b",
+      "work-c",
+    ]);
+    await userEvent.click(screen.getByRole("menuitem", { name: "work-c" }));
+    expect(
+      await screen.findByRole("button", { name: "Switching to work-c…" }),
+    ).toBeTruthy();
+    answer();
+    await screen.findByRole("button", { name: "Switch account" });
+    expect(calls.find((call) => call.method === "PUT")?.body).toEqual({
+      account: "work-c",
     });
   });
 
