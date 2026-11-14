@@ -81,6 +81,9 @@ export function isPausedWorker(state: WorkerState, paused: boolean): boolean {
 
 const PAUSED_PILL: StatePill = { label: "paused", tone: "paused" };
 
+/** An idle worker whose turn waits for the network or a usage limit, which fold runs again itself: neutral, as idle. */
+const WAITING_PILL: StatePill = { label: "waiting", tone: "idle" };
+
 /** A parked worker waits for its lead's go in the neutral tone of a stop: nobody else needs to act. */
 const PARKED_PILL: StatePill = { label: "parked", tone: "stopped" };
 
@@ -517,11 +520,11 @@ function workerRow(
     };
   }
   if (worker.waits_for !== null && worker.state === "idle") {
-    // The pill says the wait, so the step keeps the worker's last step; the open row still shows Claude Code's message.
+    // One word, as every state pill, keeps the name whole on a phone; the step under it says what the turn waits for, from the error line when Claude Code's message is there.
     return {
       ...runningRow(worker, input, child),
-      pill: { label: waitWords(worker.waits_for), tone: "idle" },
-      errorInStep: false,
+      pill: WAITING_PILL,
+      step: sentence(waitWords(worker.waits_for)),
     };
   }
   return runningRow(worker, input, child);

@@ -293,7 +293,7 @@ describe("steps", () => {
     expect(running?.rows[0]?.pill).toEqual(workerPill("working"));
   });
 
-  it("says in the pill that an idle worker's turn waits for the network or the usage limit reset, never idle", () => {
+  it("shows an idle worker whose turn waits as waiting, with the wait in its step, never idle or its next turn", () => {
     const workers = [
       workerProcess("web-lead", { state: "working" }),
       workerProcess("web-worker", {
@@ -309,19 +309,31 @@ describe("steps", () => {
         waits_for: "network",
       }),
       workerProcess("db-worker", { state: "idle", role: "task_worker" }),
+      workerProcess("ui-worker", {
+        state: "idle",
+        role: "task_worker",
+        waits_for: "usage_limit",
+      }),
     ];
     const [group] = teamGroups(input({ workers: workerList({ workers }) }));
     const row = (name: string) => group?.rows.find((r) => r.name === name);
     expect(row("web-worker")).toMatchObject({
-      pill: { label: "waits for the usage limit reset", tone: "idle" },
-      errorInStep: false,
+      pill: { label: "waiting", tone: "idle" },
+      errorInStep: true,
       error: { title: "waits for the usage limit reset", waits: true },
+      step: { tool: null, text: "waits for the usage limit reset" },
     });
-    expect(row("api-worker")?.pill).toEqual({
-      label: "waiting for the network",
-      tone: "idle",
+    expect(row("api-worker")).toMatchObject({
+      pill: { label: "waiting", tone: "idle" },
+      errorInStep: true,
+      error: { title: "waiting for the network", waits: true },
     });
     expect(row("db-worker")?.pill).toEqual(workerPill("idle"));
+    expect(row("ui-worker")).toMatchObject({
+      pill: { label: "waiting", tone: "idle" },
+      errorInStep: false,
+      step: { tool: null, text: "waits for the usage limit reset" },
+    });
   });
 
   it("shows a parked worker as parked with what it waits for and no Restart, and a worker that runs again as running", () => {
