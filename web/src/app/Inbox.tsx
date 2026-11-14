@@ -204,7 +204,9 @@ function NeedLine({
             )}
           </span>
         ) : null}
-        {choices ? <span className="basis-full pt-4">{choices}</span> : null}
+        {choices && line.href === null ? (
+          <span className="basis-full pt-4">{choices}</span>
+        ) : null}
       </span>
     </>
   );
@@ -233,7 +235,16 @@ function NeedLine({
     </HrefLink>
   );
   return (
-    <li>{full === null ? link : <Tooltip content={full}>{link}</Tooltip>}</li>
+    <li>
+      {full === null ? link : <Tooltip content={full}>{link}</Tooltip>}
+      {choices ? (
+        // A control inside the link would open the line's screen too, so the controls of a line that opens one sit under it, in line with its words.
+        <div className="flex gap-10 px-10 pb-8">
+          <span aria-hidden="true" className="w-16 shrink-0" />
+          <div className="min-w-0 flex-1">{choices}</div>
+        </div>
+      ) : null}
+    </li>
   );
 }
 
