@@ -131,6 +131,10 @@ pub(super) async fn decide_stalls(
                 .as_ref()
                 .and_then(|agent| inputs.owed_turn(agent, limits)),
             given_at: turn_given_at(turn, checks, worker_turn),
+            returned_at: match turn {
+                Some(ProposalTurn::Author { since }) => Some(since),
+                Some(ProposalTurn::Others) | None => None,
+            },
             waits: process.and_then(|process| process.waits),
             parked: process
                 .and_then(|process| process.park.as_ref())
