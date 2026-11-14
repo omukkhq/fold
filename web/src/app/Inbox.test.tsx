@@ -337,6 +337,36 @@ describe("Inbox, Needs you", () => {
     expect(title?.className).not.toContain("truncate");
   });
 
+  it("offers the usage limit's two targets behind one Switch account trigger, never a button per account", async () => {
+    await renderInbox(
+      [
+        needsItem({
+          kind: "usage_limit",
+          screen: "worker",
+          agents: ["web-lead"],
+          limit: "weekly",
+          account: "work-a",
+          reason: "fold runs each waiting turn again after the reset",
+          actions: [
+            { action: "pause" },
+            { action: "switch_account", account: "system-default" },
+            { action: "switch_account", account: "work-b" },
+          ],
+        }),
+      ],
+      "tanim",
+    );
+    const inbox = await openInbox();
+    const project = within(inbox).getByRole("region", { name: "Project" });
+    // The menu's items are the LimitActions tests'; the line holds its one trigger.
+    expect(
+      await within(project).findAllByRole("button", { name: "Switch account" }),
+    ).toHaveLength(1);
+    expect(
+      within(project).queryByRole("button", { name: /Switch to/ }),
+    ).toBeNull();
+  });
+
   it("shows main's invalid checks file as a line that opens nothing and counts it", async () => {
     await renderInbox(
       [

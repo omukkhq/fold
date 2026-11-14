@@ -1,20 +1,23 @@
-/** Up to this many switch targets show as one button each; more show as one Switch account menu, which keeps the line short on a phone. */
-export const SWITCH_BUTTONS_UP_TO = 2;
+import { accountLabel } from "../features/settings/accountModel";
 
-/** How the usage-limit line offers its switch targets. */
-export function switchLayout(count: number): "none" | "buttons" | "menu" {
-  if (count === 0) {
-    return "none";
+/** One item of the Switch account menu: the account the choice makes the project's, and its words. */
+export interface SwitchItem {
+  account: string;
+  label: string;
+}
+
+/** The items of the usage-limit line's one Switch account menu, in the daemon's order, whatever their number; null without a target, which leaves the menu out. `system-default` reads as Claude Code's own login. */
+export function switchItems(accounts: readonly string[]): SwitchItem[] | null {
+  if (accounts.length === 0) {
+    return null;
   }
-  return count <= SWITCH_BUTTONS_UP_TO ? "buttons" : "menu";
+  return accounts.map((account) => ({
+    account,
+    label: accountLabel(account),
+  }));
 }
 
-/** The words of the button that makes `account` the project's account. */
-export function switchLabel(account: string): string {
-  return `Switch to ${account}`;
-}
-
-/** The words of a switch while the daemon has not answered. */
+/** The words of the menu's trigger while the daemon has not answered a switch. */
 export function switchPendingLabel(account: string): string {
   return `Switching to ${account}…`;
 }

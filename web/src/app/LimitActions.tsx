@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Repeat } from "lucide-react";
+import { ChevronDown, Repeat } from "lucide-react";
 import { apiErrorCode } from "@/api/errors";
 import { keys } from "@/api/keys";
 import { sessionQuery } from "@/api/queries";
@@ -7,19 +7,15 @@ import { setProjectAccount } from "@/api/workers";
 import { Button } from "@/components/button/Button";
 import { Menu } from "@/components/overlay/Menu";
 import { cn } from "@/lib/cn";
-import {
-  accountFailure,
-  accountLabel,
-} from "../features/settings/accountModel";
+import { accountFailure } from "../features/settings/accountModel";
 import { PauseControl } from "./PauseControl";
 import {
   SWITCH_MENU_HINT,
-  switchLabel,
-  switchLayout,
+  switchItems,
   switchPendingLabel,
 } from "./limitActionsModel";
 
-/** The usage-limit line's actions: Pause, and a switch to each other account, which makes it the project's account; fold then runs the waiting turns again on it. Up to two targets show as buttons, more as one Switch account menu. A switch stays pending until the daemon answers and Needs you is read again. */
+/** The usage-limit line's actions: Pause, and one Switch account menu whose items are the other accounts, for any number of them; a choice makes that account the project's, and fold then runs the waiting turns again on it. A switch stays pending until the daemon answers and Needs you is read again. */
 export function LimitActions({
   slug,
   accounts,
@@ -41,31 +37,14 @@ export function LimitActions({
       ]),
   });
   const named = (session.data?.human ?? null) !== null;
-  const layout = named ? switchLayout(accounts.length) : "none";
+  const items = named ? switchItems(accounts) : null;
   const failure = write.isError ? accountFailure(write.error) : null;
   const pendingFor = write.isPending ? write.variables : undefined;
   return (
     <div className={cn("flex flex-col items-start gap-6", className)}>
       <div className="flex flex-wrap items-center gap-6">
         <PauseControl slug={slug} className="items-start" />
-        {layout === "buttons"
-          ? accounts.map((account) => (
-              <Button
-                key={account}
-                variant="quiet"
-                pending={pendingFor === account}
-                pendingLabel={switchPendingLabel(account)}
-                disabled={write.isPending}
-                icon={<Repeat aria-hidden="true" size={16} />}
-                onClick={() => {
-                  write.mutate(account);
-                }}
-              >
-                {switchLabel(account)}
-              </Button>
-            ))
-          : null}
-        {layout === "menu" ? (
+        {items === null ? null : (
           <Menu
             hint={SWITCH_MENU_HINT}
             trigger={
@@ -76,17 +55,22 @@ export function LimitActions({
                 icon={<Repeat aria-hidden="true" size={16} />}
               >
                 Switch account
+                <ChevronDown
+                  aria-hidden="true"
+                  size={14}
+                  className="shrink-0 text-text-2"
+                />
               </Button>
             }
-            items={accounts.map((account) => ({
-              label: accountLabel(account),
+            items={items.map((item) => ({
+              label: item.label,
               onSelect: () => {
-                write.mutate(account);
+                write.mutate(item.account);
               },
               disabled: write.isPending,
             }))}
           />
-        ) : null}
+        )}
       </div>
       {failure === null ? null : (
         <span role="alert" className="text-13 text-bad">
