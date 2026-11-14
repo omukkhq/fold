@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_processes SET parked_by = ?2, parked_for = ?3, parked_at = ?4 WHERE id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "7604393c3bbdf3692b753b03bc06a2ca4cffa481eafac9556f8c479513c7e9fb"
+}

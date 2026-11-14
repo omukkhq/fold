@@ -13,7 +13,7 @@ const TIMED: ReadonlySet<WorkerActivity["state"]> = new Set([
 ]);
 
 export interface ActivityLine {
-  /** `Running checks for v2` while a check run goes in the workspace; what fold saw of the worker, such as `Running a command for 8 min` or `No activity from @web-worker for 12 min`; `Editing src/a.ts`; `Sent P-1 v1 · waits for review` while the workspace files are the open proposal's newest version; or `No edits for 6 min` when the worker is stalled and no sent version waits on others, with `· blocked` when the task also waits on a prerequisite. */
+  /** `Running checks for v2` while a check run goes in the workspace; what fold saw of the worker, such as `Running a command for 8 min`, `No activity from @web-worker for 12 min` or `Waits for @web-lead's go`; `Edited src/a.ts` or `Last edit` while fold saw nothing of the worker, with the time in `since`; `Sent P-1 v1 · waits for review` while the workspace files are the open proposal's newest version; or `No edits for 6 min` when the worker is stalled and no sent version waits on others, with `· blocked` when the task also waits on a prerequisite. */
   text: string;
   /** `12 s ago`: since the run started while one goes, else since the last edit, or since what fold saw of the worker began when its text says no time, as `@web-worker stopped` does; null when the text already says how long. */
   since: string | null;
@@ -88,7 +88,8 @@ export function activityLine(
     const verb = sentText(sent);
     text = `${verb.charAt(0).toUpperCase()}${verb.slice(1)} · ${waitText(sent.waits)}`;
   } else {
-    text = path === null ? "Editing" : `Editing ${path}`;
+    // fold saw no state of the worker, so the line says what the workspace shows: the last edit, whose time `since` gives.
+    text = path === null ? "Last edit" : `Edited ${path}`;
   }
   return {
     text,

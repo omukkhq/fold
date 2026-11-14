@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT w.id AS \"id!: i64\", w.agent_id, g.name AS agent, w.role, w.area_id, a.name AS \"area?: String\",\n                      w.model, w.session_id, w.pid, w.state, w.started_by, w.started_at, w.stopped_at,\n                      w.idle_since, w.turns, w.cost_micro_usd, w.cache_read_tokens, w.cache_write_tokens,\n                      w.context_tokens, w.exit_code, w.failed_reason, w.last_error, w.last_error_at,\n                      w.failed_turns, w.fold_fingerprint, w.wait_reason, w.wait_limit, w.wait_since,\n                      w.wait_tried_at, w.wait_tries, w.wait_reset, w.wait_resets_at\n               FROM worker_processes w JOIN agents g ON g.id = w.agent_id LEFT JOIN areas a ON a.id = w.area_id\n               ORDER BY w.id",
+  "query": "SELECT w.id AS \"id!: i64\", w.agent_id, g.name AS agent, w.role, w.area_id, a.name AS \"area?: String\",\n                      w.model, w.session_id, w.pid, w.state, w.started_by, w.started_at, w.stopped_at,\n                      w.idle_since, w.turns, w.cost_micro_usd, w.cache_read_tokens, w.cache_write_tokens,\n                      w.context_tokens, w.exit_code, w.failed_reason, w.last_error, w.last_error_at,\n                      w.failed_turns, w.fold_fingerprint, w.wait_reason, w.wait_limit, w.wait_since,\n                      w.wait_tried_at, w.wait_tries, w.wait_reset, w.wait_resets_at, pa.name AS \"parked_by?: String\",\n                      w.parked_for, w.parked_at\n               FROM worker_processes w JOIN agents g ON g.id = w.agent_id LEFT JOIN areas a ON a.id = w.area_id\n               LEFT JOIN agents pa ON pa.id = w.parked_by\n               WHERE g.name = ?",
   "describe": {
     "columns": [
       {
@@ -354,10 +354,43 @@
             "name": "wait_resets_at"
           }
         }
+      },
+      {
+        "name": "parked_by?: String",
+        "ordinal": 32,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "parked_for",
+        "ordinal": 33,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "parked_for"
+          }
+        }
+      },
+      {
+        "name": "parked_at",
+        "ordinal": 34,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "parked_at"
+          }
+        }
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
@@ -391,8 +424,11 @@
       true,
       false,
       true,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "1cfd9d6391bb077ffd889e4a693f5f442b842c5b4834b6a2966d4f7c20f0935f"
+  "hash": "c74c028eba9a646c799a981394143445edaa0630165ac7a8d557c078a05fa17a"
 }

@@ -262,6 +262,8 @@ pub struct StallFacts {
     pub given_at: Option<Timestamp>,
     /// The idle worker's last turn ended for a cause outside it, since the time given, and fold runs it again once the cause has passed (see [`crate::turn_waits`]); `None` when it waits for nothing.
     pub waits: Option<(WaitReason, Timestamp)>,
+    /// An agent stopped the worker at this time to wait for its go, with `stop_worker`'s `wait_for`: the next move is that agent's, so the worker's silence says nothing. Every start of the worker's process ends the park.
+    pub parked: Option<Timestamp>,
 }
 
 impl Default for StallFacts {
@@ -277,6 +279,7 @@ impl Default for StallFacts {
             owed: None,
             given_at: None,
             waits: None,
+            parked: None,
         }
     }
 }
@@ -302,6 +305,8 @@ pub enum Activity {
     WaitsForNetwork { since: Timestamp },
     /// The worker's last turn reached a usage limit at `since`; fold runs it again after the reset.
     WaitsForUsageLimit { since: Timestamp },
+    /// An agent, its lead, stopped the worker at `since` to wait for its go: the lead's message resumes it in its session, so nobody else must act.
+    Parked { since: Timestamp },
 }
 
 impl Activity {
@@ -313,7 +318,7 @@ impl Activity {
         )
     }
 
-    /// The name of a stall, as events and the live state write it; `None` for `Quiet`, `Working`, `Stopped` and the waits.
+    /// The name of a stall, as events and the live state write it; `None` for `Quiet`, `Working`, `Stopped`, `WaitsForSlot`, `Parked` and the turn waits.
     pub fn reason(self) -> Option<&'static str> {
         match self {
             Self::Silent { .. } => Some("silent"),
@@ -325,11 +330,12 @@ impl Activity {
             | Self::WaitsForSlot { .. }
             | Self::WaitsForNetwork { .. }
             | Self::WaitsForUsageLimit { .. } => None,
+            Self::Parked { .. } => None,
         }
     }
 }
 
-/// Decides what the worker of a workspace does at `now`. Nothing is said while the project's agents are paused, nor of a worker without the implementation claim or of a workspace that is not active. A worker whose last turn waits for the network or a usage limit is `WaitsForNetwork` or `WaitsForUsageLimit`, never a stall, whatever else holds. Nothing is said either of a check run that goes, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A worker whose resume fold owes while the worker limits hold it is `WaitsForSlot`, never a stall; once a place is free for it, it is `Silent` when a stall window from that time, and from `start`, passed without a run. A process that ended is `Failed` at once when it ended without anyone asking and `Stopped` when someone asked for its stop, whatever changed in the workspace after the end, unless others gave the worker the turn after it ended (`given_at`), such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
+/// Decides what the worker of a workspace does at `now`. Nothing is said while the project's agents are paused, nor of a worker without the implementation claim. A worker of an active workspace whose last turn waits for the network or a usage limit is `WaitsForNetwork` or `WaitsForUsageLimit`, never a stall, whatever else holds. Nothing is said either while its check run goes. A worker that an agent parked is `Parked` while its workspace is active or holds its sent version, fold owes it no resume and nobody gave it the turn after the park. Nothing else is said of a workspace that is not active, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A worker whose resume fold owes while the worker limits hold it is `WaitsForSlot`, never a stall; once a place is free for it, it is `Silent` when a stall window from that time, and from `start`, passed without a run. A process that ended is `Failed` at once when it ended without anyone asking and `Stopped` when someone asked for its stop, whatever changed in the workspace after the end, unless others gave the worker the turn after it ended (`given_at`), such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
 pub fn activity(
     now: Timestamp,
     facts: &StallFacts,
@@ -337,15 +343,27 @@ pub fn activity(
     start: Timestamp,
     stall_minutes: u64,
 ) -> Activity {
-    if facts.paused || !facts.has_impl_claim || facts.workspace != WorkspaceFact::Active {
+    if facts.paused || !facts.has_impl_claim {
         return Activity::Quiet;
     }
-    match facts.waits {
-        Some((WaitReason::Network, since)) => return Activity::WaitsForNetwork { since },
-        Some((WaitReason::UsageLimit, since)) => return Activity::WaitsForUsageLimit { since },
-        None => {}
+    if facts.workspace == WorkspaceFact::Active {
+        match facts.waits {
+            Some((WaitReason::Network, since)) => return Activity::WaitsForNetwork { since },
+            Some((WaitReason::UsageLimit, since)) => return Activity::WaitsForUsageLimit { since },
+            None => {}
+        }
     }
-    if facts.checks == WorkspaceChecks::Running
+    if facts.checks == WorkspaceChecks::Running {
+        return Activity::Quiet;
+    }
+    if let Some(since) = facts.parked
+        && matches!(facts.workspace, WorkspaceFact::Active | WorkspaceFact::Sent)
+        && facts.owed.is_none()
+        && facts.given_at.is_none_or(|given| given <= since)
+    {
+        return Activity::Parked { since };
+    }
+    if facts.workspace != WorkspaceFact::Active
         || facts.worker.waits()
         || facts.reported
         || facts.explained
@@ -422,8 +440,18 @@ pub const WAITS_FOR_NETWORK: &str = "Waiting for the network";
 /// The words of a worker whose turn waits for the reset of a usage limit, in every view.
 pub const WAITS_FOR_USAGE_LIMIT: &str = "Waits for the usage limit reset";
 
-/// What fold saw of the worker `worker`, in the words that the board's chip, the task, Activity, Needs you and the notices all use: `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed`, `Waiting for a free slot`, `Waiting for the network` or `Waits for the usage limit reset`. The time is the span from the activity's start to `now`, rounded down, in seconds, minutes, hours or days. `None` for [`Activity::Quiet`].
+/// What fold saw of the worker `worker`, in the words that the board's chip, the task, Activity, Needs you and the notices all use: `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed`, `Waiting for a free slot`, `Waiting for the network`, `Waits for the usage limit reset` or `Waits for its lead's go`. The time is the span from the activity's start to `now`, rounded down, in seconds, minutes, hours or days. `None` for [`Activity::Quiet`]. [`activity_text_by`] names the agent that parked the worker.
 pub fn activity_text(activity: Activity, worker: &str, now: Timestamp) -> Option<String> {
+    activity_text_by(activity, worker, None, now)
+}
+
+/// [`activity_text`] with the agent that parked the worker, `Waits for @web-lead's go`; `parked_by` is read only for [`Activity::Parked`].
+pub fn activity_text_by(
+    activity: Activity,
+    worker: &str,
+    parked_by: Option<&str>,
+    now: Timestamp,
+) -> Option<String> {
     let span = |since: Timestamp| {
         let seconds = now
             .duration_since(since)
@@ -466,6 +494,15 @@ pub fn activity_text(activity: Activity, worker: &str, now: Timestamp) -> Option
         Activity::WaitsForSlot { .. } => Some("Waiting for a free slot".to_owned()),
         Activity::WaitsForNetwork { .. } => Some(WAITS_FOR_NETWORK.to_owned()),
         Activity::WaitsForUsageLimit { .. } => Some(WAITS_FOR_USAGE_LIMIT.to_owned()),
+        Activity::Parked { .. } => Some(parked_text(parked_by)),
+    }
+}
+
+/// `Waits for @web-lead's go`, or `Waits for its lead's go` when the agent that parked the worker is not known.
+pub fn parked_text(parked_by: Option<&str>) -> String {
+    match parked_by {
+        Some(agent) => format!("Waits for @{agent}'s go"),
+        None => "Waits for its lead's go".to_owned(),
     }
 }
 
@@ -924,6 +961,7 @@ mod tests {
         owed: None,
         given_at: None,
         waits: None,
+        parked: None,
     };
 
     fn running(last_output: i64, call: Option<(CallKind, i64)>) -> WorkerStream {
@@ -1429,6 +1467,108 @@ mod tests {
     }
 
     #[test]
+    fn a_parked_worker_waits_for_its_leads_go_and_never_stalls() {
+        let parked_at = at(10 * MINUTE);
+        let parked = StallFacts {
+            parked: Some(parked_at),
+            given_at: Some(at(0)),
+            ..CLAIMED
+        };
+        let stopped = WorkerStream::Ended {
+            at: parked_at,
+            failed: false,
+        };
+        for stream in [stopped, WorkerStream::Unread, running(0, None)] {
+            for minutes in [10, 60, 24 * 60] {
+                let seen = activity(at(minutes * MINUTE), &parked, stream, at(0), 5);
+                assert_eq!(seen, Activity::Parked { since: parked_at }, "{stream:?}");
+                assert!(!seen.is_stall());
+                assert_eq!(seen.reason(), None);
+            }
+        }
+        for facts in [
+            StallFacts {
+                workspace: WorkspaceFact::Sent,
+                ..parked
+            },
+            StallFacts {
+                reported: true,
+                ..parked
+            },
+            StallFacts {
+                worker: WorkerTurn {
+                    waits_for_person: true,
+                    ..IDLE
+                },
+                ..parked
+            },
+        ] {
+            assert_eq!(
+                activity(at(60 * MINUTE), &facts, stopped, at(0), 5),
+                Activity::Parked { since: parked_at },
+                "a sent version, a report or an ask still shows the wait for the go"
+            );
+        }
+        let late = at(60 * MINUTE);
+        for facts in [
+            StallFacts {
+                paused: true,
+                ..parked
+            },
+            StallFacts {
+                has_impl_claim: false,
+                ..parked
+            },
+            StallFacts {
+                workspace: WorkspaceFact::Missing,
+                ..parked
+            },
+            StallFacts {
+                checks: WorkspaceChecks::Running,
+                ..parked
+            },
+        ] {
+            assert_eq!(activity(late, &facts, stopped, at(0), 5), Activity::Quiet);
+        }
+        assert_eq!(StallFacts::default().parked, None);
+    }
+
+    #[test]
+    fn a_turn_given_after_the_park_or_an_owed_resume_ends_the_wait() {
+        let parked_at = at(10 * MINUTE);
+        let stopped = WorkerStream::Ended {
+            at: parked_at,
+            failed: false,
+        };
+        let back = at(20 * MINUTE);
+        let sent_back = StallFacts {
+            parked: Some(parked_at),
+            given_at: Some(back),
+            ..CLAIMED
+        };
+        assert_eq!(
+            activity(at(25 * MINUTE), &sent_back, stopped, back, 5),
+            Activity::Silent { since: back },
+            "a proposal back with its author owes a resume that the park does not hide"
+        );
+        let owed = StallFacts {
+            parked: Some(parked_at),
+            owed: Some(OwedTurn::WaitsForPlace {
+                slot: Slot::TaskWorker,
+                since: back,
+            }),
+            ..CLAIMED
+        };
+        assert_eq!(
+            activity(at(25 * MINUTE), &owed, stopped, back, 5),
+            Activity::WaitsForSlot {
+                slot: Slot::TaskWorker,
+                since: back
+            }
+        );
+    }
+
+    #[test]
     fn a_stall_needs_a_person_one_window_after_the_agent_was_told_or_at_once_when_nobody_can_act() {
         assert!(needs_person(at(0), None, 5));
         assert!(!needs_person(at(5 * MINUTE - 1), Some(at(0)), 5));
@@ -1536,6 +1676,31 @@ mod tests {
             })
             .as_deref(),
             Some("Waiting for a free slot")
+        );
+        assert_eq!(
+            text(Activity::Parked { since: at(0) }).as_deref(),
+            Some("Waits for its lead's go")
+        );
+        assert_eq!(
+            activity_text_by(
+                Activity::Parked { since: at(0) },
+                "web-worker",
+                Some("web-lead"),
+                now
+            )
+            .as_deref(),
+            Some("Waits for @web-lead's go")
+        );
+        assert_eq!(
+            activity_text_by(
+                Activity::Stopped { since: at(0) },
+                "w",
+                Some("web-lead"),
+                now
+            )
+            .as_deref(),
+            Some("@w stopped"),
+            "only a park names the agent that parked"
         );
         let later = |millis: i64| activity_text(Activity::Silent { since: at(0) }, "w", at(millis));
         assert_eq!(

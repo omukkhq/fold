@@ -32,7 +32,7 @@ export interface NeedsYouLine {
   files: FilesSummary | null;
   /** How many items of changed shared files the line's Dismiss ends, which is every one of them; null for every other line. */
   dismiss: number | null;
-  /** The stalled worker that the line's Restart worker starts again in a new session; null for every other line, and for a worker whose session fold does not run. */
+  /** The worker that the line's Restart worker starts again in a new session: a stalled worker, or the holder of a stale claim, when the daemon names restarting as the person's action; null for every other line, and for a worker whose session fold does not run. */
   restart: string | null;
   /** What the human can do from the line, as the daemon lists it for the item, such as `pause` for a usage limit. */
   actions: readonly NeedsYouActionKind[];
@@ -87,6 +87,7 @@ const KIND_ORDER: readonly NeedsYouKind[] = [
   "shared_changed",
   "worker_stalled",
   "usage_limit",
+  "stale_claim",
 ];
 
 /** Agents that ask, things that wait for the human's decision, and the project's own state, which includes workers fold cannot run. */
@@ -110,6 +111,7 @@ export const GROUP_OF: Readonly<Record<NeedsYouKind, NeedsYouGroupId>> = {
   shared_changed: "project",
   worker_stalled: "wait",
   usage_limit: "project",
+  stale_claim: "wait",
 };
 
 /** The kinds whose title is the item's own name, which the sentence ends with. */
@@ -463,6 +465,21 @@ function lineOf(
         title: waitersText(item.agents, markedText(item.reason)),
         text: limitText(item, now),
         href: null,
+      };
+    case "stale_claim":
+      return {
+        ...base,
+        person: item.agent,
+        chip: null,
+        // A review claim names its proposal, which already says the task.
+        task: item.proposal === null ? item.task : null,
+        title: sentence(markedText(item.reason)),
+        text:
+          item.proposal === null
+            ? "holds a stale claim"
+            : `holds a stale review claim on ${codeData(item.proposal)}`,
+        href: taskPath(slug, item.task ?? ""),
+        restart: item.action === "restart_worker" ? (item.agent ?? null) : null,
       };
     case "human_review":
       return {

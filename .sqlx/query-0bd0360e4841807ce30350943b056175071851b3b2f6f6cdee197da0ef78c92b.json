@@ -1,0 +1,54 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.worker_id AS \"worker!: i64\",\n                  (c.kind = 'implementation' AND EXISTS (\n                       SELECT 1 FROM proposals p\n                       WHERE p.task_id = c.task_id AND p.state = 'open'\n                         AND NOT p.conflicted AND NOT p.checks_failed\n                         AND NOT (\n                             (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) = 'request_changes'\n                             AND EXISTS (SELECT 1 FROM reviews r\n                                         WHERE r.verdict = 'request_changes'\n                                           AND r.version_id = (SELECT v.id FROM proposal_versions v\n                                                               WHERE v.proposal_id = p.id\n                                                               ORDER BY v.version DESC LIMIT 1))))) AS \"sent!: bool\",\n                  (c.kind = 'implementation' AND EXISTS (\n                       SELECT 1 FROM open_human_questions q WHERE q.task_id = c.task_id)) AS \"asks_person!: bool\",\n                  (c.kind = 'implementation' AND EXISTS (\n                       SELECT 1 FROM task_reports r\n                       WHERE r.task_id = c.task_id AND r.resolution IS NULL)) AS \"reported!: bool\",\n                  (c.kind = 'review' AND EXISTS (\n                       SELECT 1 FROM reviews r\n                       JOIN workers rw ON rw.id = r.reviewer_worker_id\n                       WHERE rw.agent_id = (SELECT w.agent_id FROM workers w WHERE w.id = c.worker_id)\n                         AND r.version_id = (SELECT v.id FROM proposal_versions v\n                                             WHERE v.proposal_id = c.proposal_id\n                                             ORDER BY v.version DESC LIMIT 1))) AS \"verdict_given!: bool\"\n           FROM claims c\n           WHERE c.released_at IS NULL\n           ORDER BY c.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "worker!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "worker_id"
+          }
+        }
+      },
+      {
+        "name": "sent!: bool",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "asks_person!: bool",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "reported!: bool",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "verdict_given!: bool",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "0bd0360e4841807ce30350943b056175071851b3b2f6f6cdee197da0ef78c92b"
+}

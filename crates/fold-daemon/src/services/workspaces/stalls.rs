@@ -10,7 +10,7 @@ use fold_core::stall::{
 use fold_core::{
     AgentName, ProjectPaths, ProposalId, TaskId, Timestamp, WorkerName, WorkerState, WorkspaceId,
 };
-use fold_store::agents::{self, ClaimKind, OwedStart};
+use fold_store::agents::{self, ClaimKind, OwedStart, WorkerPark};
 use fold_store::reviews::checks;
 use fold_store::tasks::reports;
 use fold_store::{Store, StoreError, events, messages, reviews};
@@ -132,6 +132,9 @@ pub(super) async fn decide_stalls(
                 .and_then(|agent| inputs.owed_turn(agent, limits)),
             given_at: turn_given_at(turn, checks, worker_turn),
             waits: process.and_then(|process| process.waits),
+            parked: process
+                .and_then(|process| process.park.as_ref())
+                .map(|park| park.at),
         };
         let verdict = activity(now, &facts, stream, start, stall_minutes);
         let (told, stalled) = match (verdict.reason(), verdict_since(verdict), &agent) {
@@ -187,7 +190,10 @@ pub(super) async fn decide_stalls(
             }
         };
         let supervised = !matches!(stream, WorkerStream::Unread);
-        let shown = LiveActivity::of(verdict, supervised, &told);
+        let park = process
+            .and_then(|process| process.park.as_ref())
+            .map(|park| (&park.by, park.wait_for.as_str()));
+        let shown = LiveActivity::of(verdict, supervised, &told).map(|shown| shown.with_park(park));
         if live.set_activity(view.workspace, view.last_activity_at, shown, stalled) {
             changed += 1;
             if stalled && !view.stalled {
@@ -212,6 +218,7 @@ fn verdict_since(verdict: Activity) -> Option<Timestamp> {
         | Activity::WaitsForSlot { .. }
         | Activity::WaitsForNetwork { .. }
         | Activity::WaitsForUsageLimit { .. } => None,
+        Activity::Parked { .. } => None,
     }
 }
 
@@ -312,7 +319,7 @@ pub async fn follow_stall_turns(
     }
 }
 
-/// A message of a person or an agent, which can be an answer or an ask, the closure of an ask, a permission question or its answer, a verdict, a start of a worker process, the end of a process or a session, which shows the worker stopped at once or frees a place for an owed resume, a send-back, which owes its task worker a resume, a change of the worker limits, a pause or its resume, which clears or restarts every stall time, and the start or end of a worker's wait for the network or a usage limit. fold's own messages, such as check results, give no turn.
+/// A message of a person or an agent, which can be an answer or an ask, the closure of an ask, a permission question or its answer, a verdict, a start of a worker process, the end of a process or a session, which shows the worker stopped at once or frees a place for an owed resume, a send-back, which owes its task worker a resume, a change of the worker limits, a pause or its resume, which clears or restarts every stall time, the start or end of a worker's wait for the network or a usage limit, and a park, which shows the wait at once. fold's own messages, such as check results, give no turn.
 fn gives_a_turn(event: &Event) -> bool {
     if event.event_type == types::MESSAGE_SENT {
         return event.actor != EventActor::fold();
@@ -335,6 +342,7 @@ fn gives_a_turn(event: &Event) -> bool {
         types::WORKERS_LIMITS_CHANGED,
         types::WORKER_WAITING,
         types::WORKER_WAIT_ENDED,
+        types::WORKER_PARKED,
     ]
     .contains(&event.event_type)
 }
@@ -394,6 +402,8 @@ struct ProcessFacts {
     explained: bool,
     /// The cause outside the worker its idle process waits for, since the end of the first turn of the wait.
     waits: Option<(WaitReason, Timestamp)>,
+    /// The agent that parked it, to wait for its go.
+    park: Option<WorkerPark>,
 }
 
 impl StallInputs {
@@ -532,6 +542,7 @@ async fn stall_inputs(store: &Store, opened_at: Timestamp) -> Result<StallInputs
                     .as_ref()
                     .filter(|_| shows_wait(row.state))
                     .map(|wait| (wait.reason, wait.since)),
+                park: row.park,
             };
             (row.agent, facts)
         })

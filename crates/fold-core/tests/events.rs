@@ -149,6 +149,8 @@ fn all_equals_the_plans_event_types() {
         "workers.account_changed",
         "worker.waiting",
         "worker.wait_ended",
+        "claim.needs_person",
+        "worker.parked",
     ]);
     assert_eq!(declared, expected);
 }

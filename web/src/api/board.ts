@@ -10,6 +10,7 @@ export type BoardLabel = Schemas["Label"];
 export type TaskStatus = Schemas["TaskStatus"];
 export type AttentionItem = Schemas["AttentionItem"];
 export type AttentionKind = Schemas["AttentionKind"];
+export type PersonAction = Schemas["PersonAction"];
 export type ChecklistCounts = Schemas["ChecklistCounts"];
 export type HumanReviewMark = Schemas["HumanReviewMark"];
 

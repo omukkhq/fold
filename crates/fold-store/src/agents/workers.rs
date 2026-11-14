@@ -56,6 +56,8 @@ pub struct WorkerProcessRow {
     pub fold_fingerprint: Option<String>,
     /// The cause outside the worker that its last turn ended for, which fold owes a re-run; `None` when its last turn ended for any other reason.
     pub wait: Option<StoredWait>,
+    /// The agent that stopped the worker to wait for its go, with what it waits for; `None` for every other worker. Every start of the row clears it.
+    pub park: Option<WorkerPark>,
     pub tasks: Vec<TaskId>,
     pub proposals: Vec<ProposalId>,
 }
@@ -85,6 +87,15 @@ impl StoredWait {
             limit: self.limit,
         }
     }
+}
+
+/// An agent stopped the worker with `stop_worker`'s `wait_for`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerPark {
+    pub by: AgentName,
+    /// What the worker waits for, in the parking agent's words.
+    pub wait_for: String,
+    pub at: Timestamp,
 }
 
 pub struct NewWorkerProcess<'a> {
@@ -389,6 +400,9 @@ struct RawProcess {
     wait_tries: i64,
     wait_reset: Option<String>,
     wait_resets_at: Option<i64>,
+    parked_by: Option<String>,
+    parked_for: Option<String>,
+    parked_at: Option<i64>,
 }
 
 impl RawProcess {
@@ -456,6 +470,14 @@ impl RawProcess {
             failed_turns: count(self.failed_turns, "worker_processes.failed_turns")?,
             fold_fingerprint: self.fold_fingerprint,
             wait,
+            park: match (self.parked_by, self.parked_for, self.parked_at) {
+                (Some(by), Some(wait_for), Some(at)) => Some(WorkerPark {
+                    by: AgentName::parse(&by).map_err(|_| StoreError::Corrupt("agents.name"))?,
+                    wait_for,
+                    at: time(at, "worker_processes.parked_at")?,
+                }),
+                _ => None,
+            },
             tasks: Vec::new(),
             proposals: Vec::new(),
         })
@@ -472,8 +494,10 @@ macro_rules! select_processes {
                       w.idle_since, w.turns, w.cost_micro_usd, w.cache_read_tokens, w.cache_write_tokens,
                       w.context_tokens, w.exit_code, w.failed_reason, w.last_error, w.last_error_at,
                       w.failed_turns, w.fold_fingerprint, w.wait_reason, w.wait_limit, w.wait_since,
-                      w.wait_tried_at, w.wait_tries, w.wait_reset, w.wait_resets_at
+                      w.wait_tried_at, w.wait_tries, w.wait_reset, w.wait_resets_at, pa.name AS "parked_by?: String",
+                      w.parked_for, w.parked_at
                FROM worker_processes w JOIN agents g ON g.id = w.agent_id LEFT JOIN areas a ON a.id = w.area_id
+               LEFT JOIN agents pa ON pa.id = w.parked_by
                "# + $tail
             $(, $arg)*
         )
@@ -607,7 +631,7 @@ pub async fn running_counts(
     ))
 }
 
-/// Moves the row to `state`. `idle_since` follows an idle state and `stopped_at` a final one, as the table's checks require.
+/// Moves the row to `state`. `idle_since` follows an idle state and `stopped_at` a final one, as the table's checks require, and a running state ends the park.
 pub async fn set_worker_state(
     tx: &mut WriteTx,
     id: i64,
@@ -621,7 +645,10 @@ pub async fn set_worker_state(
          SET state = ?2,
              idle_since = CASE WHEN ?2 = 'idle' THEN COALESCE(idle_since, ?3) ELSE NULL END,
              stopped_at = CASE WHEN ?2 IN ('stopped', 'failed') THEN ?3 ELSE NULL END,
-             failed_reason = CASE WHEN ?2 = 'failed' THEN failed_reason ELSE NULL END
+             failed_reason = CASE WHEN ?2 = 'failed' THEN failed_reason ELSE NULL END,
+             parked_by = CASE WHEN ?2 IN ('stopping', 'stopped', 'failed') THEN parked_by ELSE NULL END,
+             parked_for = CASE WHEN ?2 IN ('stopping', 'stopped', 'failed') THEN parked_for ELSE NULL END,
+             parked_at = CASE WHEN ?2 IN ('stopping', 'stopped', 'failed') THEN parked_at ELSE NULL END
          WHERE id = ?1",
         id,
         state,
@@ -679,6 +706,49 @@ pub async fn hold_worker(tx: &mut WriteTx, id: i64, now: Timestamp) -> Result<()
     .execute(tx.conn())
     .await?;
     Ok(())
+}
+
+/// Records that the agent `by_agent_id` parked the stopping or ended row `id` at `now` to wait for its go, for `wait_for`. A later park replaces an earlier one.
+pub async fn park_worker(
+    tx: &mut WriteTx,
+    id: i64,
+    by_agent_id: i64,
+    wait_for: &str,
+    now: Timestamp,
+) -> Result<(), StoreError> {
+    let now = now.as_millis();
+    sqlx::query!(
+        "UPDATE worker_processes SET parked_by = ?2, parked_for = ?3, parked_at = ?4 WHERE id = ?1",
+        id,
+        by_agent_id,
+        wait_for,
+        now
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
+/// The workers, by `workers.id`, whose agent's row is parked, each with whether the agent that parked it runs: its process runs, or it has an open session. Their claims hold their lease while it runs.
+pub async fn parked_holders(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<(i64, bool)>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT w.id AS "worker!: i64",
+                  (EXISTS (SELECT 1 FROM worker_processes q
+                           WHERE q.agent_id = p.parked_by AND q.state IN ('starting', 'working', 'idle', 'stopping'))
+                   OR EXISTS (SELECT 1 FROM sessions s
+                              WHERE s.agent_id = p.parked_by AND s.ended_at IS NULL)) AS "parker_runs!: bool"
+           FROM worker_processes p JOIN workers w ON w.agent_id = p.agent_id
+           WHERE p.parked_at IS NOT NULL
+           ORDER BY w.id"#
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.worker, row.parker_runs))
+        .collect())
 }
 
 /// Whether a human stopped row `id` and nothing started it since.
@@ -963,7 +1033,7 @@ pub async fn restart_worker_process(
     sqlx::query!(
         "UPDATE worker_processes
          SET state = 'starting', started_at = ?2, stopped_at = NULL, idle_since = NULL, pid = NULL, exit_code = NULL,
-             failed_reason = NULL, held_at = NULL
+             failed_reason = NULL, held_at = NULL, parked_by = NULL, parked_for = NULL, parked_at = NULL
          WHERE id = ?1",
         id,
         now

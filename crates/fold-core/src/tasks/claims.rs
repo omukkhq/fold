@@ -30,6 +30,59 @@ pub fn lease_start(renewed_at: Timestamp, runs: HolderRuns, now: Timestamp) -> T
     }
 }
 
+/// What one claim of a holder waits for from others, as its lease sees it. The holder makes no calls while it waits, and a person has nothing to do about its claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ClaimWait {
+    /// An implementation claim whose task has an open proposal that waits on reviewers or the integration: not back with its author by requested changes, a conflict or failed checks.
+    pub sent: bool,
+    /// An implementation claim whose task has an ask that waits for a person.
+    pub asks_person: bool,
+    /// An implementation claim whose task has an open report that waits for the lead's check.
+    pub reported: bool,
+    /// A review claim whose holder gave its verdict on the proposal's newest version.
+    pub verdict_given: bool,
+}
+
+impl ClaimWait {
+    pub fn waits_on_others(self) -> bool {
+        self.sent || self.asks_person || self.reported || self.verdict_given
+    }
+}
+
+/// Why a claim's holder waits for others as its lease sees it: the holder makes no calls, and its next move is someone else's. A new kind of wait, such as a turn that waits for the network, is one more field here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HolderWait {
+    /// An agent parked the holder with `stop_worker`'s `wait_for`, and that agent runs.
+    pub parked_by_running_agent: bool,
+    /// Every claim the holder holds waits on others, by [`ClaimWait::waits_on_others`].
+    pub claims_wait_on_others: bool,
+}
+
+impl HolderWait {
+    pub fn waits(self) -> bool {
+        self.parked_by_running_agent || self.claims_wait_on_others
+    }
+}
+
+/// The holder's runs as its lease sees them: while the holder waits for others (see [`HolderWait`]) its lease holds as during a run of its own, and once the wait ends, the lease counts again from the last renewal, which the sweeper made while the wait lasted.
+pub fn holding(runs: HolderRuns, wait: HolderWait) -> HolderRuns {
+    if wait.waits() {
+        HolderRuns::Running
+    } else {
+        runs
+    }
+}
+
+/// Whether a stale claim, marked at `stale_at`, needs a person at `now`: no agent was told of it (`told` is false), or the agent told, the holder's lead or else the main agent, let one more `window_minutes` pass without renewing, releasing or taking over the claim.
+pub fn stale_needs_person(
+    now: Timestamp,
+    stale_at: Timestamp,
+    told: bool,
+    window_minutes: u64,
+) -> bool {
+    !told || is_stale(stale_at, now, window_minutes)
+}
+
 /// A claim lapsed: it is stale by [`is_stale`] counted from [`lease_start`], so a takeover is allowed.
 pub fn is_lapsed(
     renewed_at: Timestamp,
@@ -168,6 +221,83 @@ mod tests {
             lease_start(at(10 * MINUTE), HolderRuns::Running, at(5 * MINUTE)),
             at(10 * MINUTE),
             "a renewal later than now stays"
+        );
+    }
+
+    #[test]
+    fn a_parked_holders_claim_never_lapses_while_the_agent_that_parked_it_runs() {
+        let renewed = at(0);
+        for minutes in [30, 60, 24 * 60] {
+            let now = at(minutes * MINUTE);
+            let held = holding(
+                HolderRuns::None,
+                HolderWait {
+                    parked_by_running_agent: true,
+                    claims_wait_on_others: false,
+                },
+            );
+            assert_eq!(held, HolderRuns::Running);
+            assert!(!is_lapsed(renewed, held, now, 30), "{minutes} min");
+        }
+        assert_eq!(
+            holding(HolderRuns::None, HolderWait::default()),
+            HolderRuns::None
+        );
+        let ended = HolderRuns::Ended { at: at(5) };
+        assert_eq!(holding(ended, HolderWait::default()), ended);
+        assert!(
+            is_lapsed(
+                renewed,
+                holding(HolderRuns::None, HolderWait::default()),
+                at(30 * MINUTE),
+                30
+            ),
+            "once the agent that parked it ends, the lease counts again"
+        );
+    }
+
+    #[test]
+    fn a_claim_that_waits_on_others_never_lapses() {
+        for wait in [
+            ClaimWait {
+                sent: true,
+                ..ClaimWait::default()
+            },
+            ClaimWait {
+                asks_person: true,
+                ..ClaimWait::default()
+            },
+            ClaimWait {
+                reported: true,
+                ..ClaimWait::default()
+            },
+            ClaimWait {
+                verdict_given: true,
+                ..ClaimWait::default()
+            },
+        ] {
+            assert!(wait.waits_on_others(), "{wait:?}");
+            let held = holding(
+                HolderRuns::None,
+                HolderWait {
+                    parked_by_running_agent: false,
+                    claims_wait_on_others: wait.waits_on_others(),
+                },
+            );
+            assert!(!is_lapsed(at(0), held, at(24 * 60 * MINUTE), 30));
+        }
+        assert!(!ClaimWait::default().waits_on_others());
+    }
+
+    #[test]
+    fn a_stale_claim_goes_to_the_lead_first_and_to_a_person_one_window_later() {
+        let stale = at(30 * MINUTE);
+        assert!(!stale_needs_person(stale, stale, true, 5));
+        assert!(!stale_needs_person(at(35 * MINUTE - 1), stale, true, 5));
+        assert!(stale_needs_person(at(35 * MINUTE), stale, true, 5));
+        assert!(
+            stale_needs_person(stale, stale, false, 5),
+            "no agent can act, so a person at once"
         );
     }
 }

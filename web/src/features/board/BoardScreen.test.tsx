@@ -84,7 +84,7 @@ function demoBoard(): Board {
         title: "Review the gate",
         status: "review",
         worker: "backend",
-        attention: [{ kind: "question", closable: true }],
+        attention: [{ kind: "question", closable: true, action: null }],
       }),
       boardCard("T-4", {
         title: "Needs two others",
@@ -107,15 +107,15 @@ function demoBoard(): Board {
           reason: "Auth work",
           set_by: "planner",
         },
-        attention: [{ kind: "human_review", closable: false }],
+        attention: [{ kind: "human_review", closable: false, action: null }],
       }),
       boardCard("T-7", {
         title: "Quiet worker",
         status: "in_progress",
         worker: "backend/db",
         attention: [
-          { kind: "stalled", closable: false },
-          { kind: "stale_claim", closable: false },
+          { kind: "stalled", closable: false, action: null },
+          { kind: "stale_claim", closable: false, action: null },
         ],
       }),
       boardCard("T-8", { status: "done", title: "Older", completed_at: 10 }),
@@ -290,11 +290,9 @@ describe("BoardScreen", () => {
     await screen.findByRole("region", { name: "Backlog" });
     // The chip names the proposal; the activity line waits in the detail panel.
     expect(screen.getByText(wholeText("P-3 changes requested"))).toBeTruthy();
-    expect(screen.queryByText("Editing src/routes/login.tsx")).toBeNull();
+    expect(screen.queryByText("Edited src/routes/login.tsx")).toBeNull();
     const panel = await openPanel("Add the session cookie and sign-out");
-    expect(
-      within(panel).getByText("Editing src/routes/login.tsx"),
-    ).toBeTruthy();
+    expect(within(panel).getByText("Edited src/routes/login.tsx")).toBeTruthy();
     expect(within(panel).getByText("P-3 · changes requested")).toBeTruthy();
   });
 
@@ -450,7 +448,9 @@ describe("BoardScreen", () => {
     expect(screen.queryByText("Stale claim · needs you")).toBeNull();
     const quiet = await openPanel("Quiet worker");
     expect(
-      within(quiet).getByText("Stale claim: the worker's lease ran out."),
+      within(quiet).getByText(
+        "Stale claim: the worker made no fold call for its lease, and its lead did not act or no agent can.",
+      ),
     ).toBeTruthy();
     const review = await openPanel("Needs a person");
     expect(rowText(review, "Human review")).toBe("@tanim");

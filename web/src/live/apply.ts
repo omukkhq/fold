@@ -405,11 +405,12 @@ function invalidationKeys(
     case "checklist":
       return [board, ...taskKey];
     case "claim":
-      // A review claim names its proposal, whose list row and page say whether a reviewer holds it.
+      // A review claim names its proposal, whose list row and page say whether a reviewer holds it. A stale claim that waits for a person is an item of Needs you.
       return [
         board,
         keys.workspaces(slug),
         keys.agents(slug),
+        keys.needsYou(slug),
         ...taskKey,
         ...workspaceKey,
         ...(proposal === null ? [] : [keys.proposals(slug), ...proposalKey]),

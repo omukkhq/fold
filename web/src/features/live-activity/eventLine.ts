@@ -994,6 +994,17 @@ const SPECS: Record<EventType, Spec> = {
     text: (e) => `${workerOf(e)} cannot reach the model`,
   },
   "worker.stalled": { icon: Hand, text: stalledText },
+  "claim.needs_person": {
+    icon: TriangleAlert,
+    text: (e) =>
+      isReview(e)
+        ? `the stale review claim on ${proposalOf(e)} waits for a person`
+        : `the stale claim on ${taskOf(e)} waits for a person`,
+  },
+  "worker.parked": {
+    icon: Pause,
+    text: (e) => `parked ${workerOf(e)} to wait for its go`,
+  },
   "review.plan_created": { icon: Hourglass, text: planCreatedText },
   "review.plan_changed": {
     icon: Hourglass,

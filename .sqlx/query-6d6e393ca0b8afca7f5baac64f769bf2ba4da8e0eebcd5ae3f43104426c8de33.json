@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE claims SET renewed_at = MAX(renewed_at, ?2), stale_at = NULL, stale_needs_person_at = NULL\n         WHERE released_at IS NULL\n           AND worker_id = (SELECT worker_id FROM check_runs WHERE number = ?1 AND stage = 'proposal')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "6d6e393ca0b8afca7f5baac64f769bf2ba4da8e0eebcd5ae3f43104426c8de33"
+}

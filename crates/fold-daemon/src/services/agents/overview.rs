@@ -89,7 +89,7 @@ pub struct WorkerOverview {
     pub proposals: Vec<ProposalSummary>,
 }
 
-/// A claim the worker holds. `stale` is decided by the claim lease alone; a worker that holds a claim but makes no edits is stalled, which is a separate flag. `marked_stale` is the lease sweeper's mark, which the next sweep sets after the lease runs out.
+/// A claim the worker holds. `stale` is decided by the claim lease alone; a worker that holds a claim but makes no edits is stalled, which is a separate flag. `needs_person` says the lease sweeper marked it stale and the agent fold told of it let a window pass, or no agent can act on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClaimSummary {
     pub task: TaskId,
@@ -97,7 +97,7 @@ pub struct ClaimSummary {
     pub acquired_at: Timestamp,
     pub renewed_at: Timestamp,
     pub stale: bool,
-    pub marked_stale: bool,
+    pub needs_person: bool,
 }
 
 /// A task workspace in state `active` or `missing` that the worker owns, read from the workspace row's cached counts.
@@ -197,7 +197,7 @@ impl AgentService {
                     acquired_at: claim.acquired_at,
                     renewed_at: claim.renewed_at,
                     stale: is_stale(claim.renewed_at, now, lease_minutes),
-                    marked_stale: claim.marked_stale,
+                    needs_person: claim.stale_needs_person,
                 });
         }
         let mut workspaces_of: HashMap<i64, Vec<WorkspaceSummary>> = HashMap::new();
@@ -282,14 +282,14 @@ impl AgentService {
     }
 }
 
-/// The board's `stalled` and `stale_claim` items, narrowed to the claim each concerns: `stalled` to the implementation claim, whose workspace the stall job watches, and `stale_claim` to the claim the lease sweeper marked, so another worker's lapsed claim on the same task never shows here.
+/// The board's `stalled` and `stale_claim` items, narrowed to the claim each concerns: `stalled` to the implementation claim, whose workspace the stall job watches, and `stale_claim` to the stale claim that needs a person, so another worker's lapsed claim on the same task never shows here.
 fn agent_attention(workers: &[WorkerOverview], stalled: &BTreeSet<TaskId>) -> Vec<AgentAttention> {
     let mut items = Vec::new();
     for claim in workers.iter().flat_map(|worker| &worker.claims) {
         let kinds = [
             (claim.kind == ClaimKind::Implementation && stalled.contains(&claim.task))
                 .then_some(AttentionKind::Stalled),
-            claim.marked_stale.then_some(AttentionKind::StaleClaim),
+            claim.needs_person.then_some(AttentionKind::StaleClaim),
         ];
         for kind in kinds.into_iter().flatten() {
             let item = AgentAttention {
