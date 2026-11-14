@@ -36,18 +36,25 @@ function isNullableBoolean(value: unknown): boolean {
   return value === null || typeof value === "boolean";
 }
 
-const CHANGE_KINDS: readonly unknown[] = [
-  "added",
-  "modified",
-  "deleted",
-  "renamed",
-] satisfies components["schemas"]["ChangeKind"][];
+/** The keys of a record that names every value of a generated enum, so a value the schema gains and this list lacks fails the type check instead of refusing every frame that carries it. */
+function everyValue<T extends string>(
+  values: Record<T, true>,
+): readonly unknown[] {
+  return Object.keys(values);
+}
 
-const PRESENCE_STATES: readonly unknown[] = [
-  "active",
-  "idle",
-  "offline",
-] satisfies components["schemas"]["PresenceState"][];
+const CHANGE_KINDS = everyValue<components["schemas"]["ChangeKind"]>({
+  added: true,
+  modified: true,
+  deleted: true,
+  renamed: true,
+});
+
+const PRESENCE_STATES = everyValue<components["schemas"]["PresenceState"]>({
+  active: true,
+  idle: true,
+  offline: true,
+});
 
 function isChangedFile(value: unknown): boolean {
   return (
@@ -106,27 +113,30 @@ export function isLiveWorkspace(value: unknown): value is LiveWorkspace {
   );
 }
 
-const ACTIVITY_STATES: readonly unknown[] = [
-  "working",
-  "silent",
-  "long_call",
-  "stopped",
-  "failed",
-  "waits_for_slot",
-] satisfies components["schemas"]["ActivityState"][];
+const ACTIVITY_STATES = everyValue<components["schemas"]["ActivityState"]>({
+  working: true,
+  silent: true,
+  long_call: true,
+  stopped: true,
+  failed: true,
+  waits_for_slot: true,
+  waits_for_network: true,
+  waits_for_usage_limit: true,
+  parked: true,
+});
 
-const CALLS: readonly unknown[] = [
-  "command",
-  "fold",
-  "subagent",
-  "question",
-  "tool",
-] satisfies components["schemas"]["LiveCall"][];
+const CALLS = everyValue<components["schemas"]["LiveCall"]>({
+  command: true,
+  fold: true,
+  subagent: true,
+  question: true,
+  tool: true,
+});
 
-const SLOTS: readonly unknown[] = [
-  "task_worker",
-  "reviewer",
-] satisfies components["schemas"]["LiveSlot"][];
+const SLOTS = everyValue<components["schemas"]["LiveSlot"]>({
+  task_worker: true,
+  reviewer: true,
+});
 
 function isActivity(value: unknown): boolean {
   return (
@@ -137,7 +147,10 @@ function isActivity(value: unknown): boolean {
     typeof value.since === "number" &&
     typeof value.supervised === "boolean" &&
     Array.isArray(value.told) &&
-    value.told.every((name) => typeof name === "string")
+    value.told.every((name) => typeof name === "string") &&
+    // A recorded frame or an older daemon sends no park.
+    (value.parked_by === undefined || isNullableString(value.parked_by)) &&
+    (value.wait_for === undefined || isNullableString(value.wait_for))
   );
 }
 

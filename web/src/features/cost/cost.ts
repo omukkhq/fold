@@ -48,12 +48,25 @@ export function shareText(part: number, total: number): string {
   return `${String(Math.round((part / total) * 100))}%`;
 }
 
-/** `980`, `64.5k` or `1.2M` tokens. */
+/** `980`, `64.5k`, `1.2M`, `2.01B` or `1.25T` tokens: thousands and millions with one decimal, billions and trillions with two. A count that rounds up to 1000 of a unit shows in the next unit, so no text reads `1000.0M`. */
 export function tokensText(count: number): string {
-  if (count < 1000) return String(count);
-  const thousands = Math.round(count / 100) / 10;
-  if (thousands < 1000) return `${thousands.toFixed(1)}k`;
-  return `${(Math.round(count / 100_000) / 10).toFixed(1)}M`;
+  // A count that is not a number, such as one a reply left out, cannot become a BigInt.
+  if (!Number.isFinite(count) || count < 1000) return String(count);
+  // Whole-number arithmetic, as the CLI's, so a count on a rounding edge gives the same text in both.
+  const total = BigInt(Math.round(count));
+  const rounded = (unit: bigint, parts: bigint) =>
+    (total * parts + unit / 2n) / unit;
+  const text = (value: bigint, parts: bigint, suffix: string) => {
+    const decimals = String(value % parts).padStart(parts === 10n ? 1 : 2, "0");
+    return `${String(value / parts)}.${decimals}${suffix}`;
+  };
+  const thousands = rounded(1_000n, 10n);
+  if (thousands < 10_000n) return text(thousands, 10n, "k");
+  const millions = rounded(1_000_000n, 10n);
+  if (millions < 10_000n) return text(millions, 10n, "M");
+  const billions = rounded(1_000_000_000n, 100n);
+  if (billions < 100_000n) return text(billions, 100n, "B");
+  return text(rounded(1_000_000_000_000n, 100n), 100n, "T");
 }
 
 /** `1.2M tokens` and `98.0k output`. */

@@ -16,7 +16,7 @@ const ui = { name: "ui", color: "sage" };
 const data = { name: "data", color: "gold" };
 const main = { name: "main", color: "ink" };
 const attention = (kind: AttentionKind) => [
-  { kind, closable: kind === "question" },
+  { kind, closable: kind === "question", action: null },
 ];
 
 const cards = [

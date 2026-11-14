@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT wait_reason, wait_limit FROM worker_processes WHERE id = ? AND wait_reason IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "wait_reason",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "wait_reason"
+          }
+        }
+      },
+      {
+        "name": "wait_limit",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "wait_limit"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "282a1ff88859498cae88615715eb11eae2328a8e26fb990c538d4c946193614b"
+}

@@ -113,6 +113,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::REVIEW_BATCH_READY,
         types::FOLDER_AGENT_CHANGED,
         types::WORKER_STALLED,
+        types::CLAIM_STALE,
     ]
     .contains(&event.event_type)
 }
@@ -613,6 +614,9 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
     if kind == types::WORKER_STALLED {
         return stall_rule(event);
     }
+    if kind == types::CLAIM_STALE {
+        return stale_claim_rule(event);
+    }
     if let Some(rule) = request_rule(event, ctx) {
         return Some(rule);
     }
@@ -759,6 +763,31 @@ fn stall_rule(event: &Event) -> Option<(Vec<AgentName>, String, &'static str)> {
         _ => return None,
     };
     Some((told, text, next))
+}
+
+/// A claim that went stale goes to the agents fold names in `told`, the holder's lead or else the main agents, as a stall does: they get one stall window to wake, resume, restart or park the holder before a person hears of it.
+fn stale_claim_rule(event: &Event) -> Option<(Vec<AgentName>, String, &'static str)> {
+    let data = &event.data;
+    let worker = data.get("worker")?.as_str()?;
+    let task = event.task?;
+    let told: Vec<AgentName> = data
+        .get("told")?
+        .as_array()?
+        .iter()
+        .filter_map(|name| AgentName::parse(name.as_str()?).ok())
+        .collect();
+    let claim = match event.proposal {
+        Some(proposal)
+            if data.get("kind").and_then(serde_json::Value::as_str) == Some("review") =>
+        {
+            format!("the review claim of {worker} on {proposal}")
+        }
+        _ => format!("the claim of {worker} on {task}"),
+    };
+    let text = format!(
+        "{claim} went stale; send_message resumes it, restart_worker starts it anew, or stop_worker with wait_for parks it"
+    );
+    Some((told, text, "send_message"))
 }
 
 /// A ready task nobody claimed goes to whoever starts its builder. A task of Main goes to the main agent, which claims and builds it itself; the lead of any other area starts a task worker; while the area has no lead, the main agent starts one; a task in no area waits for the main agent to give it an area label. Both an approved request card and a dependent of an integrated task turn ready through `task.status_changed`, so this one rule routes them.
@@ -2015,6 +2044,46 @@ mod tests {
             json!({"agent": longest, "reason": "silent", "minutes": 9_999, "told": ["main"]}),
         );
         assert!(notice_for(&widest, &ctx())[0].text.len() <= MAX_NOTICE_LEN);
+    }
+
+    #[test]
+    fn a_stale_claim_tells_the_agents_the_daemon_named_first() {
+        let stale = |data: serde_json::Value| with_data(event(types::CLAIM_STALE, "fold"), data);
+        let implementation = stale(
+            json!({"kind": "implementation", "worker": "web-worker", "renewed_at": 0, "told": ["web-lead"]}),
+        );
+        assert!(is_pushed(&implementation));
+        assert_eq!(
+            sent(&notice_for(&implementation, &ctx())),
+            vec![row(
+                "web-lead",
+                "fold: the claim of web-worker on T-12 went stale; send_message resumes it, restart_worker starts it anew, or stop_worker with wait_for parks it. Call send_message.",
+                "send_message"
+            )]
+        );
+        let review = with_data(
+            Event {
+                proposal: Some(ProposalId::from_number(4).unwrap()),
+                ..event(types::CLAIM_STALE, "fold")
+            },
+            json!({"kind": "review", "proposal": "P-4", "worker": "review-4", "renewed_at": 0, "told": ["main"]}),
+        );
+        assert!(
+            notice_for(&review, &ctx())[0]
+                .text
+                .starts_with("fold: the review claim of review-4 on P-4 went stale")
+        );
+        let nobody = stale(json!({"kind": "implementation", "worker": "web-worker", "told": []}));
+        assert!(notice_for(&nobody, &ctx()).is_empty());
+        let longest = with_data(
+            Event {
+                task: Some(TaskId::from_number(99_999).unwrap()),
+                proposal: Some(ProposalId::from_number(99_999).unwrap()),
+                ..event(types::CLAIM_STALE, "fold")
+            },
+            json!({"kind": "review", "worker": "w".repeat(32), "told": ["main"]}),
+        );
+        assert!(notice_for(&longest, &ctx())[0].text.len() <= MAX_NOTICE_LEN);
     }
 
     #[test]

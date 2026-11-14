@@ -14,6 +14,7 @@ pub mod report;
 #[path = "../benches/support/targets.rs"]
 pub mod targets;
 
+mod account;
 mod adapter;
 mod agents_section;
 mod bench_support;

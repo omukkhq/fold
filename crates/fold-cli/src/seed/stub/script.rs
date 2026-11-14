@@ -24,6 +24,9 @@ pub struct Turn {
     /// The text the turn ends with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply: Option<String>,
+    /// Ends the turn before its steps in Claude Code's error result with this text and no model call, as a turn that cannot reach the model or reached a usage limit ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// One step. Every string in a step can name a value an earlier call of the same agent saved, as `${name}`. A path is relative to the worker's folder, the project root, and never leaves it.

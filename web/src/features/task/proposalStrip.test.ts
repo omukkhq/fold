@@ -29,7 +29,7 @@ describe("proposalStrip", () => {
         taskView("T-1", {
           status: "in_progress",
           proposal: { ...proposal, checks_failed: true },
-          attention: [{ kind: "human_review", closable: false }],
+          attention: [{ kind: "human_review", closable: false, action: null }],
         }),
       ),
     ).toBeNull();
@@ -69,7 +69,7 @@ describe("proposalStrip", () => {
         taskView("T-1", {
           status: "review",
           proposal,
-          attention: [{ kind: "human_review", closable: false }],
+          attention: [{ kind: "human_review", closable: false, action: null }],
         }),
       ),
     ).toEqual({
@@ -107,7 +107,7 @@ describe("proposalStrip", () => {
             title: "",
             files: 1,
           },
-          attention: [{ kind: "human_review", closable: false }],
+          attention: [{ kind: "human_review", closable: false, action: null }],
         }),
       ),
     ).toMatchObject({

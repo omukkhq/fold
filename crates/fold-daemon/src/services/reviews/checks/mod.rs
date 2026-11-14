@@ -710,7 +710,8 @@ pub(super) async fn end_run_in_tx(
     if !checks::finish_run(tx, run.id, verdict.state, verdict.reason, now).await? {
         return Ok(false);
     }
-    claims::renew_for_run(tx, run.id, now).await?;
+    let renewal = claims::renew_for_run(tx, run.id, now).await?;
+    crate::services::tasks::append_renewed::<ReviewError>(tx, buffer, &renewal, now).await?;
     let mut event = NewEvent::new(types::CHECKS_FINISHED, EventActor::fold())?
         .task(run.task)
         .revision(run.base);

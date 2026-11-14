@@ -103,6 +103,8 @@
   --width-switcher: 128px;
   /* The smallest width of the text box after the chips of a label field, so its placeholder stays whole. */
   --width-label-input: 96px;
+  /* The opener of a usage limit's Switch account control: one width for its own words and a chosen account, cut, so choosing never moves the control. */
+  --width-switch-account: 184px;
 }
 
 :root {

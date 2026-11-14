@@ -8,10 +8,12 @@ use clap::{Args, ValueEnum};
 use fold_cli::claude_files;
 use fold_cli::claude_user::{self, UserFiles};
 use fold_cli::daemon_client::{self, ClientError, DaemonClient, Response};
+use fold_core::accounts::{ACCOUNT_ENV, AccountName, AccountToken, OAUTH_TOKEN_ENV};
 use fold_core::layout::{MCP_COMMAND, session_settings};
 use fold_core::roles::{Role, needs_update_note, update_note};
 use fold_core::transcript::{claude_config_dir, is_session_id};
 use fold_core::{AgentName, FoldError, MAIN_TAG, ProjectConfig, ProjectPaths, codes};
+use fold_daemon::services::agents::accounts;
 use fold_daemon::services::agents::claude::transcript_path;
 use fold_daemon::services::agents::new_session_id;
 use fold_daemon::services::projects::{ProjectError, load_config, registration_for_dir_on_host};
@@ -151,13 +153,17 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
     let socket = args.socket.is_some().then(|| config.socket.clone());
     let human = crate::fold_name::current();
     let runtime = serve::current_thread_runtime().map_err(ClaudeError::Runtime)?;
-    let root = runtime.block_on(async {
+    let (root, account) = runtime.block_on(async {
         let found = registration_for_dir_on_host(&host, &cwd).await?;
         let slug = found.row.slug;
         let root = PathBuf::from(found.row.root);
         // Before the daemon starts, so a refused start runs nothing. A config that fold cannot read stops no session here; the daemon reports it where it reads it.
+        let mut account = None;
         if let Ok(project) = load_config(&ProjectPaths::new(&root)).await {
             not_supervised(&project)?;
+            if let Some(name) = &project.account {
+                account = Some(project_account(&host, name)?);
+            }
         }
         daemon_client::connect(&config).await?;
         // The daemon's open route notes that a person uses the project, which orders the recent projects of the web interface, and brings a project a person removed back into fold.
@@ -179,7 +185,7 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
             let path = format!("/api/v1/projects/{slug}/agents");
             main_is_free(&client.request(Method::GET, &path, None).await?, &agent)?;
         }
-        Ok::<_, ClaudeError>(root)
+        Ok::<_, ClaudeError>((root, account))
     })?;
     drop(runtime);
     // A daemon that already runs opened the project before this binary may have changed, so the main agent's session writes the skills its prompt names too. A refused write only warns: the session starts with the skills the folder holds.
@@ -250,6 +256,7 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
         first_turn.as_deref(),
         socket.as_deref(),
         own.as_ref(),
+        account.as_ref(),
     )
     .exec();
     // The session never took the note, so the next start sends it again.
@@ -422,6 +429,7 @@ fn command(
     first_turn: Option<&str>,
     socket: Option<&Path>,
     own: Option<&OwnSetup>,
+    account: Option<&(AccountName, AccountToken)>,
 ) -> Command {
     let mut command = Command::new(claude);
     // Before `--name`, which ends the list of `--mcp-config`, so that it never takes a word of the user's own arguments.
@@ -451,7 +459,24 @@ fn command(
     if let Some(socket) = socket {
         command.env(serve::SOCKET_ENV, socket);
     }
+    // Only on this command, never on fld's own environment: the daemon that this process starts must not take the project's token for every project.
+    if let Some((name, token)) = account {
+        command
+            .env(OAUTH_TOKEN_ENV, token.expose())
+            .env(ACCOUNT_ENV, name.as_str());
+    }
     command
+}
+
+/// The name and token of the project's account `name`, refused when the host has no such account: the session would otherwise run on Claude Code's own login, another subscription than the project chose.
+fn project_account(
+    host: &fold_core::HostPaths,
+    name: &AccountName,
+) -> Result<(AccountName, AccountToken), ClaudeError> {
+    match accounts::token(&host.accounts_dir(), name)? {
+        Some((_, token)) => Ok((name.clone(), token)),
+        None => Err(accounts::not_found(name).into()),
+    }
 }
 
 /// The fold server, the fold tools' permission and fold's hooks as `claude` flags, for a session of a user whose own Claude Code configuration lacks a part of fold's setup, so that the main agent has its tools all the same. The values are JSON text, which Claude Code takes in place of a file. A part the user's configuration holds is not passed again: Claude Code defines no order between a `--mcp-config` server and a configured one of the same name, and settings add nothing to a user's settings that already allow the fold tools and run fold's hooks.
@@ -889,6 +914,7 @@ mod tests {
             Some("Load the skill."),
             None,
             None,
+            None,
         )
         .get_args()
         .map(ToOwned::to_owned)
@@ -993,6 +1019,7 @@ mod tests {
             None,
             None,
             Some(&own),
+            None,
         );
         let args: Vec<_> = command.get_args().collect();
         assert_eq!(
@@ -1024,6 +1051,7 @@ mod tests {
             None,
             None,
             Some(&settings_held),
+            None,
         )
         .get_args()
         .map(ToOwned::to_owned)
@@ -1049,6 +1077,72 @@ mod tests {
     }
 
     #[test]
+    fn the_projects_account_reaches_only_the_claude_command_and_never_its_arguments() {
+        let agent = AgentName::parse("main").unwrap();
+        let token =
+            fold_core::accounts::check_token("sk-ant-oat01-aaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let account = (AccountName::parse("work-a").unwrap(), token);
+        let with = command(
+            Path::new("claude"),
+            Path::new("/src/app"),
+            &agent,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            Some(&account),
+        );
+        let env: Vec<(String, Option<String>)> = with
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        let given = env
+            .iter()
+            .find(|(key, _)| key == OAUTH_TOKEN_ENV)
+            .and_then(|(_, value)| value.as_deref());
+        assert!(
+            given == Some(account.1.expose()),
+            "the token is in the environment"
+        );
+        assert!(env.contains(&(ACCOUNT_ENV.to_owned(), Some("work-a".to_owned()))));
+        assert!(
+            !with
+                .get_args()
+                .any(|arg| arg.to_string_lossy().contains(account.1.expose())),
+            "no argument holds the token"
+        );
+        let without = command(
+            Path::new("claude"),
+            Path::new("/src/app"),
+            &agent,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(
+            !without
+                .get_envs()
+                .any(|(key, _)| key == OAUTH_TOKEN_ENV || key == ACCOUNT_ENV),
+            "without an account fold leaves the login as it is"
+        );
+        let host = fold_core::HostPaths::new(Some("/nowhere-fold-test"), None).unwrap();
+        let missing = project_account(&host, &account.0).unwrap_err();
+        assert_eq!(missing.code(), Some(codes::ACCOUNT_NOT_FOUND));
+        assert!(missing.hint().unwrap().contains("fld account add work-a"));
+    }
+
+    #[test]
     fn claude_runs_in_the_root_with_the_name_and_the_main_tag() {
         let agent = AgentName::parse("main").unwrap();
         let extra = [OsString::from("--model"), OsString::from("opus")];
@@ -1059,6 +1153,7 @@ mod tests {
             Some(&Start::Resume(ID.to_owned())),
             Some(Path::new("/src/app/.fold/sessions/prompt.md")),
             &extra,
+            None,
             None,
             None,
             None,
@@ -1087,6 +1182,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let args: Vec<_> = own.get_args().collect();
         assert_eq!(args, ["--name", "main", "-c"]);
@@ -1099,6 +1195,7 @@ mod tests {
             &extra,
             None,
             Some(Path::new("/run/by-hand.sock")),
+            None,
             None,
         );
         assert_eq!(command.get_program(), "claude");

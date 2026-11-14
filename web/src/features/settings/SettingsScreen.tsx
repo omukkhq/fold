@@ -16,6 +16,7 @@ import { Mono } from "@/components/mono/Mono";
 import { FailurePanel } from "@/components/states/FailurePanel";
 import { Skeleton } from "@/components/states/Skeleton";
 import { ErrorNote } from "../workers/parts";
+import { AccountPanel } from "./AccountPanel";
 import {
   checkWebUrl,
   hostTargetsHint,
@@ -208,13 +209,15 @@ export function SettingsScreen({ slug }: { slug: string }) {
             Settings
           </h1>
           <p className="max-w-measure text-15 text-text-2">
-            fold sends a notice to a webhook, Slack or Discord when something on
-            the project changes. A notice names ids, titles, columns and links,
+            The Claude account the project's workers run with, and where fold
+            sends a notice to a webhook, Slack or Discord when something on the
+            project changes. A notice names ids, titles, columns and links,
             never a message, a review text or a diff.
           </p>
           {canWrite ? null : (
             <p className="max-w-measure text-15 text-text-2">
-              Sign in as a person first: only a person changes where notices go.
+              Sign in as a person first: only a person changes the account and
+              where notices go.
             </p>
           )}
         </div>
@@ -227,6 +230,12 @@ export function SettingsScreen({ slug }: { slug: string }) {
             }}
           />
         ) : null}
+        <Section
+          title="Claude account"
+          text="The subscription of every worker fold runs for this project and of the main agent that fld claude starts. fld account add puts an account on this host; its token never leaves the host."
+        >
+          <AccountPanel slug={slug} canWrite={canWrite} className={PANEL} />
+        </Section>
         <Section
           title="Notices"
           text={

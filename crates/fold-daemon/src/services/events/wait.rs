@@ -90,7 +90,7 @@ impl EventService {
         self.start_wait(worker, None, Wakes::default(), query).await
     }
 
-    /// [`EventService::wait`] for `worker`, which a new message it receives and did not send itself also ends, whatever the filter says: a notice that fold pushes into a session waits there until the tool call returns. For the main agent and an area lead, a request that another agent created or released and that waits for a drafter ends it too: the push of `request.created` reaches a session only once its tool call returns, so a lead that waits for something else would see the request only at the end of its wait. A `worker.stalled` that names the agent among those fold told ends it for the same reason, so the lead hears of a stall before a person does.
+    /// [`EventService::wait`] for `worker`, which a new message it receives and did not send itself also ends, whatever the filter says: a notice that fold pushes into a session waits there until the tool call returns. For the main agent and an area lead, a request that another agent created or released and that waits for a drafter ends it too: the push of `request.created` reaches a session only once its tool call returns, so a lead that waits for something else would see the request only at the end of its wait. A `worker.stalled` or a `claim.stale` that names the agent among those fold told ends it for the same reason, so the lead hears of a stall or a stale claim before a person does.
     pub async fn wait_as(
         &self,
         worker: &WorkerRow,
@@ -252,7 +252,7 @@ impl EventService {
                     || stall
                     || filter.matches(event)
                     || !(DRAFTER_WANTED.contains(&event.event_type)
-                        || event.event_type == types::WORKER_STALLED)
+                        || TOLD.contains(&event.event_type))
             })
             .collect();
         Ok(WaitPage {
@@ -271,7 +271,7 @@ impl EventService {
 struct Wakes {
     /// The agent of an orchestrator's wait, which a request it could claim also ends.
     claimant: Option<AgentName>,
-    /// The agent of an agent's wait, which a stall that fold told it of also ends.
+    /// The agent of an agent's wait, which a stall or a stale claim that fold told it of also ends.
     told: Option<AgentName>,
 }
 
@@ -282,7 +282,7 @@ impl Wakes {
             woken.extend(DRAFTER_WANTED);
         }
         if self.told.is_some() {
-            woken.push(types::WORKER_STALLED);
+            woken.extend(TOLD);
         }
         woken
     }
@@ -297,9 +297,12 @@ impl Wakes {
     }
 }
 
-/// `event` is a `worker.stalled` whose `told` names `agent`.
+/// The events that tell agents of a worker to act on in `told`: a stall, and a claim that went stale.
+const TOLD: [fold_core::EventType; 2] = [types::WORKER_STALLED, types::CLAIM_STALE];
+
+/// `event` is a `worker.stalled` or a `claim.stale` whose `told` names `agent`.
 fn tells_of_stall(event: &Event, agent: &AgentName) -> bool {
-    event.event_type == types::WORKER_STALLED
+    TOLD.contains(&event.event_type)
         && event
             .data
             .get("told")

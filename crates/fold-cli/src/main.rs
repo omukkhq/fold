@@ -106,6 +106,8 @@ enum Command {
     #[cfg(feature = "dev-seed")]
     #[command(hide = true)]
     Dev(seed::DevArgs),
+    /// Keep the Claude subscriptions that the projects' workers run with: add one with the token of claude setup-token on stdin, list, remove, and use one for the project in this folder
+    Account(commands::account::AccountArgs),
 }
 
 /// clap prints a parse outcome, including `--help` and `--version`, and exits with its own code; a failed write is a runtime error with exit code 1.
@@ -126,6 +128,7 @@ enum Failure {
     Remote(commands::remote::RemoteError),
     #[cfg(feature = "dev-seed")]
     Seed(seed::SeedError),
+    Account(commands::account::AccountError),
 }
 
 fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result<(), Failure> {
@@ -226,6 +229,14 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::Dev(args)) => {
             seed::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Seed)
         }
+        Some(Command::Account(args)) => {
+            use std::io::IsTerminal as _;
+            // Not locked here: the project's lookup for `use` may read the terminal on another thread.
+            let mut stdin = std::io::stdin();
+            let terminal = stdin.is_terminal();
+            commands::account::run(&args, &serve::Dirs::from_env(), &mut stdin, terminal, out)
+                .map_err(Failure::Account)
+        }
         None => status::run(out).map_err(Failure::Write),
     }
 }
@@ -268,6 +279,7 @@ coded!(commands::gc::GcError, hint);
 coded!(commands::remote::RemoteError, hint);
 #[cfg(feature = "dev-seed")]
 coded!(seed::SeedError, hint);
+coded!(commands::account::AccountError, hint);
 
 /// The error and every cause in its chain that its own message does not already hold, joined with `: `. Most of the CLI's errors name their cause in their message, which the chain would print a second time.
 fn message_with_causes(error: &dyn std::error::Error) -> String {
@@ -320,6 +332,7 @@ fn main() -> anyhow::Result<()> {
         Err(Failure::Remote(error)) => Err(failure_message(&error)),
         #[cfg(feature = "dev-seed")]
         Err(Failure::Seed(error)) => Err(failure_message(&error)),
+        Err(Failure::Account(error)) => Err(failure_message(&error)),
     }
 }
 

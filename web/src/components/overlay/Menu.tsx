@@ -23,6 +23,8 @@ interface MenuProps {
   trigger: ReactNode;
   items: MenuItem[];
   align?: "start" | "center" | "end";
+  /** Makes the list at least as wide as its trigger, so it reads as the trigger's own dropdown; it still grows to its rows up to the room in the window. */
+  minTriggerWidth?: boolean;
 }
 
 /** The room Radix measures stops short of the window edge, so the last item of a long menu never touches it. */
@@ -46,7 +48,12 @@ function ItemBody({ item }: { item: MenuItem }) {
   );
 }
 
-export function Menu({ trigger, items, align = "start" }: MenuProps) {
+export function Menu({
+  trigger,
+  items,
+  align = "start",
+  minTriggerWidth = false,
+}: MenuProps) {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
@@ -58,6 +65,7 @@ export function Menu({ trigger, items, align = "start" }: MenuProps) {
           className={cn(
             menuContent,
             "w-max max-w-(--radix-dropdown-menu-content-available-width)",
+            minTriggerWidth && "min-w-(--radix-dropdown-menu-trigger-width)",
           )}
         >
           {items.map((item) => {

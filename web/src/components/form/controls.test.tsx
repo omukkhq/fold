@@ -86,6 +86,9 @@ describe("Select", () => {
     const select = screen.getByRole("combobox", { name: "Agent" });
     expect(ref.current).toBe(select);
     expect(select.getAttribute("aria-describedby")).not.toBeNull();
+    expect(select.className).toContain("appearance-none");
+    expect(select.className).toContain("pr-40");
+    expect(select.parentElement?.querySelector("svg")).not.toBeNull();
   });
 });
 

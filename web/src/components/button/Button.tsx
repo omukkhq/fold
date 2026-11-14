@@ -61,11 +61,16 @@ export function Button({
       className={cn(buttonClasses(variant, size), focusRing, className)}
     >
       {pending || icon ? (
-        <span className={buttonIconClass(variant)}>
+        <span className={cn(buttonIconClass(variant), "shrink-0")}>
           {pending ? <Spinner size={size} /> : icon}
         </span>
       ) : null}
-      {controlLabel(children, pending, pendingLabel)}
+      {pending ? (
+        // A pending label can be longer than the idle one, so in a button of fixed width it ends in an ellipsis instead of being cut.
+        <span className="min-w-0 truncate">{pendingLabel}</span>
+      ) : (
+        children
+      )}
     </button>
   );
 }

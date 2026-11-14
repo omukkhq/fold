@@ -9,9 +9,11 @@ type LiveCall = components["schemas"]["LiveCall"];
 export interface WorkerActivity {
   /** The state the daemon decided, which the chip draws its icon from. */
   state: LiveActivity["state"];
-  /** `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed` or `Waiting for a free slot`. */
+  /** `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed`, `Waiting for a free slot`, `Waiting for the network`, `Waits for the usage limit reset` or `Waits for @web-lead's go`. */
   text: string;
-  /** Silent, a call that ran long, or a process that failed: someone must act. Work in progress, a process that was stopped on purpose and a resume that waits for a free slot are never a stall. */
+  /** What a parked worker waits for, in the words of the agent that parked it; null for every other state. */
+  waitFor: string | null;
+  /** Silent, a call that ran long, or a process that failed: someone must act. Work in progress, a process that was stopped on purpose, a resume that waits for a free slot, a turn that waits for the network or a usage limit, which fold runs again, and a wait for a lead's go are never a stall. */
   stall: boolean;
   /** The stall waits for a person: fold told the lead and it lasted one more window, or no agent can act. */
   needsYou: boolean;
@@ -33,6 +35,25 @@ const WORKING: Readonly<Record<LiveCall, string>> = {
 
 /** One text for task workers and reviewers: the board's column says which place the worker waits for. */
 const SLOT_WAIT = "Waiting for a free slot";
+
+/** A turn that could not reach the model, which fold runs again once the model answers. */
+export const NETWORK_WAIT = "Waiting for the network";
+
+/** A turn that reached a usage limit, which fold runs again after the reset. */
+export const USAGE_LIMIT_WAIT = "Waits for the usage limit reset";
+
+/** `Waits for @web-lead's go`: the agent that parked the worker gives the go. */
+export function parkedText(parkedBy: string | null): string {
+  return parkedBy === null
+    ? "Waits for its lead's go"
+    : `Waits for @${parkedBy}'s go`;
+}
+
+/** `waits for @web-lead's go`, after the worker's name. */
+export function parkedVerb(parkedBy: string | null): string {
+  const text = parkedText(parkedBy);
+  return `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+}
 
 const LONG: Readonly<Record<LiveCall, string>> = {
   command: "A command",
@@ -68,10 +89,16 @@ export function activityText(
       return `${who} failed`;
     case "waits_for_slot":
       return SLOT_WAIT;
+    case "waits_for_network":
+      return NETWORK_WAIT;
+    case "waits_for_usage_limit":
+      return USAGE_LIMIT_WAIT;
+    case "parked":
+      return parkedText(activity.parked_by ?? null);
   }
 }
 
-/** What fold saw, after the worker's name: `running a command for 8 min`, `no activity for 12 min`, `a command has run for 25 min`, `stopped`, `failed` or `waiting for a free slot`. */
+/** What fold saw, after the worker's name: `running a command for 8 min`, `no activity for 12 min`, `a command has run for 25 min`, `stopped`, `failed`, `waiting for a free slot`, `waiting for the network`, `waits for the usage limit reset` or `waits for @web-lead's go`. */
 export function activityVerb(activity: LiveActivity, now: number): string {
   const time = formatAge(now, activity.since);
   switch (activity.state) {
@@ -91,14 +118,20 @@ export function activityVerb(activity: LiveActivity, now: number): string {
       return "failed";
     case "waits_for_slot":
       return "waiting for a free slot";
+    case "waits_for_network":
+      return "waiting for the network";
+    case "waits_for_usage_limit":
+      return "waits for the usage limit reset";
+    case "parked":
+      return parkedVerb(activity.parked_by ?? null);
   }
 }
 
-/** Whether `state` needs someone to act: work, a stop that someone asked for, such as a person's Stop or a pause, and a wait for a free slot never do. */
-export function isStall(state: LiveActivity["state"]): boolean {
-  return (
-    state !== "working" && state !== "stopped" && state !== "waits_for_slot"
-  );
+/** The states that need someone to act: a silence, a call that ran long and a process that failed. Work, a stop that someone asked for, such as a person's Stop or a pause, a wait for a free slot, the waits for the network or a usage limit, which fold ends itself, and a wait for a lead's go never do, and neither does a state this build does not know. */
+const STALLS: ReadonlySet<string> = new Set(["silent", "long_call", "failed"]);
+
+export function isStall(state: string): boolean {
+  return STALLS.has(state);
 }
 
 /** The worker's activity in `live`, or null while there is nothing to say. */
@@ -118,6 +151,7 @@ export function workerActivity(
   return {
     state: activity.state,
     text: activityText(activity, live.worker, now),
+    waitFor: activity.state === "parked" ? (activity.wait_for ?? null) : null,
     stall,
     needsYou,
     // The lead fold told gets one stall window to restart the worker itself; only then does a person get the button.
@@ -127,8 +161,12 @@ export function workerActivity(
   };
 }
 
-/** `fold told @web-lead`, or that no agent can act; null while the worker works. */
+/** `fold told @web-lead`, or that no agent can act; for a parked worker, what it waits for and who resumes it; null while the worker works. */
 export function toldText(activity: WorkerActivity): string | null {
+  if (activity.state === "parked") {
+    const what = activity.waitFor === null ? "" : `: ${activity.waitFor}`;
+    return `Stopped to wait${what}. The go resumes it in its session; nobody else needs to act`;
+  }
   if (!activity.stall) {
     return null;
   }

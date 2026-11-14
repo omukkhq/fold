@@ -12,6 +12,7 @@ import type {
 } from "@/api/workers";
 import type { WorkerSteps } from "@/live/apply";
 import { type SessionView, sessionView } from "./session";
+import { waitWords } from "@/live/turnWaits";
 
 /** The look of a state pill; each tone has its soft fill, dot and text colour. */
 export type PillTone =
@@ -79,6 +80,19 @@ export function isPausedWorker(state: WorkerState, paused: boolean): boolean {
 }
 
 const PAUSED_PILL: StatePill = { label: "paused", tone: "paused" };
+
+/** An idle worker whose turn waits for the network or a usage limit, which fold runs again itself: neutral, as idle. */
+const WAITING_PILL: StatePill = { label: "waiting", tone: "idle" };
+
+/** A parked worker waits for its lead's go in the neutral tone of a stop: nobody else needs to act. */
+const PARKED_PILL: StatePill = { label: "parked", tone: "stopped" };
+
+/** `waits for @web-lead's go: my go after the T-288 migration`, the step of a parked worker. */
+export function parkedStep(
+  parked: NonNullable<WorkerProcess["parked"]>,
+): string {
+  return `waits for @${parked.by}'s go: ${parked.wait_for}`;
+}
 
 /** The interactive main agent has no process fold runs; its pill is the agent's presence. */
 export function mainPill(presence: AgentView["presence"]): StatePill {
@@ -151,6 +165,8 @@ export interface RowError {
   text: string;
   /** The daemon's hint, with its commands between backticks; null when the worker still reaches the model. */
   hint: string | null;
+  /** The turn waits for the network or a usage limit, which fold runs again itself: no failure, so the row draws it in the neutral tone. */
+  waits: boolean;
 }
 
 /** The hover text of a step the row may cut: its tool and its sentence; null for a step with no sentence, which the row never cuts. */
@@ -164,13 +180,22 @@ export function errorHoverText(error: RowError): string {
   return `${error.title}: ${error.text}`;
 }
 
-/** The row's error line; null for a worker whose last turn ended without an error. */
+/** The row's error line; null for a worker whose last turn ended without an error. A turn that waits for the network or a usage limit names the wait, which fold ends itself. */
 export function rowError(worker: WorkerProcess): RowError | null {
   if (worker.last_error === null) return null;
+  if (worker.waits_for !== null) {
+    return {
+      title: waitWords(worker.waits_for),
+      text: worker.last_error,
+      hint: null,
+      waits: true,
+    };
+  }
   return {
     title: worker.model_unreachable ? "cannot reach the model" : "last error",
     text: worker.last_error,
     hint: worker.hint,
+    waits: false,
   };
 }
 
@@ -485,7 +510,28 @@ function workerRow(
       restart: false,
     };
   }
+  if (worker.parked !== null && !isRunning(worker.state)) {
+    return {
+      ...runningRow(worker, input, child),
+      pill: PARKED_PILL,
+      step: sentence(parkedStep(worker.parked)),
+      // A new session would lose what the worker keeps for its go; the go resumes it in its own session.
+      restart: false,
+    };
+  }
+  if (worker.waits_for !== null && worker.state === "idle") {
+    // One word, as every state pill, keeps the name whole on a phone; the step under it says what the turn waits for, from the error line when Claude Code's message is there.
+    return {
+      ...runningRow(worker, input, child),
+      pill: WAITING_PILL,
+      step: sentence(waitWords(worker.waits_for)),
+    };
+  }
   return runningRow(worker, input, child);
+}
+
+function isRunning(state: WorkerState): boolean {
+  return state !== "stopped" && state !== "failed" && state !== "stopping";
 }
 
 function runningRow(

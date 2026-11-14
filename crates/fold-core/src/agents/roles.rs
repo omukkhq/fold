@@ -201,9 +201,12 @@ pub fn needs_restart(reason: &str) -> bool {
     reason == MCP_UNAVAILABLE || reason == FLD_MISSING || reason == CLAUDE_NOT_FOUND
 }
 
-/// What a human does about a failure that [`needs_restart`] accepts; `None` for any other reason.
+/// What a human does about a failure that [`needs_restart`] accepts, or about a worker that could not start with the project's account; `None` for any other reason.
 pub fn restart_hint(reason: &str) -> Option<&'static str> {
     match reason {
+        codes::ACCOUNT_NOT_FOUND | codes::ACCOUNTS_IO => Some(
+            "the project's account is missing or its token cannot be read: run `fld account add <name>` (or `fld account update <name>`) with the token on stdin, or choose another account with `fld account use <name>` or in the project's Settings, or sign in with `claude login` and run `fld account use default`, then message the worker to resume it in its session",
+        ),
         MCP_UNAVAILABLE => Some("run `fld restart`; the daemon then resumes the worker"),
         FLD_MISSING => Some(
             "install fld and run `fld restart`; the daemon then resumes the worker, or an agent resumes it with `resume_worker`",
@@ -631,6 +634,14 @@ mod tests {
                 .is_some_and(|hint| hint.contains("fld restart") && hint.contains("fld doctor"))
         );
         assert_eq!(restart_hint("exited"), None);
+        for reason in [codes::ACCOUNT_NOT_FOUND, codes::ACCOUNTS_IO] {
+            assert!(!needs_restart(reason), "{reason}");
+            assert!(
+                restart_hint(reason)
+                    .unwrap()
+                    .contains("fld account add <name>")
+            );
+        }
     }
 
     #[test]

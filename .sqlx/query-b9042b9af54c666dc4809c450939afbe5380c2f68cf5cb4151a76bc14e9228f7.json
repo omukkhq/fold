@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE claims SET stale_needs_person_at = ?2\n         WHERE id IN (SELECT value FROM json_each(?1))\n           AND released_at IS NULL AND stale_at IS NOT NULL AND stale_needs_person_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "b9042b9af54c666dc4809c450939afbe5380c2f68cf5cb4151a76bc14e9228f7"
+}

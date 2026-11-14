@@ -4,6 +4,9 @@ use fold_core::requests::{RequestState, Requester};
 use fold_core::reviews::checks::CHECKS_FILE;
 use fold_core::roles::{CLAUDE_NOT_FOUND, restart_hint};
 use fold_core::turn_errors::{MODEL_UNREACHABLE_HINT, model_unreachable};
+use fold_core::turn_waits::{
+    LIMIT_WAIT_HINT, LimitKind, NETWORK_WAIT_HINT, WaitReason, shows_wait,
+};
 use fold_core::{
     AddressedAs, AgentName, Choice, HumanName, MessageId, PermissionQuestionId, ProposalId,
     RequestId, Sender, Target, TaskId, Timestamp, WorkerState,
@@ -16,6 +19,8 @@ use fold_store::{Store, StoreError, messages};
 
 use crate::live::{LiveActivity, LiveState};
 use crate::services::reviews::awaiting_human_review;
+use crate::services::tasks::PersonAction;
+use fold_store::tasks::claims::{self, ClaimForPerson, ClaimTarget};
 
 /// What waits for a human.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,9 +47,9 @@ pub enum NeedsYouKind {
     UnstashConflicted,
     /// The checks file on main is not valid, so fold holds the integrations of proposals until a revision of main fixes it; `title` states the file, the line and the problem, and `paths` names the file.
     ChecksFileInvalidOnMain,
-    /// A worker failed because it cannot reach fold: its fold MCP server did not connect, or the fld binary it would start is gone. A new start fails the same way until the daemon runs the installed fld, so `reason` names `fld restart`, after which the daemon start resumes the worker once fld is there; the item ends when the worker runs again, through that resume or through `resume_worker`.
+    /// A worker failed because it cannot reach fold: its fold MCP server did not connect, or the fld binary it would start is gone. A new start fails the same way until the daemon runs the installed fld, so `reason` names `fld restart`, after which the daemon start resumes the worker once fld is there; the item ends when the worker runs again, through that resume or through `resume_worker`. The same kind holds a worker that could not start because the project's account is missing or its token cannot be read: `reason` names `fld account add` or another account, then a message that resumes the worker.
     WorkerUnreachable,
-    /// A worker's turns failed [`fold_core::turn_errors::MODEL_UNREACHABLE_TURNS`] times in a row before any token reached the model, so it does no work until a human fixes what Claude Code needs, such as its sign-in: `title` holds Claude Code's error and `reason` what to check. The item ends when a turn of the worker reaches the model, with or without an error, or when the worker is stopped. A worker whose process failed cannot be stopped, so it keeps the item until `resume_worker` runs it again and a turn reaches the model; a start that runs a stopped worker again shows the item again until then.
+    /// A worker's turns failed [`fold_core::turn_errors::MODEL_UNREACHABLE_TURNS`] times in a row before any token reached the model, so it does no work until a human fixes what Claude Code needs, such as its sign-in: `title` holds Claude Code's error and `reason` what to check. The same kind without an `agent` is the project's one item for the turns that could not reach the model at all: `agents` names the workers whose turn waits, `title` holds Claude Code's newest error and `reason` says that fold runs each turn again once the model answers, which ends the item. The item ends when a turn of the worker reaches the model, with or without an error, or when the worker is stopped. A worker whose process failed cannot be stopped, so it keeps the item until `resume_worker` runs it again and a turn reaches the model; a start that runs a stopped worker again shows the item again until then.
     WorkerModelUnreachable,
     /// A worker failed because the daemon found no `claude` on the `PATH` it gives workers. The daemon reads that `PATH` from the user's login shell at its start, so `reason` names `fld restart`, after which the daemon start resumes the worker; the item ends when the worker runs again.
     ClaudeNotFound,
@@ -56,6 +61,19 @@ pub enum NeedsYouKind {
     SharedChanged,
     /// A worker's stall that fold told its lead, or else the main agent, of and that lasted one more stall window, or that no agent can act on: `agent` names the worker, `task` its task, `activity` what fold saw and `reason` what the human does. It lives in memory, as the stall does, and ends when the worker works again.
     WorkerStalled,
+    /// Turns of the project's workers reached the usage limit `limit`, one item per limit: `agents` names the workers whose turn waits, `title` holds Claude Code's newest message, `reset` its wording of the reset and `resets_at` the reset instant when the message gives one, `reason` what fold does and `actions` what the human can do. fold runs each turn again after the reset; the item ends when no turn waits for the limit.
+    UsageLimit,
+    /// A claim went stale: its holder made no fold call for the lease, fold told the holder's lead, or else the main agent, and one more stall window passed without a renewal, or no agent can act on it. `agent` names the holder, `task` its task, `proposal` the proposal of a review claim, `action` and `reason` what the human does. The item ends when the holder renews the claim, which any of its fold calls does, or when the claim is released or taken over.
+    StaleClaim,
+}
+
+/// What a human can do about an item from the item itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NeedsYouAction {
+    /// Pause every agent of the project.
+    Pause,
+    /// Make another of the host's accounts the project's, which runs the waiting turns again on it.
+    SwitchAccount(fold_core::accounts::AccountName),
 }
 
 /// The screen on which a human answers an item.
@@ -92,6 +110,8 @@ impl NeedsYouKind {
             NeedsYouKind::AgentChange => "agent_change",
             NeedsYouKind::SharedChanged => "shared_changed",
             NeedsYouKind::WorkerStalled => "worker_stalled",
+            NeedsYouKind::UsageLimit => "usage_limit",
+            NeedsYouKind::StaleClaim => "stale_claim",
         }
     }
 
@@ -101,9 +121,10 @@ impl NeedsYouKind {
             NeedsYouKind::Permission => Screen::Worker,
             NeedsYouKind::HumanReview => Screen::Proposal,
             NeedsYouKind::RequestDraft => Screen::Request,
-            NeedsYouKind::HumanTask | NeedsYouKind::Blocker | NeedsYouKind::WorkerStalled => {
-                Screen::Task
-            }
+            NeedsYouKind::HumanTask
+            | NeedsYouKind::Blocker
+            | NeedsYouKind::WorkerStalled
+            | NeedsYouKind::StaleClaim => Screen::Task,
             NeedsYouKind::HumanChange
             | NeedsYouKind::HeadMoved
             | NeedsYouKind::FolderHeld
@@ -113,7 +134,8 @@ impl NeedsYouKind {
             | NeedsYouKind::SharedChanged => Screen::Repository,
             NeedsYouKind::WorkerUnreachable
             | NeedsYouKind::WorkerModelUnreachable
-            | NeedsYouKind::ClaudeNotFound => Screen::Worker,
+            | NeedsYouKind::ClaudeNotFound
+            | NeedsYouKind::UsageLimit => Screen::Worker,
             NeedsYouKind::NotifyTargetOff => Screen::Settings,
         }
     }
@@ -163,6 +185,18 @@ pub struct NeedsYouItem {
     pub agents: Vec<AgentName>,
     /// What fold saw of the worker of a `WorkerStalled`.
     pub activity: Option<LiveActivity>,
+    /// The limit of a `UsageLimit`.
+    pub limit: Option<LimitKind>,
+    /// Claude Code's wording of the reset of a `UsageLimit`, such as `1:50am (Asia/Tokyo)`.
+    pub reset: Option<String>,
+    /// The reset instant of a `UsageLimit`, when Claude Code's message gives one.
+    pub resets_at: Option<Timestamp>,
+    /// What the human can do from the item.
+    pub actions: Vec<NeedsYouAction>,
+    /// What the human does about the worker of a `WorkerStalled` or a `StaleClaim`.
+    pub action: Option<PersonAction>,
+    /// The project's account of a `UsageLimit` when fold lists the item, `default` for Claude Code's own login.
+    pub account: Option<fold_core::accounts::AccountName>,
 }
 
 impl NeedsYouItem {
@@ -206,6 +240,12 @@ impl NeedsYouItem {
             target: None,
             agents: Vec::new(),
             activity: None,
+            limit: None,
+            reset: None,
+            resets_at: None,
+            actions: Vec::new(),
+            action: None,
+            account: None,
         }
     }
 
@@ -217,15 +257,57 @@ impl NeedsYouItem {
         now: Timestamp,
     ) -> Self {
         let mut item = Self::new(NeedsYouKind::WorkerStalled, activity.since);
-        item.title = fold_core::stall::activity_text(activity.activity(), agent.as_str(), now);
+        item.title = activity.text(agent.as_str(), now);
         item.reason = Some(if activity.supervised {
             format!("restart it in a new session: `fld worker restart {agent}`")
         } else {
             "fold does not run its session; check the session where it runs".to_owned()
         });
+        item.action = Some(if activity.supervised {
+            PersonAction::RestartWorker
+        } else {
+            PersonAction::MessageWorker
+        });
         item.agent = Some(agent);
         item.task = task;
         item.activity = Some(activity);
+        item
+    }
+
+    /// The `StaleClaim` item of `claim`, held by `agent`, with what the human does: `running` is whether fold runs the holder's process now, `None` when fold does not run it.
+    pub fn stale_claim(claim: &ClaimForPerson, running: Option<bool>) -> Self {
+        let agent = claim.worker.agent();
+        let mut item = Self::new(NeedsYouKind::StaleClaim, claim.since);
+        match claim.target {
+            ClaimTarget::Task(task) => item.task = Some(task),
+            ClaimTarget::Review { proposal, task } => {
+                item.task = Some(task);
+                item.proposal = Some(proposal);
+            }
+        }
+        let (action, reason) = match running {
+            Some(true) => (
+                PersonAction::RestartWorker,
+                format!(
+                    "it runs but makes no fold call; restart it in a new session: `fld worker restart {agent}`"
+                ),
+            ),
+            Some(false) => (
+                PersonAction::MessageWorker,
+                format!(
+                    "its process ended; message @{agent} to resume it in its session, or restart it in a new session: `fld worker restart {agent}`"
+                ),
+            ),
+            None => (
+                PersonAction::MessageWorker,
+                format!(
+                    "fold does not run its session; message @{agent}, or check the session where it runs"
+                ),
+            ),
+        };
+        item.action = Some(action);
+        item.reason = Some(reason);
+        item.agent = Some(agent);
         item
     }
 
@@ -329,7 +411,20 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         item.header = row.header;
         items.push(item);
     }
-    for row in agents::list_worker_processes(&mut conn).await? {
+    let processes = agents::list_worker_processes(&mut conn).await?;
+    items.extend(wait_items(&processes));
+    let running: std::collections::HashMap<AgentName, bool> = processes
+        .iter()
+        .map(|row| (row.agent.clone(), row.state.is_running()))
+        .collect();
+    for claim in claims::claims_for_person(&mut *conn).await? {
+        let holder = claim.worker.agent();
+        items.push(NeedsYouItem::stale_claim(
+            &claim,
+            running.get(&holder).copied(),
+        ));
+    }
+    for row in processes {
         if model_unreachable(row.failed_turns, row.state) {
             let mut item = NeedsYouItem::new(
                 NeedsYouKind::WorkerModelUnreachable,
@@ -475,6 +570,58 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
     }
     items.sort_by_key(|item| item.since);
     Ok(items)
+}
+
+/// The project's items of the workers whose idle turn waits for a cause outside them: one for the turns that could not reach the model, and one for each usage limit the turns reached, each from its oldest wait and with the newest message.
+fn wait_items(rows: &[agents::WorkerProcessRow]) -> Vec<NeedsYouItem> {
+    let waiting: Vec<(&agents::WorkerProcessRow, &agents::StoredWait)> = rows
+        .iter()
+        .filter(|row| shows_wait(row.state))
+        .filter_map(|row| Some((row, row.wait.as_ref()?)))
+        .collect();
+    let mut groups: Vec<fold_core::turn_waits::WaitGroup> =
+        waiting.iter().map(|(_, wait)| wait.group()).collect();
+    groups.sort();
+    groups.dedup();
+    let mut items = Vec::new();
+    for group in groups {
+        let members: Vec<&(&agents::WorkerProcessRow, &agents::StoredWait)> = waiting
+            .iter()
+            .filter(|(_, wait)| wait.group() == group)
+            .collect();
+        let Some(since) = members.iter().map(|(_, wait)| wait.since).min() else {
+            continue;
+        };
+        let newest = members
+            .iter()
+            .max_by_key(|(row, wait)| (wait.tried_at, row.agent.clone()));
+        let mut item = match group.reason {
+            WaitReason::Network => {
+                let mut item = NeedsYouItem::new(NeedsYouKind::WorkerModelUnreachable, since);
+                item.reason = Some(NETWORK_WAIT_HINT.to_owned());
+                item
+            }
+            WaitReason::UsageLimit => {
+                let mut item = NeedsYouItem::new(NeedsYouKind::UsageLimit, since);
+                item.limit = group.limit;
+                item.about = group.limit.map(|limit| limit.as_str().to_owned());
+                item.reset = newest.and_then(|(_, wait)| wait.reset.clone());
+                item.resets_at = newest.and_then(|(_, wait)| wait.resets_at);
+                item.reason = Some(LIMIT_WAIT_HINT.to_owned());
+                item.actions = vec![NeedsYouAction::Pause];
+                item
+            }
+        };
+        item.title = newest.and_then(|(row, _)| row.last_error.clone());
+        item.agents = members
+            .iter()
+            .map(|(row, _)| row.agent.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        items.push(item);
+    }
+    items
 }
 
 /// `items` with a `WorkerStalled` item for each live workspace whose stall needs a person, oldest first.

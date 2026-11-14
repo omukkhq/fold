@@ -93,6 +93,8 @@ fn sample_workspace() -> LiveWorkspace {
             since: Timestamp::from_millis(1_760_000_000_200).unwrap(),
             supervised: true,
             told: vec!["web-lead".to_owned()],
+            parked_by: None,
+            wait_for: None,
         }),
     }
 }

@@ -33,11 +33,12 @@ mod removal;
 mod requests;
 mod views;
 
-pub use attention::{AttentionItem, AttentionKind, attention, stalled_tasks};
+pub use attention::{AttentionItem, AttentionKind, PersonAction, attention, stalled_tasks};
 pub use checklists::{
     ChecklistItemPatch, ChecklistItemView, ChecklistProgress, ChecklistView, ItemContent,
     NewChecklistItem, item_content,
 };
+pub(crate) use claims::append_renewed;
 pub(crate) use claims::{
     Assign, already_claimed, assign_in_tx, check_claim_right, claim_in_tx, closed_refusal,
     holder_has_ended, worker_row,
@@ -49,6 +50,7 @@ pub(crate) use hold::agent_refusal;
 pub use hold::{HumanTaskRights, human_task_rights};
 pub use lead_checks::{MAX_NOTE_CHARS, REPORT_LIMIT, ReportView};
 pub(crate) use lead_checks::{areas_of, proposal_kind_refusal};
+pub(crate) use leases::Holders;
 pub use leases::sweep_leases;
 pub use ready::ReadyTask;
 pub use recompute::{Recomputed, recompute};

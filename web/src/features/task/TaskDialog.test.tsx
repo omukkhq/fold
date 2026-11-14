@@ -661,7 +661,7 @@ describe("the task dialog route", () => {
     expect(
       within(changes).queryByRole("link", { name: "Compare with main" }),
     ).toBeNull();
-    expect(within(dialog).getByText("is editing")).toBeTruthy();
+    expect(within(dialog).getByText("last edited")).toBeTruthy();
     // The strip is one fact; the files and the base wait behind its info button, which a click opens too.
     const details = within(within(dialog).getByLabelText("Live")).getByRole(
       "button",

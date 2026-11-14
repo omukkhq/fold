@@ -128,7 +128,7 @@ async fn takeover_waits_for_the_lease_then_moves_the_claim_and_the_workspace() {
         .unwrap();
 }
 
-/// The open proposal goes to the new holder with the claim and the workspace. The old author can no longer add a version and the new holder answers a change request with the next one.
+/// A holder whose open proposal waits on reviewers keeps its claim past the lease; once the proposal is back with its author, here by a conflict, the lapsed claim is taken over and the open proposal goes to the new holder with the claim and the workspace. The old author can no longer add a version and the new holder answers with the next one.
 #[tokio::test]
 async fn a_takeover_hands_the_open_proposal_to_the_new_holder() {
     let fx = Fixture::new().await;
@@ -150,6 +150,17 @@ async fn a_takeover_hands_the_open_proposal_to_the_new_holder() {
         .summary
         .id;
     let at = fx.advance(LEASE);
+    let waiting = fx
+        .tasks
+        .takeover_claim(&by(&fx.backend), t(1))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        task_refusal(waiting).code(),
+        codes::CLAIM_NOT_STALE,
+        "a proposal that waits on reviewers keeps its author's claim"
+    );
+    fx.execute("UPDATE proposals SET conflicted = 1").await;
     let before = fx.last_seq().await;
 
     fx.tasks
@@ -162,8 +173,10 @@ async fn a_takeover_hands_the_open_proposal_to_the_new_holder() {
         vec![
             "claim.taken_over",
             "workspace.adopted",
-            "proposal.author_changed"
-        ]
+            "proposal.author_changed",
+            "task.status_changed"
+        ],
+        "the conflicted proposal is back with its new author"
     );
     let changed = &appended[2];
     assert_eq!(changed.actor.as_str(), "backend");

@@ -897,13 +897,23 @@ fn target_file(dir: &Path, agent: &AgentName) -> PathBuf {
 }
 
 /// Makes `dir` and its parent, the daemon's folder of every project's targets, where they are missing, and accepts each only as a real directory of this user that no one else can enter, narrowing a wider mode to 0700.
-fn private_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn private_dir(dir: &Path) -> io::Result<()> {
+    private_folders(dir, true)
+}
+
+/// [`private_dir`] for `dir` alone, whose parent is fold's data folder, which a person may keep behind a link and the registry's open already narrows.
+pub(crate) fn private_folder(dir: &Path) -> io::Result<()> {
+    private_folders(dir, false)
+}
+
+fn private_folders(dir: &Path, with_parent: bool) -> io::Result<()> {
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(dir)?;
     let uid = rustix::process::getuid().as_raw();
-    for folder in [dir.parent(), Some(dir)].into_iter().flatten() {
+    let parent = if with_parent { dir.parent() } else { None };
+    for folder in [parent, Some(dir)].into_iter().flatten() {
         let meta = std::fs::symlink_metadata(folder)?;
         if !meta.is_dir() || meta.uid() != uid {
             return Err(io::Error::from(io::ErrorKind::PermissionDenied));
@@ -917,8 +927,18 @@ fn private_dir(dir: &Path) -> io::Result<()> {
 
 /// Writes `bytes` as `dir/name` through a temporary file of mode 0600 and a rename, after [`private_dir`], so a reader never sees half a file and a secret is never in a file anyone else can read.
 pub(crate) fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
-    static TEMP: AtomicU64 = AtomicU64::new(0);
     private_dir(dir)?;
+    write_in_private(dir, name, bytes)
+}
+
+/// [`write_private`] after [`private_folder`], which leaves the parent of `dir` as it is.
+pub(crate) fn write_private_here(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+    private_folder(dir)?;
+    write_in_private(dir, name, bytes)
+}
+
+fn write_in_private(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+    static TEMP: AtomicU64 = AtomicU64::new(0);
     let temp = dir.join(format!(
         ".{name}.{}.{}.tmp",
         std::process::id(),

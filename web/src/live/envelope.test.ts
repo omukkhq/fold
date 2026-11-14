@@ -231,6 +231,65 @@ describe("isEventEnvelope", () => {
     ).toBe(true);
   });
 
+  it("accepts a turn that waits for the network or a usage limit, alone and in a snapshot", () => {
+    for (const state of ["waits_for_network", "waits_for_usage_limit"]) {
+      const waits = {
+        state,
+        call: null,
+        slot: null,
+        since: 1,
+        supervised: true,
+        told: [],
+        parked_by: null,
+        wait_for: null,
+      };
+      expect(isEventEnvelope({ ...changed(), activity: waits }), state).toBe(
+        true,
+      );
+      expect(
+        isEventEnvelope({
+          kind: "snapshot",
+          seq: 3,
+          workspaces: [workspace(), { ...workspace(), activity: waits }],
+        }),
+        state,
+      ).toBe(true);
+    }
+  });
+
+  it("accepts a parked worker with its park, alone and in a snapshot, and refuses a park that is not text", () => {
+    const parked = {
+      state: "parked",
+      call: null,
+      slot: null,
+      since: 1,
+      supervised: true,
+      told: [],
+      parked_by: "api-lead",
+      wait_for: "my go after the users migration",
+    };
+    expect(isEventEnvelope({ ...changed(), activity: parked })).toBe(true);
+    expect(
+      isEventEnvelope({
+        kind: "snapshot",
+        seq: 3,
+        workspaces: [{ ...workspace(), activity: parked }],
+      }),
+    ).toBe(true);
+    expect(
+      isLiveWorkspace({
+        ...workspace(),
+        activity: { ...parked, parked_by: 3 },
+      }),
+    ).toBe(false);
+    expect(
+      isLiveWorkspace({
+        ...workspace(),
+        activity: { ...parked, wait_for: ["go"] },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts a stored event of a type this build does not know", () => {
     expect(isEventEnvelope({ ...stored(), type: "future.thing" })).toBe(true);
   });

@@ -195,9 +195,10 @@ async fn a_process_that_failed_without_a_report_is_a_stall_at_once() {
     let before = state(&harness, &work).await.view.last_activity_at;
     advance(&harness, Duration::from_secs(1));
     work.write(&[("late.txt", "written as the process ended\n")]);
+    // The scan that takes the write drops a stall from the view until the next decision, which can read the workspace before the scan, so wait for a decision after it.
     let late = eventually(WAIT, async || {
         let view = state(&harness, &work).await.view;
-        if view.last_activity_at > before {
+        if view.last_activity_at > before && view.activity.is_some() {
             Ok(view)
         } else {
             Err(view.last_activity_at)
@@ -510,4 +511,27 @@ async fn an_owed_resume_that_fold_does_not_serve_stalls_and_its_restart_frees_th
         }
     })
     .await;
+}
+
+/// A task worker whose turn could not reach the model waits for the network, which is never a stall however long it lasts, and a turn that reaches the model again ends the wait.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_worker_whose_turn_waits_for_the_network_is_never_a_stall() {
+    let fake = FakeClaude::new("network_error");
+    let harness = task_worker_for(&fake, &["Draw the page"], WorkerState::Idle).await;
+    let work = harness.start_work(TASK_WORKER, "T-1").await;
+    let waiting = eventually(WAIT, async || {
+        let row = worker(&harness, TASK_WORKER).await;
+        row.wait.clone().ok_or(row.state)
+    })
+    .await;
+
+    advance(&harness, STALL * 3);
+    let shown = state(&harness, &work).await.view;
+    let seen = shown.activity.expect("a waiting worker");
+    assert_eq!(seen.state, ActivityState::WaitsForNetwork);
+    assert_eq!(seen.since, waiting.since);
+    assert!(!seen.is_stall());
+    assert!(!shown.stalled);
+    assert!(seen.told.is_empty());
+    assert!(stalled_events(&harness).await.is_empty());
 }

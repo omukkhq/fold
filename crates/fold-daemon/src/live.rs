@@ -146,16 +146,22 @@ pub struct LiveActivity {
     /// The role whose free place a `waits_for_slot` worker waits for; null for the other states.
     #[schema(required = true)]
     pub slot: Option<LiveSlot>,
-    /// UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, or the time the work came that fold owes a `waits_for_slot` worker.
+    /// UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, the time the work came that fold owes a `waits_for_slot` worker, the end of the first turn of a wait for the network or a usage limit, or the time a `parked` worker was parked.
     #[schema(value_type = i64)]
     pub since: Timestamp,
     /// fold runs the worker's process, so `restart_worker` can start it again in a new session.
     pub supervised: bool,
     /// The agents fold told of the stall: the worker's lead, or else the main agents. Empty while the worker works, and for a stall no agent can act on, which needs a person at once.
     pub told: Vec<String>,
+    /// The agent that parked a `parked` worker, whose go it waits for; null for the other states.
+    #[schema(required = true)]
+    pub parked_by: Option<String>,
+    /// What a `parked` worker waits for, in the words of the agent that parked it; null for the other states.
+    #[schema(required = true)]
+    pub wait_for: Option<String>,
 }
 
-/// What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, and `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free. `working`, `stopped` and `waits_for_slot` are never stalls.
+/// What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free, `waits_for_network` while its last turn could not reach the model, which fold runs again once the model answers, and `waits_for_usage_limit` while its last turn reached a usage limit, which fold runs again after the reset, and `parked` while it waits for the go of the agent that stopped it with `stop_worker`'s `wait_for`. `working`, `stopped`, `waits_for_slot`, `parked` and the waits are never stalls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityState {
@@ -165,6 +171,9 @@ pub enum ActivityState {
     Stopped,
     Failed,
     WaitsForSlot,
+    WaitsForNetwork,
+    WaitsForUsageLimit,
+    Parked,
 }
 
 /// The role of a place under the worker limits.
@@ -222,6 +231,11 @@ impl LiveActivity {
                 slot = Some(LiveSlot::from(waits));
                 (ActivityState::WaitsForSlot, None, since)
             }
+            Activity::WaitsForNetwork { since } => (ActivityState::WaitsForNetwork, None, since),
+            Activity::WaitsForUsageLimit { since } => {
+                (ActivityState::WaitsForUsageLimit, None, since)
+            }
+            Activity::Parked { since } => (ActivityState::Parked, None, since),
         };
         Some(Self {
             state,
@@ -230,7 +244,26 @@ impl LiveActivity {
             since,
             supervised,
             told: told.iter().map(ToString::to_string).collect(),
+            parked_by: None,
+            wait_for: None,
         })
+    }
+
+    /// The view with the park of a `parked` worker: the agent that parked it and what it waits for. Any other state keeps both null.
+    #[must_use]
+    pub fn with_park(mut self, park: Option<(&AgentName, &str)>) -> Self {
+        if self.state == ActivityState::Parked
+            && let Some((by, wait_for)) = park
+        {
+            self.parked_by = Some(by.to_string());
+            self.wait_for = Some(wait_for.to_owned());
+        }
+        self
+    }
+
+    /// What fold saw, in the words of every view; see [`fold_core::stall::activity_text_by`].
+    pub fn text(&self, worker: &str, now: Timestamp) -> Option<String> {
+        fold_core::stall::activity_text_by(self.activity(), worker, self.parked_by.as_deref(), now)
     }
 
     /// The rule's activity this view shows.
@@ -256,10 +289,13 @@ impl LiveActivity {
                 },
                 since,
             },
+            ActivityState::WaitsForNetwork => Activity::WaitsForNetwork { since },
+            ActivityState::WaitsForUsageLimit => Activity::WaitsForUsageLimit { since },
+            ActivityState::Parked => Activity::Parked { since },
         }
     }
 
-    /// A stall rather than work, a stop someone asked for or a wait for a free place.
+    /// A stall rather than work, a stop someone asked for, a wait for a free place or a wait for a lead's go.
     pub fn is_stall(&self) -> bool {
         self.activity().is_stall()
     }

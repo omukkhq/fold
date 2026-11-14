@@ -432,7 +432,11 @@ impl TaskService {
             }),
             None => None,
         };
-        let activity = self.activity_of(workspace, live.as_ref().and_then(|w| w.last_activity_at));
+        let activity = self.activity_of(
+            workspace,
+            live.as_ref().and_then(|w| w.last_activity_at),
+            live.as_ref().map(|w| w.created_at),
+        );
         let open = proposal
             .as_ref()
             .filter(|p| p.standing != ProposalStanding::Integrated)
@@ -465,14 +469,18 @@ impl TaskService {
         })
     }
 
-    /// The last edit of a live workspace: the time from the live state when it holds the workspace, else the stored column, and the file when the live state names exactly one changed.
+    /// The last edit of a live workspace: the time from the live state when it holds the workspace, else the stored column, and the file when the live state names exactly one changed. `None` for a workspace without an edit: its last activity starts at its creation, `created`, and only a scan that sees an edit moves it.
     fn activity_of(
         &self,
         workspace: Option<WorkspaceId>,
         stored: Option<Timestamp>,
+        created: Option<Timestamp>,
     ) -> Option<Activity> {
         let live = workspace.and_then(|id| self.live.as_ref()?.get(id));
         let at = live.as_ref().map(|w| w.view.last_activity_at).or(stored)?;
+        if created.is_some_and(|created| at <= created) {
+            return None;
+        }
         let path = live.and_then(|w| match w.view.files.as_slice() {
             [only] => Some(only.path.clone()),
             _ => None,
@@ -617,10 +625,14 @@ impl TaskService {
                 proposal,
                 edits_after_version,
                 check_run: self.check_run(snapshot.workspaces.get(&row.id).copied()),
-                activity: self.activity_of(
-                    snapshot.workspaces.get(&row.id).copied(),
-                    snapshot.activity.get(&row.id).copied(),
-                ),
+                activity: {
+                    let times = snapshot.activity.get(&row.id);
+                    self.activity_of(
+                        snapshot.workspaces.get(&row.id).copied(),
+                        times.map(|t| t.last_activity_at),
+                        times.map(|t| t.created_at),
+                    )
+                },
                 attention: attention.remove(&row.id).unwrap_or_default(),
                 report: snapshot.reports.remove(&row.id),
                 id: row.id,

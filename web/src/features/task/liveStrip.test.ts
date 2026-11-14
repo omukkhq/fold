@@ -111,6 +111,8 @@ describe("liveStrip", () => {
       since: NOW - 12 * MINUTE,
       supervised: true,
       told: ["web-lead"],
+      parked_by: null,
+      wait_for: null,
     };
     const told = liveStrip(task(), live({ activity }), NOW);
     expect(told).toMatchObject({
@@ -127,12 +129,12 @@ describe("liveStrip", () => {
     expect(flagged?.activity?.restart).toBe("frontend");
   });
 
-  it("says who edits which file, the files, the latest checkpoint and the base against main", () => {
+  it("says which file the worker last edited and when, the files, the latest checkpoint and the base against main", () => {
     expect(liveStrip(task(), live(), NOW)).toEqual({
       worker: "frontend/ui",
-      verb: "is editing",
+      verb: "last edited",
       file: "src/routes/login.tsx",
-      wait: null,
+      wait: "12 s ago",
       details: "1 file · ck-31 3 min ago · base r7 (main r8)",
       stalled: false,
       activity: null,
@@ -158,7 +160,7 @@ describe("liveStrip", () => {
   it("says how long the worker has been quiet while the daemon reports it stalled", () => {
     const strip = liveStrip(
       task({
-        attention: [{ kind: "stalled", closable: false }],
+        attention: [{ kind: "stalled", closable: false, action: null }],
         activity: { path: "a.ts", at: NOW - 7 * MINUTE },
       }),
       live({ last_activity_at: NOW - 8 * MINUTE }),
@@ -171,16 +173,56 @@ describe("liveStrip", () => {
     });
   });
 
-  it("keeps the verb when a stalled worker has no recorded edit", () => {
+  it("says a parked worker waits for its lead's go and names no file", () => {
+    const strip = liveStrip(
+      task(),
+      live({
+        worker: "backend-worker",
+        activity: {
+          state: "parked",
+          slot: null,
+          call: null,
+          since: NOW - 40 * MINUTE,
+          supervised: true,
+          told: [],
+          parked_by: "backend-lead",
+          wait_for: "my go after the T-288 migration",
+        },
+      }),
+      NOW,
+    );
+    expect(strip).toMatchObject({
+      verb: "waits for @backend-lead's go",
+      file: null,
+      wait: null,
+      stalled: false,
+    });
+    expect(strip?.activity?.waitFor).toBe("my go after the T-288 migration");
+  });
+
+  it("says a new workspace has no edits yet instead of giving its creation as an edit's time", () => {
+    const strip = liveStrip(
+      task({ activity: null }),
+      live({ files: [], last_activity_at: NOW - 3 * MINUTE }),
+      NOW,
+    );
+    expect(strip).toMatchObject({
+      verb: "has no edits yet",
+      file: null,
+      wait: null,
+    });
+  });
+
+  it("says a stalled worker without a recorded edit has none", () => {
     const strip = liveStrip(
       task({
-        attention: [{ kind: "stalled", closable: false }],
+        attention: [{ kind: "stalled", closable: false, action: null }],
         activity: null,
       }),
       null,
       NOW,
     );
-    expect(strip?.verb).toBe("is editing");
+    expect(strip?.verb).toBe("has no edits yet");
   });
 
   it("says the holder sent the version and what it waits for, never the stall, while the files are that version", () => {
@@ -195,7 +237,7 @@ describe("liveStrip", () => {
       reviews: [],
     };
     const sent = task({
-      attention: [{ kind: "stalled", closable: false }],
+      attention: [{ kind: "stalled", closable: false, action: null }],
       proposal,
       edits_after_version: false,
     });
@@ -227,7 +269,7 @@ describe("liveStrip", () => {
 
   it("says the stall and the wait while a sent version is back with its author", () => {
     const back = task({
-      attention: [{ kind: "stalled", closable: false }],
+      attention: [{ kind: "stalled", closable: false, action: null }],
       proposal: {
         id: "P-1",
         title: "Add the form",
@@ -261,7 +303,7 @@ describe("liveStrip", () => {
       started_at: NOW - MINUTE,
     };
     const waiting = task({
-      attention: [{ kind: "stalled", closable: false }],
+      attention: [{ kind: "stalled", closable: false, action: null }],
       check_run: run,
       proposal: {
         id: "P-1",
@@ -327,9 +369,9 @@ describe("liveStrip without the task details", () => {
     };
     expect(liveStrip(bare, live(), NOW)).toEqual({
       worker: "frontend/ui",
-      verb: "is editing",
+      verb: "last edited",
       file: "a.ts",
-      wait: null,
+      wait: "12 s ago",
       details: "1 file · base r7",
       stalled: false,
       activity: null,

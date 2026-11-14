@@ -18,8 +18,8 @@ use crate::http::{self, assets::AssetSource};
 use crate::jobs::{self, Job};
 use crate::mcp;
 use crate::projects::{FolderFiles, Projects, resume_workers};
-use crate::services::agents::Launcher;
 use crate::services::agents::environment::WorkerEnvironment;
+use crate::services::agents::{Launcher, accounts};
 use crate::socket::SocketServer;
 
 /// How long the open connections of the HTTP listener and of the socket get to finish after shutdown starts, and the jobs to stop.
@@ -156,6 +156,15 @@ impl Daemon {
             started_by,
         };
         let launcher = launcher.with_own_binary();
+        if let Some(dir) = launcher.accounts.clone() {
+            let removed =
+                tokio::task::spawn_blocking(move || accounts::remove_leftovers(&dir)).await;
+            if !matches!(removed, Ok(Ok(()))) {
+                tracing::warn!(
+                    "the accounts folder kept a file that a stopped change left, which could not be removed"
+                );
+            }
+        }
         let lock = {
             let config = config.clone();
             tokio::task::spawn_blocking(move || prepare_runtime_dir(&config))

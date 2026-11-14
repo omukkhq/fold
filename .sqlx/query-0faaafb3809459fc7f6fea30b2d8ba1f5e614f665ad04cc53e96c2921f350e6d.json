@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.kind, t.number AS \"task!: i64\", p.number AS \"proposal?: i64\",\n                  w.name AS worker, c.stale_needs_person_at AS \"since!: i64\"\n           FROM claims c\n           JOIN workers w ON w.id = c.worker_id\n           LEFT JOIN proposals p ON p.id = c.proposal_id\n           JOIN tasks t ON t.id = COALESCE(c.task_id, p.task_id)\n           WHERE c.released_at IS NULL AND c.stale_needs_person_at IS NOT NULL\n             AND (c.kind = 'implementation' OR p.state = 'open')\n           ORDER BY c.stale_needs_person_at, c.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "kind",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "task!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "proposal?: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "worker",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "since!: i64",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "stale_needs_person_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "0faaafb3809459fc7f6fea30b2d8ba1f5e614f665ad04cc53e96c2921f350e6d"
+}

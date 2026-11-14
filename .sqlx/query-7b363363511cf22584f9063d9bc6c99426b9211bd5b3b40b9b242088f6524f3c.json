@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_processes\n         SET wait_reason = NULL, wait_limit = NULL, wait_since = NULL, wait_tried_at = NULL, wait_tries = 0,\n             wait_reset = NULL, wait_resets_at = NULL\n         WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "7b363363511cf22584f9063d9bc6c99426b9211bd5b3b40b9b242088f6524f3c"
+}

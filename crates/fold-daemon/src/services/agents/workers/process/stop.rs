@@ -28,7 +28,20 @@ impl Supervisor {
         &self,
         agent: &AgentName,
     ) -> Result<(), AgentError> {
-        self.stop_when(agent, |_| true, false).await.map(|_| ())
+        self.stop_when(agent, |_| true, false, None)
+            .await
+            .map(|_| ())
+    }
+
+    /// [`Supervisor::stop`] that parks the worker for `park`: in the transaction that marks it `stopping`, or at once when it has ended already, the row records the agent that parked it and what it waits for, with `worker.parked`. The worker keeps its session and claims, and the parking agent's message resumes it as any message to a stopped worker does.
+    pub(in crate::services::agents::workers) async fn stop_and_park(
+        &self,
+        agent: &AgentName,
+        park: &Park,
+    ) -> Result<(), AgentError> {
+        self.stop_when(agent, |_| true, false, Some(park))
+            .await
+            .map(|_| ())
     }
 
     /// [`Supervisor::stop`] of the supervised main for a human, who wants it to stay stopped: the row is held in the transaction that marks it `stopping`, or at once when it has ended already, so no notice, message or catch-up starts it until a human starts it again.
@@ -36,28 +49,35 @@ impl Supervisor {
         &self,
         agent: &AgentName,
     ) -> Result<(), AgentError> {
-        self.stop_when(agent, |_| true, true).await.map(|_| ())
+        self.stop_when(agent, |_| true, true, None)
+            .await
+            .map(|_| ())
     }
 
-    /// [`Supervisor::stop`] of a worker that `still` holds for, read in the transaction that marks it `stopping`; with `hold`, a supervised main is also held (see [`Supervisor::stop_and_hold`]). Returns whether it stopped the worker.
+    /// [`Supervisor::stop`] of a worker that `still` holds for, read in the transaction that marks it `stopping`; with `hold`, a supervised main is also held (see [`Supervisor::stop_and_hold`]); with `park`, the worker is parked (see [`Supervisor::stop_and_park`]). Returns whether it stopped the worker.
     async fn stop_when(
         &self,
         agent: &AgentName,
         still: impl Fn(&WorkerProcessRow) -> bool,
         hold: bool,
+        park: Option<&Park>,
     ) -> Result<bool, AgentError> {
         let now = self.inner.clock.now();
+        let mut buffer = EventBuffer::new();
         let started = self
             .inner
             .store
             .write(async |tx| {
                 let Some(row) = agents::find_worker_process(tx.conn(), agent).await? else {
-                    return Ok::<_, StoreError>(None);
+                    return Ok::<_, AgentError>(None);
                 };
                 let hold = hold && row.role == Role::Main;
                 if !row.state.is_running() {
                     if hold && row.state != WorkerState::Starting {
                         agents::hold_worker(tx, row.id, now).await?;
+                    }
+                    if let Some(park) = park {
+                        park_row(tx, &mut buffer, &row, park, now).await?;
                     }
                     return Ok(None);
                 }
@@ -69,9 +89,13 @@ impl Supervisor {
                 if hold {
                     agents::hold_worker(tx, row.id, now).await?;
                 }
+                if let Some(park) = park {
+                    park_row(tx, &mut buffer, &row, park, now).await?;
+                }
                 Ok(Some((row, working)))
             })
             .await?;
+        self.inner.bus.publish(buffer);
         let Some((row, working)) = started else {
             return Ok(false);
         };
@@ -325,7 +349,7 @@ impl Supervisor {
         Ok(done)
     }
 
-    /// Stops every short-lived worker that has been idle for its role's `idle_minutes` at `now`, except while the project's agents are paused: a resume gives each worker a new idle time. A worker is stopped only while it is still idle since the same moment, so one that took a turn after the rows were read keeps running. A worker that cannot be stopped is logged and the sweep goes on. Returns the agents it stopped.
+    /// Stops every short-lived worker that has been idle for its role's `idle_minutes` at `now`, except one whose turn waits for the network or a usage limit, and except while the project's agents are paused: a resume gives each worker a new idle time. A worker is stopped only while it is still idle since the same moment, so one that took a turn after the rows were read keeps running. A worker that cannot be stopped is logged and the sweep goes on. Returns the agents it stopped.
     pub async fn sweep_idle(
         &self,
         now: fold_core::Timestamp,
@@ -348,7 +372,11 @@ impl Supervisor {
             let Some(minutes) = config.role(row.role).idle_minutes else {
                 continue;
             };
-            let Some(since) = row.idle_since.filter(|_| row.state == WorkerState::Idle) else {
+            // A worker whose turn waits is idle only until fold runs that turn again.
+            let Some(since) = row
+                .idle_since
+                .filter(|_| row.state == WorkerState::Idle && row.wait.is_none())
+            else {
                 continue;
             };
             let due = since
@@ -365,7 +393,7 @@ impl Supervisor {
                     && current.state == WorkerState::Idle
                     && current.idle_since == Some(since)
             };
-            match self.stop_when(&row.agent, still_idle, false).await {
+            match self.stop_when(&row.agent, still_idle, false, None).await {
                 Ok(true) => stopped.push(row.agent),
                 Ok(false) => {}
                 Err(error) => {
@@ -445,6 +473,38 @@ impl Supervisor {
             ),
         }
     }
+}
+
+/// Who parks a worker and what the worker waits for: the parking agent's event actor and agent, and its words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Park {
+    pub actor: EventActor,
+    pub by: AgentName,
+    pub wait_for: String,
+}
+
+/// Parks the stopping or ended `row` for `park` and appends `worker.parked`.
+async fn park_row(
+    tx: &mut fold_store::WriteTx,
+    buffer: &mut EventBuffer,
+    row: &WorkerProcessRow,
+    park: &Park,
+    now: fold_core::Timestamp,
+) -> Result<(), AgentError> {
+    let by = agents::find_agent(tx.conn(), &park.by)
+        .await?
+        .ok_or(StoreError::Invalid("the parking agent is not registered"))?;
+    agents::park_worker(tx, row.id, by.id, &park.wait_for, now).await?;
+    // A full lease from the park, so no reader sees the claims lapse before the sweeper renews them while the parker runs.
+    let renewal = fold_store::tasks::claims::renew_of_agent(tx, row.agent_id, now).await?;
+    crate::services::tasks::append_renewed::<AgentError>(tx, buffer, &renewal, now).await?;
+    let event = NewEvent::new(types::WORKER_PARKED, park.actor.clone())?.data(json!({
+        "agent": row.agent.as_str(),
+        "by": park.by.as_str(),
+        "wait_for": park.wait_for,
+    }))?;
+    buffer.append(tx, &event, now).await?;
+    Ok(())
 }
 
 pub(super) fn stopped_event(

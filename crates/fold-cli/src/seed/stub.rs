@@ -227,6 +227,8 @@ fn incoming(line: &str) -> Incoming {
 enum Ended {
     Done(String),
     Interrupted,
+    /// The script's error, which ends the turn as Claude Code's error result.
+    Error(String),
 }
 
 struct Stub<W> {
@@ -302,6 +304,21 @@ impl<W: AsyncWrite + Unpin> Stub<W> {
                 Ok(Ended::Interrupted) => {
                     self.result(true, "error_during_execution", None).await?;
                 }
+                Ok(Ended::Error(text)) => {
+                    let session = self.options.session.clone();
+                    self.emit(&json!({
+                        "type": "result",
+                        "subtype": "success",
+                        "is_error": true,
+                        "num_turns": self.turns,
+                        "session_id": session,
+                        "total_cost_usd": self.base_cost + running_cost(self.turns, self.calls),
+                        "duration_ms": 0,
+                        "usage": usage(),
+                        "result": text,
+                    }))
+                    .await?;
+                }
                 Err(error) => {
                     self.log(&error.to_string()).await?;
                     self.assistant(json!({"type": "text", "text": error.to_string()}))
@@ -324,9 +341,18 @@ impl<W: AsyncWrite + Unpin> Stub<W> {
         }) else {
             return Ok(Ended::Done("Nothing to do.".to_owned()));
         };
-        let Turn { steps, reply, .. } = turn.clone();
+        let Turn {
+            steps,
+            reply,
+            error,
+            ..
+        } = turn.clone();
         self.state.turn += 1;
         self.save().await?;
+        if let Some(error) = error {
+            self.log(&format!("turn {index}: ends in an error")).await?;
+            return Ok(Ended::Error(error));
+        }
         for (number, step) in steps.iter().enumerate() {
             if self.interrupted().await? {
                 self.log(&format!("turn {index}: interrupted before step {number}"))
@@ -985,6 +1011,33 @@ mod tests {
         let log = std::fs::read_to_string(dir.join(LOG_FILE)).unwrap();
         assert!(log.contains("turn 0, step 0"), "{log}");
         assert!(!outer.path().join("out.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn a_turn_with_an_error_ends_in_claude_codes_error_result_without_its_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = "API Error: Can't reach the API server";
+        let script = json!({"turns": [
+            {"error": text, "steps": [{"write": {"path": "a.txt", "text": ""}}]},
+            {"steps": [], "reply": "Back."}
+        ]});
+        let mut stub = stub(dir.path(), &script, false, &[user("Go."), user("Again.")]);
+        stub.serve(false).await.unwrap();
+        assert!(!dir.path().join("a.txt").exists());
+        let results: Vec<(bool, Option<String>, u64)> = output(&stub)
+            .iter()
+            .filter_map(|message| match message {
+                ClaudeMessage::Result(result) => Some((
+                    result.is_error,
+                    result.result.clone(),
+                    result.usage.output_tokens,
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results[0], (true, Some(text.to_owned()), 0));
+        assert!(!results[1].0);
+        assert_eq!(results[1].1.as_deref(), Some("Back."));
     }
 
     #[tokio::test]

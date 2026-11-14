@@ -430,7 +430,7 @@ describe("breakdowns", () => {
 });
 
 describe("tokens", () => {
-  it("read as thousands and millions", () => {
+  it("read as thousands, millions, billions and trillions, and a rounded count moves up a unit", () => {
     expect(tokensText(0)).toBe("0");
     expect(tokensText(999)).toBe("999");
     expect(tokensText(1_000)).toBe("1.0k");
@@ -438,6 +438,16 @@ describe("tokens", () => {
     expect(tokensText(999_949)).toBe("999.9k");
     expect(tokensText(999_950)).toBe("1.0M");
     expect(tokensText(12_345_678)).toBe("12.3M");
+    expect(tokensText(999_949_999)).toBe("999.9M");
+    expect(tokensText(999_950_000)).toBe("1.00B");
+    expect(tokensText(2_015_700_000)).toBe("2.02B");
+    expect(tokensText(2_014_900_000)).toBe("2.01B");
+    expect(tokensText(999_994_999_999)).toBe("999.99B");
+    expect(tokensText(999_995_000_000)).toBe("1.00T");
+    expect(tokensText(1_250_000_000_000)).toBe("1.25T");
+    expect(tokensText(12_345_000_000_000)).toBe("12.35T");
+    expect(tokensText(64_546.4)).toBe("64.5k");
+    expect(tokensText(Number.NaN)).toBe("NaN");
   });
 
   it("split into their four parts and the share the prompt cache held", () => {

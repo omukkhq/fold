@@ -269,7 +269,7 @@ impl Supervisor {
         }
     }
 
-    /// Whether the worker of `agent` is idle, has read its inbox, has no user turn waiting in its stdin, and has no bound task that waits for its proposal or report and no bound proposal that waits for its verdict. A notice that carried a new message marks it delivered when it is queued on stdin, so the waiting turn is what holds the stop until the worker has seen the message.
+    /// Whether the worker of `agent` is idle without a turn that waits, has read its inbox, has no user turn waiting in its stdin, and has no bound task that waits for its proposal or report and no bound proposal that waits for its verdict. A notice that carried a new message marks it delivered when it is queued on stdin, so the waiting turn is what holds the stop until the worker has seen the message.
     async fn answered(&self, agent: &AgentName) -> Result<bool, StoreError> {
         let queued = lock(&self.inner.running)
             .get(agent)
@@ -283,7 +283,11 @@ impl Supervisor {
             return Ok(false);
         };
         drop(conn);
-        if row.state != WorkerState::Idle || messages::undelivered_count(read, agent).await? > 0 {
+        // A worker whose turn waits for the network or a usage limit owes that turn, so it has not answered.
+        if row.state != WorkerState::Idle
+            || row.wait.is_some()
+            || messages::undelivered_count(read, agent).await? > 0
+        {
             return Ok(false);
         }
         let waiting = match row.role {

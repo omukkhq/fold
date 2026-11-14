@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { needsItem } from "@/test/workers";
 import {
   GROUP_OF,
+  limitText,
+  waitersText,
   fullTitle,
+  wrapsWhole,
   itemsFor,
   needsYouGroups,
   reviewsWaitingFor,
@@ -132,7 +135,7 @@ describe("needsYouGroups", () => {
     expect(new Set(Object.values(GROUP_OF))).toEqual(
       new Set(["ask", "wait", "project"]),
     );
-    expect(Object.keys(GROUP_OF)).toHaveLength(18);
+    expect(Object.keys(GROUP_OF)).toHaveLength(20);
   });
 
   it("drops an empty group and words a missing tool", () => {
@@ -472,6 +475,8 @@ describe("needsYouGroups", () => {
       since: 1_760_000_000_000,
       supervised: true,
       told: ["web-lead"],
+      parked_by: null,
+      wait_for: null,
     };
     const groups = needsYouGroups(
       "demo",
@@ -543,6 +548,61 @@ describe("needsYouGroups", () => {
     expect(unknown?.text).toBe("@old-worker stalled");
   });
 
+  it("shows a stale claim with what the person does, after the stalls, and offers the restart only when the daemon names it", () => {
+    const groups = needsYouGroups("demo", [
+      needsItem({
+        kind: "stale_claim",
+        screen: "task",
+        agent: "backend-worker",
+        task: "T-378",
+        action: "message_worker",
+        reason:
+          "its process ended; message @backend-worker to resume it in its session, or restart it in a new session: `fld worker restart backend-worker`",
+      }),
+      needsItem({
+        kind: "stale_claim",
+        screen: "task",
+        agent: "reviewer-9",
+        task: "T-12",
+        proposal: "P-4",
+        action: "restart_worker",
+        reason:
+          "it runs but makes no fold call; restart it in a new session: `fld worker restart reviewer-9`",
+      }),
+      needsItem({
+        kind: "worker_stalled",
+        screen: "task",
+        agent: "web-worker",
+        task: "T-3",
+      }),
+    ]);
+    expect(groups.map((g) => g.title)).toEqual(["Waiting for you"]);
+    expect(lineKinds(groups)).toEqual([
+      "worker_stalled",
+      "stale_claim",
+      "stale_claim",
+    ]);
+    const [, message, restart] = allLines(groups);
+    expect(message).toMatchObject({
+      person: "backend-worker",
+      chip: null,
+      task: "T-378",
+      text: "holds a stale claim",
+      title:
+        "Its process ended; message @backend-worker to resume it in its session, or restart it in a new session: `fld worker restart backend-worker`",
+      href: "/p/demo/t/T-378",
+      restart: null,
+      wholeTitle: true,
+    });
+    expect(restart).toMatchObject({
+      person: "reviewer-9",
+      task: null,
+      text: "holds a stale review claim on P-4",
+      href: "/p/demo/t/T-12",
+      restart: "reviewer-9",
+    });
+  });
+
   it("shows a worker that cannot reach the model with Claude Code's error and what to check, after the workers that cannot reach fold", () => {
     const groups = needsYouGroups("demo", [
       needsItem({
@@ -568,12 +628,111 @@ describe("needsYouGroups", () => {
       title: "Invalid \\`key\\`",
       text: "cannot reach the model: check the sign-in, or run `fld doctor`",
       href: "/p/demo/agents",
+      wholeTitle: false,
     });
     expect(allLines(groups)[2]).toMatchObject({
       person: "api-worker",
       title: null,
       text: "cannot reach the model",
     });
+  });
+
+  it("shows the turns that cannot reach the model as one project line with who waits and what fold does", () => {
+    const groups = needsYouGroups("demo", [
+      needsItem({
+        kind: "worker_model_unreachable",
+        screen: "worker",
+        agent: null,
+        agents: ["api-lead", "web-lead"],
+        title: "API Error: Can't reach the API server",
+        reason: "fold runs each waiting turn again once the model answers",
+      }),
+    ]);
+    expect(groups.map((g) => g.title)).toEqual(["Project"]);
+    expect(allLines(groups)[0]).toMatchObject({
+      person: null,
+      chip: null,
+      text: "fold cannot reach the model",
+      title:
+        "@api-lead and @web-lead wait; fold runs each waiting turn again once the model answers",
+      href: "/p/demo/agents",
+      actions: [],
+      wholeTitle: true,
+    });
+  });
+
+  it("shows a usage limit as one project line with its reset and the pause action, opening the agents, last of its group", () => {
+    const limit = needsItem({
+      kind: "usage_limit",
+      screen: "worker",
+      agents: ["web-lead"],
+      limit: "weekly",
+      account: "work-a",
+      reset: "Mon 12:00am",
+      title: "You've hit your weekly limit · resets Mon 12:00am",
+      reason: "fold runs each waiting turn again after the reset",
+      actions: [{ action: "pause" }],
+    });
+    const groups = needsYouGroups("demo", [
+      limit,
+      needsItem({ kind: "worker_unreachable", agent: "api-lead" }),
+    ]);
+    expect(lineKinds(groups)).toEqual(["worker_unreachable", "usage_limit"]);
+    expect(allLines(groups)[1]).toMatchObject({
+      person: null,
+      chip: null,
+      text: "work-a reached its weekly limit, which resets Mon 12:00am",
+      title:
+        "@web-lead waits; fold runs each waiting turn again after the reset",
+      href: "/p/demo/agents",
+      wholeTitle: true,
+      actions: ["pause"],
+      switchTo: [],
+    });
+    const switching = needsYouGroups("demo", [
+      needsItem({
+        ...limit,
+        actions: [
+          { action: "pause" },
+          { action: "switch_account", account: "work-b" },
+          { action: "switch_account" },
+          { action: "switch_account", account: "personal" },
+        ],
+      }),
+    ]);
+    expect(allLines(switching)[0]).toMatchObject({
+      actions: ["pause", "switch_account", "switch_account", "switch_account"],
+      switchTo: ["work-b", "personal"],
+    });
+    const now = new Date(2026, 10, 14, 9, 0).getTime();
+    const at = new Date(2026, 10, 14, 13, 50).getTime();
+    expect(limitText({ limit: "usage", reset: null, resets_at: at }, now)).toBe(
+      "Claude Code reached its usage limit, which resets at 13:50",
+    );
+    expect(
+      limitText({ limit: "sonnet", reset: null, resets_at: null }, now),
+    ).toBe("Claude Code reached its Sonnet limit");
+    expect(
+      limitText({ limit: "opus", reset: "3:45pm `x`", resets_at: at }, now),
+    ).toBe("Claude Code reached its Opus limit, which resets 3:45pm \\`x\\`");
+    expect(
+      limitText(
+        {
+          limit: "session",
+          account: "default",
+          reset: null,
+          resets_at: null,
+        },
+        now,
+      ),
+    ).toBe("default reached its session limit");
+    expect(
+      limitText(
+        { limit: "opus", account: "work-b", reset: null, resets_at: null },
+        now,
+      ),
+    ).toBe("work-b reached its Opus limit");
+    expect(waitersText(["a", "b", "c"], null)).toBe("3 agents wait");
   });
 
   it("shows a worker whose claude the daemon cannot find with the fix, after the worker connections", () => {
@@ -638,14 +797,56 @@ describe("needsYouGroups", () => {
 });
 
 describe("fullTitle", () => {
+  const cut = { href: "/p/demo/t/T-1", restart: null, wholeTitle: false };
+
   it("gives the whole title as plain words, its commands without their marks", () => {
-    expect(fullTitle({ title: "Record changes in an audit log" })).toBe(
+    expect(fullTitle({ ...cut, title: "Record changes in an audit log" })).toBe(
       "Record changes in an audit log",
     );
     expect(
-      fullTitle({ title: "fold-checks.toml line 12: unknown field `tiemout`" }),
+      fullTitle({
+        ...cut,
+        title: "fold-checks.toml line 12: unknown field `tiemout`",
+      }),
     ).toBe("fold-checks.toml line 12: unknown field tiemout");
-    expect(fullTitle({ title: "a \\`b\\` path" })).toBe("a `b` path");
-    expect(fullTitle({ title: null })).toBeNull();
+    expect(fullTitle({ ...cut, title: "a \\`b\\` path" })).toBe("a `b` path");
+    expect(fullTitle({ ...cut, title: null })).toBeNull();
+  });
+
+  it("gives no tooltip to a title the line shows whole", () => {
+    const title = "fold runs each waiting turn again after the reset";
+    expect(wrapsWhole(cut)).toBe(false);
+    for (const whole of [
+      { ...cut, wholeTitle: true },
+      { ...cut, restart: "web-worker" },
+      { ...cut, href: null },
+    ]) {
+      expect(wrapsWhole(whole)).toBe(true);
+      expect(fullTitle({ ...whole, title })).toBeNull();
+    }
+    const [limit, network, stale] = allLines(
+      needsYouGroups("demo", [
+        needsItem({ kind: "usage_limit", agents: ["web-lead"], title }),
+        needsItem({
+          kind: "worker_model_unreachable",
+          agent: null,
+          agents: ["web-lead"],
+          title,
+        }),
+        needsItem({
+          kind: "stale_claim",
+          agent: "web-worker",
+          task: "T-3",
+          action: "message_worker",
+          reason: title,
+        }),
+      ]),
+    );
+    for (const line of [limit, network, stale]) {
+      expect(
+        line === undefined ? null : fullTitle(line),
+        line?.kind,
+      ).toBeNull();
+    }
   });
 });

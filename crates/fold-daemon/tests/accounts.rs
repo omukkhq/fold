@@ -1,0 +1,777 @@
+#![cfg(test)]
+
+use std::path::{Path, PathBuf};
+
+use axum::http::{Method, StatusCode};
+use fold_core::accounts::{AccountName, check_token};
+use fold_core::{ManualClock, WorkerState, codes};
+use fold_daemon::services::agents::accounts;
+use fold_store::testing::eventually;
+use serde_json::{Value, json};
+use tempfile::TempDir;
+
+use crate::common::acceptance::{HUMAN, Harness, WAIT};
+use crate::project_pause::{LEAD, lead_running};
+use crate::worker_resume::{MAIN, until_state, worker};
+use crate::workers_support::{FakeClaude, Run};
+
+pub(crate) const TOKEN_A: &str = "sk-ant-oat01-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+pub(crate) const TOKEN_B: &str = "sk-ant-oat01-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const ACCOUNT: &str = "/api/v1/projects/demo/account";
+const TOKEN_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
+
+/// The host's accounts folder with `work-a` holding [`TOKEN_A`] and `work-b` holding [`TOKEN_B`].
+pub(crate) fn accounts_with_two(clock: &ManualClock) -> (TempDir, PathBuf) {
+    use fold_core::Clock as _;
+    let temp = TempDir::new().unwrap();
+    let dir = temp.path().join("accounts");
+    for (name, token) in [("work-a", TOKEN_A), ("work-b", TOKEN_B)] {
+        accounts::add(
+            &dir,
+            &AccountName::parse(name).unwrap(),
+            &check_token(token).unwrap(),
+            clock.now(),
+        )
+        .unwrap();
+    }
+    (temp, dir)
+}
+
+/// Gives the fake's launcher the host's accounts in `dir` and Claude Code's own folder beside them, with its login when `login`, so no test reads the real home.
+pub(crate) fn host_accounts(fake: &mut FakeClaude, dir: &Path, login: bool) {
+    let config = dir.parent().unwrap().join("claude-config");
+    std::fs::create_dir_all(&config).unwrap();
+    if login {
+        std::fs::write(config.join(".credentials.json"), "{}\n").unwrap();
+    }
+    fake.launcher.accounts = Some(dir.to_path_buf());
+    fake.launcher.env.push((
+        "CLAUDE_CONFIG_DIR".to_owned(),
+        config.to_string_lossy().into_owned(),
+    ));
+}
+
+/// Whether `run` got `token` as its account token. The values are compared here and never printed.
+pub(crate) fn ran_with(run: &Run, token: Option<&str>) -> bool {
+    run.env.get(TOKEN_ENV).map(String::as_str) == token
+}
+
+pub(crate) async fn choose(harness: &Harness, account: Option<&str>) -> (StatusCode, Value) {
+    harness
+        .http(
+            Method::PUT,
+            ACCOUNT,
+            Some(&json!({ "account": account })),
+            HUMAN,
+        )
+        .await
+}
+
+/// The runs of `agent` once there are `count` of them and the newest has read its `initialize` line.
+pub(crate) async fn until_started(fake: &FakeClaude, agent: &str, count: usize) -> Vec<Run> {
+    eventually(WAIT, async || {
+        let runs = fake.runs_of(agent);
+        match runs.last() {
+            Some(last) if runs.len() == count && !last.stdin.is_empty() => Ok(runs),
+            _ => Err(runs.len()),
+        }
+    })
+    .await
+}
+
+fn account_events(harness: &[crate::common::acceptance::StoredEvent]) -> Vec<Value> {
+    harness
+        .iter()
+        .filter(|event| event.kind == "workers.account_changed")
+        .map(|event| event.data.clone())
+        .collect()
+}
+
+/// Every file below `dir` whose bytes hold `needle`, without following a link.
+fn files_holding(dir: &Path, needle: &str) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            found.extend(files_holding(&path, needle));
+        } else if kind.is_file()
+            && std::fs::read(&path)
+                .is_ok_and(|bytes| bytes.windows(needle.len()).any(|w| w == needle.as_bytes()))
+        {
+            found.push(path);
+        }
+    }
+    found
+}
+
+#[tokio::test]
+async fn a_change_of_the_account_resumes_each_idle_worker_in_its_own_session_with_the_new_token() {
+    let clock = ManualClock::new();
+    let (_accounts, dir) = accounts_with_two(&clock);
+    let mut fake = FakeClaude::new("result");
+    host_accounts(&mut fake, &dir, true);
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    let first = &fake.runs_of(LEAD)[0];
+    assert!(
+        ran_with(first, None),
+        "without an account the login stays as it is"
+    );
+    assert!(!first.env.contains_key("FOLD_ACCOUNT"));
+    let session = worker(&harness, LEAD).await.session_id;
+
+    let (status, body) = choose(&harness, Some("work-a")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({"account": "work-a", "accounts": ["default", "work-a", "work-b"]})
+    );
+    let runs = until_started(&fake, LEAD, 2).await;
+    assert_eq!(runs[1].flag("--resume"), Some(session.as_str()));
+    assert!(
+        ran_with(&runs[1], Some(TOKEN_A)),
+        "the resume has the token of work-a"
+    );
+    assert_eq!(
+        runs[1].env.get("FOLD_ACCOUNT").map(String::as_str),
+        Some("work-a")
+    );
+    assert!(
+        !runs[1].args.iter().any(|arg| arg.contains(TOKEN_A)),
+        "no argument holds the token"
+    );
+    assert_eq!(
+        runs[1].stdin.len(),
+        1,
+        "an idle lead with nothing waiting gets no turn"
+    );
+    until_state(&harness, LEAD, WorkerState::Idle).await;
+
+    let (status, body) = choose(&harness, Some("work-b")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let runs = until_started(&fake, LEAD, 3).await;
+    assert_eq!(runs[2].flag("--resume"), Some(session.as_str()));
+    assert!(
+        ran_with(&runs[2], Some(TOKEN_B)),
+        "the resume has the token of work-b"
+    );
+    let row = until_state(&harness, LEAD, WorkerState::Idle).await;
+    assert_eq!(row.session_id, session, "no session is lost");
+
+    let (status, _) = choose(&harness, Some("work-b")).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = choose(&harness, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["account"], "default");
+    let runs = until_started(&fake, LEAD, 4).await;
+    assert!(ran_with(&runs[3], None), "Claude Code's own login again");
+    assert_eq!(runs[3].flag("--resume"), Some(session.as_str()));
+    let events = harness.events().await;
+    assert_eq!(
+        account_events(&events),
+        [
+            json!({"old": "default", "new": "work-a"}),
+            json!({"old": "work-a", "new": "work-b"}),
+            json!({"old": "work-b", "new": "default"}),
+        ],
+        "a choice of the same account stores nothing"
+    );
+    assert!(
+        !events.iter().any(|event| event.kind == "worker.stopped"),
+        "a switch stops no worker"
+    );
+    for event in &events {
+        let text = event.data.to_string();
+        assert!(
+            !text.contains(TOKEN_A) && !text.contains(TOKEN_B),
+            "an event holds a token"
+        );
+    }
+    let config =
+        std::fs::read_to_string(Path::new(harness.root()).join(".fold/config.toml")).unwrap();
+    assert!(!config.contains("account"), "{config}");
+}
+
+#[tokio::test]
+async fn a_working_worker_keeps_its_process_until_its_turn_ends() {
+    let clock = ManualClock::new();
+    let (_accounts, dir) = accounts_with_two(&clock);
+    let mut fake = FakeClaude::new("result").holding_resumed_turns();
+    host_accounts(&mut fake, &dir, true);
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    assert_eq!(choose(&harness, Some("work-a")).await.0, StatusCode::OK);
+    until_started(&fake, LEAD, 2).await;
+    until_state(&harness, LEAD, WorkerState::Idle).await;
+
+    // A message gives the resumed lead a turn, which the stand-in holds, so the lead works.
+    harness
+        .call(
+            MAIN,
+            "send_message",
+            json!({"to": [LEAD], "body": "look at T-1"}),
+        )
+        .await;
+    until_state(&harness, LEAD, WorkerState::Working).await;
+    assert_eq!(choose(&harness, Some("work-b")).await.0, StatusCode::OK);
+    eventually(WAIT, async || {
+        let events = harness.events().await;
+        (account_events(&events).len() == 2).then_some(()).ok_or(())
+    })
+    .await;
+    tokio::task::yield_now().await;
+    let runs = fake.runs_of(LEAD);
+    assert_eq!(runs.len(), 2, "the working lead keeps its process");
+    assert_eq!(worker(&harness, LEAD).await.state, WorkerState::Working);
+
+    let turns = worker(&harness, LEAD).await.turns;
+    fake.release(1, None);
+    let runs = until_started(&fake, LEAD, 3).await;
+    assert!(ran_with(&runs[2], Some(TOKEN_B)));
+    assert_eq!(runs[2].flag("--resume"), runs[1].flag("--resume"));
+    assert!(
+        !runs[1]
+            .stdin
+            .iter()
+            .any(|line| line.contains("\"interrupt\"")),
+        "the turn was never interrupted"
+    );
+    let row = until_state(&harness, LEAD, WorkerState::Idle).await;
+    assert!(row.turns > turns, "the held turn ran to its end");
+}
+
+#[tokio::test]
+async fn a_notice_that_comes_while_the_process_changes_reaches_the_new_one() {
+    let clock = ManualClock::new();
+    let (_accounts, dir) = accounts_with_two(&clock);
+    let mut fake = FakeClaude::new("result").stubborn();
+    host_accounts(&mut fake, &dir, true);
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    assert_eq!(choose(&harness, Some("work-a")).await.0, StatusCode::OK);
+    // The stand-in ignores the closed stdin and SIGINT, so its process lives on until the project's clock reaches SIGTERM.
+    let first = fake.runs_of(LEAD).remove(0);
+    eventually(WAIT, async || fake.saw_eof(&first).then_some(()).ok_or(())).await;
+    harness
+        .call(
+            MAIN,
+            "send_message",
+            json!({"to": [LEAD], "body": "look at T-1"}),
+        )
+        .await;
+    let project_clock = harness.project.clock().clone();
+    let runs = eventually(WAIT, async || {
+        let runs = fake.runs_of(LEAD);
+        if runs.len() == 2 && runs[1].stdin.len() >= 2 {
+            Ok(runs)
+        } else {
+            project_clock
+                .advance(std::time::Duration::from_secs(6))
+                .unwrap();
+            Err(runs.len())
+        }
+    })
+    .await;
+    assert!(ran_with(&runs[1], Some(TOKEN_A)));
+    assert!(
+        runs[1].stdin[1].contains("\"type\":\"user\""),
+        "the notice is the new process's first turn"
+    );
+    assert_eq!(
+        runs[0].stdin.len(),
+        first.stdin.len(),
+        "the old process never got it"
+    );
+}
+
+#[tokio::test]
+async fn a_new_token_of_the_same_account_reaches_an_idle_worker_before_its_next_turn() {
+    use fold_core::Clock as _;
+    let clock = ManualClock::new();
+    let (_accounts, dir) = accounts_with_two(&clock);
+    let mut fake = FakeClaude::new("result");
+    host_accounts(&mut fake, &dir, true);
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    assert_eq!(choose(&harness, Some("work-a")).await.0, StatusCode::OK);
+    until_started(&fake, LEAD, 2).await;
+    until_state(&harness, LEAD, WorkerState::Idle).await;
+    clock.advance(std::time::Duration::from_secs(60)).unwrap();
+    accounts::update(
+        &dir,
+        &AccountName::parse("work-a").unwrap(),
+        &check_token(TOKEN_B).unwrap(),
+        clock.now(),
+    )
+    .unwrap();
+    harness
+        .call(
+            MAIN,
+            "send_message",
+            json!({"to": [LEAD], "body": "look at T-1"}),
+        )
+        .await;
+    let runs = until_started(&fake, LEAD, 3).await;
+    assert!(ran_with(&runs[1], Some(TOKEN_A)));
+    assert!(
+        ran_with(&runs[2], Some(TOKEN_B)),
+        "the lead continues with the new token"
+    );
+    assert_eq!(runs[2].flag("--resume"), runs[1].flag("--resume"));
+    let holds = |run: &Run| run.stdin.iter().any(|line| line.contains("look at T-1"));
+    assert!(
+        !holds(&runs[1]) && holds(&runs[2]),
+        "the turn runs on the new token, never on the old one"
+    );
+}
+
+#[tokio::test]
+async fn a_turn_that_waits_runs_again_on_the_new_token_of_its_account() {
+    use crate::turn_waits::{
+        advance, fake_with_turn, read_fixture, set_turn, until_idle, until_turns,
+    };
+    use fold_core::Clock as _;
+    use fold_core::turn_waits::{NETWORK_FIRST_WAIT, NETWORK_RERUN_TURN};
+    let clock = ManualClock::new();
+    let (_accounts, dir) = accounts_with_two(&clock);
+    let turns = TempDir::new().unwrap();
+    let (mut fake, turn) = fake_with_turn(&turns, &read_fixture("result"));
+    host_accounts(&mut fake, &dir, true);
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    assert_eq!(choose(&harness, Some("work-a")).await.0, StatusCode::OK);
+    until_started(&fake, LEAD, 2).await;
+    until_state(&harness, LEAD, WorkerState::Idle).await;
+    let session = worker(&harness, LEAD).await.session_id;
+    set_turn(&turn, &read_fixture("network_error"));
+    harness
+        .call(
+            MAIN,
+            "send_message",
+            json!({"to": [LEAD], "body": "look at T-1"}),
+        )
+        .await;
+    until_idle(&harness, LEAD, |row| row.wait.is_some()).await;
+
+    clock.advance(std::time::Duration::from_secs(60)).unwrap();
+    accounts::update(
+        &dir,
+        &AccountName::parse("work-a").unwrap(),
+        &check_token(TOKEN_B).unwrap(),
+        clock.now(),
+    )
+    .unwrap();
+    set_turn(&turn, &read_fixture("result"));
+    advance(&harness, NETWORK_FIRST_WAIT);
+    let runs = until_turns(&fake, LEAD, NETWORK_RERUN_TURN, 1).await;
+    let rerun = runs
+        .iter()
+        .find(|run| {
+            run.stdin
+                .iter()
+                .any(|line| line.contains(NETWORK_RERUN_TURN))
+        })
+        .unwrap();
+    assert!(
+        ran_with(rerun, Some(TOKEN_B)),
+        "the turn runs again on the new token"
+    );
+    assert_eq!(rerun.flag("--resume"), Some(session.as_str()));
+    until_idle(&harness, LEAD, |row| row.wait.is_none()).await;
+}
+
+#[tokio::test]
+async fn the_route_names_accounts_only_and_refuses_an_unknown_one() {
+    let clock = ManualClock::new();
+    let (_accounts, dir) = accounts_with_two(&clock);
+    let mut fake = FakeClaude::new("result");
+    host_accounts(&mut fake, &dir, true);
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    let (status, listed) = harness
+        .http(Method::GET, "/api/v1/projects/demo/workers", None, HUMAN)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        listed["account"],
+        json!({"account": "default", "accounts": ["default", "work-a", "work-b"]})
+    );
+    let (status, unknown) = choose(&harness, Some("work-c")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{unknown}");
+    assert_eq!(unknown["error"]["code"], codes::ACCOUNT_NOT_FOUND);
+    assert_eq!(unknown["error"]["details"]["account"], "work-c");
+    assert!(
+        unknown["error"]["details"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("fld account add work-c")
+    );
+    let (status, bad) = choose(&harness, Some("Work C")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    assert_eq!(bad["error"]["code"], codes::INVALID_ACCOUNT_NAME);
+    let (status, chosen) = choose(&harness, Some("work-a")).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, listed) = harness
+        .http(Method::GET, "/api/v1/projects/demo/workers", None, HUMAN)
+        .await;
+    assert_eq!(listed["account"]["account"], "work-a");
+    for body in [&chosen, &listed, &unknown] {
+        let text = body.to_string();
+        assert!(
+            !text.contains(TOKEN_A) && !text.contains(TOKEN_B),
+            "an answer holds a token"
+        );
+    }
+    until_started(&fake, LEAD, 2).await;
+    let root = Path::new(harness.root());
+    assert!(
+        files_holding(root, TOKEN_A).is_empty(),
+        "a file of the project folder holds the token"
+    );
+    let (status, back) = choose(&harness, Some("default")).await;
+    assert_eq!(status, StatusCode::OK, "{back}");
+    assert_eq!(back["account"], "default");
+    let config = std::fs::read_to_string(root.join(".fold/config.toml")).unwrap_or_default();
+    assert!(
+        !config.contains("account"),
+        "default is stored as no key: {config}"
+    );
+    let runs = until_started(&fake, LEAD, 3).await;
+    assert!(ran_with(&runs[2], None), "default passes no token");
+}
+
+#[tokio::test]
+async fn a_worker_of_a_project_that_names_an_unknown_account_fails_with_its_reason() {
+    let clock = ManualClock::new();
+    let (_accounts, dir) = accounts_with_two(&clock);
+    let mut fake = FakeClaude::new("result");
+    host_accounts(&mut fake, &dir, true);
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    let config = Path::new(harness.root()).join(".fold/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap_or_default();
+    std::fs::write(&config, format!("account = \"gone\"\n{text}")).unwrap();
+    // The idle lead keeps its process: a start would fail, so no switch happens.
+    harness
+        .call(
+            MAIN,
+            "start_worker",
+            json!({"role": "review_lead", "name": "reviews"}),
+        )
+        .await;
+    let row = until_state(&harness, "reviews", WorkerState::Failed).await;
+    assert_eq!(row.failed_reason.as_deref(), Some(codes::ACCOUNT_NOT_FOUND));
+    let items = crate::turn_waits::needs_you(&harness).await;
+    let item = items
+        .iter()
+        .find(|item| item["agent"] == "reviews")
+        .expect("an item tells the person what to do");
+    assert_eq!(item["kind"], "worker_unreachable");
+    assert!(
+        item["reason"]
+            .as_str()
+            .unwrap()
+            .contains("fld account add <name>"),
+        "{item}"
+    );
+    assert!(
+        fake.runs_of("reviews").is_empty(),
+        "no Claude Code ran without its account"
+    );
+    assert_eq!(worker(&harness, LEAD).await.state, WorkerState::Idle);
+}
+
+#[tokio::test]
+async fn a_usage_limit_offers_the_other_accounts_and_a_switch_runs_the_waiting_turn_on_the_new_one()
+{
+    use crate::turn_waits::{
+        fake_with_turn, limit_turn, needs_you, read_fixture, reruns_of, set_turn, until_idle,
+        until_turns,
+    };
+    use fold_core::turn_waits::LIMIT_RERUN_TURN;
+    let clock = ManualClock::new();
+    let (_accounts, dir) = accounts_with_two(&clock);
+    let turns = TempDir::new().unwrap();
+    let (mut fake, turn) = fake_with_turn(&turns, &read_fixture("result"));
+    host_accounts(&mut fake, &dir, true);
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    assert_eq!(choose(&harness, Some("work-a")).await.0, StatusCode::OK);
+    until_started(&fake, LEAD, 2).await;
+    until_state(&harness, LEAD, WorkerState::Idle).await;
+    let session = worker(&harness, LEAD).await.session_id;
+
+    set_turn(
+        &turn,
+        &limit_turn("You've hit your weekly limit · resets Mon 12:00am"),
+    );
+    harness
+        .call(
+            MAIN,
+            "send_message",
+            json!({"to": [LEAD], "body": "look at T-1"}),
+        )
+        .await;
+    until_idle(&harness, LEAD, |row| row.wait.is_some()).await;
+    let items = needs_you(&harness).await;
+    let limit = items
+        .iter()
+        .find(|item| item["kind"] == "usage_limit")
+        .expect("a usage-limit item");
+    assert_eq!(
+        limit["actions"],
+        json!([
+            {"action": "pause"},
+            {"action": "switch_account", "account": "default"},
+            {"action": "switch_account", "account": "work-b"}
+        ]),
+        "one switch per other account, by name"
+    );
+    assert_eq!(
+        limit["account"], "work-a",
+        "the item names the project's account"
+    );
+    let text = serde_json::to_string(&items).unwrap();
+    assert!(!text.contains(TOKEN_A) && !text.contains(TOKEN_B));
+
+    assert_eq!(
+        reruns_of(&fake, LEAD, LIMIT_RERUN_TURN),
+        0,
+        "no turn runs again before the switch"
+    );
+    set_turn(&turn, &read_fixture("result"));
+    let (status, body) = choose(&harness, Some("work-b")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let runs = until_turns(&fake, LEAD, LIMIT_RERUN_TURN, 1).await;
+    let rerun = runs
+        .iter()
+        .find(|run| run.stdin.iter().any(|line| line.contains(LIMIT_RERUN_TURN)))
+        .unwrap();
+    assert!(
+        ran_with(rerun, Some(TOKEN_B)),
+        "the waiting turn runs on work-b"
+    );
+    assert_eq!(
+        rerun.flag("--resume"),
+        Some(session.as_str()),
+        "in its own session"
+    );
+    until_idle(&harness, LEAD, |row| row.wait.is_none()).await;
+    assert!(
+        !needs_you(&harness)
+            .await
+            .iter()
+            .any(|item| item["kind"] == "usage_limit"),
+        "the item ends with the wait"
+    );
+}
+
+/// A lead whose turn waits at a usage limit, on the account `on` (`None` for Claude Code's own login), with the next turn set to end well.
+async fn lead_at_the_limit(
+    on: Option<&str>,
+) -> (TempDir, PathBuf, TempDir, FakeClaude, Harness, String) {
+    use crate::turn_waits::{fake_with_turn, limit_turn, read_fixture, set_turn, until_idle};
+    let clock = ManualClock::new();
+    let (accounts, dir) = accounts_with_two(&clock);
+    let turns = TempDir::new().unwrap();
+    let (mut fake, turn) = fake_with_turn(&turns, &read_fixture("result"));
+    host_accounts(&mut fake, &dir, true);
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    let mut runs = 1;
+    if let Some(name) = on {
+        assert_eq!(choose(&harness, Some(name)).await.0, StatusCode::OK);
+        runs += 1;
+        until_started(&fake, LEAD, runs).await;
+        until_state(&harness, LEAD, WorkerState::Idle).await;
+    }
+    let session = worker(&harness, LEAD).await.session_id;
+    set_turn(
+        &turn,
+        &limit_turn("You've hit your weekly limit · resets Mon 12:00am"),
+    );
+    harness
+        .call(
+            MAIN,
+            "send_message",
+            json!({"to": [LEAD], "body": "look at T-1"}),
+        )
+        .await;
+    until_idle(&harness, LEAD, |row| row.wait.is_some()).await;
+    set_turn(&turn, &read_fixture("result"));
+    (accounts, dir, turns, fake, harness, session)
+}
+
+/// The run of `agent` that took the re-run of its waiting turn, once it came, with no time passing on the project's clock.
+async fn the_rerun(fake: &FakeClaude) -> Run {
+    use crate::turn_waits::until_turns;
+    use fold_core::turn_waits::LIMIT_RERUN_TURN;
+    until_turns(fake, LEAD, LIMIT_RERUN_TURN, 1)
+        .await
+        .into_iter()
+        .find(|run| run.stdin.iter().any(|line| line.contains(LIMIT_RERUN_TURN)))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_choice_of_an_account_runs_the_turn_at_the_limit_again_at_once_on_it() {
+    let (_accounts, _dir, _turns, fake, harness, session) = lead_at_the_limit(None).await;
+    let (status, body) = choose(&harness, Some("work-a")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rerun = the_rerun(&fake).await;
+    assert!(ran_with(&rerun, Some(TOKEN_A)), "the turn runs on work-a");
+    assert_eq!(rerun.flag("--resume"), Some(session.as_str()));
+    crate::turn_waits::until_idle(&harness, LEAD, |row| row.wait.is_none()).await;
+}
+
+#[tokio::test]
+async fn a_new_token_of_the_waiting_account_runs_the_turn_at_the_limit_again_at_once() {
+    use fold_core::Clock as _;
+    let (_accounts, dir, _turns, fake, harness, session) = lead_at_the_limit(Some("work-a")).await;
+    let later = ManualClock::new();
+    later.advance(std::time::Duration::from_secs(60)).unwrap();
+    accounts::update(
+        &dir,
+        &AccountName::parse("work-a").unwrap(),
+        &check_token(TOKEN_B).unwrap(),
+        later.now(),
+    )
+    .unwrap();
+    let rerun = the_rerun(&fake).await;
+    assert!(
+        ran_with(&rerun, Some(TOKEN_B)),
+        "the turn runs on the new token without waiting for its backoff"
+    );
+    assert_eq!(rerun.flag("--resume"), Some(session.as_str()));
+    crate::turn_waits::until_idle(&harness, LEAD, |row| row.wait.is_none()).await;
+}
+
+/// The web's switch of a usage-limit item: the PUT with the browser's session cookie, then at once the reads that its answer and the live events start, while the switch replaces the process. Each switch runs the turn at the limit again at once on the chosen account, back and forth.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_needs_you_switch_runs_the_turn_at_the_limit_again_at_once_while_the_page_reads() {
+    use crate::turn_waits::{limit_turn, set_turn, until_idle, until_turns};
+    use fold_core::turn_waits::LIMIT_RERUN_TURN;
+    let (_accounts, _dir, turns, fake, harness, session) = lead_at_the_limit(Some("work-a")).await;
+    let turn = turns.path().join("turn.jsonl");
+    let reads = async || {
+        for _ in 0..20 {
+            for path in ["needs-you", "workers", "agents", "board"] {
+                let _ = harness
+                    .http(
+                        Method::GET,
+                        &format!("/api/v1/projects/demo/{path}"),
+                        None,
+                        HUMAN,
+                    )
+                    .await;
+            }
+        }
+    };
+    for (round, (name, token)) in [("work-b", TOKEN_B), ("work-a", TOKEN_A)]
+        .into_iter()
+        .enumerate()
+    {
+        set_turn(
+            &turn,
+            &limit_turn("You've hit your weekly limit · resets Mon 12:00am"),
+        );
+        let ((status, body), ()) = tokio::join!(choose(&harness, Some(name)), reads());
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let runs = until_turns(&fake, LEAD, LIMIT_RERUN_TURN, round + 1).await;
+        let rerun = runs
+            .iter()
+            .rfind(|run| run.stdin.iter().any(|line| line.contains(LIMIT_RERUN_TURN)))
+            .unwrap();
+        assert!(ran_with(rerun, Some(token)), "round {round} runs on {name}");
+        assert_eq!(rerun.flag("--resume"), Some(session.as_str()));
+        until_idle(&harness, LEAD, |row| {
+            row.wait
+                .as_ref()
+                .is_some_and(|wait| wait.tries == round as u32 + 1)
+        })
+        .await;
+    }
+}
+
+/// A host whose Claude Code runs only on account tokens has no login of its own: `default` is no account to choose, in the workers' answer and in a usage limit's switches, while a project on it still shows it as its account.
+#[tokio::test]
+async fn default_is_offered_only_while_claude_code_has_its_own_login() {
+    use crate::turn_waits::{fake_with_turn, limit_turn, read_fixture, set_turn, until_idle};
+    let clock = ManualClock::new();
+    let (_accounts, dir) = accounts_with_two(&clock);
+    let turns = TempDir::new().unwrap();
+    let (mut fake, turn) = fake_with_turn(&turns, &read_fixture("result"));
+    host_accounts(&mut fake, &dir, false);
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    let account = async || {
+        harness
+            .http(Method::GET, "/api/v1/projects/demo/workers", None, HUMAN)
+            .await
+            .1["account"]
+            .clone()
+    };
+    assert_eq!(
+        account().await,
+        json!({"account": "default", "accounts": ["work-a", "work-b"]}),
+        "the project's account shows, but it is no choice without the login"
+    );
+    for name in [Some("default"), Some("system-default"), None] {
+        let (status, refused) = choose(&harness, name).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{name:?}: {refused}");
+        assert_eq!(refused["error"]["code"], codes::ACCOUNT_NOT_FOUND);
+        assert_eq!(refused["error"]["details"]["account"], "default");
+        assert!(
+            refused["error"]["details"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("sign in with `claude login`, then run `fld account use default`"),
+            "{refused}"
+        );
+    }
+
+    assert_eq!(choose(&harness, Some("work-a")).await.0, StatusCode::OK);
+    until_started(&fake, LEAD, 2).await;
+    until_state(&harness, LEAD, WorkerState::Idle).await;
+    set_turn(
+        &turn,
+        &limit_turn("You've hit your weekly limit · resets Mon 12:00am"),
+    );
+    harness
+        .call(
+            MAIN,
+            "send_message",
+            json!({"to": [LEAD], "body": "look at T-1"}),
+        )
+        .await;
+    until_idle(&harness, LEAD, |row| row.wait.is_some()).await;
+    let items = crate::turn_waits::needs_you(&harness).await;
+    let limit = items
+        .iter()
+        .find(|item| item["kind"] == "usage_limit")
+        .expect("a usage-limit item");
+    assert_eq!(limit["account"], "work-a");
+    assert_eq!(
+        limit["actions"],
+        json!([
+            {"action": "pause"},
+            {"action": "switch_account", "account": "work-b"}
+        ]),
+        "no switch to default without its login"
+    );
+
+    std::fs::write(
+        dir.parent()
+            .unwrap()
+            .join("claude-config/.credentials.json"),
+        "{}\n",
+    )
+    .unwrap();
+    assert_eq!(
+        account().await["accounts"],
+        json!(["default", "work-a", "work-b"]),
+        "a login of Claude Code makes default a choice again"
+    );
+    let (status, body) = choose(&harness, Some("system-default")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["account"], "default",
+        "system-default reads as default"
+    );
+}

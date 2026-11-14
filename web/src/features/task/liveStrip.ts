@@ -17,11 +17,11 @@ type ChangeKind = LiveWorkspace["files"][number]["change"];
 
 export interface LiveStrip {
   worker: string;
-  /** `is running checks for v2` while a check run goes in the workspace; what fold saw of the worker, such as `running a command for 8 min`, `no activity for 12 min` or `stopped`; `is editing`; `sent P-1 v1` while the workspace files are the open proposal's newest version; or `no edits for 7 min` while the daemon reports the worker stalled and no sent version waits on others. */
+  /** `is running checks for v2` while a check run goes in the workspace; what fold saw of the worker, such as `running a command for 8 min`, `no activity for 12 min`, `stopped` or `waits for @web-lead's go`; `last edited` while fold saw nothing of the worker, or `has no edits yet` without an edit; `sent P-1 v1` while the workspace files are the open proposal's newest version; or `no edits for 7 min` while the daemon reports the worker stalled and no sent version waits on others. */
   verb: string;
-  /** The file being edited; null while checks run, after a sent version, while stalled or unless exactly one file changed. */
+  /** The file of the last edit; null while checks run, after a sent version, while stalled, while fold says what the worker does, or unless exactly one file changed. */
   file: string | null;
-  /** What a sent version waits for, `waits for review`; null without one and while checks run. */
+  /** What a sent version waits for, `waits for review`, or the time of the last edit, `6 min ago`, after `last edited`; null otherwise and while checks run. */
   wait: string | null;
   /** The strip's details behind its info button: `4 files · ck-31 3 min ago · base r7`; null when the stream and the task read name none. */
   details: string | null;
@@ -66,7 +66,7 @@ export function baseText(workspace: { base: string; main?: string }): string {
 }
 
 /**
- * One fact, who is editing what, that the holder waits for its checks, or which version the holder sent and what it waits for, and its details: the files changed, the latest checkpoint and the base.
+ * One fact, what the holder last edited and when, what fold saw of it, that the holder waits for its checks, or which version the holder sent and what it waits for, and its details: the files changed, the latest checkpoint and the base.
  * The task payload names the workspace, and its details, activity, checkpoints, proposal and check run; the event stream's frame fills in the rest.
  * A check run that goes leads, and the stall wording shows only while no run goes and no sent version waits on others. Null without a workspace.
  */
@@ -127,7 +127,10 @@ export function liveStrip(
   }
   const [only, ...others] = live?.files ?? [];
   const liveFile = only !== undefined && others.length === 0 ? only.path : null;
-  let verb = "is editing";
+  // A workspace without an edit takes its creation as its last activity, which is no edit's time.
+  const edited =
+    (activity !== null || only !== undefined) && Number.isFinite(lastEdit);
+  let verb = edited ? "last edited" : "has no edits yet";
   if (run !== null) {
     const text = checkRunText(run, task.proposal);
     verb = `is ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
@@ -143,7 +146,12 @@ export function liveStrip(
     worker,
     verb,
     file: quiet ? null : (activity?.path ?? liveFile),
-    wait: run === null && sent !== null ? waitText(sent.waits) : null,
+    wait:
+      run === null && sent !== null
+        ? waitText(sent.waits)
+        : !quiet && edited
+          ? formatSince(now, lastEdit)
+          : null,
     details: parts.length > 0 ? parts.join(" · ") : null,
     stalled,
     activity: seen,

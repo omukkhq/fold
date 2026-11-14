@@ -212,6 +212,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** A named human chooses the Claude account of the project's workers, one of the host's accounts or `default` for Claude Code's own login, which a config states by leaving the key out. The name goes into `.fold/config.toml`; each running worker continues in its own session with the new account when its current turn ends, an idle one at once. The interactive main agent of `fld claude` keeps its account until it starts again. The answer names accounts only, never a token. */
+        put: operations["set_project_account"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/agent-changes/ignore": {
         parameters: {
             query?: never;
@@ -647,7 +664,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, a worker whose turns fail before they reach the model, a notice target fold turned off, which a person's change of the target or a test send that gets through ends, and the files that changed in the project folder during supervised workers' tool calls, whose paths leave the waiting folder's item. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `stash.discarded`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, `notify.target_changed`, `folder.agent_changed` and `folder.agent_change_cleared`, and with the live `worker.output` steps `result` and `result_error`, which end a turn, and with the live `workspace.changed` whose `stalled` changed, which starts or ends a `worker_stalled` item. */
+        /** Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, a worker whose turns fail before they reach the model, the turns that could not reach the model at all and those that reached a usage limit, which fold runs again, a notice target fold turned off, which a person's change of the target or a test send that gets through ends, and the files that changed in the project folder during supervised workers' tool calls, whose paths leave the waiting folder's item, and stale claims whose holder's lead did not act or that no agent can act on. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `stash.discarded`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, `notify.target_changed`, `folder.agent_changed`, `folder.agent_change_cleared`, `worker.waiting`, `worker.wait_ended`, `claim.*`, and with the live `worker.output` steps `result` and `result_error`, which end a turn, and with the live `workspace.changed` whose `stalled` changed, which starts or ends a `worker_stalled` item. */
         get: operations["list_needs_you"];
         put?: never;
         post?: never;
@@ -2037,10 +2054,10 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @description What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, and `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free. `working`, `stopped` and `waits_for_slot` are never stalls.
+         * @description What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free, `waits_for_network` while its last turn could not reach the model, which fold runs again once the model answers, and `waits_for_usage_limit` while its last turn reached a usage limit, which fold runs again after the reset, and `parked` while it waits for the go of the agent that stopped it with `stop_worker`'s `wait_for`. `working`, `stopped`, `waits_for_slot`, `parked` and the waits are never stalls.
          * @enum {string}
          */
-        ActivityState: "working" | "silent" | "long_call" | "stopped" | "failed" | "waits_for_slot";
+        ActivityState: "working" | "silent" | "long_call" | "stopped" | "failed" | "waits_for_slot" | "waits_for_network" | "waits_for_usage_limit" | "parked";
         /** @description One comment on the version the human read, as its own `comment` review. */
         AddCommentBody: components["schemas"]["CommentBody"] & {
             /**
@@ -2116,7 +2133,13 @@ export interface components {
             last_error: string | null;
             /** @description The process's turns failed often enough in a row without reaching the model that it cannot work until a human fixes Claude Code; the daemon decides it, and it is false for a stopped process. */
             model_unreachable: boolean;
+            /**
+             * @description The agent that stopped the process with `stop_worker`'s `wait_for` and whose go it waits for; null for a process nobody parked. Every start ends the park.
+             * @example web-lead
+             */
+            parked_by: string | null;
             state: components["schemas"]["WorkerProcessState"];
+            waits_for: components["schemas"]["TurnWaitReason"] | null;
         };
         /** @description A connected session. A session has no public id; one adapter process is one session, so its pid names it. */
         AgentSession: {
@@ -2230,6 +2253,7 @@ export interface components {
             version: number;
         };
         AttentionItem: {
+            action: components["schemas"]["PersonAction"] | null;
             /** @description For a `question`: one of the task's open asks is closable, so a human can mark it answered with the asks route, because it is no worker's `AskUserQuestion`, which only a reply in its thread ends. False for every other kind. */
             closable: boolean;
             kind: components["schemas"]["AttentionKind"];
@@ -3036,7 +3060,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed" | "review.plan_created" | "review.plan_changed" | "review.plan_joined" | "review.plan_left" | "review.plan_wait_ended" | "review.plan_started" | "review.plan_ended" | "review.batch_integrated" | "review.batch_waiting" | "review.batch_wait_ended" | "review.batch_ready" | "notify.target_changed" | "folder.agent_changed" | "folder.agent_change_cleared" | "shared.changed" | "shared.changes_dismissed" | "shared.paths_changed" | "stash.discarded" | "worker.stalled";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed" | "review.plan_created" | "review.plan_changed" | "review.plan_joined" | "review.plan_left" | "review.plan_wait_ended" | "review.plan_started" | "review.plan_ended" | "review.batch_integrated" | "review.batch_waiting" | "review.batch_wait_ended" | "review.batch_ready" | "notify.target_changed" | "folder.agent_changed" | "folder.agent_change_cleared" | "shared.changed" | "shared.changes_dismissed" | "shared.paths_changed" | "stash.discarded" | "worker.stalled" | "workers.account_changed" | "worker.waiting" | "worker.wait_ended" | "claim.needs_person" | "worker.parked" | "claim.renewed";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -3566,9 +3590,11 @@ export interface components {
         /** @description What fold saw of a workspace's worker, as the stall rule decides it. fold keeps the times of the worker's output in memory, so after a daemon start it counts from that start. */
         LiveActivity: {
             call: components["schemas"]["LiveCall"] | null;
+            /** @description The agent that parked a `parked` worker, whose go it waits for; null for the other states. */
+            parked_by: string | null;
             /**
              * Format: int64
-             * @description UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, or the time the work came that fold owes a `waits_for_slot` worker.
+             * @description UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, the time the work came that fold owes a `waits_for_slot` worker, the end of the first turn of a wait for the network or a usage limit, or the time a `parked` worker was parked.
              */
             since: number;
             slot: components["schemas"]["LiveSlot"] | null;
@@ -3577,6 +3603,8 @@ export interface components {
             supervised: boolean;
             /** @description The agents fold told of the stall: the worker's lead, or else the main agents. Empty while the worker works, and for a stall no agent can act on, which needs a person at once. */
             told: string[];
+            /** @description What a `parked` worker waits for, in the words of the agent that parked it; null for the other states. */
+            wait_for: string | null;
         };
         /**
          * @description The kind of an open call.
@@ -3780,8 +3808,30 @@ export interface components {
             /** Format: int64 */
             workers: number;
         };
+        /** @description One action of an item. */
+        NeedsYouActionEntry: {
+            /**
+             * @description The account of a `switch_account`, by name; absent for every other action.
+             * @example work-b
+             */
+            account?: string | null;
+            action: components["schemas"]["NeedsYouActionKind"];
+        };
+        /**
+         * @description What a human can do from an item.
+         * @enum {string}
+         */
+        NeedsYouActionKind: "pause" | "switch_account";
         /** @description One item that waits for a human. Only the ids its kind has are set. */
         NeedsYouEntry: {
+            /**
+             * @description The project's account of a `usage_limit` when fold lists the item, `default` for Claude Code's own login; null for every other kind.
+             * @example work-a
+             */
+            account: string | null;
+            action: components["schemas"]["PersonAction"] | null;
+            /** @description What the human can do from the item, such as `pause` for a `usage_limit`; empty for most kinds. */
+            actions: components["schemas"]["NeedsYouActionEntry"][];
             activity: components["schemas"]["LiveActivity"] | null;
             /**
              * @description The agent that asks.
@@ -3821,6 +3871,7 @@ export interface components {
              */
             humans: string[];
             kind: components["schemas"]["NeedsYouItemKind"];
+            limit: components["schemas"]["UsageLimitKind"] | null;
             /**
              * @description The question message of a `question`.
              * @example m-31
@@ -3844,6 +3895,16 @@ export interface components {
             reason: string | null;
             /** @example RQ-4 */
             request: string | null;
+            /**
+             * @description Claude Code's wording of the reset of a `usage_limit`, such as `1:50am (Asia/Tokyo)` or `Mon 12:00am`, a local time without a date; null when its message gives none, and for every other kind.
+             * @example 1:50am (Asia/Tokyo)
+             */
+            reset: string | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the reset of a `usage_limit`, when Claude Code's message gives the instant; null otherwise.
+             */
+            resets_at: number | null;
             screen: components["schemas"]["NeedsYouScreen"];
             /**
              * Format: int64
@@ -3877,7 +3938,7 @@ export interface components {
          * @description Why an item waits for a human.
          * @enum {string}
          */
-        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable" | "worker_model_unreachable" | "claude_not_found" | "notify_target_off" | "agent_change" | "shared_changed" | "worker_stalled";
+        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable" | "worker_model_unreachable" | "claude_not_found" | "notify_target_off" | "agent_change" | "shared_changed" | "worker_stalled" | "usage_limit" | "stale_claim";
         /** @description Every item that waits for a human, oldest first. */
         NeedsYouList: {
             items: components["schemas"]["NeedsYouEntry"][];
@@ -4075,6 +4136,11 @@ export interface components {
              */
             paused_since: number | null;
         };
+        /**
+         * @description What a person does about a stalled worker or a stale claim: `restart_worker` starts the worker again in a new session, because fold runs it and its process runs or stalled; `message_worker` messages it, because its process ended, so the message resumes it in its own session, or because fold does not run its session.
+         * @enum {string}
+         */
+        PersonAction: "restart_worker" | "message_worker";
         /** @description An agent's presence after it crossed a boundary: `active` after a call of an agent that was not active, and the new presence once an active agent's window passes or its last session ends. It is the `data` of the live `agent.presence_changed` event. */
         PresenceChange: {
             /** @example frontend */
@@ -4096,6 +4162,16 @@ export interface components {
             reason: components["schemas"]["SessionEndReason"];
             /** @description The session id, which names the session's Claude Code transcript. */
             session_id: string;
+        };
+        /** @description The Claude account of the project's workers and the host's accounts it can choose, by name only; a token never leaves the host's data folder. */
+        ProjectAccountEntry: {
+            /**
+             * @description The account that `.fold/config.toml` names; `default`, Claude Code's own login, when it names none, also when that login is gone from the host.
+             * @example work-a
+             */
+            account: string;
+            /** @description The accounts a person can choose: `default` first while Claude Code has its own login on the host (`claude login`), then the host's accounts in name order, as `fld account add` added them. */
+            accounts: string[];
         };
         ProjectAgent: {
             name: string;
@@ -5249,6 +5325,14 @@ export interface components {
             /** @description The address people open fold at, with its scheme; null or empty for notices without links. */
             web_url?: string | null;
         };
+        /** @description The account a person chooses for the project. */
+        SetProjectAccountBody: {
+            /**
+             * @description The name of one of the host's accounts, or `default` for Claude Code's own login; null and `system-default` mean `default` too.
+             * @example work-a
+             */
+            account: string | null;
+        };
         SetProjectNotifyBody: {
             /** @description Whether the host's targets get the project's notices too. */
             use_host_targets: boolean;
@@ -5895,6 +5979,11 @@ export interface components {
             /** @description The directory listed; empty for the root. */
             path: string;
         };
+        /**
+         * @description The cause outside a worker that its last turn waits for.
+         * @enum {string}
+         */
+        TurnWaitReason: "network" | "usage_limit";
         /** @description One path where the unstash conflicted with the project folder. */
         UnstashConflictView: {
             /** @description `both_modified_text`, `both_modified_binary`, `modify_delete`, `add_add` or `type_change`. */
@@ -5969,6 +6058,11 @@ export interface components {
             labels?: string[] | null;
             title?: string | null;
         };
+        /**
+         * @description A usage limit of Claude Code: `session`, `weekly`, `opus`, `sonnet`, or `usage` for the older message that names no kind.
+         * @enum {string}
+         */
+        UsageLimitKind: "session" | "weekly" | "opus" | "sonnet" | "usage";
         /** @enum {string} */
         WatchModeView: "watching" | "degraded";
         /** @description One worker's turns in the range. A stopped, failed or restarted worker keeps its turns. */
@@ -6025,6 +6119,7 @@ export interface components {
         };
         /** @description The areas and every worker fold runs or ran. */
         WorkerList: {
+            account: components["schemas"]["ProjectAccountEntry"];
             /** @description In name order, without the built-in area Main, which has no lead and no profile. */
             areas: components["schemas"]["AreaEntry"][];
             limits: components["schemas"]["LimitsEntry"] | null;
@@ -6063,6 +6158,24 @@ export interface components {
              * @example Bash
              */
             tool: string | null;
+        };
+        /** @description A park of a worker: an agent stopped it with `stop_worker`'s `wait_for`. */
+        WorkerParkEntry: {
+            /**
+             * @description The agent whose go the worker waits for.
+             * @example web-lead
+             */
+            by: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the park.
+             */
+            since: number;
+            /**
+             * @description What the worker waits for, in that agent's words.
+             * @example my go after the T-288 migration
+             */
+            wait_for: string;
         };
         /**
          * @description One worker agent and its supervised Claude Code process. The totals add up over every process of the worker.
@@ -6135,6 +6248,7 @@ export interface components {
             name: string;
             /** @description The worker is idle or working in a session that last read other skill text than the fld that runs the daemon writes for its role. Its next turn starts with a note to load its role skill again, and once fold writes that turn this is false; false for a worker that is starting or stopping or does not run. */
             older_fold: boolean;
+            parked: components["schemas"]["WorkerParkEntry"] | null;
             /** @description The sessions the worker had before its current one, oldest first. */
             previous_sessions: components["schemas"]["PreviousSessionEntry"][];
             /** @description The proposals a reviewer is bound to. */
@@ -6167,6 +6281,7 @@ export interface components {
              * @description Finished turns.
              */
             turns: number;
+            waits_for: components["schemas"]["TurnWaitReason"] | null;
         };
         /**
          * @description `starting` until Claude Code reports its session, `working` during a turn, `idle` between turns, `stopping` while fold ends the process, then `stopped` or `failed`.
@@ -7412,6 +7527,96 @@ export interface operations {
             };
             /** @description Internal error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    set_project_account: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetProjectAccountBody"];
+            };
+        };
+        responses: {
+            /** @description The project's account after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectAccountEntry"];
+                };
+            };
+            /** @description `invalid_account_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found`, or `account_not_found` with the name in `details.account`: the host has no such account, or the account is `default` while Claude Code has no login of its own on the host */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_config`: `.fold/config.toml` is not valid */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `accounts_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

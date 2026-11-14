@@ -88,7 +88,7 @@ describe("phoneColumn", () => {
       make("T-1", "todo"),
       boardCard("T-2", {
         status: "review",
-        attention: [{ kind: "question", closable: true }],
+        attention: [{ kind: "question", closable: true, action: null }],
       }),
     ]);
     expect(phoneColumn(columns)).toBe("review");

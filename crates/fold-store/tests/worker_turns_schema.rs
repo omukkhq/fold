@@ -67,6 +67,7 @@ async fn turn(store: &Store, id: i64, total: u64, millis: i64) {
                     cache_read_tokens: 5,
                     cache_write_tokens: 6,
                     failed: false,
+                    waited: false,
                 },
                 at(millis),
             )

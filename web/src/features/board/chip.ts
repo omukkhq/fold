@@ -1,8 +1,11 @@
 import {
   Activity,
+  CirclePause,
   CircleStop,
   ClipboardCheck,
   Clock,
+  CloudOff,
+  Gauge,
   GitPullRequest,
   Hand,
   Hourglass,
@@ -16,7 +19,7 @@ import type { BoardCard, LiveCheckRun } from "@/api/board";
 import type { ChipTone } from "@/components/badge/chips";
 import { planWaitLabel } from "@/features/proposals/planWait";
 import type { WorkerActivity } from "@/live/workerActivity";
-import { hasKind } from "./attention";
+import { attentionChipText, hasKind } from "./attention";
 import {
   blockedText,
   checklistText,
@@ -59,6 +62,12 @@ function activityChip(activity: WorkerActivity): CardChip {
       return { tone: "neutral", icon: CircleStop, text: activity.text };
     case "waits_for_slot":
       return { tone: "neutral", icon: Hourglass, text: SLOT_CHIP_TEXT };
+    case "waits_for_network":
+      return { tone: "neutral", icon: CloudOff, text: activity.text };
+    case "waits_for_usage_limit":
+      return { tone: "neutral", icon: Gauge, text: activity.text };
+    case "parked":
+      return { tone: "neutral", icon: CirclePause, text: activity.text };
     default:
       return { tone: "neutral", icon: Activity, text: activity.text };
   }
@@ -68,8 +77,10 @@ function activityChip(activity: WorkerActivity): CardChip {
  * The one chip a card shows, or null. The first state that holds wins: a person must answer or approve, a human
  * blocker, an unfinished prerequisite (before the stall, which it causes), a check run that goes, which no person
  * waits for, which the daemon never counts as a stall and during which the worker's claim never runs out, what fold saw
- * of the worker (work in progress in the neutral tone, a stall in gold only once it waits for a person), a stale
- * claim, a proposal back with its author, then a wait on others. `run` is the card's run and `activity` its worker's
+ * of the worker (work in progress and a wait for a lead's go in the neutral tone, a stall in gold only once it waits for
+ * a person; a stale claim, which waits for a person, shows over the neutral states), a stall and then a stale claim that
+ * only the daemon's items tell of, each in gold with the person's action, a proposal back with its author, then a wait
+ * on others. `run` is the card's run and `activity` its worker's
  * activity as the live frame of its workspace has them. A Done card has no chip.
  */
 export function cardChip(
@@ -96,14 +107,26 @@ export function cardChip(
   if (run !== null) {
     return { tone: "neutral", icon: ListChecks, text: "Running checks" };
   }
+  const stale: CardChip = {
+    tone: "warn",
+    icon: Hand,
+    text: attentionChipText(card.attention, "stale_claim"),
+  };
   if (activity !== null) {
-    return activityChip(activity);
+    // A stale claim reaches the card only once it waits for a person, so it shows over what fold saw unless that waits for a person too.
+    return hasKind(card.attention, "stale_claim") && !activity.needsYou
+      ? stale
+      : activityChip(activity);
   }
   if (hasKind(card.attention, "stalled")) {
-    return { tone: "warn", icon: Hand, text: "Stalled · needs you" };
+    return {
+      tone: "warn",
+      icon: Hand,
+      text: attentionChipText(card.attention, "stalled"),
+    };
   }
   if (hasKind(card.attention, "stale_claim")) {
-    return { tone: "warn", icon: Hand, text: "Stale claim · needs you" };
+    return stale;
   }
   return proposalChip(card);
 }
