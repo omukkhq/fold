@@ -296,7 +296,7 @@ pub struct BoardCard {
     /// The task's open proposal, or the integrated one once it is Done.
     #[schema(required = true)]
     pub proposal: Option<BoardProposal>,
-    /// The last tracked edit in the live workspace.
+    /// The last tracked edit in the live workspace; null without a live workspace and before its first edit.
     #[schema(required = true)]
     pub activity: Option<BoardActivity>,
     /// Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them.
@@ -566,7 +566,7 @@ pub struct TaskView {
     /// The live task workspace; null without one.
     #[schema(required = true)]
     pub workspace_info: Option<TaskWorkspaceInfo>,
-    /// The last tracked edit in the live workspace.
+    /// The last tracked edit in the live workspace; null without a live workspace and before its first edit.
     #[schema(required = true)]
     pub activity: Option<BoardActivity>,
     /// Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them.
