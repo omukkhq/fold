@@ -628,3 +628,50 @@ async fn a_new_token_of_the_waiting_account_runs_the_turn_at_the_limit_again_at_
     assert_eq!(rerun.flag("--resume"), Some(session.as_str()));
     crate::turn_waits::until_idle(&harness, LEAD, |row| row.wait.is_none()).await;
 }
+
+/// The web's switch of a usage-limit item: the PUT with the browser's session cookie, then at once the reads that its answer and the live events start, while the switch replaces the process. Each switch runs the turn at the limit again at once on the chosen account, back and forth.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_needs_you_switch_runs_the_turn_at_the_limit_again_at_once_while_the_page_reads() {
+    use crate::turn_waits::{limit_turn, set_turn, until_idle, until_turns};
+    use fold_core::turn_waits::LIMIT_RERUN_TURN;
+    let (_accounts, _dir, turns, fake, harness, session) = lead_at_the_limit(Some("work-a")).await;
+    let turn = turns.path().join("turn.jsonl");
+    let reads = async || {
+        for _ in 0..20 {
+            for path in ["needs-you", "workers", "agents", "board"] {
+                let _ = harness
+                    .http(
+                        Method::GET,
+                        &format!("/api/v1/projects/demo/{path}"),
+                        None,
+                        HUMAN,
+                    )
+                    .await;
+            }
+        }
+    };
+    for (round, (name, token)) in [("work-b", TOKEN_B), ("work-a", TOKEN_A)]
+        .into_iter()
+        .enumerate()
+    {
+        set_turn(
+            &turn,
+            &limit_turn("You've hit your weekly limit · resets Mon 12:00am"),
+        );
+        let ((status, body), ()) = tokio::join!(choose(&harness, Some(name)), reads());
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let runs = until_turns(&fake, LEAD, LIMIT_RERUN_TURN, round + 1).await;
+        let rerun = runs
+            .iter()
+            .rfind(|run| run.stdin.iter().any(|line| line.contains(LIMIT_RERUN_TURN)))
+            .unwrap();
+        assert!(ran_with(rerun, Some(token)), "round {round} runs on {name}");
+        assert_eq!(rerun.flag("--resume"), Some(session.as_str()));
+        until_idle(&harness, LEAD, |row| {
+            row.wait
+                .as_ref()
+                .is_some_and(|wait| wait.tries == round as u32 + 1)
+        })
+        .await;
+    }
+}

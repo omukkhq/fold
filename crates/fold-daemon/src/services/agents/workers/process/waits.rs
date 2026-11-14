@@ -86,26 +86,36 @@ impl Supervisor {
 
     /// Runs again, in its own running process, each owed turn that the plan of [`rerun_plan`] makes due, and returns when the plan must be read again, `Some(None)` for only when woken; `Ok(None)` once no row waits. While the project's agents are paused nothing runs: the resume of the pause gives each worker a turn of its own, and wakes the loop.
     async fn serve_owed_turns(&self) -> Result<Option<Option<Timestamp>>, AgentError> {
-        lock(&self.inner.owed).changed = false;
-        let mut conn = self
-            .inner
-            .store
-            .read()
-            .acquire()
-            .await
-            .map_err(StoreError::from)?;
-        let rows = agents::list_worker_processes(&mut conn).await?;
-        drop(conn);
+        // The releases are taken before the rows are read, so each one meets rows at least as new as itself: a release that comes later, such as at the end of a switch while this read sees the row still starting, stays for the next plan.
+        let released = {
+            let mut owed = lock(&self.inner.owed);
+            owed.changed = false;
+            std::mem::take(&mut owed.released)
+        };
+        let rows = match self.worker_rows().await {
+            Ok(rows) => rows,
+            Err(error) => {
+                self.keep_released(released);
+                return Err(error);
+            }
+        };
         if !rows
             .iter()
             .any(|row| row.wait.is_some() && row.state.is_running())
         {
             // A release ends the waits there are now; a turn that reaches a limit later waits for its own reset.
-            lock(&self.inner.owed).released.clear();
             return Ok(None);
         }
-        if self.is_paused().await? {
-            return Ok(Some(None));
+        match self.is_paused().await {
+            Ok(false) => {}
+            Ok(true) => {
+                self.keep_released(released);
+                return Ok(Some(None));
+            }
+            Err(error) => {
+                self.keep_released(released);
+                return Err(error.into());
+            }
         }
         // A process that started with another account than the project's waits for its own switch, which runs its turn after it with the project's account. Nothing else switches a process whose turn waits, such as after `fld account update`, so the loop starts the switch.
         let current = self.current_account().await.ok();
@@ -120,7 +130,6 @@ impl Supervisor {
             }
         }
         let now = self.inner.clock.now();
-        let released = std::mem::take(&mut lock(&self.inner.owed).released);
         let mut waiting: Vec<(&WorkerProcessRow, WaitingTurn<AgentName>)> = rows
             .iter()
             .filter(|row| {
@@ -166,6 +175,27 @@ impl Supervisor {
             self.send_turn(agent, &text);
         }
         Ok(Some(plan.next_at))
+    }
+
+    async fn worker_rows(&self) -> Result<Vec<WorkerProcessRow>, AgentError> {
+        let mut conn = self
+            .inner
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        Ok(agents::list_worker_processes(&mut conn).await?)
+    }
+
+    /// Puts back releases that a plan did not use, before any that came meanwhile.
+    fn keep_released(&self, released: Vec<WaitGroup>) {
+        let mut owed = lock(&self.inner.owed);
+        for group in released {
+            if !owed.released.contains(&group) {
+                owed.released.push(group);
+            }
+        }
     }
 
     /// Whether the process of `agent` runs with the project's account `current`, or the account cannot be told (`None`), and no restart of it is under way.
