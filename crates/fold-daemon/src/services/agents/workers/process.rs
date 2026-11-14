@@ -142,6 +142,8 @@ impl Default for StopTimeouts {
 enum Input {
     Line(String),
     Turn(String),
+    /// A turn that goes to this process whatever account it runs with, because its switch did not happen.
+    KeptTurn(String),
     Close,
 }
 
@@ -215,6 +217,8 @@ struct Inner {
     streams: Arc<WorkerStreams>,
     /// The workers that continue in their own session with another account, whose notices wait for the new process meanwhile.
     switching: Mutex<HashSet<AgentName>>,
+    /// The turns that came for idle processes that run with another account than the project's, by worker, which the switch gives the new process, or the old one when no switch happens.
+    switch_turns: Mutex<HashMap<AgentName, Vec<String>>>,
     /// The turns fold owes workers whose last turn ended for a cause outside them.
     owed: Mutex<waits::OwedTurns>,
 }
@@ -286,6 +290,7 @@ impl Supervisor {
                 tool_windows: Arc::default(),
                 streams: Arc::default(),
                 switching: Mutex::new(HashSet::new()),
+                switch_turns: Mutex::default(),
                 owed: Mutex::default(),
             }),
         };

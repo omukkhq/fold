@@ -101,8 +101,18 @@ impl Supervisor {
         if self.is_paused().await? {
             return Ok(Some(None));
         }
-        // A process that started with another account than the project's waits for its own switch, which runs its turn after it with the project's account.
+        // A process that started with another account than the project's waits for its own switch, which runs its turn after it with the project's account. Nothing else switches a process whose turn waits, such as after `fld account update`, so the loop starts the switch.
         let current = self.current_account().await.ok();
+        for row in &rows {
+            if row.wait.is_some()
+                && row.state == WorkerState::Idle
+                && self.can_take_turn(&row.agent)
+                && !lock(&self.inner.refreshing).contains(&row.agent)
+                && !self.runs_account(&row.agent, current.as_ref())
+            {
+                self.switch_soon(&row.agent);
+            }
+        }
         let now = self.inner.clock.now();
         let released = std::mem::take(&mut lock(&self.inner.owed).released);
         let mut waiting: Vec<(&WorkerProcessRow, WaitingTurn<AgentName>)> = rows

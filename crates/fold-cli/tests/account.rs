@@ -227,7 +227,7 @@ fn add_reads_the_token_from_stdin_into_a_private_file_and_list_never_shows_it() 
     assert!(renewed.status.success(), "{}", stderr(&renewed));
     holds_no_token(&renewed);
     assert!(stdout(&renewed).starts_with("account work-a has the new token"));
-    assert!(stdout(&renewed).contains("when its next turn ends"));
+    assert!(stdout(&renewed).contains("before its next turn"));
     for entry in fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
         assert_eq!(mode(&path), 0o600, "{}", path.display());

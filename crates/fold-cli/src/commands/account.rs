@@ -172,7 +172,7 @@ fn added_line(name: &AccountName) -> String {
 
 fn updated_line(name: &AccountName) -> String {
     format!(
-        "account {name} has the new token: each running worker of a project that uses it restarts in its own session with it when its next turn ends, and every worker that starts or resumes from now on starts with it"
+        "account {name} has the new token: each running worker of a project that uses it restarts in its own session with it before its next turn, a working one when its current turn ends, and every worker that starts or resumes from now on starts with it"
     )
 }
 
@@ -304,7 +304,7 @@ mod tests {
             "work-a added 2026-11-14 10:00 used by demo, shop"
         );
         assert!(added_line(&name("work-a")).contains("fld account use work-a"));
-        assert!(updated_line(&name("work-a")).contains("when its next turn ends"));
+        assert!(updated_line(&name("work-a")).contains("before its next turn"));
         assert_eq!(
             default_line(&["app".to_owned()]),
             "system-default Claude Code's own login used by app"

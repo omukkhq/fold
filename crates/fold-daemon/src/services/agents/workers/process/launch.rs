@@ -416,9 +416,16 @@ impl Supervisor {
         mut update: Option<Update>,
     ) {
         while let Some(input) = inputs.recv().await {
+            let input = match input {
+                Input::Turn(text) => match self.holds_for_switch(&process, text).await {
+                    Some(text) => Input::KeptTurn(text),
+                    None => continue,
+                },
+                other => other,
+            };
             let (line, turn) = match input {
                 Input::Line(line) => (line, None),
-                Input::Turn(text) => {
+                Input::Turn(text) | Input::KeptTurn(text) => {
                     let noted = update.take();
                     let text = match &noted {
                         Some(noted) => with_update_note(noted.role, &text),
