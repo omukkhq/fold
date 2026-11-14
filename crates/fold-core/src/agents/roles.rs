@@ -205,7 +205,7 @@ pub fn needs_restart(reason: &str) -> bool {
 pub fn restart_hint(reason: &str) -> Option<&'static str> {
     match reason {
         codes::ACCOUNT_NOT_FOUND | codes::ACCOUNTS_IO => Some(
-            "the project's account is missing or its token cannot be read: run `fld account add <name>` (or `fld account update <name>`) with the token on stdin, or choose another account with `fld account use <name>` or in the project's Settings, then message the worker to resume it in its session",
+            "the project's account is missing or its token cannot be read: run `fld account add <name>` (or `fld account update <name>`) with the token on stdin, or choose another account with `fld account use <name>` or in the project's Settings, or sign in with `claude login` and run `fld account use default`, then message the worker to resume it in its session",
         ),
         MCP_UNAVAILABLE => Some("run `fld restart`; the daemon then resumes the worker"),
         FLD_MISSING => Some(

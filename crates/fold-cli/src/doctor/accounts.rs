@@ -34,7 +34,7 @@ pub(crate) fn accounts_verdict(
     if accounts.is_empty() {
         return Check::ok(
             NAME,
-            "no accounts but system-default: every project uses Claude Code's own login",
+            "no accounts but default: every project uses Claude Code's own login",
         );
     }
     let overriding: Vec<&str> = match report {
@@ -104,7 +104,7 @@ pub(crate) fn project_account_verdict(
     let Some(name) = named else {
         return Check::ok(
             PROJECT_NAME,
-            "the workers use system-default, Claude Code's own login",
+            "the workers use default, Claude Code's own login",
         );
     };
     match listed {

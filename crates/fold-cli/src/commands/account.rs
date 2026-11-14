@@ -28,11 +28,11 @@ pub struct AccountArgs {
 enum AccountCommand {
     /// Add a Claude subscription under a new name, with the token that `claude setup-token` printed, read from stdin
     Add(NameArgs),
-    /// List the accounts, system-default (Claude Code's own login) first: name, when the token was added and which projects use each, never the token
+    /// List the accounts, default (Claude Code's own login, shown while `claude login` stored one on this host) first: name, when the token was added and which projects use each, never the token
     List,
     /// Remove an account and its token; refused while a project uses it
     Remove(NameArgs),
-    /// Make the account the one of the project in this folder, system-default for Claude Code's own login: each worker continues in its own session with it when its turn ends
+    /// Make the account the one of the project in this folder, default for Claude Code's own login: each worker continues in its own session with it when its turn ends
     Use(UseArgs),
     /// Give an account a new token from stdin, as for an expired or revoked one
     Update(NameArgs),
@@ -120,9 +120,11 @@ pub fn run(
             let runtime = current_thread_runtime().map_err(AccountError::Runtime)?;
             let usage = runtime.block_on(accounts::usage_on_host(&host))?;
             let listed = accounts::list(&host.accounts_dir())?;
-            let default = AccountName::system_default();
-            let projects = usage.get(&default).map(Vec::as_slice).unwrap_or(&[]);
-            output::line(out, &default_line(projects))?;
+            let default = AccountName::default_account();
+            if accounts::claude_login(|name| std::env::var_os(name)) {
+                let projects = usage.get(&default).map(Vec::as_slice).unwrap_or(&[]);
+                output::line(out, &default_line(projects))?;
+            }
             for account in listed {
                 let projects = usage.get(&account.name).map(Vec::as_slice).unwrap_or(&[]);
                 output::line(
@@ -187,7 +189,7 @@ fn used_by(projects: &[String]) -> String {
 fn default_line(projects: &[String]) -> String {
     format!(
         "{} Claude Code's own login used by {}",
-        fold_core::accounts::SYSTEM_DEFAULT,
+        fold_core::accounts::DEFAULT_ACCOUNT,
         used_by(projects)
     )
 }
@@ -307,7 +309,7 @@ mod tests {
         assert!(updated_line(&name("work-a")).contains("before its next turn"));
         assert_eq!(
             default_line(&["app".to_owned()]),
-            "system-default Claude Code's own login used by app"
+            "default Claude Code's own login used by app"
         );
         assert!(use_line(&name("work-b")).contains("fld claude"));
     }

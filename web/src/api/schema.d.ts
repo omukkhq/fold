@@ -220,7 +220,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** A named human chooses the Claude account of the project's workers, one of the host's accounts or `system-default` for Claude Code's own login, which a config states by leaving the key out. The name goes into `.fold/config.toml`; each running worker continues in its own session with the new account when its current turn ends, an idle one at once. The interactive main agent of `fld claude` keeps its account until it starts again. The answer names accounts only, never a token. */
+        /** A named human chooses the Claude account of the project's workers, one of the host's accounts or `default` for Claude Code's own login, which a config states by leaving the key out. The name goes into `.fold/config.toml`; each running worker continues in its own session with the new account when its current turn ends, an idle one at once. The interactive main agent of `fld claude` keeps its account until it starts again. The answer names accounts only, never a token. */
         put: operations["set_project_account"];
         post?: never;
         delete?: never;
@@ -3825,7 +3825,7 @@ export interface components {
         /** @description One item that waits for a human. Only the ids its kind has are set. */
         NeedsYouEntry: {
             /**
-             * @description The project's account of a `usage_limit` when fold lists the item, `system-default` for Claude Code's own login; null for every other kind.
+             * @description The project's account of a `usage_limit` when fold lists the item, `default` for Claude Code's own login; null for every other kind.
              * @example work-a
              */
             account: string | null;
@@ -4166,11 +4166,11 @@ export interface components {
         /** @description The Claude account of the project's workers and the host's accounts it can choose, by name only; a token never leaves the host's data folder. */
         ProjectAccountEntry: {
             /**
-             * @description The account that `.fold/config.toml` names; `system-default`, Claude Code's own login, when it names none.
+             * @description The account that `.fold/config.toml` names; `default`, Claude Code's own login, when it names none, also when that login is gone from the host.
              * @example work-a
              */
             account: string;
-            /** @description `system-default` first, then the host's accounts in name order, as `fld account add` added them. */
+            /** @description The accounts a person can choose: `default` first while Claude Code has its own login on the host (`claude login`), then the host's accounts in name order, as `fld account add` added them. */
             accounts: string[];
         };
         ProjectAgent: {
@@ -5328,7 +5328,7 @@ export interface components {
         /** @description The account a person chooses for the project. */
         SetProjectAccountBody: {
             /**
-             * @description The name of one of the host's accounts, or `system-default` for Claude Code's own login; null means `system-default` too.
+             * @description The name of one of the host's accounts, or `default` for Claude Code's own login; null and `system-default` mean `default` too.
              * @example work-a
              */
             account: string | null;

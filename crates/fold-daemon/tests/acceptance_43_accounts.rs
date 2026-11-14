@@ -15,7 +15,7 @@ async fn acceptance_43_a_person_switches_the_projects_subscription_without_a_pau
     let clock = ManualClock::new();
     let (_accounts, dir) = accounts_with_two(&clock);
     let mut fake = FakeClaude::new("result");
-    fake.launcher.accounts = Some(dir);
+    crate::accounts::host_accounts(&mut fake, &dir, true);
     let mut harness = lead_running(&fake, WorkerState::Idle).await;
     let (status, body) = choose(&harness, Some("work-a")).await;
     assert_eq!(status, StatusCode::OK, "{body}");

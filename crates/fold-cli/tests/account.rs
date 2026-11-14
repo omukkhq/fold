@@ -40,6 +40,12 @@ impl Sandbox {
         self.path("data/fold/accounts")
     }
 
+    /// Claude Code's own login in the sandbox's home, as `claude login` leaves it.
+    fn claude_login(&self) {
+        fs::create_dir_all(self.path("home/.claude")).unwrap();
+        fs::write(self.path("home/.claude/.credentials.json"), "{}\n").unwrap();
+    }
+
     fn socket(&self) -> PathBuf {
         self.path("fold.sock")
     }
@@ -183,7 +189,14 @@ fn add_reads_the_token_from_stdin_into_a_private_file_and_list_never_shows_it() 
     assert!(empty.status.success(), "{empty:?}");
     assert_eq!(
         stdout(&empty),
-        "system-default Claude Code's own login used by no project\n"
+        "",
+        "without a login of Claude Code there is no default"
+    );
+    sandbox.claude_login();
+    let default = sandbox.fold(&["account", "list"]);
+    assert_eq!(
+        stdout(&default),
+        "default Claude Code's own login used by no project\n"
     );
     let added = sandbox.fold_with_input(&["account", "add", "work-a"], &format!("{TOKEN_A}\n"));
     assert!(added.status.success(), "{}", stderr(&added));
@@ -206,10 +219,7 @@ fn add_reads_the_token_from_stdin_into_a_private_file_and_list_never_shows_it() 
     let text = stdout(&listed);
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 2, "{lines:?}");
-    assert!(
-        lines[0].starts_with("system-default "),
-        "system-default comes first"
-    );
+    assert!(lines[0].starts_with("default "), "default comes first");
     assert!(lines[1].starts_with("work-a added "), "{lines:?}");
     assert!(lines[1].ends_with(" used by no project"));
 
@@ -286,6 +296,7 @@ fn a_token_comes_only_from_stdin_and_a_bad_one_is_refused_with_its_reason() {
     );
     assert!(stderr(&unknown).contains("hint: run `fld account list`"));
     for args in [
+        &["account", "add", "default"][..],
         &["account", "add", "system-default"][..],
         &["account", "update", "system-default"][..],
         &["account", "remove", "system-default"][..],
@@ -345,17 +356,15 @@ fn use_goes_through_the_daemon_and_remove_is_refused_while_a_project_uses_the_ac
     assert!(text.contains("project app"), "{text}");
     assert!(text.contains("hint: choose another account"), "{text}");
     assert!(sandbox.fold(&["account", "list"]).status.success());
-    let back = sandbox.use_account(&project, "system-default");
+    sandbox.claude_login();
+    let back = sandbox.use_account(&project, "default");
     assert!(back.status.success(), "{}", stderr(&back));
     let config = fs::read_to_string(project.join(".fold/config.toml")).unwrap();
     assert_eq!(ProjectConfig::from_toml(&config).unwrap().account, None);
-    assert!(
-        !config.contains("account ="),
-        "system-default removes the key"
-    );
+    assert!(!config.contains("account ="), "default removes the key");
     let listed = sandbox.fold(&["account", "list"]);
     assert!(
-        stdout(&listed).starts_with("system-default Claude Code's own login used by app\n"),
+        stdout(&listed).starts_with("default Claude Code's own login used by app\n"),
         "{listed:?}"
     );
     let reserved = sandbox.fold(&["account", "remove", "system-default"]);

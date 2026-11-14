@@ -314,7 +314,7 @@ pub struct NeedsYouEntry {
     /// What the human does about the worker of a `worker_stalled` or a `stale_claim`; null for every other kind.
     #[schema(required = true)]
     pub action: Option<crate::http::tasks::PersonAction>,
-    /// The project's account of a `usage_limit` when fold lists the item, `system-default` for Claude Code's own login; null for every other kind.
+    /// The project's account of a `usage_limit` when fold lists the item, `default` for Claude Code's own login; null for every other kind.
     #[schema(required = true, example = "work-a")]
     pub account: Option<String>,
 }

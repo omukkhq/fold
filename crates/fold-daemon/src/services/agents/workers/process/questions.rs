@@ -745,7 +745,7 @@ impl AgentService {
         ))
     }
 
-    /// Gives each usage-limit item the project's account and one switch to every account other than the project's, by name, after its pause: `system-default` first when the project runs on another account.
+    /// Gives each usage-limit item the project's account and one switch to every account other than the project's, by name, after its pause: `default` first when the project runs on another account and Claude Code has its own login on the host.
     async fn offer_account_switches(&self, items: &mut [crate::services::agents::NeedsYouItem]) {
         use crate::services::agents::{NeedsYouAction, NeedsYouKind};
         if !items

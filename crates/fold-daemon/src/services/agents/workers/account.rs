@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use fold_core::accounts::AccountName;
+use fold_core::accounts::{AccountName, DEFAULT_ACCOUNT};
 use fold_core::config::ACCOUNT_KEY;
 use fold_core::events::types;
 use fold_core::{Actor, FoldError, NewEvent, ProjectConfig, codes, policy};
@@ -12,7 +12,7 @@ use super::super::{AgentError, AgentService, accounts};
 use super::limits::{REWRITE, config_io, joined, replace, restore};
 use crate::services::events::EventBuffer;
 
-/// The project's account and the accounts of the host it can choose, by name only: `system-default`, Claude Code's own login, first, then the host's accounts in name order.
+/// The project's account and the accounts of the host it can choose, by name only: `default`, Claude Code's own login, first while that login is on the host, then the host's accounts in name order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectAccount {
     pub account: AccountName,
@@ -61,13 +61,13 @@ impl AgentService {
         self.workers.as_ref()?.accounts_dir()
     }
 
-    /// The account `.fold/config.toml` names, `system-default` without one, and `system-default` with the names of the host's accounts. A file that cannot be read names `system-default`; accounts that cannot be read list `system-default` only.
+    /// The account `.fold/config.toml` names, `default` without one, which shows even when Claude Code's own login is gone, and the accounts a person can choose: `default` while that login is on the host (see [`super::Supervisor::claude_login`]), then the host's accounts. A file that cannot be read names `default`; accounts that cannot be read list none.
     pub async fn project_account(&self) -> ProjectAccount {
         let account = self
             .worker_config()
             .await
             .and_then(|config| config.account)
-            .unwrap_or_else(AccountName::system_default);
+            .unwrap_or_else(AccountName::default_account);
         let host: Vec<AccountName> = match self.accounts_dir() {
             Some(dir) => tokio::task::spawn_blocking(move || accounts::list(&dir))
                 .await
@@ -79,7 +79,13 @@ impl AgentService {
                 .collect(),
             None => Vec::new(),
         };
-        let accounts = std::iter::once(AccountName::system_default())
+        let login = match &self.workers {
+            Some(workers) => workers.claude_login().await,
+            None => false,
+        };
+        let accounts = login
+            .then(AccountName::default_account)
+            .into_iter()
             .chain(host)
             .collect();
         ProjectAccount { account, accounts }
@@ -151,8 +157,8 @@ impl AgentService {
             .write(async |tx| {
                 let event =
                     NewEvent::new(types::WORKERS_ACCOUNT_CHANGED, by.clone())?.data(json!({
-                        "old": old.as_ref().map(AccountName::as_str),
-                        "new": account.as_ref().map(AccountName::as_str),
+                        "old": old.as_ref().map_or(DEFAULT_ACCOUNT, AccountName::as_str),
+                        "new": account.as_ref().map_or(DEFAULT_ACCOUNT, AccountName::as_str),
                     }))?;
                 buffer.append(tx, &event, now).await?;
                 let path = path.clone();

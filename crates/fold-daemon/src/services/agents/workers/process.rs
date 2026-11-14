@@ -305,6 +305,24 @@ impl Supervisor {
         lock(&self.inner.launcher).fingerprints.get(&role).cloned()
     }
 
+    /// Whether Claude Code has its own login on the host, as the workers' environment finds it (see [`crate::services::agents::accounts::claude_login`]); false for a launcher without an accounts folder, which knows no account.
+    pub async fn claude_login(&self) -> bool {
+        let (env, known) = {
+            let launcher = lock(&self.inner.launcher);
+            (launcher.env.clone(), launcher.accounts.is_some())
+        };
+        if !known {
+            return false;
+        }
+        tokio::task::spawn_blocking(move || {
+            crate::services::agents::accounts::claude_login(|name| {
+                env_value(&env, name).or_else(|| std::env::var_os(name))
+            })
+        })
+        .await
+        .unwrap_or(false)
+    }
+
     /// The folder of the host's accounts that the launcher names.
     pub fn accounts_dir(&self) -> Option<PathBuf> {
         lock(&self.inner.launcher).accounts.clone()

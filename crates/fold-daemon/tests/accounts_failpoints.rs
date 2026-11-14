@@ -132,7 +132,7 @@ async fn a_choice_that_cannot_commit_leaves_the_config_as_it_was() {
     let clock = ManualClock::new();
     let (_accounts, dir) = accounts_with_two(&clock);
     let mut fake = FakeClaude::new("result");
-    fake.launcher.accounts = Some(dir);
+    crate::accounts::host_accounts(&mut fake, &dir, true);
     let harness = lead_running(&fake, WorkerState::Idle).await;
     let config = Path::new(harness.root()).join(".fold/config.toml");
     let before = std::fs::read_to_string(&config).ok();

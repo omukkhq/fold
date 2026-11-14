@@ -158,12 +158,12 @@ fold pushes without force. If incoming changes conflict, fold creates a sync tas
 
 ## Use several Claude subscriptions
 
-fold's workers use Claude Code's own login, which fold calls `system-default`. To run projects on other subscriptions, make a token for each with `claude setup-token` and give it to fold; the token stays on this machine in a file only you can read, and fold passes it to the workers through their environment.
+fold's workers use Claude Code's own login, which fold calls `default` and offers while `claude login` stored one on this machine. To run projects on other subscriptions, make a token for each with `claude setup-token` and give it to fold; the token stays on this machine in a file only you can read, and fold passes it to the workers through their environment.
 
 ```bash
 claude setup-token                             # prints a one-year token for the subscription you sign in with
 fld account add work-b                         # paste the token; it is read from stdin and not shown
-fld account list                               # system-default first, then each account and the projects that use it
+fld account list                               # default first (with a Claude Code login), then each account and the projects that use it
 fld account use work-b                         # in a project folder: its workers continue on work-b
 fld account update work-b                      # a new token for an expired or revoked one
 fld account remove work-b
@@ -196,7 +196,7 @@ Run these commands inside your project:
 | `fld pause` | Stop project workers and keep their sessions. |
 | `fld resume` | Resume workers stopped by a project pause. |
 | `fld worker restart <name>` | Start a worker again in a new Claude Code session, for example when its session is broken. It keeps its name, claims and workers. |
-| `fld account add\|list\|use\|update\|remove` | Manage the Claude subscriptions that projects run on; `system-default` is Claude Code's own login. |
+| `fld account add\|list\|use\|update\|remove` | Manage the Claude subscriptions that projects run on; `default` is Claude Code's own login. |
 | `fld record` | Record your own changes in the project folder on main. It asks first when the change empties a tracked file, adds 10 or more empty files, or holds a worker's files; `--yes` skips the question. |
 | `fld untrack <path>...` | Stop tracking files that main records and keep them in the project folder. A directory stands for every tracked file in it. Older revisions keep the files. |
 | `fld share <path>...` | Share ignored files or folders with every workspace through read-only links; `--list` shows the shared paths and the ignored paths workers cannot see. |

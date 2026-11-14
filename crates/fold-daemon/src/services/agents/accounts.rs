@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use fold_core::accounts::{AccountName, AccountStamp, AccountToken, check_token};
 use fold_core::{FoldError, HostPaths, ProjectConfig, ProjectPaths, Timestamp, codes};
@@ -46,6 +47,42 @@ fn accounts_io(kind: io::ErrorKind) -> FoldError {
 
 fn io_error(error: &io::Error) -> FoldError {
     accounts_io(error.kind())
+}
+
+/// The file in which Claude Code keeps the login of `claude login`, in its own folder.
+const CREDENTIALS_FILE: &str = ".credentials.json";
+
+/// Whether Claude Code has its own login on this host, which the account `default` stands for: the file of that login in Claude Code's folder, `CLAUDE_CONFIG_DIR` or `.claude` in the home directory as `var` gives them, or on macOS the keychain item Claude Code keeps it in. A host that runs Claude Code only on account tokens has none. The secret is never read. Blocking.
+pub fn claude_login(var: impl Fn(&str) -> Option<OsString>) -> bool {
+    credentials_file(var) || keychain_login()
+}
+
+/// Whether Claude Code's folder holds the file of its login.
+fn credentials_file(var: impl Fn(&str) -> Option<OsString>) -> bool {
+    let dir = match var("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
+        Some(dir) => Some(PathBuf::from(dir)),
+        None => var("HOME")
+            .filter(|home| !home.is_empty())
+            .map(|home| PathBuf::from(home).join(".claude")),
+    };
+    dir.is_some_and(|dir| dir.join(CREDENTIALS_FILE).is_file())
+}
+
+/// Whether the macOS keychain holds Claude Code's login, asked by the item's name only: `security` without `-w` or `-g` prints no secret, and its output is dropped.
+#[cfg(target_os = "macos")]
+fn keychain_login() -> bool {
+    std::process::Command::new("security")
+        .args(["find-generic-password", "-s", "Claude Code-credentials"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keychain_login() -> bool {
+    false
 }
 
 /// The index of the accounts in `dir`, whose every change renames a new file into place.
@@ -254,7 +291,7 @@ fn exists(name: &AccountName) -> FoldError {
     .with_details([("account", serde_json::json!(name.as_str()))])
 }
 
-/// Adds the account `name` with `token`, refused for a name the host has already ([`codes::ACCOUNT_EXISTS`]) and for `system-default`. See [`put`] for the order of the writes. Blocking.
+/// Adds the account `name` with `token`, refused for a name the host has already ([`codes::ACCOUNT_EXISTS`]) and for `default`. See [`put`] for the order of the writes. Blocking.
 pub fn add(
     dir: &Path,
     name: &AccountName,
@@ -265,7 +302,7 @@ pub fn add(
     put(dir, name, token, now, false)
 }
 
-/// Gives the account `name` the new `token` and `now` as its date, refused for a name the host does not have and for `system-default`. See [`put`]. Blocking.
+/// Gives the account `name` the new `token` and `now` as its date, refused for a name the host does not have and for `default`. See [`put`]. Blocking.
 pub fn update(
     dir: &Path,
     name: &AccountName,
@@ -342,7 +379,7 @@ pub fn remove(dir: &Path, name: &AccountName) -> Result<(), FoldError> {
     remove_file(&dir.join(gone.file))
 }
 
-/// The slugs of the registered projects whose `.fold/config.toml` names each account, `system-default` for a config that names none, read without a running daemon. A project whose config cannot be read is left out; a host without a registry has no project.
+/// The slugs of the registered projects whose `.fold/config.toml` names each account, `default` for a config that names none, read without a running daemon. A project whose config cannot be read is left out; a host without a registry has no project.
 pub async fn usage_on_host(
     host: &HostPaths,
 ) -> Result<BTreeMap<AccountName, Vec<String>>, FoldError> {
@@ -380,7 +417,7 @@ pub async fn usage_on_host(
                 Err(_) => None,
             };
             if let Some(config) = config {
-                let name = config.account.unwrap_or_else(AccountName::system_default);
+                let name = config.account.unwrap_or_else(AccountName::default_account);
                 usage.entry(name).or_default().push(row.slug);
             }
         }
@@ -390,7 +427,7 @@ pub async fn usage_on_host(
     .map_err(|_| FoldError::new(codes::INTERNAL_ERROR, "the read of the projects stopped"))
 }
 
-/// [`remove`] for `fld account remove`, refused for `system-default` and while a registered project names the account: its workers could not start without it.
+/// [`remove`] for `fld account remove`, refused for `default` and while a registered project names the account: its workers could not start without it.
 pub async fn remove_on_host(host: &HostPaths, name: &AccountName) -> Result<(), FoldError> {
     name.check_not_reserved()?;
     if let Some(projects) = usage_on_host(host).await?.remove(name) {
@@ -493,17 +530,17 @@ mod tests {
         for refused in [
             add(
                 &dir,
-                &AccountName::system_default(),
+                &AccountName::default_account(),
                 &check_token(TOKEN_B).unwrap(),
                 at(4),
             ),
             update(
                 &dir,
-                &AccountName::system_default(),
+                &AccountName::default_account(),
                 &check_token(TOKEN_B).unwrap(),
                 at(4),
             ),
-            remove(&dir, &AccountName::system_default()),
+            remove(&dir, &AccountName::default_account()),
         ] {
             assert_eq!(refused.unwrap_err().code(), codes::ACCOUNT_RESERVED);
         }
@@ -557,6 +594,36 @@ mod tests {
         assert_eq!(error.code(), codes::ACCOUNTS_IO);
         assert!(error.hint().unwrap().contains("accounts/"));
         assert!(!format!("{error:?}").contains(TOKEN_A));
+    }
+
+    #[test]
+    fn claude_codes_login_is_the_file_in_its_folder() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::create_dir_all(&config).unwrap();
+        let env = |pairs: Vec<(&'static str, PathBuf)>| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| OsString::from(value))
+            }
+        };
+        assert!(!credentials_file(env(vec![("HOME", home.clone())])));
+        std::fs::write(home.join(".claude").join(CREDENTIALS_FILE), "{}").unwrap();
+        assert!(credentials_file(env(vec![("HOME", home.clone())])));
+        assert!(
+            !credentials_file(env(vec![
+                ("HOME", home.clone()),
+                ("CLAUDE_CONFIG_DIR", config.clone())
+            ])),
+            "CLAUDE_CONFIG_DIR names the folder Claude Code reads"
+        );
+        std::fs::write(config.join(CREDENTIALS_FILE), "{}").unwrap();
+        assert!(credentials_file(env(vec![("CLAUDE_CONFIG_DIR", config)])));
+        assert!(!credentials_file(env(Vec::new())));
     }
 
     #[test]
