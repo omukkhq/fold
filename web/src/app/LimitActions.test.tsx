@@ -29,26 +29,29 @@ function show(accounts: readonly string[] = ["work-b", "personal"]) {
   return { client, invalidated };
 }
 
-/** Opens the one Switch account menu and gives the words of its items. */
-async function openMenu(): Promise<string[]> {
-  await userEvent.click(
-    await screen.findByRole("button", { name: "Switch account" }),
-  );
-  return screen.getAllByRole("menuitem").map((item) => item.textContent);
+function dropdown(): HTMLSelectElement {
+  return screen.getByLabelText<HTMLSelectElement>("Switch account");
+}
+
+/** The words of the dropdown's options, its first one the placeholder. */
+function options(): (string | null)[] {
+  return [...dropdown().options].map((option) => option.textContent);
 }
 
 describe("LimitActions", () => {
-  it("offers one target in the one Switch account menu, never a button of its own, next to Pause", async () => {
+  it("offers one target in the one Switch account dropdown, with nothing chosen ahead and no menu", async () => {
     stubFetch({
       [SESSION]: { body: { human: "tanim", authenticated: true } },
     });
     show(["work-b"]);
-    expect(await openMenu()).toEqual(["work-b"]);
-    expect(screen.queryByRole("button", { name: /Switch to/ })).toBeNull();
-    expect(screen.getByText(/each waiting turn runs again on it/)).toBeTruthy();
+    await screen.findByLabelText("Switch account");
+    expect(options()).toEqual(["Switch account", "work-b"]);
+    expect(dropdown().value).toBe("");
+    expect(screen.queryByRole("button", { name: /Switch/ })).toBeNull();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("switches to the chosen account of two and stays pending until the daemon answers", async () => {
+  it("switches at once to the chosen account of two and stays pending until the daemon answers", async () => {
     let answer: () => void = () => {};
     const answered = new Promise<void>((resolve) => {
       answer = resolve;
@@ -63,47 +66,50 @@ describe("LimitActions", () => {
       },
     });
     show();
-    expect(await openMenu()).toEqual(["work-b", "personal"]);
-    await userEvent.click(screen.getByRole("menuitem", { name: "work-b" }));
-    expect(
-      await screen.findByRole("button", { name: "Switching to work-b…" }),
-    ).toBeTruthy();
+    await screen.findByLabelText("Switch account");
+    expect(options()).toEqual(["Switch account", "work-b", "personal"]);
+    await userEvent.selectOptions(dropdown(), "work-b");
+    await waitFor(() => {
+      expect(dropdown().disabled).toBe(true);
+    });
+    expect(options()[0]).toBe("Switching to work-b…");
+    expect(dropdown().value).toBe("");
     answer();
-    await screen.findByRole("button", { name: "Switch account" });
+    await waitFor(() => {
+      expect(dropdown().disabled).toBe(false);
+    });
+    expect(options()[0]).toBe("Switch account");
     expect(calls.find((call) => call.method === "PUT")?.body).toEqual({
       account: "work-b",
     });
   });
 
-  it("shows a refused switch with its code and reads the item and the accounts again", async () => {
+  it("shows a refused switch with its code, chooses nothing and reads the item and the accounts again", async () => {
     stubFetch({
       [SESSION]: { body: { human: "tanim", authenticated: true } },
       [CHOOSE]: errorReply(404, "account_not_found"),
     });
     const { invalidated } = show();
-    await openMenu();
-    await userEvent.click(screen.getByRole("menuitem", { name: "personal" }));
+    await screen.findByLabelText("Switch account");
+    await userEvent.selectOptions(dropdown(), "personal");
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("no such account");
-    expect(alert.textContent).toContain("code: account_not_found");
+    expect(alert.textContent).toContain("account_not_found");
     const keysRead = invalidated.mock.calls.map((call) => call[0]?.queryKey);
     expect(keysRead).toContainEqual(keys.needsYou("demo"));
     expect(keysRead).toContainEqual(keys.workers("demo"));
-    await waitFor(() => {
-      expect(
-        screen.getByRole<HTMLButtonElement>("button", {
-          name: "Switch account",
-        }).disabled,
-      ).toBe(false);
-    });
+    expect(dropdown().disabled).toBe(false);
+    expect(dropdown().value).toBe("");
   });
 
-  it("offers three or more targets in the same menu, Claude Code's own login by its name", async () => {
+  it("offers three or more targets in the same dropdown, Claude Code's own login by its name", async () => {
     stubFetch({
       [SESSION]: { body: { human: "tanim", authenticated: true } },
     });
     show(["system-default", "work-b", "work-c", "personal"]);
-    expect(await openMenu()).toEqual([
+    await screen.findByLabelText("Switch account");
+    expect(options()).toEqual([
+      "Switch account",
       "system-default (Claude Code's own login)",
       "work-b",
       "work-c",
@@ -119,14 +125,13 @@ describe("LimitActions", () => {
     await waitFor(() => {
       expect(client.getQueryData(sessionQuery().queryKey)).toBeDefined();
     });
-    expect(screen.queryByRole("button", { name: "Switch account" })).toBeNull();
+    expect(screen.queryByLabelText("Switch account")).toBeNull();
     cleanup();
     stubFetch({ [SESSION]: { body: { human: null, authenticated: true } } });
-    show();
+    const other = show().client;
     await waitFor(() => {
-      expect(
-        screen.queryByRole("button", { name: "Switch account" }),
-      ).toBeNull();
+      expect(other.getQueryData(sessionQuery().queryKey)).toBeDefined();
     });
+    expect(screen.queryByLabelText("Switch account")).toBeNull();
   });
 });

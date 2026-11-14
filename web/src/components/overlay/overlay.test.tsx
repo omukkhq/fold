@@ -269,19 +269,6 @@ describe("Menu", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("shows its hint above the items", async () => {
-    render(
-      <Menu
-        trigger={<Button>Switch</Button>}
-        hint="The waiting turns run again on it."
-        items={[{ label: "work-b", onSelect: () => {} }]}
-      />,
-    );
-    await userEvent.click(screen.getByRole("button", { name: "Switch" }));
-    expect(screen.getByText("The waiting turns run again on it.")).toBeTruthy();
-    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
-  });
-
   it("stops at the room Radix measures in the window and scrolls inside", async () => {
     const items = Array.from({ length: 300 }, (_, n) => ({
       label: `worker-${String(n)}`,

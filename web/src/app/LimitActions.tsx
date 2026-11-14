@@ -1,21 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Repeat } from "lucide-react";
-import { apiErrorCode } from "@/api/errors";
 import { keys } from "@/api/keys";
 import { sessionQuery } from "@/api/queries";
 import { setProjectAccount } from "@/api/workers";
-import { Button } from "@/components/button/Button";
-import { Menu } from "@/components/overlay/Menu";
+import { Select } from "@/components/form/controls";
 import { cn } from "@/lib/cn";
 import { accountFailure } from "../features/settings/accountModel";
+import { ErrorNote } from "../features/workers/parts";
 import { PauseControl } from "./PauseControl";
 import {
-  SWITCH_MENU_HINT,
+  SWITCH_ACCOUNT,
   switchItems,
-  switchPendingLabel,
+  switchPlaceholder,
 } from "./limitActionsModel";
 
-/** The usage-limit line's actions: Pause, and one Switch account menu whose items are the other accounts, for any number of them; a choice makes that account the project's, and fold then runs the waiting turns again on it. A switch stays pending until the daemon answers and Needs you is read again. */
+/** The usage-limit line's actions: Pause, and one Switch account dropdown whose options are the other accounts, for any number of them; a choice makes that account the project's at once, and fold then runs the waiting turns again on it. A switch stays pending until the daemon answers and Needs you is read again. */
 export function LimitActions({
   slug,
   accounts,
@@ -45,41 +43,31 @@ export function LimitActions({
       <div className="flex flex-wrap items-center gap-6">
         <PauseControl slug={slug} className="items-start" />
         {items === null ? null : (
-          <Menu
-            hint={SWITCH_MENU_HINT}
-            trigger={
-              <Button
-                variant="quiet"
-                pending={pendingFor !== undefined}
-                pendingLabel={switchPendingLabel(pendingFor ?? "")}
-                icon={<Repeat aria-hidden="true" size={16} />}
-              >
-                Switch account
-                <ChevronDown
-                  aria-hidden="true"
-                  size={14}
-                  className="shrink-0 text-text-2"
-                />
-              </Button>
-            }
-            items={items.map((item) => ({
-              label: item.label,
-              onSelect: () => {
-                write.mutate(item.account);
-              },
-              disabled: write.isPending,
-            }))}
-          />
+          <Select
+            label={SWITCH_ACCOUNT}
+            labelHidden
+            // The first option stays the value, so the dropdown never names a target nobody chose, also after a refusal.
+            value=""
+            disabled={write.isPending}
+            className="w-auto py-7 text-14"
+            onChange={(event) => {
+              if (event.target.value !== "") {
+                write.mutate(event.target.value);
+              }
+            }}
+          >
+            <option value="" disabled>
+              {switchPlaceholder(pendingFor)}
+            </option>
+            {items.map((item) => (
+              <option key={item.account} value={item.account}>
+                {item.label}
+              </option>
+            ))}
+          </Select>
         )}
       </div>
-      {failure === null ? null : (
-        <span role="alert" className="text-13 text-bad">
-          {failure.text}
-          {apiErrorCode(write.error) === null ? null : (
-            <span className="font-mono text-text-2"> code: {failure.code}</span>
-          )}
-        </span>
-      )}
+      {failure === null ? null : <ErrorNote failure={failure} />}
     </div>
   );
 }

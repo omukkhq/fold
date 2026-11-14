@@ -23,8 +23,6 @@ interface MenuProps {
   trigger: ReactNode;
   items: MenuItem[];
   align?: "start" | "center" | "end";
-  /** A line above the items that says what choosing one does. */
-  hint?: string;
 }
 
 /** The room Radix measures stops short of the window edge, so the last item of a long menu never touches it. */
@@ -48,7 +46,7 @@ function ItemBody({ item }: { item: MenuItem }) {
   );
 }
 
-export function Menu({ trigger, items, align = "start", hint }: MenuProps) {
+export function Menu({ trigger, items, align = "start" }: MenuProps) {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
@@ -62,11 +60,6 @@ export function Menu({ trigger, items, align = "start", hint }: MenuProps) {
             "w-max max-w-(--radix-dropdown-menu-content-available-width)",
           )}
         >
-          {hint === undefined ? null : (
-            <DropdownMenu.Label className="px-10 pt-6 pb-4 text-13 text-text-2">
-              {hint}
-            </DropdownMenu.Label>
-          )}
           {items.map((item) => {
             const className = cn(
               menuItem,

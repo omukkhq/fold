@@ -1,12 +1,12 @@
 import { accountLabel } from "../features/settings/accountModel";
 
-/** One item of the Switch account menu: the account the choice makes the project's, and its words. */
+/** One option of the Switch account dropdown: the account the choice makes the project's, and its words. */
 export interface SwitchItem {
   account: string;
   label: string;
 }
 
-/** The items of the usage-limit line's one Switch account menu, in the daemon's order, whatever their number; null without a target, which leaves the menu out. `system-default` reads as Claude Code's own login. */
+/** The options of the usage-limit line's one Switch account dropdown, in the daemon's order, whatever their number; null without a target, which leaves the dropdown out. `system-default` reads as Claude Code's own login. */
 export function switchItems(accounts: readonly string[]): SwitchItem[] | null {
   if (accounts.length === 0) {
     return null;
@@ -17,11 +17,10 @@ export function switchItems(accounts: readonly string[]): SwitchItem[] | null {
   }));
 }
 
-/** The words of the menu's trigger while the daemon has not answered a switch. */
-export function switchPendingLabel(account: string): string {
-  return `Switching to ${account}…`;
-}
+/** The dropdown's name, which its first option shows until a person chooses. */
+export const SWITCH_ACCOUNT = "Switch account";
 
-/** The line above the menu's accounts. */
-export const SWITCH_MENU_HINT =
-  "Make another account the project's: each waiting turn runs again on it, in its own session.";
+/** The first option of the dropdown, which stays the shown value so no target is ever chosen ahead: `Switch account`, or `Switching to work-b…` while the daemon has not answered a switch. */
+export function switchPlaceholder(pending: string | undefined): string {
+  return pending === undefined ? SWITCH_ACCOUNT : `Switching to ${pending}…`;
+}

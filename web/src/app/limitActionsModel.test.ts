@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { switchItems, switchPendingLabel } from "./limitActionsModel";
+import { switchItems, switchPlaceholder } from "./limitActionsModel";
 
 describe("limitActionsModel", () => {
-  it("leaves the menu out without a target", () => {
+  it("leaves the dropdown out without a target", () => {
     expect(switchItems([])).toBeNull();
   });
 
-  it("offers every target in one menu, one item each in the daemon's order, for one, two or more", () => {
+  it("offers every target in one dropdown, one option each in the daemon's order, for one, two or more", () => {
     expect(switchItems(["work-b"])).toEqual([
       { account: "work-b", label: "work-b" },
     ]);
@@ -24,7 +24,8 @@ describe("limitActionsModel", () => {
     ).toEqual(["work-b", "work-c", "personal", "spare"]);
   });
 
-  it("names the account a pending switch goes to", () => {
-    expect(switchPendingLabel("work-b")).toBe("Switching to work-b…");
+  it("names the dropdown, and the account a pending switch goes to", () => {
+    expect(switchPlaceholder(undefined)).toBe("Switch account");
+    expect(switchPlaceholder("work-b")).toBe("Switching to work-b…");
   });
 });

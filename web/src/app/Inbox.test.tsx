@@ -8,7 +8,14 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { TaskStatus } from "@/api/board";
@@ -62,10 +69,12 @@ async function renderInbox(
   items: NeedsYouItem[],
   human: string | null,
   slug = "demo",
+  routes: Parameters<typeof stubFetch>[0] = {},
 ) {
-  stubFetch({
+  const calls = stubFetch({
     "GET /api/v1/session": { body: { human, authenticated: true } },
     [`GET /api/v1/projects/${slug}/needs-you`]: { body: { items } },
+    ...routes,
   });
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -106,7 +115,7 @@ async function renderInbox(
     </QueryClientProvider>,
   );
   await screen.findByText("Home");
-  return { client, router };
+  return { client, router, calls };
 }
 
 const permission = needsItem({
@@ -345,8 +354,8 @@ describe("Inbox, Needs you", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
-  it("offers the usage limit's two targets behind one Switch account trigger, never a button per account", async () => {
-    await renderInbox(
+  it("offers the usage limit's two targets in one Switch account dropdown under the line, which switches at once and opens nothing", async () => {
+    const { router, calls } = await renderInbox(
       [
         needsItem({
           kind: "usage_limit",
@@ -363,16 +372,39 @@ describe("Inbox, Needs you", () => {
         }),
       ],
       "tanim",
+      "demo",
+      {
+        "PUT /api/v1/projects/demo/account": {
+          body: {
+            account: "work-b",
+            accounts: ["system-default", "work-a", "work-b"],
+          },
+        },
+      },
     );
     const inbox = await openInbox();
     const project = within(inbox).getByRole("region", { name: "Project" });
-    // The menu's items are the LimitActions tests'; the line holds its one trigger.
+    const dropdown =
+      await within(project).findByLabelText<HTMLSelectElement>(
+        "Switch account",
+      );
+    expect([...dropdown.options].map((option) => option.textContent)).toEqual([
+      "Switch account",
+      "system-default (Claude Code's own login)",
+      "work-b",
+    ]);
+    expect(dropdown.value).toBe("");
+    expect(dropdown.closest("a")).toBeNull();
     expect(
-      await within(project).findAllByRole("button", { name: "Switch account" }),
-    ).toHaveLength(1);
-    expect(
-      within(project).queryByRole("button", { name: /Switch to/ }),
+      within(project).queryByRole("button", { name: /Switch/ }),
     ).toBeNull();
+    await userEvent.selectOptions(dropdown, "work-b");
+    await waitFor(() => {
+      expect(calls.find((call) => call.method === "PUT")?.body).toEqual({
+        account: "work-b",
+      });
+    });
+    expect(router.state.location.pathname).toBe("/");
   });
 
   it("shows main's invalid checks file as a line that opens nothing and counts it", async () => {
