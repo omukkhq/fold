@@ -874,7 +874,7 @@ pub async fn resume_project(human: Human, project: Project) -> Result<Json<Pause
         (status = 200, description = "The project's account after the change", body = ProjectAccountEntry),
         (status = 400, description = "`invalid_account_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
-        (status = 404, description = "`project_not_found`, or `account_not_found` with the name in `details.account`: the host has no such account", body = ErrorEnvelope),
+        (status = 404, description = "`project_not_found`, or `account_not_found` with the name in `details.account`: the host has no such account, or the account is `default` while Claude Code has no login of its own on the host", body = ErrorEnvelope),
         (status = 409, description = "`invalid_config`: `.fold/config.toml` is not valid", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "`accounts_io` or internal error", body = ErrorEnvelope),

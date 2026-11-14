@@ -90,6 +90,16 @@ pub fn index_path(dir: &Path) -> std::path::PathBuf {
     dir.join(INDEX_FILE)
 }
 
+/// The refusal of `default` while Claude Code has no login of its own on the host (see [`claude_login`]): the account stands for that login only.
+pub fn default_not_found() -> FoldError {
+    FoldError::new(
+        codes::ACCOUNT_NOT_FOUND,
+        "this host has no account default: Claude Code has no login of its own here",
+    )
+    .with_hint("sign in with `claude login`, then run `fld account use default`, or choose another account (`fld account list`)")
+    .with_details([("account", serde_json::json!(fold_core::accounts::DEFAULT_ACCOUNT))])
+}
+
 /// The refusal for a name that the host has no account of.
 pub fn not_found(name: &AccountName) -> FoldError {
     FoldError::new(

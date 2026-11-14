@@ -91,7 +91,7 @@ impl AgentService {
         ProjectAccount { account, accounts }
     }
 
-    /// A named human chooses the project's account, `None` for Claude Code's own login. The name goes into `.fold/config.toml`, which stays the single source, through a flushed temporary file and a rename that keeps every other byte, and `workers.account_changed` with the old and the new name is stored in the same write; a commit that fails puts the old file back. A choice of the account the file names already writes nothing. Once the event is out, each running worker continues in its own session with the new account when it is idle (see [`super::Supervisor::switch_accounts`]); a start reads the file, so a daemon that stops between the rename and the commit starts its workers with the new account, without the event.
+    /// A named human chooses the project's account, `None` for Claude Code's own login, which is refused with `account_not_found` while that login is not on the host. The name goes into `.fold/config.toml`, which stays the single source, through a flushed temporary file and a rename that keeps every other byte, and `workers.account_changed` with the old and the new name is stored in the same write; a commit that fails puts the old file back. A choice of the account the file names already writes nothing. Once the event is out, each running worker continues in its own session with the new account when it is idle (see [`super::Supervisor::switch_accounts`]); a start reads the file, so a daemon that stops between the rename and the commit starts its workers with the new account, without the event.
     pub async fn set_account(
         &self,
         actor: &Actor,
@@ -99,6 +99,15 @@ impl AgentService {
     ) -> Result<ProjectAccount, AgentError> {
         let starter = self.starter(actor).await?;
         policy::can_set_account(&starter).map_err(FoldError::from)?;
+        if account.is_none() {
+            let login = match &self.workers {
+                Some(workers) => workers.claude_login().await,
+                None => false,
+            };
+            if !login {
+                return Err(accounts::default_not_found().into());
+            }
+        }
         if let Some(name) = &account {
             let dir = self
                 .accounts_dir()

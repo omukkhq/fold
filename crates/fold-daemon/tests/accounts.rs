@@ -712,12 +712,19 @@ async fn default_is_offered_only_while_claude_code_has_its_own_login() {
         json!({"account": "default", "accounts": ["work-a", "work-b"]}),
         "the project's account shows, but it is no choice without the login"
     );
-    let (status, body) = choose(&harness, Some("system-default")).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(
-        body["account"], "default",
-        "the older name reads as default"
-    );
+    for name in [Some("default"), Some("system-default"), None] {
+        let (status, refused) = choose(&harness, name).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{name:?}: {refused}");
+        assert_eq!(refused["error"]["code"], codes::ACCOUNT_NOT_FOUND);
+        assert_eq!(refused["error"]["details"]["account"], "default");
+        assert!(
+            refused["error"]["details"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("sign in with `claude login`, then run `fld account use default`"),
+            "{refused}"
+        );
+    }
 
     assert_eq!(choose(&harness, Some("work-a")).await.0, StatusCode::OK);
     until_started(&fake, LEAD, 2).await;
@@ -760,5 +767,11 @@ async fn default_is_offered_only_while_claude_code_has_its_own_login() {
         account().await["accounts"],
         json!(["default", "work-a", "work-b"]),
         "a login of Claude Code makes default a choice again"
+    );
+    let (status, body) = choose(&harness, Some("system-default")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["account"], "default",
+        "system-default reads as default"
     );
 }

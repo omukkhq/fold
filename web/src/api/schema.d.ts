@@ -7588,7 +7588,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `project_not_found`, or `account_not_found` with the name in `details.account`: the host has no such account */
+            /** @description `project_not_found`, or `account_not_found` with the name in `details.account`: the host has no such account, or the account is `default` while Claude Code has no login of its own on the host */
             404: {
                 headers: {
                     [name: string]: unknown;

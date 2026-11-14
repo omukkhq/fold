@@ -356,6 +356,14 @@ fn use_goes_through_the_daemon_and_remove_is_refused_while_a_project_uses_the_ac
     assert!(text.contains("project app"), "{text}");
     assert!(text.contains("hint: choose another account"), "{text}");
     assert!(sandbox.fold(&["account", "list"]).status.success());
+    let refused = sandbox.use_account(&project, "default");
+    assert!(!refused.status.success());
+    let text = stderr(&refused);
+    assert!(text.contains("account_not_found: "), "{text}");
+    assert!(
+        text.contains("sign in with `claude login`, then run `fld account use default`"),
+        "{text}"
+    );
     sandbox.claude_login();
     let back = sandbox.use_account(&project, "default");
     assert!(back.status.success(), "{}", stderr(&back));
