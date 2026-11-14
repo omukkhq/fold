@@ -61,6 +61,8 @@ pub struct ProcessSummary {
     pub model_unreachable: bool,
     /// The cause outside the worker its idle process's last turn waits for, which fold runs again once it has passed.
     pub waits_for: Option<fold_core::turn_waits::WaitReason>,
+    /// The agent that parked the stopped process to wait for its go.
+    pub parked_by: Option<AgentName>,
 }
 
 /// A connected session of the agent. `cwd` is `None` for a session opened without a working directory.
@@ -168,6 +170,7 @@ impl AgentService {
                             row.state,
                         ),
                         waits_for,
+                        parked_by: row.park.map(|park| park.by),
                     },
                 )
             })

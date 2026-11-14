@@ -511,6 +511,10 @@ async fn a_usage_limit_offers_the_other_accounts_and_a_switch_runs_the_waiting_t
         ]),
         "one switch per other account, by name"
     );
+    assert_eq!(
+        limit["account"], "work-a",
+        "the item names the project's account"
+    );
     let text = serde_json::to_string(&items).unwrap();
     assert!(!text.contains(TOKEN_A) && !text.contains(TOKEN_B));
 

@@ -314,6 +314,9 @@ pub struct NeedsYouEntry {
     /// What the human does about the worker of a `worker_stalled` or a `stale_claim`; null for every other kind.
     #[schema(required = true)]
     pub action: Option<crate::http::tasks::PersonAction>,
+    /// The project's account of a `usage_limit` when fold lists the item, `system-default` for Claude Code's own login; null for every other kind.
+    #[schema(required = true, example = "work-a")]
+    pub account: Option<String>,
 }
 
 impl From<NeedsYouItem> for NeedsYouEntry {
@@ -378,6 +381,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             resets_at: item.resets_at,
             actions: item.actions.into_iter().map(Into::into).collect(),
             action: item.action.map(crate::http::tasks::PersonAction::from),
+            account: item.account.map(|name| name.as_str().to_owned()),
         }
     }
 }

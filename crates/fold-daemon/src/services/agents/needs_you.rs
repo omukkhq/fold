@@ -195,6 +195,8 @@ pub struct NeedsYouItem {
     pub actions: Vec<NeedsYouAction>,
     /// What the human does about the worker of a `WorkerStalled` or a `StaleClaim`.
     pub action: Option<PersonAction>,
+    /// The project's account of a `UsageLimit` when fold lists the item, `system-default` for Claude Code's own login.
+    pub account: Option<fold_core::accounts::AccountName>,
 }
 
 impl NeedsYouItem {
@@ -243,6 +245,7 @@ impl NeedsYouItem {
             resets_at: None,
             actions: Vec::new(),
             action: None,
+            account: None,
         }
     }
 
