@@ -495,6 +495,9 @@ async fn park_row(
         .await?
         .ok_or(StoreError::Invalid("the parking agent is not registered"))?;
     agents::park_worker(tx, row.id, by.id, &park.wait_for, now).await?;
+    // A full lease from the park, so no reader sees the claims lapse before the sweeper renews them while the parker runs.
+    let renewal = fold_store::tasks::claims::renew_of_agent(tx, row.agent_id, now).await?;
+    crate::services::tasks::append_renewed::<AgentError>(tx, buffer, &renewal, now).await?;
     let event = NewEvent::new(types::WORKER_PARKED, park.actor.clone())?.data(json!({
         "agent": row.agent.as_str(),
         "by": park.by.as_str(),

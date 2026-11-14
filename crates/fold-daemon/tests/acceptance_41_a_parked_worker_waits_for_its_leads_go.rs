@@ -138,10 +138,14 @@ async fn acceptance_41_a_parked_worker_waits_for_its_leads_go_and_nothing_waits_
         .advance(Duration::from_secs(60))
         .unwrap();
     assert_eq!(sweep(&harness).await, 1, "only the second claim lapses");
-    assert_eq!(told(&harness, "claim.stale").await, [json!(["web-lead"])]);
+    assert_eq!(
+        told(&harness, "claim.stale").await,
+        [json!(["frontend"])],
+        "the stopped lead hears no push, so the running main agent hears first"
+    );
     assert!(
         attention(&harness, "T-2").await.is_empty(),
-        "the lead first"
+        "the main agent first"
     );
     harness.project.clock().advance(STALL).unwrap();
     sweep(&harness).await;

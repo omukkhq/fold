@@ -180,6 +180,7 @@ define_event_types! {
     WORKER_WAIT_ENDED = "worker.wait_ended",
     CLAIM_NEEDS_PERSON = "claim.needs_person",
     WORKER_PARKED = "worker.parked",
+    CLAIM_RENEWED = "claim.renewed",
 }
 
 impl EventType {

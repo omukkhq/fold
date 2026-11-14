@@ -70,12 +70,19 @@ impl AgentService {
                 let Some(paused_at) = agents::set_resumed(tx, now).await? else {
                     return Ok::<_, AgentError>(None);
                 };
-                let renewed = claims::renew_all(tx, now).await?;
+                let renewal = claims::renew_all(tx, now).await?;
                 let event = NewEvent::new(types::PROJECT_RESUMED, by.clone())?.data(json!({
                     "paused_at": paused_at.as_millis(),
-                    "renewed_claims": renewed,
+                    "renewed_claims": renewal.count,
                 }))?;
                 buffer.append(tx, &event, now).await?;
+                crate::services::tasks::append_renewed::<AgentError>(
+                    tx,
+                    &mut buffer,
+                    &renewal,
+                    now,
+                )
+                .await?;
                 Ok(Some(paused_at))
             })
             .await?;

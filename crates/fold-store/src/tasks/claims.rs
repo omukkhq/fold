@@ -107,16 +107,61 @@ pub async fn unreleased_for_task(
     .transpose()
 }
 
-/// Sets `renewed_at = now` and clears `stale_at` and `stale_needs_person_at` on every unreleased claim, of either kind, held by one of `worker_ids`. Returns how many claims it renewed.
+/// A claim whose stale mark a renewal cleared: its task, the proposal's task for a review claim, and its holder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenewedClaim {
+    pub task: TaskId,
+    pub worker: WorkerName,
+}
+
+/// What a renewal did: how many claims it renewed, and those of them whose stale mark it cleared, which a `claim.renewed` reports.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Renewal {
+    pub count: u64,
+    pub cleared: Vec<RenewedClaim>,
+}
+
+/// The unreleased claims with a stale mark that a renewal of `worker_ids` (a JSON array), or of every worker for `None`, clears, in claim order.
+async fn marked(
+    tx: &mut WriteTx,
+    worker_ids: Option<&str>,
+) -> Result<Vec<RenewedClaim>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT t.number AS "task!: i64", w.name AS worker
+           FROM claims c
+           JOIN workers w ON w.id = c.worker_id
+           LEFT JOIN proposals p ON p.id = c.proposal_id
+           JOIN tasks t ON t.id = COALESCE(c.task_id, p.task_id)
+           WHERE c.released_at IS NULL
+             AND (c.stale_at IS NOT NULL OR c.stale_needs_person_at IS NOT NULL)
+             AND (?1 IS NULL OR c.worker_id IN (SELECT value FROM json_each(?1)))
+           ORDER BY c.id"#,
+        worker_ids
+    )
+    .fetch_all(tx.conn())
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(RenewedClaim {
+                task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
+                worker: WorkerName::parse(&row.worker)
+                    .map_err(|_| StoreError::Corrupt("workers.name"))?,
+            })
+        })
+        .collect()
+}
+
+/// Sets `renewed_at = now` and clears `stale_at` and `stale_needs_person_at` on every unreleased claim, of either kind, held by one of `worker_ids`.
 pub async fn renew(
     tx: &mut WriteTx,
     worker_ids: &[i64],
     now: Timestamp,
-) -> Result<u64, StoreError> {
+) -> Result<Renewal, StoreError> {
     if worker_ids.is_empty() {
-        return Ok(0);
+        return Ok(Renewal::default());
     }
     let ids = serde_json::Value::from(worker_ids.to_vec()).to_string();
+    let cleared = marked(tx, Some(&ids)).await?;
     let now = now.as_millis();
     let result = sqlx::query!(
         "UPDATE claims SET renewed_at = ?2, stale_at = NULL, stale_needs_person_at = NULL
@@ -126,7 +171,54 @@ pub async fn renew(
     )
     .execute(tx.conn())
     .await?;
-    Ok(result.rows_affected())
+    Ok(Renewal {
+        count: result.rows_affected(),
+        cleared,
+    })
+}
+
+/// [`renew`] for the holders that wait, which make no calls: only the claims renewed at or before `due_at`, or marked stale, so a wait renews each claim once per half lease instead of at every sweep.
+pub async fn renew_due(
+    tx: &mut WriteTx,
+    worker_ids: &[i64],
+    due_at: Timestamp,
+    now: Timestamp,
+) -> Result<Renewal, StoreError> {
+    if worker_ids.is_empty() {
+        return Ok(Renewal::default());
+    }
+    let ids = serde_json::Value::from(worker_ids.to_vec()).to_string();
+    let cleared = marked(tx, Some(&ids)).await?;
+    let (due_at, now) = (due_at.as_millis(), now.as_millis());
+    let result = sqlx::query!(
+        "UPDATE claims SET renewed_at = ?3, stale_at = NULL, stale_needs_person_at = NULL
+         WHERE released_at IS NULL AND worker_id IN (SELECT value FROM json_each(?1))
+           AND (renewed_at <= ?2 OR stale_at IS NOT NULL OR stale_needs_person_at IS NOT NULL)",
+        ids,
+        due_at,
+        now
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(Renewal {
+        count: result.rows_affected(),
+        cleared,
+    })
+}
+
+/// [`renew`] for every worker of the agent `agent_id`, as when the agent's worker starts to wait for others.
+pub async fn renew_of_agent(
+    tx: &mut WriteTx,
+    agent_id: i64,
+    now: Timestamp,
+) -> Result<Renewal, StoreError> {
+    let ids: Vec<i64> = sqlx::query_scalar!(
+        r#"SELECT id AS "id!: i64" FROM workers WHERE agent_id = ?"#,
+        agent_id
+    )
+    .fetch_all(tx.conn())
+    .await?;
+    renew(tx, &ids, now).await
 }
 
 /// Renews every unreleased claim of the worker that started proposal-stage run `run`, at its end `now`, so the claims get a full lease after the run the worker waited for. A run of another stage renews nothing.
@@ -134,22 +226,37 @@ pub async fn renew_for_run(
     tx: &mut WriteTx,
     run: CheckRunId,
     now: Timestamp,
-) -> Result<u64, StoreError> {
-    let (number, now) = (run.to_db(), now.as_millis());
+) -> Result<Renewal, StoreError> {
+    let number = run.to_db();
+    let worker: Option<i64> = sqlx::query_scalar!(
+        r#"SELECT worker_id AS "worker!: i64" FROM check_runs WHERE number = ? AND stage = 'proposal'"#,
+        number
+    )
+    .fetch_optional(tx.conn())
+    .await?;
+    let Some(worker) = worker else {
+        return Ok(Renewal::default());
+    };
+    let ids = serde_json::Value::from(vec![worker]).to_string();
+    let cleared = marked(tx, Some(&ids)).await?;
+    let now = now.as_millis();
     let result = sqlx::query!(
         "UPDATE claims SET renewed_at = MAX(renewed_at, ?2), stale_at = NULL, stale_needs_person_at = NULL
-         WHERE released_at IS NULL
-           AND worker_id = (SELECT worker_id FROM check_runs WHERE number = ?1 AND stage = 'proposal')",
-        number,
+         WHERE released_at IS NULL AND worker_id = ?1",
+        worker,
         now
     )
     .execute(tx.conn())
     .await?;
-    Ok(result.rows_affected())
+    Ok(Renewal {
+        count: result.rows_affected(),
+        cleared,
+    })
 }
 
 /// Gives every unreleased claim of the project a full lease from `now` and clears its stale mark, as the end of a pause does.
-pub async fn renew_all(tx: &mut WriteTx, now: Timestamp) -> Result<u64, StoreError> {
+pub async fn renew_all(tx: &mut WriteTx, now: Timestamp) -> Result<Renewal, StoreError> {
+    let cleared = marked(tx, None).await?;
     let now = now.as_millis();
     let result = sqlx::query!(
         "UPDATE claims SET renewed_at = ?, stale_at = NULL, stale_needs_person_at = NULL WHERE released_at IS NULL",
@@ -157,7 +264,10 @@ pub async fn renew_all(tx: &mut WriteTx, now: Timestamp) -> Result<u64, StoreErr
     )
     .execute(tx.conn())
     .await?;
-    Ok(result.rows_affected())
+    Ok(Renewal {
+        count: result.rows_affected(),
+        cleared,
+    })
 }
 
 /// Releases the unreleased implementation claim that `worker_id` holds on `task`. When that worker holds none there it changes nothing and fails with `StoreError::Invalid`.

@@ -300,6 +300,23 @@ impl Supervisor {
                     (Some(error), Some(wait)) => {
                         let new = agents::record_turn_wait(tx, id, &error.text, wait, now).await?;
                         if new == Some(true) {
+                            // A full lease from the start of the wait, which the sweeper keeps while it lasts.
+                            if let Some(row) = agents::find_worker_process(tx.conn(), agent).await?
+                            {
+                                let renewal = fold_store::tasks::claims::renew_of_agent(
+                                    tx,
+                                    row.agent_id,
+                                    now,
+                                )
+                                .await?;
+                                crate::services::tasks::append_renewed::<AgentError>(
+                                    tx,
+                                    &mut buffer,
+                                    &renewal,
+                                    now,
+                                )
+                                .await?;
+                            }
                             let group = wait.group();
                             let event = NewEvent::new(types::WORKER_WAITING, EventActor::fold())?
                                 .data(json!({

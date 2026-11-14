@@ -5,7 +5,6 @@ use fold_core::{
     TaskStatus, Timestamp, WorkerName, WorkspaceId, codes, policy,
 };
 use fold_store::agents::{self, WorkerRow};
-use fold_store::reviews::checks;
 use fold_store::tasks::TaskRow;
 use fold_store::tasks::claims::{self, ClaimRow, ReleaseReason};
 use fold_store::{SqliteConnection, StoreError, WriteTx, tasks, workspaces};
@@ -204,12 +203,40 @@ impl TaskService {
 }
 
 /// Renews every unreleased claim held by `worker_ids` inside the caller's transaction. The session touch calls it with the calling agent's worker, so a lease and the agent's last call never disagree.
-pub async fn renew_leases(
+pub async fn renew_leases<E>(
     tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
     worker_ids: &[i64],
     now: Timestamp,
-) -> Result<u64, StoreError> {
-    claims::renew(tx, worker_ids, now).await
+) -> Result<u64, E>
+where
+    E: From<StoreError> + From<fold_core::EventError>,
+{
+    let renewal = claims::renew(tx, worker_ids, now).await?;
+    append_renewed::<E>(tx, buffer, &renewal, now).await?;
+    Ok(renewal.count)
+}
+
+/// Appends one `claim.renewed` for each claim whose stale mark `renewal` cleared, in the caller's write, so every view that shows the mark hears that it ended.
+pub(crate) async fn append_renewed<E>(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    renewal: &claims::Renewal,
+    now: Timestamp,
+) -> Result<(), E>
+where
+    E: From<StoreError> + From<fold_core::EventError>,
+{
+    for claim in &renewal.cleared {
+        let event = NewEvent::new(types::CLAIM_RENEWED, EventActor::fold())?
+            .task(claim.task)
+            .data(json!({
+                "task": claim.task.to_string(),
+                "agent": claim.worker.agent().as_str(),
+            }))?;
+        buffer.append(tx, &event, now).await?;
+    }
+    Ok(())
 }
 
 /// The insert runs before any read of the holder, so the unique index on unreleased implementation claims decides a race and its violation becomes `already_claimed` or, for the holder, a renewal. The caller runs `recompute` once the rest of its command, such as an adoption or a new workspace, is in place, so the event log shows each `task.status_changed` after the changes that caused it.
@@ -234,7 +261,7 @@ pub(crate) async fn claim_in_tx(
                 .await?
                 .ok_or(error)?;
             if holder.worker_id == worker.id {
-                renew_leases(tx, &[worker.id], now).await?;
+                renew_leases::<TaskError>(tx, buffer, &[worker.id], now).await?;
                 let renewed = ClaimRow {
                     renewed_at: now,
                     stale_at: None,
@@ -404,14 +431,16 @@ pub(crate) fn closed_refusal(row: &TaskRow) -> Option<TaskError> {
     )
 }
 
-/// Whether the lease of `holder` ran out at `now`, counted by [`is_lapsed`] with the holder's own check runs, so a holder that waits for its run is never taken over during it.
+/// Whether the lease of `holder` ran out at `now`, counted by [`is_lapsed`] with the holder's runs as the lease sweeper sees them ([`super::leases::Holders`]), so a holder that waits for its own run or for others is never taken over, also before the sweeper's next renewal.
 async fn holder_lapsed(
     conn: &mut SqliteConnection,
     holder: &ClaimRow,
     now: Timestamp,
     lease_minutes: u64,
 ) -> Result<bool, StoreError> {
-    let runs = checks::runs_of_holder(conn, holder.worker_id).await?;
+    let runs = super::leases::Holders::read(conn)
+        .await?
+        .runs_of(holder.worker_id);
     Ok(is_lapsed(holder.renewed_at, runs, now, lease_minutes))
 }
 

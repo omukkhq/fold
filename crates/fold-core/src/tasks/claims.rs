@@ -1,5 +1,7 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
+use crate::AgentName;
 use crate::time::{MIN_MILLIS, Timestamp};
 
 /// A claim is stale once `lease_minutes` have passed since its last renewal. Staleness is computed when a claim is read and never stored by this rule. A `renewed_at` later than `now` is not stale.
@@ -106,6 +108,34 @@ pub fn near_stale_cutoff(now: Timestamp, lease_minutes: u64) -> Option<Timestamp
 pub fn stale_cutoff(now: Timestamp, lease_minutes: u64) -> Timestamp {
     let lease = Duration::from_secs(lease_minutes.saturating_mul(60));
     now.checked_sub(lease)
+        .unwrap_or(Timestamp::from_valid_millis(MIN_MILLIS))
+}
+
+/// The agents that hear of the stale claim of `holder` first and can act on it now: the agent that started the holder while it runs (`runs`), or else the main agents that run. An agent without a running process or an open session hears no push, so it counts as told only while it runs; an empty list means that no agent can act and the claim needs a person at once. The holder never hears of its own claim.
+pub fn stale_claim_receivers(
+    holder: &AgentName,
+    starter: Option<&AgentName>,
+    main_agents: &BTreeSet<AgentName>,
+    runs: impl Fn(&AgentName) -> bool,
+) -> Vec<AgentName> {
+    let receivers: Vec<AgentName> = match starter.filter(|starter| runs(starter)) {
+        Some(starter) => vec![starter.clone()],
+        None => main_agents
+            .iter()
+            .filter(|agent| runs(agent))
+            .cloned()
+            .collect(),
+    };
+    receivers
+        .into_iter()
+        .filter(|agent| agent != holder)
+        .collect()
+}
+
+/// The renewal time at or before which the sweeper renews the claims of a holder that waits at `now`: half a lease ago, so a waiting holder's claim is never older than half its lease and one sweep, without a renewal at every sweep.
+pub fn renewal_due(now: Timestamp, lease_minutes: u64) -> Timestamp {
+    let half = Duration::from_millis(lease_minutes.saturating_mul(30_000));
+    now.checked_sub(half)
         .unwrap_or(Timestamp::from_valid_millis(MIN_MILLIS))
 }
 
@@ -338,5 +368,37 @@ mod tests {
             30
         ));
         assert!(!HolderWait::default().waits());
+    }
+
+    #[test]
+    fn a_stale_claim_goes_to_a_running_starter_or_else_to_the_running_main_agents() {
+        let name = |text: &str| AgentName::parse(text).unwrap();
+        let (worker, lead, main) = (name("web-worker"), name("web-lead"), name("frontend"));
+        let mains: BTreeSet<AgentName> = [main.clone()].into();
+        let all = |_: &AgentName| true;
+        assert_eq!(
+            stale_claim_receivers(&worker, Some(&lead), &mains, all),
+            vec![lead.clone()]
+        );
+        assert_eq!(
+            stale_claim_receivers(&worker, Some(&lead), &mains, |agent| agent != &lead),
+            vec![main.clone()],
+            "a lead that does not run hears nothing, so the main agent is told"
+        );
+        assert!(stale_claim_receivers(&worker, Some(&lead), &mains, |_| false).is_empty());
+        assert_eq!(
+            stale_claim_receivers(&worker, None, &mains, all),
+            vec![main.clone()]
+        );
+        assert!(stale_claim_receivers(&main, None, &mains, all).is_empty());
+    }
+
+    #[test]
+    fn a_waiting_claim_is_renewed_after_half_its_lease() {
+        let now = Timestamp::from_millis(10 * 60_000).unwrap();
+        assert_eq!(renewal_due(now, 10).as_millis(), 5 * 60_000);
+        assert_eq!(renewal_due(now, 0), now);
+        assert_eq!(renewal_due(now, 60).as_millis(), -20 * 60_000);
+        assert_eq!(renewal_due(now, u64::MAX).as_millis(), MIN_MILLIS);
     }
 }
