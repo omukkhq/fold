@@ -917,6 +917,21 @@ describe("invalidation rules", () => {
     }
   });
 
+  it("refreshes the board, the task and Needs you when a renewal clears a stale claim", () => {
+    invalidated = [];
+    applyEvent(
+      client,
+      slug,
+      ev("claim.renewed", {
+        task: "T-3",
+        data: { task: "T-3", agent: "web-worker" },
+      }),
+    );
+    expect(hit(keys.board(slug))).toBe(true);
+    expect(hit(keys.task(slug, "T-3"))).toBe(true);
+    expect(hit(keys.needsYou(slug))).toBe(true);
+  });
+
   it("refreshes the workers and Needs you when the project's account changes", () => {
     invalidated = [];
     applyEvent(client, slug, ev("workers.account_changed"));
