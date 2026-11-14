@@ -312,6 +312,31 @@ describe("Inbox, Needs you", () => {
     ).toBeTruthy();
   });
 
+  it("shows the whole advice of a usage limit, which a cut line would hide", async () => {
+    await renderInbox(
+      [
+        needsItem({
+          kind: "usage_limit",
+          screen: "worker",
+          agents: ["web-lead", "api-worker"],
+          limit: "weekly",
+          account: "work-a",
+          reason:
+            "fold runs each waiting turn again after the reset; pause the agents to start no new turns until then",
+          actions: [{ action: "pause" }],
+        }),
+      ],
+      null,
+    );
+    const inbox = await openInbox();
+    const project = within(inbox).getByRole("region", { name: "Project" });
+    const title = within(project)
+      .getByText(/pause the agents to start no new turns until then/)
+      .closest(".basis-full");
+    expect(title?.className).toContain("wrap-anywhere");
+    expect(title?.className).not.toContain("truncate");
+  });
+
   it("shows main's invalid checks file as a line that opens nothing and counts it", async () => {
     await renderInbox(
       [

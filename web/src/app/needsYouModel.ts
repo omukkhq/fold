@@ -39,6 +39,8 @@ export interface NeedsYouLine {
   actions: readonly NeedsYouActionKind[];
   /** The other accounts of the host that the line's Switch to buttons make the project's, by name, in the daemon's order; empty for every other line. */
   switchTo: readonly string[];
+  /** The second line says what the person or fold does, so it wraps whole instead of being cut: a row that opens nothing, a stalled worker with its restart, a stale claim, and the waits for the network or a usage limit. */
+  wholeTitle: boolean;
 }
 
 export type NeedsYouActionKind = NeedsYouItem["actions"][number]["action"];
@@ -279,6 +281,7 @@ function lineOf(
     restart: null,
     actions: item.actions.map((entry) => entry.action),
     switchTo: switchTargets(item.actions),
+    wholeTitle: false,
   };
   switch (item.kind) {
     case "human_task":
@@ -402,6 +405,7 @@ function lineOf(
           title: waitersText(item.agents, check),
           text: "fold cannot reach the model",
           href: projectPath(slug, "agents"),
+          wholeTitle: true,
         };
       }
       return {
@@ -474,6 +478,7 @@ function lineOf(
         title: waitersText(item.agents, markedText(item.reason)),
         text: limitText(item, now),
         href: projectPath(slug, "agents"),
+        wholeTitle: true,
       };
     case "stale_claim":
       return {
@@ -489,6 +494,7 @@ function lineOf(
             : `holds a stale review claim on ${codeData(item.proposal)}`,
         href: taskPath(slug, item.task ?? ""),
         restart: item.action === "restart_worker" ? (item.agent ?? null) : null,
+        wholeTitle: true,
       };
     case "human_review":
       return {

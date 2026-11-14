@@ -175,13 +175,11 @@ function NeedLine({
           {formatAsOfMinute(now, line.since)}
         </span>
         {!line.inline && line.title ? (
-          // A row that opens nothing has no tooltip to give a cut title, and the title of a stalled worker or a stale claim is what the person does, so each wraps whole.
+          // A row that opens nothing has no tooltip to give a cut title, and the title of a stalled worker, a stale claim or a wait says what the person or fold does, so each wraps whole.
           <span
             className={cn(
               "min-w-0 basis-full text-13 text-text-2",
-              line.href === null ||
-                line.restart !== null ||
-                line.kind === "stale_claim"
+              line.href === null || line.restart !== null || line.wholeTitle
                 ? "wrap-anywhere"
                 : "truncate",
             )}

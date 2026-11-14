@@ -591,6 +591,7 @@ describe("needsYouGroups", () => {
         "Its process ended; message @backend-worker to resume it in its session, or restart it in a new session: `fld worker restart backend-worker`",
       href: "/p/demo/t/T-378",
       restart: null,
+      wholeTitle: true,
     });
     expect(restart).toMatchObject({
       person: "reviewer-9",
@@ -626,6 +627,7 @@ describe("needsYouGroups", () => {
       title: "Invalid \\`key\\`",
       text: "cannot reach the model: check the sign-in, or run `fld doctor`",
       href: "/p/demo/agents",
+      wholeTitle: false,
     });
     expect(allLines(groups)[2]).toMatchObject({
       person: "api-worker",
@@ -654,6 +656,7 @@ describe("needsYouGroups", () => {
         "@api-lead and @web-lead wait; fold runs each waiting turn again once the model answers",
       href: "/p/demo/agents",
       actions: [],
+      wholeTitle: true,
     });
   });
 
@@ -681,6 +684,7 @@ describe("needsYouGroups", () => {
       title:
         "@web-lead waits; fold runs each waiting turn again after the reset",
       href: "/p/demo/agents",
+      wholeTitle: true,
       actions: ["pause"],
       switchTo: [],
     });
