@@ -39,32 +39,37 @@ export function LimitActions({
   const failure = write.isError ? accountFailure(write.error) : null;
   const pendingFor = write.isPending ? write.variables : undefined;
   return (
-    <div className={cn("flex flex-col items-start gap-6", className)}>
-      <div className="flex flex-wrap items-center gap-6">
+    <div
+      className={cn("flex max-w-full flex-col items-start gap-6", className)}
+    >
+      <div className="flex max-w-full flex-wrap items-center gap-6">
         <PauseControl slug={slug} className="items-start" />
         {items === null ? null : (
-          <Select
-            label={SWITCH_ACCOUNT}
-            labelHidden
-            // The first option stays the value, so the dropdown never names a target nobody chose, also after a refusal.
-            value=""
-            disabled={write.isPending}
-            className="w-auto py-7 text-14"
-            onChange={(event) => {
-              if (event.target.value !== "") {
-                write.mutate(event.target.value);
-              }
-            }}
-          >
-            <option value="" disabled>
-              {switchPlaceholder(pendingFor)}
-            </option>
-            {items.map((item) => (
-              <option key={item.account} value={item.account}>
-                {item.label}
+          // The closed select is as wide as its longest option, so on a phone it stops at the column and cuts its text.
+          <div className="max-w-full min-w-0">
+            <Select
+              label={SWITCH_ACCOUNT}
+              labelHidden
+              // The first option stays the value, so the dropdown never names a target nobody chose, also after a refusal.
+              value=""
+              disabled={write.isPending}
+              className="w-auto max-w-full truncate py-7 font-title text-14 leading-tight font-semibold"
+              onChange={(event) => {
+                if (event.target.value !== "") {
+                  write.mutate(event.target.value);
+                }
+              }}
+            >
+              <option value="" disabled>
+                {switchPlaceholder(pendingFor)}
               </option>
-            ))}
-          </Select>
+              {items.map((item) => (
+                <option key={item.account} value={item.account}>
+                  {item.label}
+                </option>
+              ))}
+            </Select>
+          </div>
         )}
       </div>
       {failure === null ? null : <ErrorNote failure={failure} />}

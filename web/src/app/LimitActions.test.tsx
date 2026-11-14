@@ -47,6 +47,10 @@ describe("LimitActions", () => {
     await screen.findByLabelText("Switch account");
     expect(options()).toEqual(["Switch account", "work-b"]);
     expect(dropdown().value).toBe("");
+    // A long account name stops at the column on a phone instead of running past the panel.
+    expect(dropdown().className).toContain("max-w-full");
+    expect(dropdown().className).toContain("truncate");
+    expect(dropdown().closest(".min-w-0")).not.toBeNull();
     expect(screen.queryByRole("button", { name: /Switch/ })).toBeNull();
     expect(screen.queryByRole("menu")).toBeNull();
   });
