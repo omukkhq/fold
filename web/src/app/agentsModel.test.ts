@@ -23,6 +23,7 @@ function supervised(
       last_error: null,
       model_unreachable: false,
       waits_for: null,
+      parked_by: null,
       ...extra,
     },
   };

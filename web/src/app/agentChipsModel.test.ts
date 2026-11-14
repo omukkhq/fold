@@ -97,7 +97,13 @@ const supervised = (
   },
 ): ProjectAgent => ({
   ...agent({ presence: "offline", ...options }),
-  process: { state, failed_reason: failedReason, waits_for: null, ...error },
+  process: {
+    state,
+    failed_reason: failedReason,
+    waits_for: null,
+    parked_by: null,
+    ...error,
+  },
 });
 
 describe("agentStateText of a supervised agent", () => {
@@ -106,6 +112,25 @@ describe("agentStateText of a supervised agent", () => {
     expect(agentStateText(supervised("starting"))).toBe("starting");
     expect(agentStateText(supervised("stopping"))).toBe("stopping");
     expect(agentStateText(supervised("stopped"))).toBe("stopped");
+  });
+
+  it("names whose go a parked worker waits for instead of saying that it stopped", () => {
+    const parked = (
+      state: "stopped" | "working",
+      by: string | null,
+    ): ProjectAgent => {
+      const base = supervised(state);
+      return {
+        ...base,
+        process:
+          base.process === null ? null : { ...base.process, parked_by: by },
+      };
+    };
+    expect(agentStateText(parked("stopped", "web-lead"))).toBe(
+      "waits for @web-lead's go",
+    );
+    expect(agentStateText(parked("stopped", null))).toBe("stopped");
+    expect(agentStateText(parked("working", "web-lead"))).toBe("working");
   });
 
   it("counts the claims of a working one and the stalled tasks of a working or idle one", () => {
@@ -162,6 +187,7 @@ describe("agentStateText of a supervised agent", () => {
         failed_reason: null,
         last_error: "API Error",
         model_unreachable: false,
+        parked_by: null,
         waits_for: waits,
       },
     });

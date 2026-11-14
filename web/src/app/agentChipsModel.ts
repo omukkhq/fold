@@ -4,6 +4,7 @@ import { formatAsOfMinute } from "../format/time";
 import type { LiveStatus } from "../live/status";
 import { syncedAt } from "./streamStatusModel";
 import { waitWords } from "../live/turnWaits";
+import { parkedVerb } from "../live/workerActivity";
 
 /** Tasks the agent's workers hold an implementation claim on. */
 export function workingCount(agent: ProjectAgent): number {
@@ -74,10 +75,14 @@ function knownFailure(process: AgentProcess): boolean {
   );
 }
 
-/** A supervised agent runs Claude Code only during a turn, so its process tells its state; its presence would read offline between turns. A process whose turn waits for the network or a usage limit says so, and one whose turns cannot reach the model says so, unless it failed for a reason the chip names. */
+/** A supervised agent runs Claude Code only during a turn, so its process tells its state; its presence would read offline between turns. A process whose turn waits for the network or a usage limit says so, a parked one names whose go it waits for, and one whose turns cannot reach the model says so, unless it failed for a reason the chip names. */
 function processText(agent: ProjectAgent, process: AgentProcess): string {
   if (process.waits_for !== null) {
     return withStalled(agent, waitWords(process.waits_for));
+  }
+  // A parked worker's process ended on purpose: its lead's go resumes it in its own session.
+  if (process.parked_by !== null && process.state === "stopped") {
+    return parkedVerb(process.parked_by);
   }
   if (process.model_unreachable && !knownFailure(process)) {
     return MODEL_UNREACHABLE_TEXT;

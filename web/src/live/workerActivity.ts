@@ -49,6 +49,12 @@ export function parkedText(parkedBy: string | null): string {
     : `Waits for @${parkedBy}'s go`;
 }
 
+/** `waits for @web-lead's go`, after the worker's name. */
+export function parkedVerb(parkedBy: string | null): string {
+  const text = parkedText(parkedBy);
+  return `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+}
+
 const LONG: Readonly<Record<LiveCall, string>> = {
   command: "A command",
   fold: "A fold call",
@@ -116,10 +122,8 @@ export function activityVerb(activity: LiveActivity, now: number): string {
       return "waiting for the network";
     case "waits_for_usage_limit":
       return "waits for the usage limit reset";
-    case "parked": {
-      const text = parkedText(activity.parked_by ?? null);
-      return `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
-    }
+    case "parked":
+      return parkedVerb(activity.parked_by ?? null);
   }
 }
 

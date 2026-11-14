@@ -8,6 +8,7 @@ import { projectPath, withQuery } from "@/routes/paths";
 import { activityText } from "@/live/workerActivity";
 import { limitWords } from "@/live/turnWaits";
 import { formatAsOfMinute } from "@/format/time";
+import { SYSTEM_DEFAULT } from "@/features/settings/accountModel";
 
 /** A line of the list: a person who asks, or an item chip, then the words and the screen it opens, if any. */
 export interface NeedsYouLine {
@@ -232,12 +233,20 @@ export function waitersText(
   return next === null ? waits : `${waits}; ${next}`;
 }
 
-/** `Claude Code reached its weekly limit, which resets Mon 12:00am`: the limit and its reset in Claude Code's words, or the reset instant in local time when the message gave one, or no reset at all. */
+/** `work-a reached its weekly limit, which resets Mon 12:00am`: the account that reached the limit, `Claude Code` for its own login, then the limit and its reset in Claude Code's words, or the reset instant in local time when the message gave one, or no reset at all. */
 export function limitText(
-  item: Pick<NeedsYouItem, "limit" | "reset" | "resets_at">,
+  item: Pick<NeedsYouItem, "limit" | "reset" | "resets_at"> & {
+    account?: string | null;
+  },
   now: number,
 ): string {
-  const reached = `Claude Code reached its ${limitWords(item.limit)}`;
+  const who =
+    item.account === undefined ||
+    item.account === null ||
+    item.account === SYSTEM_DEFAULT
+      ? "Claude Code"
+      : item.account;
+  const reached = `${who} reached its ${limitWords(item.limit)}`;
   const reset = markedText(item.reset);
   if (reset !== null) {
     return `${reached}, which resets ${codeData(reset)}`;

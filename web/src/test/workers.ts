@@ -122,6 +122,7 @@ export function needsItem(fields: Partial<NeedsYouItem> = {}): NeedsYouItem {
     agents: [],
     activity: null,
     limit: null,
+    account: null,
     reset: null,
     resets_at: null,
     actions: [],

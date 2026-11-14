@@ -663,6 +663,7 @@ describe("needsYouGroups", () => {
       screen: "worker",
       agents: ["web-lead"],
       limit: "weekly",
+      account: "work-a",
       reset: "Mon 12:00am",
       title: "You've hit your weekly limit · resets Mon 12:00am",
       reason: "fold runs each waiting turn again after the reset",
@@ -676,7 +677,7 @@ describe("needsYouGroups", () => {
     expect(allLines(groups)[1]).toMatchObject({
       person: null,
       chip: null,
-      text: "Claude Code reached its weekly limit, which resets Mon 12:00am",
+      text: "work-a reached its weekly limit, which resets Mon 12:00am",
       title:
         "@web-lead waits; fold runs each waiting turn again after the reset",
       href: "/p/demo/agents",
@@ -709,6 +710,23 @@ describe("needsYouGroups", () => {
     expect(
       limitText({ limit: "opus", reset: "3:45pm `x`", resets_at: at }, now),
     ).toBe("Claude Code reached its Opus limit, which resets 3:45pm \\`x\\`");
+    expect(
+      limitText(
+        {
+          limit: "session",
+          account: "system-default",
+          reset: null,
+          resets_at: null,
+        },
+        now,
+      ),
+    ).toBe("Claude Code reached its session limit");
+    expect(
+      limitText(
+        { limit: "opus", account: "work-b", reset: null, resets_at: null },
+        now,
+      ),
+    ).toBe("work-b reached its Opus limit");
     expect(waitersText(["a", "b", "c"], null)).toBe("3 agents wait");
   });
 
