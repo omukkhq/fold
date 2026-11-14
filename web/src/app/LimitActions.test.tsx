@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { keys } from "../api/keys";
 import { errorReply, stubFetch } from "../test/stubFetch";
 import { LimitActions } from "./LimitActions";
 
@@ -18,11 +19,13 @@ function show(accounts: readonly string[] = ["work-b", "personal"]) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+  const invalidated = vi.spyOn(client, "invalidateQueries");
   render(
     <QueryClientProvider client={client}>
       <LimitActions slug="demo" accounts={accounts} />
     </QueryClientProvider>,
   );
+  return invalidated;
 }
 
 describe("LimitActions", () => {
@@ -59,18 +62,21 @@ describe("LimitActions", () => {
     });
   });
 
-  it("shows a refused switch with its code", async () => {
+  it("shows a refused switch with its code and reads the item and the accounts again", async () => {
     stubFetch({
       [SESSION]: { body: { human: "tanim", authenticated: true } },
       [CHOOSE]: errorReply(404, "account_not_found"),
     });
-    show();
+    const invalidated = show();
     await userEvent.click(
       await screen.findByRole("button", { name: "Switch to personal" }),
     );
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("no such account");
     expect(alert.textContent).toContain("code: account_not_found");
+    const keysRead = invalidated.mock.calls.map((call) => call[0]?.queryKey);
+    expect(keysRead).toContainEqual(keys.needsYou("demo"));
+    expect(keysRead).toContainEqual(keys.workers("demo"));
     await waitFor(() => {
       expect(
         screen.getByRole<HTMLButtonElement>("button", {

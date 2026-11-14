@@ -33,7 +33,8 @@ export function LimitActions({
   const queryClient = useQueryClient();
   const write = useMutation({
     mutationFn: (account: string) => setProjectAccount(slug, account),
-    onSuccess: () =>
+    // A refusal such as `account_not_found` also reads the item again, so its switches name the accounts as they are now.
+    onSettled: () =>
       Promise.all([
         queryClient.invalidateQueries({ queryKey: keys.needsYou(slug) }),
         queryClient.invalidateQueries({ queryKey: keys.workers(slug) }),

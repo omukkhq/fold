@@ -31,7 +31,8 @@ export function AccountPanel({
   const client = useQueryClient();
   const save = useMutation({
     mutationFn: (account: string) => setProjectAccount(slug, account),
-    onSuccess: () => client.invalidateQueries({ queryKey: keys.workers(slug) }),
+    // A refusal such as `account_not_found` also reads the list again, so the select offers the accounts as they are now.
+    onSettled: () => client.invalidateQueries({ queryKey: keys.workers(slug) }),
   });
   if (workers.isError) {
     return (

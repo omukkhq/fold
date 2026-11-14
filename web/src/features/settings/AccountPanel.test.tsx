@@ -77,22 +77,29 @@ describe("AccountPanel", () => {
     });
   });
 
-  it("shows a refused choice with its code and keeps the project's account", async () => {
+  it("shows a refused choice with its code, keeps the project's account and reads the accounts again", async () => {
+    let accounts = ["system-default", "work-a", "work-b"];
     stubFetch({
-      [WORKERS]: workers({
-        account: "work-a",
-        accounts: ["system-default", "work-a", "work-b"],
-      }),
-      [CHOOSE]: errorReply(404, "account_not_found"),
+      [WORKERS]: () => workers({ account: "work-a", accounts }),
+      [CHOOSE]: () => {
+        accounts = ["system-default", "work-a"];
+        return errorReply(404, "account_not_found");
+      },
     });
     show();
     await screen.findByLabelText("Account");
     expect(select().value).toBe("work-a");
-    await userEvent.selectOptions(select(), "system-default");
+    await userEvent.selectOptions(select(), "work-b");
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("no such account");
     expect(alert.textContent).toContain("code: account_not_found");
     expect(select().value).toBe("work-a");
+    await waitFor(() => {
+      expect([...select().options].map((option) => option.value)).toEqual([
+        "system-default",
+        "work-a",
+      ]);
+    });
   });
 
   it("lets nobody but a signed-in person choose, and shows a failed read", async () => {
