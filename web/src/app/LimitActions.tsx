@@ -8,7 +8,7 @@ import { Button } from "@/components/button/Button";
 import { cn } from "@/lib/cn";
 import { accountFailure } from "../features/settings/accountModel";
 import { PauseControl } from "./PauseControl";
-import { switchLabel, switchPendingLabel } from "./limitActions";
+import { switchLabel, switchPendingLabel } from "./limitActionsModel";
 
 /** The usage-limit line's actions: Pause, and Switch to each other account of the host, which makes it the project's account; fold then runs the waiting turns again on it. A switch stays pending until the daemon answers and Needs you is read again. */
 export function LimitActions({

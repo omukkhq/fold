@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { switchLabel, switchPendingLabel } from "./limitActions";
+import { switchLabel, switchPendingLabel } from "./limitActionsModel";
 
 describe("limitActions", () => {
   it("names the account the button switches to", () => {
