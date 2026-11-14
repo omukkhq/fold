@@ -293,19 +293,24 @@ describe("Menu", () => {
     expect(document.activeElement?.textContent).toBe("worker-299");
   });
 
-  it("is as wide as its trigger when asked, so it reads as the trigger's dropdown", async () => {
+  it("is at least as wide as its trigger when asked, and still grows to its rows within the window", async () => {
     render(
       <Menu
         trigger={<Button>Switch account</Button>}
-        matchTriggerWidth
+        minTriggerWidth
         items={[{ label: "work-b", onSelect: () => {} }]}
       />,
     );
     screen.getByRole("button", { name: "Switch account" }).focus();
     await userEvent.keyboard("{Enter}");
     const menu = screen.getByRole("menu");
-    expect(menu.className).toContain("w-(--radix-dropdown-menu-trigger-width)");
-    expect(menu.className).not.toContain("w-max");
+    expect(menu.className).toContain(
+      "min-w-(--radix-dropdown-menu-trigger-width)",
+    );
+    expect(menu.className).toContain("w-max");
+    expect(menu.className).toContain(
+      "max-w-(--radix-dropdown-menu-content-available-width)",
+    );
   });
 
   it("keeps a menu of tick boxes open while the reader ticks several", async () => {

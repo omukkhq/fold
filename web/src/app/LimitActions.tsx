@@ -56,16 +56,16 @@ export function LimitActions({
         {items === null ? null : (
           <div className="flex max-w-full min-w-0 items-center gap-2">
             <Menu
-              matchTriggerWidth
+              minTriggerWidth
               trigger={
                 <Button
                   variant="quiet"
                   pending={pending}
                   pendingLabel={switchPendingLabel(write.variables ?? "")}
                   icon={<Repeat aria-hidden="true" size={16} />}
-                  className="min-w-0 rounded-r-none"
+                  className="w-switch-account max-w-full min-w-0 rounded-r-none"
                 >
-                  <span className="min-w-0 truncate">
+                  <span className="min-w-0 flex-1 truncate text-left">
                     {triggerLabel(chosen)}
                   </span>
                   <ChevronDown

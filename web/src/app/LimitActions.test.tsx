@@ -63,7 +63,7 @@ describe("LimitActions", () => {
     show(["work-b"]);
     expect(await openList()).toEqual(["work-b"]);
     expect(screen.getByRole("menu").className).toContain(
-      "w-(--radix-dropdown-menu-trigger-width)",
+      "min-w-(--radix-dropdown-menu-trigger-width)",
     );
     await userEvent.keyboard("{Escape}");
     expect(
@@ -91,6 +91,8 @@ describe("LimitActions", () => {
     expect(await openList()).toEqual(["work-b", "personal"]);
     await userEvent.click(screen.getByRole("menuitem", { name: "work-b" }));
     expect(trigger().textContent).toBe("work-b");
+    // One width before and after a choice, so choosing never moves the control.
+    expect(trigger().className).toContain("w-switch-account");
     expect(calls.some((call) => call.method === "PUT")).toBe(false);
     const send = screen.getByRole<HTMLButtonElement>("button", {
       name: "Switch to work-b",
@@ -101,6 +103,7 @@ describe("LimitActions", () => {
       await screen.findByRole("button", { name: "Switching to work-b…" }),
     ).toBeTruthy();
     expect(trigger().disabled).toBe(true);
+    // The switch button is off too while the write is in flight.
     expect(
       screen.getByRole<HTMLButtonElement>("button", {
         name: "Switch to work-b",
