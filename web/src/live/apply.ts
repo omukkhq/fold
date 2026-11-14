@@ -383,8 +383,10 @@ function invalidationKeys(
         keys.needsYou(slug),
       ];
     case "area":
-    case "workers":
       return [keys.workers(slug)];
+    case "workers":
+      // The usage-limit item of Needs you offers a switch to every account but the project's.
+      return [keys.workers(slug), keys.needsYou(slug)];
     case "label":
       return [board, keys.labels(slug), ...taskKey];
     case "task": {

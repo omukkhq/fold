@@ -917,6 +917,13 @@ describe("invalidation rules", () => {
     }
   });
 
+  it("refreshes the workers and Needs you when the project's account changes", () => {
+    invalidated = [];
+    applyEvent(client, slug, ev("workers.account_changed"));
+    expect(hit(keys.workers(slug))).toBe(true);
+    expect(hit(keys.needsYou(slug))).toBe(true);
+  });
+
   it("refreshes the workers for a new or changed area", () => {
     for (const type of ["area.defined", "area.updated"]) {
       invalidated = [];
