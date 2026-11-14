@@ -358,6 +358,11 @@ fn use_goes_through_the_daemon_and_remove_is_refused_while_a_project_uses_the_ac
         stdout(&listed).starts_with("system-default Claude Code's own login used by app\n"),
         "{listed:?}"
     );
+    let reserved = sandbox.fold(&["account", "remove", "system-default"]);
+    assert!(
+        stderr(&reserved).contains("account_reserved: "),
+        "the reserved name is refused before its use: {reserved:?}"
+    );
     let log = fs::read_to_string(sandbox.path("daemon.log")).unwrap();
     assert!(!log.contains(TOKEN_A), "the daemon's log holds the token");
 }

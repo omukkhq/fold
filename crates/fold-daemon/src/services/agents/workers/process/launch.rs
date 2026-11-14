@@ -455,7 +455,6 @@ impl Supervisor {
     }
 }
 
-/// Whether a failed spawn of `program` means that Claude Code is not installed where the daemon looks: the program is the launcher's `claude`, the system found no such file, and no file is at that path either, which tells it apart from a script whose interpreter is missing. Blocking, for one `stat`.
 /// The stamp and token of the account `name` from the launcher's accounts folder; `None` when the host has no such account or the launcher knows no folder.
 pub(super) async fn account_token(
     launcher: &Launcher,
@@ -470,6 +469,7 @@ pub(super) async fn account_token(
         .map_err(|_| FoldError::new(codes::INTERNAL_ERROR, "the read of the account stopped"))?
 }
 
+/// Whether a failed spawn of `program` means that Claude Code is not installed where the daemon looks: the program is the launcher's `claude`, the system found no such file, and no file is at that path either, which tells it apart from a script whose interpreter is missing. Blocking, for one `stat`.
 fn claude_missing(error: &std::io::Error, program: &Path, launcher: &Launcher) -> bool {
     error.kind() == std::io::ErrorKind::NotFound
         && program == launcher.claude
