@@ -512,6 +512,8 @@ function workerRow(
       ...runningRow(worker, input, child),
       pill: PARKED_PILL,
       step: sentence(parkedStep(worker.parked)),
+      // A new session would lose what the worker keeps for its go; the go resumes it in its own session.
+      restart: false,
     };
   }
   return runningRow(worker, input, child);

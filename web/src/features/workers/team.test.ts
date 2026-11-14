@@ -293,7 +293,7 @@ describe("steps", () => {
     expect(running?.rows[0]?.pill).toEqual(workerPill("working"));
   });
 
-  it("shows a parked worker as parked with what it waits for, and a worker that runs again as running", () => {
+  it("shows a parked worker as parked with what it waits for and no Restart, and a worker that runs again as running", () => {
     const parked = {
       by: "web-lead",
       wait_for: "my go after the T-2 migration",
@@ -316,12 +316,14 @@ describe("steps", () => {
     const row = (name: string) => group?.rows.find((r) => r.name === name);
     expect(row("web-worker")).toMatchObject({
       pill: { label: "parked", tone: "stopped" },
+      restart: false,
       step: {
         tool: null,
         text: "waits for @web-lead's go: my go after the T-2 migration",
       },
     });
     expect(row("api-worker")?.pill).toEqual(workerPill("working"));
+    expect(row("api-worker")?.restart).toBe(true);
     expect(parkedStep(parked)).toBe(
       "waits for @web-lead's go: my go after the T-2 migration",
     );
