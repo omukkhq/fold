@@ -26,6 +26,10 @@ describe("Button", () => {
     const button = screen.getByRole("button", { name: "Saving…" });
     expect(button).toHaveProperty("disabled", true);
     expect(button.getAttribute("aria-busy")).toBe("true");
+    // A long pending label ends in an ellipsis in a button of fixed width, beside the spinner.
+    const label = screen.getByText("Saving…");
+    expect(label.className).toContain("truncate");
+    expect(label.className).toContain("min-w-0");
     await userEvent.click(button);
     expect(onClick).not.toHaveBeenCalled();
   });
