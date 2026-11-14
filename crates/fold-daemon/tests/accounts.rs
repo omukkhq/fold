@@ -549,3 +549,82 @@ async fn a_usage_limit_offers_the_other_accounts_and_a_switch_runs_the_waiting_t
         "the item ends with the wait"
     );
 }
+
+/// A lead whose turn waits at a usage limit, on the account `on` (`None` for Claude Code's own login), with the next turn set to end well.
+async fn lead_at_the_limit(
+    on: Option<&str>,
+) -> (TempDir, PathBuf, TempDir, FakeClaude, Harness, String) {
+    use crate::turn_waits::{fake_with_turn, limit_turn, read_fixture, set_turn, until_idle};
+    let clock = ManualClock::new();
+    let (accounts, dir) = accounts_with_two(&clock);
+    let turns = TempDir::new().unwrap();
+    let (mut fake, turn) = fake_with_turn(&turns, &read_fixture("result"));
+    fake.launcher.accounts = Some(dir.clone());
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    let mut runs = 1;
+    if let Some(name) = on {
+        assert_eq!(choose(&harness, Some(name)).await.0, StatusCode::OK);
+        runs += 1;
+        until_started(&fake, LEAD, runs).await;
+        until_state(&harness, LEAD, WorkerState::Idle).await;
+    }
+    let session = worker(&harness, LEAD).await.session_id;
+    set_turn(
+        &turn,
+        &limit_turn("You've hit your weekly limit · resets Mon 12:00am"),
+    );
+    harness
+        .call(
+            MAIN,
+            "send_message",
+            json!({"to": [LEAD], "body": "look at T-1"}),
+        )
+        .await;
+    until_idle(&harness, LEAD, |row| row.wait.is_some()).await;
+    set_turn(&turn, &read_fixture("result"));
+    (accounts, dir, turns, fake, harness, session)
+}
+
+/// The run of `agent` that took the re-run of its waiting turn, once it came, with no time passing on the project's clock.
+async fn the_rerun(fake: &FakeClaude) -> Run {
+    use crate::turn_waits::until_turns;
+    use fold_core::turn_waits::LIMIT_RERUN_TURN;
+    until_turns(fake, LEAD, LIMIT_RERUN_TURN, 1)
+        .await
+        .into_iter()
+        .find(|run| run.stdin.iter().any(|line| line.contains(LIMIT_RERUN_TURN)))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_choice_of_an_account_runs_the_turn_at_the_limit_again_at_once_on_it() {
+    let (_accounts, _dir, _turns, fake, harness, session) = lead_at_the_limit(None).await;
+    let (status, body) = choose(&harness, Some("work-a")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rerun = the_rerun(&fake).await;
+    assert!(ran_with(&rerun, Some(TOKEN_A)), "the turn runs on work-a");
+    assert_eq!(rerun.flag("--resume"), Some(session.as_str()));
+    crate::turn_waits::until_idle(&harness, LEAD, |row| row.wait.is_none()).await;
+}
+
+#[tokio::test]
+async fn a_new_token_of_the_waiting_account_runs_the_turn_at_the_limit_again_at_once() {
+    use fold_core::Clock as _;
+    let (_accounts, dir, _turns, fake, harness, session) = lead_at_the_limit(Some("work-a")).await;
+    let later = ManualClock::new();
+    later.advance(std::time::Duration::from_secs(60)).unwrap();
+    accounts::update(
+        &dir,
+        &AccountName::parse("work-a").unwrap(),
+        &check_token(TOKEN_B).unwrap(),
+        later.now(),
+    )
+    .unwrap();
+    let rerun = the_rerun(&fake).await;
+    assert!(
+        ran_with(&rerun, Some(TOKEN_B)),
+        "the turn runs on the new token without waiting for its backoff"
+    );
+    assert_eq!(rerun.flag("--resume"), Some(session.as_str()));
+    crate::turn_waits::until_idle(&harness, LEAD, |row| row.wait.is_none()).await;
+}

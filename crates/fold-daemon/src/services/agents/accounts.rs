@@ -48,6 +48,11 @@ fn io_error(error: &io::Error) -> FoldError {
     accounts_io(error.kind())
 }
 
+/// The index of the accounts in `dir`, whose every change renames a new file into place.
+pub fn index_path(dir: &Path) -> std::path::PathBuf {
+    dir.join(INDEX_FILE)
+}
+
 /// The refusal for a name that the host has no account of.
 pub fn not_found(name: &AccountName) -> FoldError {
     FoldError::new(

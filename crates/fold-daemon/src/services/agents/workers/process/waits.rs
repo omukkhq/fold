@@ -1,7 +1,8 @@
 use std::collections::{BTreeSet, HashMap};
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use fold_core::accounts::AccountStamp;
 use fold_core::turn_waits::{LimitKind, WaitGroup, WaitingTurn, rerun_plan, rerun_turn};
@@ -12,8 +13,8 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use super::{Inner, Supervisor, lock};
-use crate::services::agents::AgentError;
 use crate::services::agents::workers::code_of;
+use crate::services::agents::{AgentError, accounts};
 
 /// How often the loop that runs owed turns again looks at the project's clock while it waits for the next one.
 const OWED_POLL: Duration = Duration::from_secs(1);
@@ -71,6 +72,11 @@ impl Supervisor {
         } else {
             owed.wake.notify_one();
         }
+    }
+
+    /// Forgets the re-run fold sent `agent`, so the loop sends it again: the process it went to ended for a switch of the account.
+    pub(super) fn forget_rerun(&self, agent: &AgentName) {
+        lock(&self.inner.owed).sent.remove(agent);
     }
 
     /// Runs every turn that waits for a usage limit again at once, as after a change that ends the limit for the project.
@@ -189,6 +195,10 @@ async fn run_owed_turns(inner: Weak<Inner>, wake: Arc<Notify>) {
             return;
         };
         let supervisor = Supervisor { inner: strong };
+        let index = supervisor
+            .accounts_dir()
+            .map(|dir| accounts::index_path(&dir));
+        let seen = index_mark(index.as_deref()).await;
         let next = match supervisor.serve_owed_turns().await {
             Ok(Some(next)) => next,
             Ok(None) => {
@@ -222,6 +232,17 @@ async fn run_owed_turns(inner: Weak<Inner>, wake: Arc<Notify>) {
             if next.is_some_and(|next| clock.now() >= next) || inner.strong_count() == 0 {
                 break;
             }
+            // `fld account update` changes no project and tells no daemon, so a new token shows only in the host's accounts index; a waiting turn then switches to it and runs again at once.
+            if index_mark(index.as_deref()).await != seen {
+                break;
+            }
         }
     }
+}
+
+/// What tells one version of the accounts index from the next, which every change renames into place: its inode and its time of change.
+async fn index_mark(index: Option<&Path>) -> Option<(u64, SystemTime)> {
+    use std::os::unix::fs::MetadataExt as _;
+    let meta = tokio::fs::metadata(index?).await.ok()?;
+    Some((meta.ino(), meta.modified().ok()?))
 }
