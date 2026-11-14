@@ -313,18 +313,20 @@ async fn a_new_token_of_the_same_account_reaches_an_idle_worker_before_its_next_
             json!({"to": [LEAD], "body": "look at T-1"}),
         )
         .await;
-    let runs = until_started(&fake, LEAD, 3).await;
-    assert!(ran_with(&runs[1], Some(TOKEN_A)));
-    assert!(
-        ran_with(&runs[2], Some(TOKEN_B)),
-        "the lead continues with the new token"
-    );
-    assert_eq!(runs[2].flag("--resume"), runs[1].flag("--resume"));
+    // The new process reads its initialize line before the turn, so the runs are read once the turn has reached a process, whichever it is.
+    let runs = crate::turn_waits::until_turns(&fake, LEAD, "look at T-1", 1).await;
     let holds = |run: &Run| run.stdin.iter().any(|line| line.contains("look at T-1"));
     assert!(
-        !holds(&runs[1]) && holds(&runs[2]),
-        "the turn runs on the new token, never on the old one"
+        !holds(&runs[1]),
+        "the turn never reaches the process of the old token"
     );
+    assert_eq!(runs.len(), 3, "the turn starts a process of its own");
+    assert!(ran_with(&runs[1], Some(TOKEN_A)));
+    assert!(
+        ran_with(&runs[2], Some(TOKEN_B)) && holds(&runs[2]),
+        "the turn runs on the new token"
+    );
+    assert_eq!(runs[2].flag("--resume"), runs[1].flag("--resume"));
 }
 
 #[tokio::test]
