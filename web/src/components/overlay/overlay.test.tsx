@@ -293,6 +293,21 @@ describe("Menu", () => {
     expect(document.activeElement?.textContent).toBe("worker-299");
   });
 
+  it("is as wide as its trigger when asked, so it reads as the trigger's dropdown", async () => {
+    render(
+      <Menu
+        trigger={<Button>Switch account</Button>}
+        matchTriggerWidth
+        items={[{ label: "work-b", onSelect: () => {} }]}
+      />,
+    );
+    screen.getByRole("button", { name: "Switch account" }).focus();
+    await userEvent.keyboard("{Enter}");
+    const menu = screen.getByRole("menu");
+    expect(menu.className).toContain("w-(--radix-dropdown-menu-trigger-width)");
+    expect(menu.className).not.toContain("w-max");
+  });
+
   it("keeps a menu of tick boxes open while the reader ticks several", async () => {
     const ticked = new Set<string>(["ui"]);
     const onTick = vi.fn((name: string) => {

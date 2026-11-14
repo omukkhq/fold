@@ -25,13 +25,10 @@ export function Field({
   hint,
   error,
   inline,
-  labelHidden,
   children,
 }: FieldProps & {
   /** Puts the control before its label, as a checkbox needs. */
   inline?: boolean;
-  /** Keeps the label for assistive technology only, for a control that sits in a row of buttons and says what it does itself. */
-  labelHidden?: boolean;
   children: (control: ControlProps) => ReactNode;
 }) {
   const ids = fieldIds(useId());
@@ -40,11 +37,9 @@ export function Field({
     <label
       htmlFor={ids.input}
       className={
-        labelHidden
-          ? "sr-only"
-          : inline
-            ? "text-15 leading-tight text-text"
-            : "font-title text-13 leading-tight font-semibold text-text-2"
+        inline
+          ? "text-15 leading-tight text-text"
+          : "font-title text-13 leading-tight font-semibold text-text-2"
       }
     >
       {label}
