@@ -169,7 +169,7 @@ fld account update work-b                      # a new token for an expired or r
 fld account remove work-b
 ```
 
-The project's **Settings** tab chooses its account too. After a change, each worker continues in its own session with the new account when its current turn ends, without a pause. When a subscription reaches its usage limit, Needs you offers the other accounts next to **Pause**. `fld doctor` warns when `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` would replace the account, and when a token is close to its one-year end.
+The project's **Settings** tab chooses its account too. After a change, each worker continues in its own session with the new account when its current turn ends, without a pause. When a subscription reaches its usage limit, Needs you offers the other accounts in one **Switch account** menu next to **Pause**. `fld doctor` warns when `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` would replace the account, and when a token is close to its one-year end.
 
 ## Get notices
 
