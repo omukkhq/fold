@@ -390,6 +390,19 @@ async fn a_worker_of_a_project_that_names_an_unknown_account_fails_with_its_reas
         .await;
     let row = until_state(&harness, "reviews", WorkerState::Failed).await;
     assert_eq!(row.failed_reason.as_deref(), Some(codes::ACCOUNT_NOT_FOUND));
+    let items = crate::turn_waits::needs_you(&harness).await;
+    let item = items
+        .iter()
+        .find(|item| item["agent"] == "reviews")
+        .expect("an item tells the person what to do");
+    assert_eq!(item["kind"], "worker_unreachable");
+    assert!(
+        item["reason"]
+            .as_str()
+            .unwrap()
+            .contains("fld account add <name>"),
+        "{item}"
+    );
     assert!(
         fake.runs_of("reviews").is_empty(),
         "no Claude Code ran without its account"
