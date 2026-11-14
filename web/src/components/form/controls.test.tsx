@@ -90,6 +90,20 @@ describe("Select", () => {
     expect(select.className).toContain("pr-40");
     expect(select.parentElement?.querySelector("svg")).not.toBeNull();
   });
+
+  it("keeps a hidden label for assistive technology only", () => {
+    render(
+      <Select label="Switch account" labelHidden>
+        <option value="">Switch account</option>
+      </Select>,
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Switch account" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Switch account", { selector: "label" }).className,
+    ).toBe("sr-only");
+  });
 });
 
 describe("Checkbox", () => {

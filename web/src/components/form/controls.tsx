@@ -51,12 +51,18 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
 const SELECT_ARROW_ROOM = "appearance-none pr-40";
 
 export type SelectProps = Omit<ComponentProps<"select">, "id" | "ref"> &
-  FieldProps;
+  FieldProps & {
+    /** Keeps the label for assistive technology only, for a select whose first option says what it does. */
+    labelHidden?: boolean;
+  };
 
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(
-  function Select({ label, hint, error, className, children, ...rest }, ref) {
+  function Select(
+    { label, hint, error, labelHidden, className, children, ...rest },
+    ref,
+  ) {
     return (
-      <Field label={label} hint={hint} error={error}>
+      <Field label={label} hint={hint} error={error} labelHidden={labelHidden}>
         {(control) => (
           <div className="relative">
             <select
