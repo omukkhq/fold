@@ -657,7 +657,7 @@ describe("needsYouGroups", () => {
     });
   });
 
-  it("shows a usage limit as one project line with its reset and the pause action, last of its group", () => {
+  it("shows a usage limit as one project line with its reset and the pause action, opening the agents, last of its group", () => {
     const limit = needsItem({
       kind: "usage_limit",
       screen: "worker",
@@ -679,7 +679,7 @@ describe("needsYouGroups", () => {
       text: "Claude Code reached its weekly limit, which resets Mon 12:00am",
       title:
         "@web-lead waits; fold runs each waiting turn again after the reset",
-      href: null,
+      href: "/p/demo/agents",
       actions: ["pause"],
       switchTo: [],
     });

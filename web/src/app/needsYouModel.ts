@@ -464,7 +464,7 @@ function lineOf(
         task: null,
         title: waitersText(item.agents, markedText(item.reason)),
         text: limitText(item, now),
-        href: null,
+        href: projectPath(slug, "agents"),
       };
     case "stale_claim":
       return {
