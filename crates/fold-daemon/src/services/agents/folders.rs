@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use fold_core::worker_folders::{FolderDecision, FolderKeep, FolderTies, decide_folder};
 use fold_core::{AgentName, FoldError, ProjectPaths, Timestamp, codes};
 use fold_store::agents::{self, EndedWorker};
-use fold_store::{Store, messages};
+use fold_store::{Store, WriteTx, messages};
 use fold_vcs::gc::{locate_worker_dir, remove_tree, tree_bytes};
 
 use super::AgentError;
@@ -45,6 +45,31 @@ impl Owed {
             .map(|owed| owed.agent)
             .collect();
         let session_folders = agents::open_session_folders(read)
+            .await?
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        Ok(Self {
+            resumes,
+            messages,
+            session_folders,
+        })
+    }
+
+    /// The same for one agent, inside the write that removes its folder, so a resume, a message or a session that came after [`Owed::read`] keeps the folder.
+    async fn read_in(tx: &mut WriteTx, agent: &AgentName) -> Result<Self, AgentError> {
+        let resumes = agents::owed_starts(tx.conn())
+            .await?
+            .into_iter()
+            .map(|owed| owed.resume.agent)
+            .filter(|owed| owed == agent)
+            .collect();
+        let messages = messages::owed_to_stopped(tx.conn(), Some(agent))
+            .await?
+            .into_iter()
+            .map(|owed| owed.agent)
+            .collect();
+        let session_folders = agents::open_session_folders(tx.conn())
             .await?
             .into_iter()
             .map(PathBuf::from)
@@ -154,7 +179,7 @@ pub async fn collect_worker_folders(
     Ok(folders)
 }
 
-/// Moves the folder of `worker` aside and deletes it, once a write has read its row again and found it ended at the same time with nothing new that ties it to work. `None` when the row changed or the folder is gone, so there is nothing to report.
+/// Moves the folder of `worker` aside and deletes it, once a write has read its row, its open sessions, and the resumes and messages fold owes it again and found it ended at the same time with nothing new that ties it to work. `None` when the row changed or the folder is gone, so there is nothing to report; a kept folder when something ties the worker again, or when a folder moved aside earlier is still there, as only [`remove_moved_folders`] deletes those, outside the write.
 async fn remove_folder(
     store: &Store,
     paths: &ProjectPaths,
@@ -174,40 +199,38 @@ async fn remove_folder(
             else {
                 return Ok(None);
             };
-            let folders: Vec<PathBuf> = agents::open_session_folders(tx.conn())
-                .await?
-                .into_iter()
-                .map(PathBuf::from)
-                .collect();
-            let dir = paths.worker_dir(&worker.agent);
-            if again.claim
-                || again.session
-                || again.parked
-                || again.waiting
-                || used(&folders, &[dir])
-            {
-                return Ok(None);
+            let owed = Owed::read_in(tx, &worker.agent).await?;
+            let decision = owed.decide(&again, &[paths.worker_dir(&worker.agent)]);
+            if decision != FolderDecision::Remove {
+                return Ok(Some(decision));
             }
             let (paths, name, moved) = (
                 paths.clone(),
                 worker.agent.as_str().to_owned(),
                 moved.clone(),
             );
-            let renamed = blocking(move || {
+            blocking(move || {
+                match fs::symlink_metadata(&moved) {
+                    Ok(_) => return Ok(Some(FolderDecision::Keep(FolderKeep::Failed))),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(folder_error(error)),
+                }
                 let located = locate_worker_dir(&paths, &name).map_err(folder_error)?;
                 let Some(dir) = located else {
-                    return Ok(false);
+                    return Ok(None);
                 };
-                remove_tree(&moved).map_err(folder_error)?;
                 fs::rename(&dir, &moved).map_err(folder_error)?;
-                Ok(true)
+                Ok(Some(FolderDecision::Remove))
             })
-            .await?;
-            Ok(renamed.then_some(FolderDecision::Remove))
+            .await
+            .map_err(AgentError::from)
         })
         .await?;
-    if outcome.is_none() {
-        return Ok(None);
+    if outcome != Some(FolderDecision::Remove) {
+        if outcome == Some(FolderDecision::Keep(FolderKeep::Failed)) {
+            tracing::warn!(agent = %worker.agent, "a worker folder moved aside earlier is still there; the next run tries again");
+        }
+        return Ok(outcome);
     }
     #[cfg(feature = "failpoints")]
     fail::fail_point!("worker_folder_after_move", |_| {
