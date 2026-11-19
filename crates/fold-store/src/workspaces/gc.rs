@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use fold_core::object::ObjectHash;
+pub use fold_core::removal::OwnerHold;
 use fold_core::{Timestamp, WorkspaceId};
 use sqlx::SqliteExecutor;
 
@@ -67,38 +68,64 @@ pub struct ClosedWorkspace {
     pub closed_at: Timestamp,
     /// fold started to remove the directory (`start_directory_removal`), so what is left of it is only deleted.
     pub removal_started: bool,
+    /// The worker row that owns the workspace, such as `web-worker-3` or `main`.
+    pub owner: Option<String>,
+    /// What of its owning agent holds the directory back, `None` once nothing does.
+    pub hold: Option<OwnerHold>,
+    /// The workspace closed before the cutoff the caller passed: the `closed_workspace_days` window has passed, and past it the owner does not hold the directory back.
+    pub past_window: bool,
 }
 
-/// The archived or abandoned workspaces whose directory fold has not removed yet, by id, or only `workspace` when it is one of them. A workspace whose owning agent has a worker process that has not ended, or an open session such as the main agent's or one opened by hand, is left out until both have ended, so fold never removes the files a running worker or a connected session can still use. The supervised main is long-lived and works only in its turns, so while its process is idle between turns neither it nor its sessions hold its closed workspaces back; no other session binds as it while it runs.
-pub async fn closed_directories_due<'e>(
+impl ClosedWorkspace {
+    /// Whether fold removes the directory now: nothing of its owner holds it back, or the window has passed.
+    pub fn due(&self) -> bool {
+        self.hold.is_none() || self.past_window
+    }
+}
+
+/// The archived or abandoned workspaces whose directory fold has not removed yet, by id, or only `workspace` when it is one of them, each with what of its owning agent holds it back. A worker process of the owning agent that has not ended, or an open session such as the main agent's or one opened by hand, holds the directory, so fold never removes the files a running worker or a connected session can still use. The supervised main is long-lived and works only in its turns, so while its process is idle between turns neither it nor its sessions hold its closed workspaces back; no other session binds as it while it runs. A workspace that closed before `cutoff` is `past_window`: a long-lived lead's process never ends, so without the window the review checkouts it opened would stay for good.
+pub async fn closed_directories<'e>(
     db: impl SqliteExecutor<'e>,
     workspace: Option<WorkspaceId>,
+    cutoff: Option<Timestamp>,
 ) -> Result<Vec<ClosedWorkspace>, StoreError> {
     let only = workspace.map(WorkspaceId::to_db);
+    let cutoff = cutoff.map(Timestamp::as_millis);
     let rows = sqlx::query!(
         r#"SELECT w.number AS "number!: i64", w.path, w.closed_at AS "closed_at!: i64",
-                  w.removal_started_at IS NOT NULL AS "removal_started!: bool"
+                  w.removal_started_at IS NOT NULL AS "removal_started!: bool",
+                  o.name AS "owner?: String",
+                  EXISTS (
+                    SELECT 1 FROM workers k JOIN worker_processes p ON p.agent_id = k.agent_id
+                    WHERE k.id = w.worker_id AND p.state NOT IN ('stopped', 'failed')
+                      AND NOT (p.role = 'main' AND p.state = 'idle')) AS "process!: bool",
+                  EXISTS (
+                    SELECT 1 FROM workers k JOIN sessions s ON s.agent_id = k.agent_id
+                    WHERE k.id = w.worker_id AND s.ended_at IS NULL
+                      AND NOT EXISTS (
+                        SELECT 1 FROM worker_processes p
+                        WHERE p.agent_id = k.agent_id AND p.role = 'main' AND p.state = 'idle')) AS "session!: bool",
+                  COALESCE(w.closed_at < ?2, 0) AS "past_window!: bool"
            FROM workspaces w
+           LEFT JOIN workers o ON o.id = w.worker_id
            WHERE w.state IN ('archived', 'abandoned') AND w.closed_at IS NOT NULL
              AND w.directory_removed_at IS NULL
              AND (?1 IS NULL OR w.number = ?1)
-             AND NOT EXISTS (
-               SELECT 1 FROM workers k JOIN worker_processes p ON p.agent_id = k.agent_id
-               WHERE k.id = w.worker_id AND p.state NOT IN ('stopped', 'failed')
-                 AND NOT (p.role = 'main' AND p.state = 'idle'))
-             AND NOT EXISTS (
-               SELECT 1 FROM workers k JOIN sessions s ON s.agent_id = k.agent_id
-               WHERE k.id = w.worker_id AND s.ended_at IS NULL
-                 AND NOT EXISTS (
-                   SELECT 1 FROM worker_processes p
-                   WHERE p.agent_id = k.agent_id AND p.role = 'main' AND p.state = 'idle'))
            ORDER BY w.number"#,
-        only
+        only,
+        cutoff
     )
     .fetch_all(db)
     .await?;
     rows.into_iter()
         .map(|row| {
+            let hold = if row.process {
+                Some(OwnerHold::Process)
+            } else if row.session {
+                Some(OwnerHold::Session)
+            } else {
+                None
+            };
             Ok(ClosedWorkspace {
                 id: WorkspaceId::try_from_db(row.number)
                     .ok_or(StoreError::Corrupt("workspaces.number"))?,
@@ -106,9 +133,63 @@ pub async fn closed_directories_due<'e>(
                 closed_at: Timestamp::from_millis(row.closed_at)
                     .map_err(|_| StoreError::Corrupt("workspaces.closed_at"))?,
                 removal_started: row.removal_started,
+                owner: row.owner,
+                hold,
+                past_window: row.past_window,
             })
         })
         .collect()
+}
+
+/// The [`closed_directories`] that are [`ClosedWorkspace::due`].
+pub async fn closed_directories_due<'e>(
+    db: impl SqliteExecutor<'e>,
+    workspace: Option<WorkspaceId>,
+    cutoff: Option<Timestamp>,
+) -> Result<Vec<ClosedWorkspace>, StoreError> {
+    let mut closed = closed_directories(db, workspace, cutoff).await?;
+    closed.retain(ClosedWorkspace::due);
+    Ok(closed)
+}
+
+/// The closed workspaces among `paths` whose directory fold recorded as removed, by id. Paths are unique, so a directory at such a path came back after the removal, such as from an agent that wrote into it by its full path.
+pub async fn removed_directories_at<'e>(
+    db: impl SqliteExecutor<'e>,
+    paths: &[String],
+) -> Result<Vec<WorkspaceId>, StoreError> {
+    let paths = serde_json::Value::from(paths.to_vec()).to_string();
+    let numbers = sqlx::query_scalar!(
+        r#"SELECT w.number AS "number!: i64" FROM workspaces w
+           WHERE w.state IN ('archived', 'abandoned') AND w.directory_removed_at IS NOT NULL
+             AND w.path IN (SELECT value FROM json_each(?1))
+           ORDER BY w.number"#,
+        paths
+    )
+    .fetch_all(db)
+    .await?;
+    numbers
+        .into_iter()
+        .map(|number| {
+            WorkspaceId::try_from_db(number).ok_or(StoreError::Corrupt("workspaces.number"))
+        })
+        .collect()
+}
+
+/// Forgets that fold removed the directory of the closed workspace, because a directory is at its path again: the removal runs again from its start, with a final checkpoint of what the directory holds when fold has not recorded it. False when no closed workspace with this id is marked removed.
+pub async fn reopen_directory_removal(
+    tx: &mut WriteTx,
+    workspace: WorkspaceId,
+) -> Result<bool, StoreError> {
+    let workspace = workspace.to_db();
+    let changed = sqlx::query!(
+        "UPDATE workspaces SET directory_removed_at = NULL, removal_started_at = NULL
+         WHERE number = ?1 AND state IN ('archived', 'abandoned') AND directory_removed_at IS NOT NULL",
+        workspace
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(changed == 1)
 }
 
 /// The archived or abandoned workspaces whose directory fold removed, with an unpruned checkpoint, whose close and directory removal both came more than `closed_workspace_days` days before `now`, by id. Counting from the later of the two keeps the checkpoint a late removal takes for the whole retention.
@@ -170,6 +251,33 @@ pub async fn tree_recorded<'e>(
     .fetch_one(db)
     .await?;
     Ok(recorded)
+}
+
+/// Every tree that [`tree_recorded`] counts for the workspace, each once, so a caller can ask whether each file of a directory is recorded in one of them.
+pub async fn recorded_trees<'e>(
+    db: impl SqliteExecutor<'e>,
+    workspace: WorkspaceId,
+) -> Result<Vec<ObjectHash>, StoreError> {
+    let workspace = workspace.to_db();
+    let rows = sqlx::query_scalar!(
+        r#"SELECT r.tree_hash AS "tree!: String" FROM workspaces w
+             JOIN revisions r ON r.id = w.base_revision_id WHERE w.number = ?1
+           UNION SELECT c.tree_hash FROM workspaces w JOIN checkpoints c ON c.workspace_id = w.id
+             WHERE w.number = ?1 AND c.kind = 'explicit' AND c.pruned_at IS NULL
+           UNION SELECT c.tree_hash FROM workspaces w JOIN changesets c ON c.workspace_id = w.id
+             WHERE w.number = ?1
+           UNION SELECT v.tree_hash FROM workspaces w JOIN proposals p ON p.task_id = w.task_id
+             JOIN proposal_versions v ON v.proposal_id = p.id WHERE w.number = ?1"#,
+        workspace
+    )
+    .fetch_all(db)
+    .await?;
+    rows.iter()
+        .map(|text| {
+            text.parse()
+                .map_err(|_| StoreError::Corrupt("recorded_trees"))
+        })
+        .collect()
 }
 
 /// Records that fold started to remove the directory of the closed workspace, in the write that commits its final checkpoint when it needs one. False when no closed workspace whose directory is still there has this id, or the start is already recorded.

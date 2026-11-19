@@ -3,7 +3,9 @@ use std::path::PathBuf;
 
 use clap::Args;
 use fold_cli::daemon_client::{ClientConfig, ClientError, DaemonClient, Response};
-use fold_daemon::http::projects::GcCounts;
+use fold_daemon::http::projects::{
+    GcAction, GcCounts, GcWorker, GcWorkerReason, GcWorkspace, GcWorkspaceReason,
+};
 use fold_daemon::services::projects::{ProjectError, slug_for_dir_on_host};
 use hyper::Method;
 use thiserror::Error;
@@ -142,11 +144,85 @@ fn print_counts(
         ("missing objects", counts.missing),
         ("workspaces removed", counts.workspaces_removed),
         ("checkpoints pruned", counts.checkpoints_pruned),
+        ("worker folders removed", counts.workers_removed),
+        ("worker folder bytes freed", counts.worker_bytes_freed),
     ];
     for (label, value) in rows {
         output::line(out, &format!("{label}: {value}"))?;
     }
+    for workspace in &counts.workspaces {
+        output::line(out, &workspace_line(workspace, dry_run))?;
+    }
+    for worker in &counts.workers {
+        output::line(out, &worker_line(worker, dry_run))?;
+    }
     Ok(())
+}
+
+fn action(action: GcAction, dry_run: bool) -> &'static str {
+    match (action, dry_run) {
+        (GcAction::Remove, true) => "would remove",
+        (GcAction::Remove, false) => "removed",
+        (GcAction::Keep, _) => "kept",
+    }
+}
+
+/// One closed workspace as `workspace ws-2 .fold/ws/review-p-1: would remove, it closed more than closed_workspace_days ago`.
+fn workspace_line(workspace: &GcWorkspace, dry_run: bool) -> String {
+    let owner = workspace.owner.as_deref().unwrap_or("its owner");
+    let why = match workspace.reason {
+        GcWorkspaceReason::OwnerEnded => {
+            format!("{owner} has no running worker process and no open session")
+        }
+        GcWorkspaceReason::PastWindow => "it closed more than closed_workspace_days ago".to_owned(),
+        GcWorkspaceReason::OwnerProcess => {
+            format!("{owner} has a worker process that has not ended")
+        }
+        GcWorkspaceReason::OwnerSession => format!("{owner} has an open session"),
+        GcWorkspaceReason::SessionInside => "an open session works in it".to_owned(),
+        GcWorkspaceReason::InvalidPath => {
+            "its path is no directory directly below .fold/ws".to_owned()
+        }
+        GcWorkspaceReason::OtherFilesystem => {
+            "it holds another file system, such as a mount, which fold never deletes".to_owned()
+        }
+        GcWorkspaceReason::Failed => format!(
+            "the removal failed ({}); the next run tries again",
+            workspace.code.as_deref().unwrap_or("internal_error")
+        ),
+    };
+    let returned = if workspace.returned {
+        " (it came back after fold removed it)"
+    } else {
+        ""
+    };
+    format!(
+        "workspace {} {}{returned}: {}, {why}",
+        workspace.workspace,
+        workspace.path,
+        action(workspace.action, dry_run)
+    )
+}
+
+/// One worker folder as `worker folder reviewer-12, 372 bytes: would remove, it can never run again on its own`.
+fn worker_line(worker: &GcWorker, dry_run: bool) -> String {
+    let why = match worker.reason {
+        GcWorkerReason::Finished => "it can never run again on its own",
+        GcWorkerReason::Claim => "it holds a claim",
+        GcWorkerReason::Session => "an open session uses it",
+        GcWorkerReason::Parked => "it is parked",
+        GcWorkerReason::Waiting => "fold owes it a turn",
+        GcWorkerReason::OwedResume => "fold owes it a resume",
+        GcWorkerReason::OwedMessage => "a message waits for it",
+        GcWorkerReason::InvalidPath => "its folder is no directory",
+        GcWorkerReason::Failed => "the removal failed; the next run tries again",
+    };
+    format!(
+        "worker folder {}, {} bytes: {}, {why}",
+        worker.agent,
+        worker.bytes,
+        action(worker.action, dry_run)
+    )
 }
 
 #[cfg(test)]
@@ -185,6 +261,19 @@ mod tests {
         json!({
             "dry_run": false, "examined": 5, "deleted": deleted, "bytes_freed": 80,
             "tmp_removed": 0, "missing": 0, "workspaces_removed": 0, "checkpoints_pruned": 1,
+            "workers_removed": 1, "worker_bytes_freed": 372,
+            "workspaces": [
+                {"workspace": "ws-2", "path": ".fold/ws/review-p-1", "owner": "review-lead",
+                 "returned": false, "action": "remove", "reason": "past_window", "code": null},
+                {"workspace": "ws-9", "path": ".fold/ws/t-5", "owner": "main",
+                 "returned": true, "action": "keep", "reason": "owner_session", "code": null},
+                {"workspace": "ws-12", "path": ".fold/ws/t-8", "owner": null,
+                 "returned": false, "action": "keep", "reason": "failed", "code": "unrecorded_changes"},
+            ],
+            "workers": [
+                {"agent": "reviewer-3", "bytes": 372, "action": "remove", "reason": "finished"},
+                {"agent": "web-worker-2", "bytes": 40, "action": "keep", "reason": "claim"},
+            ],
         })
     }
 
@@ -226,11 +315,41 @@ mod tests {
         print_counts(&mut out, "demo", true, &counts).unwrap();
         let text = String::from_utf8(out).unwrap();
         let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 8);
+        assert_eq!(lines.len(), 15);
         assert!(lines[0].contains("dry run"));
         assert_eq!(lines[1], "objects examined: 5");
         assert_eq!(lines[3], "bytes freed: 80");
         assert_eq!(lines[7], "checkpoints pruned: 1");
+        assert_eq!(lines[8], "worker folders removed: 1");
+        assert_eq!(lines[9], "worker folder bytes freed: 372");
+        assert_eq!(
+            lines[10],
+            "workspace ws-2 .fold/ws/review-p-1: would remove, it closed more than closed_workspace_days ago"
+        );
+        assert_eq!(
+            lines[11],
+            "workspace ws-9 .fold/ws/t-5 (it came back after fold removed it): kept, main has an open session"
+        );
+        assert_eq!(
+            lines[12],
+            "workspace ws-12 .fold/ws/t-8: kept, the removal failed (unrecorded_changes); the next run tries again"
+        );
+        assert_eq!(
+            lines[13],
+            "worker folder reviewer-3, 372 bytes: would remove, it can never run again on its own"
+        );
+        assert_eq!(
+            lines[14],
+            "worker folder web-worker-2, 40 bytes: kept, it holds a claim"
+        );
+        let mut out = Vec::new();
+        print_counts(&mut out, "demo", false, &counts).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains("ws-2 .fold/ws/review-p-1: removed, it closed"),
+            "{text}"
+        );
+        assert!(text.contains("reviewer-3, 372 bytes: removed, "), "{text}");
     }
 
     fn args(socket: Option<&Path>) -> GcArgs {

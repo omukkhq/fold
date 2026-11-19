@@ -118,7 +118,11 @@ async fn fold_gc_prints_the_counts_of_the_project_it_runs_in() {
     let text = stdout(&run);
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines[0], "garbage collection of project demo finished");
-    assert_eq!(lines.len(), 8);
+    assert_eq!(
+        lines.len(),
+        10,
+        "no closed workspace and no worker folder: {text}"
+    );
     for line in &lines[1..] {
         let (_, number) = line.rsplit_once(": ").unwrap();
         assert!(number.parse::<u64>().is_ok(), "{line}");

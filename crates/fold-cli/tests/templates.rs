@@ -1405,6 +1405,22 @@ fn run_state_names() -> BTreeSet<&'static str> {
         .collect()
 }
 
+/// The reasons `fld gc` gives for each closed workspace and worker folder, as the answer spells them.
+#[cfg(test)]
+fn gc_reason_names() -> BTreeSet<String> {
+    use fold_daemon::http::projects::{GcWorkerReason, GcWorkspaceReason};
+    let spelled = |value: serde_json::Value| value.as_str().unwrap().to_owned();
+    GcWorkspaceReason::ALL
+        .into_iter()
+        .map(|reason| spelled(serde_json::to_value(reason).unwrap()))
+        .chain(
+            GcWorkerReason::ALL
+                .into_iter()
+                .map(|reason| spelled(serde_json::to_value(reason).unwrap())),
+        )
+        .collect()
+}
+
 #[test]
 fn the_reference_names_the_claude_files_fold_keeps_out_of_main() {
     for line in fold_vcs::ignore::claude_excludes()
@@ -1520,6 +1536,7 @@ fn every_backticked_identifier_of_the_reference_is_known() {
     let mut known: BTreeSet<String> = known_names().into_iter().map(str::to_owned).collect();
     known.extend(config_keys().into_iter().map(|(_, key)| key));
     known.extend(run_state_names().into_iter().map(str::to_owned));
+    known.extend(gc_reason_names());
     known.extend(REFERENCE_NAMES.map(str::to_owned));
     for identifier in backticked_identifiers(REFERENCE) {
         assert!(

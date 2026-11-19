@@ -46,6 +46,7 @@ pub use workers::{
     set_area_profile, set_worker_context, set_worker_pid, set_worker_state, task_workers_of_task,
     tasks_awaiting_proposal, worker_held,
 };
+pub use workers::{EndedWorker, ended_short_lived_workers};
 pub use workers::{
     OwedReview, OwedStart, PendingResume, owed_starts, pending_resumes,
     reviews_owed_to_ended_reviewers, unreviewed_claims_of_ended_reviewer,
@@ -554,6 +555,17 @@ pub async fn open_sessions_by_agent(
             });
     }
     Ok(sessions)
+}
+
+/// The working folders of every open session, bound or not, as their processes reported them.
+pub async fn open_session_folders(db: impl SqliteExecutor<'_>) -> Result<Vec<String>, StoreError> {
+    let folders = sqlx::query_scalar!(
+        r#"SELECT cwd AS "cwd!: String" FROM sessions
+           WHERE ended_at IS NULL AND cwd IS NOT NULL ORDER BY id"#
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(folders)
 }
 
 /// The `last_call_at` of every open session of one agent, which is what its presence reads.
