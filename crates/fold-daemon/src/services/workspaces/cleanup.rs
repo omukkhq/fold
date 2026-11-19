@@ -50,26 +50,37 @@ pub struct ClosedDirectory {
     pub decision: ClosedDecision,
 }
 
-/// What decides whether a closed workspace's owner still holds its directory back: the cutoff of the `closed_workspace_days` window, and the working folders of the open sessions.
+/// What decides whether a closed workspace's owner still holds its directory back: the cutoff of the `closed_workspace_days` window, the working folders of the open sessions, and the canonical `.fold/ws/`.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RemovalWindow {
     pub(crate) cutoff: Option<Timestamp>,
     pub(crate) session_folders: Vec<PathBuf>,
+    /// `.fold/ws/` with its links resolved, as a session's canonical folder names a workspace below it; `None` while it is not there.
+    pub(crate) canonical_ws: Option<PathBuf>,
 }
 
 impl RemovalWindow {
-    /// Whether an open session works in `dir` or below it.
-    pub(crate) fn session_inside(&self, dir: &Path) -> bool {
-        self.session_folders
-            .iter()
-            .any(|folder| folder.starts_with(dir))
+    /// Whether an open session works in the directory `path` (relative to `root`) or below it, by the project's path or by the canonical one.
+    pub(crate) fn session_inside(&self, root: &Path, path: &str) -> bool {
+        let given = root.join(path);
+        let canonical = self
+            .canonical_ws
+            .as_ref()
+            .zip(Path::new(path).file_name())
+            .map(|(ws, name)| ws.join(name));
+        self.session_folders.iter().any(|folder| {
+            folder.starts_with(&given)
+                || canonical
+                    .as_ref()
+                    .is_some_and(|dir| folder.starts_with(dir))
+        })
     }
 }
 
 /// What fold does with the directory of `closed` under `window` (see [`decide_closed`]).
 fn decide(closed: &ClosedWorkspace, window: &RemovalWindow, root: &Path) -> ClosedDecision {
     decide_closed(
-        window.session_inside(&root.join(&closed.path)),
+        window.session_inside(root, &closed.path),
         closed.hold,
         closed.past_window,
     )
@@ -93,9 +104,12 @@ impl WorkspaceService {
             .into_iter()
             .map(PathBuf::from)
             .collect();
+        let ws = self.paths.ws_dir();
+        let canonical_ws = blocking(move || Ok(fs::canonicalize(&ws).ok())).await?;
         Ok(RemovalWindow {
             cutoff,
             session_folders,
+            canonical_ws,
         })
     }
 

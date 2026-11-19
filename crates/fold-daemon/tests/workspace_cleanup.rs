@@ -786,3 +786,24 @@ async fn an_open_session_in_a_closed_directory_keeps_it_past_the_window() {
     );
     assert!(!fx.task_dir().exists());
 }
+
+#[tokio::test]
+async fn a_session_in_a_closed_directory_named_by_its_canonical_path_keeps_it() {
+    let fx = Fixture::new().await;
+    abandoned_with_changes(&fx).await;
+    frontend_leaves(&fx).await;
+    let fold = fx.project.paths().fold_dir();
+    fs::rename(fold.join("ws"), fold.join("ws-real")).unwrap();
+    symlink("ws-real", fold.join("ws")).unwrap();
+    let inside = fold.join("ws-real/t-1/src");
+    fx.execute(&format!(
+        "INSERT INTO sessions (pid, started_at, last_call_at, cwd) VALUES (4243, 0, 0, '{}')",
+        inside.display()
+    ))
+    .await;
+    assert_eq!(
+        fx.workspaces.remove_closed_directory(ws(1)).await.unwrap(),
+        DirectoryRemoval::Kept(KeepReason::SessionInside)
+    );
+    assert!(inside.join("lib.rs").is_file());
+}
