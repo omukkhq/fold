@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use fold_core::accounts::AccountName;
 use fold_core::agent_changes::may_write_files;
 use fold_core::events::types;
 use fold_core::roles::MCP_UNAVAILABLE;
@@ -291,6 +292,25 @@ impl Supervisor {
         let agent = &process.agent;
         let mut buffer = EventBuffer::new();
         let wait = error.and_then(|error| error.wait.as_ref());
+        // The account the process ran with is the one whose login a refused turn names; a project's own account can have changed since the start.
+        let ran_with = lock(&self.inner.running)
+            .get(agent)
+            .filter(|run| run.generation == process.generation)
+            .map(|run| {
+                run.account
+                    .as_ref()
+                    .map_or_else(AccountName::default_account, |stamp| stamp.name.clone())
+            });
+        let account = match ran_with {
+            Some(account) => account,
+            None if wait.is_none() => AccountName::default_account(),
+            None => self
+                .current_account()
+                .await
+                .ok()
+                .flatten()
+                .map_or_else(AccountName::default_account, |stamp| stamp.name),
+        };
         let cleared = self
             .inner
             .store
@@ -298,7 +318,9 @@ impl Supervisor {
                 let mut cleared = None;
                 match (error, wait) {
                     (Some(error), Some(wait)) => {
-                        let new = agents::record_turn_wait(tx, id, &error.text, wait, now).await?;
+                        let new =
+                            agents::record_turn_wait(tx, id, &error.text, wait, &account, now)
+                                .await?;
                         if new == Some(true) {
                             // A full lease from the start of the wait, which the sweeper keeps while it lasts.
                             if let Some(row) = agents::find_worker_process(tx.conn(), agent).await?

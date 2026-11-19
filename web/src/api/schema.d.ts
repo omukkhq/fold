@@ -3825,7 +3825,7 @@ export interface components {
         /** @description One item that waits for a human. Only the ids its kind has are set. */
         NeedsYouEntry: {
             /**
-             * @description The project's account of a `usage_limit` or a `login_refused` when fold lists the item, `default` for Claude Code's own login; null for every other kind.
+             * @description The project's account of a `usage_limit` when fold lists the item, and the account whose login the API refused in the newest turn of a `login_refused`; `default` for Claude Code's own login; null for every other kind.
              * @example work-a
              */
             account: string | null;
@@ -3839,7 +3839,7 @@ export interface components {
              */
             agent: string | null;
             /**
-             * @description The agents of an `agent_change`, in name order; empty for every other kind.
+             * @description The agents of an `agent_change`, and the workers whose turn waits of a `worker_model_unreachable` for the network, a `usage_limit` or a `login_refused`, in name order; empty for every other kind.
              * @example [
              *       "reviewer-35"
              *     ]
@@ -3889,7 +3889,7 @@ export interface components {
             /** @description How many questions a `question` asks as one set, which a human answers together in one reply; 0 for every other kind. */
             questions: number;
             /**
-             * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again; what to check for a `worker_model_unreachable`.
+             * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again; what to check for a `worker_model_unreachable`; what fold does about a `usage_limit`; the fix of the refused account of a `login_refused`, `fld account update <account>` with a new token or `claude login` for `default`.
              * @example Wait until the design is signed off
              */
             reason: string | null;
@@ -3924,7 +3924,7 @@ export interface components {
              */
             thread: string | null;
             /**
-             * @description The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`; Claude Code's error of a `worker_model_unreachable`; what fold saw of a `worker_stalled` at the read, such as `No activity from @web-worker for 12 min`, in the words of the board's chip.
+             * @description The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`; Claude Code's error of a `worker_model_unreachable`, and its newest message of the waits of a `usage_limit` or a `login_refused`; what fold saw of a `worker_stalled` at the read, such as `No activity from @web-worker for 12 min`, in the words of the board's chip.
              * @example Database schema for reports
              */
             title: string | null;

@@ -1,4 +1,4 @@
--- A worker's turn can also wait for a working login (`login`): the API refused the account's token or Claude Code's own login. A login wait has no limit, as a network wait has none. SQLite changes no CHECK of a column, so the wait columns are dropped and added again with the new checks, the dependent ones first, and each row keeps its wait through a copy.
+-- A worker's turn can also wait for a working login (`login`): the API refused the account's token or Claude Code's own login. A login wait has no limit, as a network wait has none, and names the account whose login was refused (`wait_account`, `default` for Claude Code's own login), which the project's account can differ from after a switch. SQLite changes no CHECK of a column, so the wait columns are dropped and added again with the new checks, the dependent ones first, and each row keeps its wait through a copy.
 CREATE TEMP TABLE worker_waits_copy AS
 SELECT id, wait_reason, wait_limit, wait_since, wait_tried_at, wait_tries, wait_reset, wait_resets_at
 FROM worker_processes
@@ -38,6 +38,12 @@ ALTER TABLE worker_processes ADD COLUMN wait_reset TEXT
 ALTER TABLE worker_processes ADD COLUMN wait_resets_at INTEGER
     CONSTRAINT worker_processes_wait_resets_at CHECK (wait_resets_at IS NULL OR wait_limit IS NOT NULL);
 
+ALTER TABLE worker_processes ADD COLUMN wait_account TEXT
+    CONSTRAINT worker_processes_wait_account CHECK (
+        (wait_account IS NULL) = (wait_reason IS NOT 'login')
+        AND (wait_account IS NULL OR length(wait_account) BETWEEN 1 AND 32)
+    );
+
 UPDATE worker_processes
 SET (wait_reason, wait_limit, wait_since, wait_tried_at, wait_tries, wait_reset, wait_resets_at) = (
     SELECT c.wait_reason, c.wait_limit, c.wait_since, c.wait_tried_at, c.wait_tries, c.wait_reset, c.wait_resets_at
@@ -45,5 +51,8 @@ SET (wait_reason, wait_limit, wait_since, wait_tried_at, wait_tries, wait_reset,
     WHERE c.id = worker_processes.id
 )
 WHERE id IN (SELECT id FROM worker_waits_copy);
+
+-- A wait ends a row's run of failed turns, so a worker that waits is never one that cannot reach the model.
+UPDATE worker_processes SET failed_turns = 0 WHERE wait_reason IS NOT NULL;
 
 DROP TABLE worker_waits_copy;

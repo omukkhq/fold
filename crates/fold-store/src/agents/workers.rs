@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use fold_core::accounts::AccountName;
 use fold_core::roles::AreaProfile;
 use fold_core::turn_waits::{LimitKind, TurnWait, WaitGroup, WaitReason};
 use fold_core::{AgentName, AreaName, LabelName, ProposalId, Role, TaskId, Timestamp, WorkerState};
@@ -78,6 +79,8 @@ pub struct StoredWait {
     pub reset: Option<String>,
     /// A limit's reset instant, when Claude Code's message gives one.
     pub resets_at: Option<Timestamp>,
+    /// The account whose login the API refused in a `Login` wait, `default` for Claude Code's own login: the account the process ran with, which can differ from the project's after a switch.
+    pub account: Option<AccountName>,
 }
 
 impl StoredWait {
@@ -400,6 +403,7 @@ struct RawProcess {
     wait_tries: i64,
     wait_reset: Option<String>,
     wait_resets_at: Option<i64>,
+    wait_account: Option<String>,
     parked_by: Option<String>,
     parked_for: Option<String>,
     parked_at: Option<i64>,
@@ -431,6 +435,14 @@ impl RawProcess {
             tries: count(self.wait_tries, "worker_processes.wait_tries")?,
             reset: self.wait_reset.clone(),
             resets_at: optional_time(self.wait_resets_at, "worker_processes.wait_resets_at")?,
+            account: self
+                .wait_account
+                .as_deref()
+                .map(|name| {
+                    AccountName::parse(name)
+                        .map_err(|_| StoreError::Corrupt("worker_processes.wait_account"))
+                })
+                .transpose()?,
         }))
     }
 
@@ -494,7 +506,8 @@ macro_rules! select_processes {
                       w.idle_since, w.turns, w.cost_micro_usd, w.cache_read_tokens, w.cache_write_tokens,
                       w.context_tokens, w.exit_code, w.failed_reason, w.last_error, w.last_error_at,
                       w.failed_turns, w.fold_fingerprint, w.wait_reason, w.wait_limit, w.wait_since,
-                      w.wait_tried_at, w.wait_tries, w.wait_reset, w.wait_resets_at, pa.name AS "parked_by?: String",
+                      w.wait_tried_at, w.wait_tries, w.wait_reset, w.wait_resets_at, w.wait_account,
+                      pa.name AS "parked_by?: String",
                       w.parked_for, w.parked_at
                FROM worker_processes w JOIN agents g ON g.id = w.agent_id LEFT JOIN areas a ON a.id = w.area_id
                LEFT JOIN agents pa ON pa.id = w.parked_by
@@ -904,12 +917,13 @@ pub async fn record_turn_error(
         .transpose()
 }
 
-/// Records a turn that ended in Claude Code's `error` for the cause outside the worker that `wait` names: the error becomes the row's last error, without counting as a failed turn, and the row holds the wait. A wait for the same cause keeps its start and counts one more try; any other starts again. A row that is stopping or has ended is left as it is. Returns whether the wait is new, or `None` for a row left as it was.
+/// Records a turn that ended in Claude Code's `error` for the cause outside the worker that `wait` names: the error becomes the row's last error, without counting as a failed turn, and the row holds the wait. A wait ends the row's run of failed turns, so a worker that waits is never one that cannot reach the model. A wait for the same cause keeps its start and counts one more try; any other starts again. A login wait names `account`, the account the process ran with, as the newest refused one. A row that is stopping or has ended is left as it is. Returns whether the wait is new, or `None` for a row left as it was.
 pub async fn record_turn_wait(
     tx: &mut WriteTx,
     id: i64,
     error: &str,
     wait: &TurnWait,
+    account: &AccountName,
     now: Timestamp,
 ) -> Result<Option<bool>, StoreError> {
     let now = now.as_millis();
@@ -922,12 +936,14 @@ pub async fn record_turn_wait(
             reset, resets_at, ..
         } => (reset.as_deref(), resets_at.map(Timestamp::as_millis)),
     };
+    let account = matches!(wait, TurnWait::Login).then(|| account.as_str());
     let tries = sqlx::query_scalar!(
         r#"UPDATE worker_processes
-           SET last_error = ?2, last_error_at = ?3,
+           SET last_error = ?2, last_error_at = ?3, failed_turns = 0,
                wait_tries = CASE WHEN wait_reason IS ?4 AND wait_limit IS ?5 THEN wait_tries + 1 ELSE 0 END,
                wait_since = CASE WHEN wait_reason IS ?4 AND wait_limit IS ?5 THEN wait_since ELSE ?3 END,
-               wait_reason = ?4, wait_limit = ?5, wait_tried_at = ?3, wait_reset = ?6, wait_resets_at = ?7
+               wait_reason = ?4, wait_limit = ?5, wait_tried_at = ?3, wait_reset = ?6, wait_resets_at = ?7,
+               wait_account = ?8
            WHERE id = ?1 AND state IN ('starting', 'working', 'idle')
            RETURNING wait_tries AS "wait_tries!: i64""#,
         id,
@@ -936,7 +952,8 @@ pub async fn record_turn_wait(
         reason,
         limit,
         reset,
-        resets_at
+        resets_at,
+        account
     )
     .fetch_optional(tx.conn())
     .await?;
@@ -969,7 +986,7 @@ pub async fn clear_turn_wait(tx: &mut WriteTx, id: i64) -> Result<Option<WaitGro
     sqlx::query!(
         "UPDATE worker_processes
          SET wait_reason = NULL, wait_limit = NULL, wait_since = NULL, wait_tried_at = NULL, wait_tries = 0,
-             wait_reset = NULL, wait_resets_at = NULL
+             wait_reset = NULL, wait_resets_at = NULL, wait_account = NULL
          WHERE id = ?",
         id
     )

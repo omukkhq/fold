@@ -65,7 +65,7 @@ pub enum NeedsYouKind {
     UsageLimit,
     /// A claim went stale: its holder made no fold call for the lease, fold told the holder's lead, or else the main agent, and one more stall window passed without a renewal, or no agent can act on it. `agent` names the holder, `task` its task, `proposal` the proposal of a review claim, `action` and `reason` what the human does. The item ends when the holder renews the claim, which any of its fold calls does, or when the claim is released or taken over.
     StaleClaim,
-    /// The API refused the login of turns of the project's workers: the token of the project's account, or Claude Code's own login for `default`. One item for the project: `agents` names the workers whose turn waits, `title` holds Claude Code's newest message, `account` the project's account, `reason` what the human does and `actions` the pause and a switch to each other account. A new token of the account, a switch of the account or a new login of Claude Code runs every waiting turn again at once in its session; the item ends when no turn waits for a working login.
+    /// The API refused the login of turns of the project's workers: the token of an account, or Claude Code's own login for `default`. One item for the project: `agents` names the workers whose turn waits, `title` holds Claude Code's newest message, `account` the account of that newest refusal, which the process ran with, `reason` that account's fix and `actions` the pause and a switch to each account other than the project's. A new token of the account, a switch of the account or a new login of Claude Code runs every waiting turn again at once in its session; the item ends when no turn waits for a working login.
     LoginRefused,
 }
 
@@ -199,7 +199,7 @@ pub struct NeedsYouItem {
     pub actions: Vec<NeedsYouAction>,
     /// What the human does about the worker of a `WorkerStalled` or a `StaleClaim`.
     pub action: Option<PersonAction>,
-    /// The project's account of a `UsageLimit` or a `LoginRefused` when fold lists the item, `default` for Claude Code's own login.
+    /// The project's account of a `UsageLimit` when fold lists the item, and the account whose login the API refused in the newest turn of a `LoginRefused`; `default` for Claude Code's own login.
     pub account: Option<fold_core::accounts::AccountName>,
 }
 
@@ -576,7 +576,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
     Ok(items)
 }
 
-/// The project's items of the workers whose idle turn waits for a cause outside them: one for the turns that could not reach the model, one for each usage limit the turns reached, and one for the turns whose login the API refused, each from its oldest wait and with the newest message. The account of a refused login, its words and its switches come from the project's account (see `AgentService::needs_you`).
+/// The project's items of the workers whose idle turn waits for a cause outside them: one for the turns that could not reach the model, one for each usage limit the turns reached, and one for the turns whose login the API refused, each from its oldest wait and with the newest message. The refused-login item names the account of the newest refusal, the one its message is about, with that account's fix; its switches come from the project's account (see `AgentService::needs_you`).
 fn wait_items(rows: &[agents::WorkerProcessRow]) -> Vec<NeedsYouItem> {
     let waiting: Vec<(&agents::WorkerProcessRow, &agents::StoredWait)> = rows
         .iter()
@@ -616,8 +616,13 @@ fn wait_items(rows: &[agents::WorkerProcessRow]) -> Vec<NeedsYouItem> {
                 item
             }
             WaitReason::Login => {
+                let account = newest
+                    .and_then(|(_, wait)| wait.account.clone())
+                    .unwrap_or_else(fold_core::accounts::AccountName::default_account);
                 let mut item = NeedsYouItem::new(NeedsYouKind::LoginRefused, since);
-                item.reason = Some(login_wait_hint(None));
+                item.reason = Some(login_wait_hint(Some(&account)));
+                item.about = Some(account.as_str().to_owned());
+                item.account = Some(account);
                 item.actions = vec![NeedsYouAction::Pause];
                 item
             }

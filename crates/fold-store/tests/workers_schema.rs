@@ -1,3 +1,4 @@
+use fold_core::accounts::AccountName;
 use fold_core::roles::AreaProfile;
 use fold_core::{AgentName, ProposalId, Role, TaskId, Timestamp, WorkerState};
 use fold_store::Store;
@@ -985,7 +986,15 @@ async fn a_turn_that_waits_keeps_its_start_counts_its_tries_and_counts_no_failed
     let waited = async |wait: TurnWait, now: i64| {
         store
             .write(async |tx| {
-                agents::record_turn_wait(tx, lead, "API Error: no route", &wait, at(now)).await
+                agents::record_turn_wait(
+                    tx,
+                    lead,
+                    "API Error: no route",
+                    &wait,
+                    &AccountName::default_account(),
+                    at(now),
+                )
+                .await
             })
             .await
             .unwrap()
@@ -1009,6 +1018,7 @@ async fn a_turn_that_waits_keeps_its_start_counts_its_tries_and_counts_no_failed
         ),
         (WaitReason::Network, None, at(20), at(30), 1)
     );
+    assert_eq!(wait.account, None, "only a login wait names an account");
     assert_eq!(again.failed_turns, 0);
     assert_eq!(again.last_error_at, Some(at(30)));
     assert_eq!(
@@ -1088,7 +1098,8 @@ async fn a_refused_login_waits_without_a_limit_and_another_cause_starts_a_new_wa
             .unwrap()
             .unwrap()
     };
-    let waited = async |wait: TurnWait, now: i64| {
+    let waited_on = async |wait: TurnWait, account: &str, now: i64| {
+        let account = AccountName::parse(account).unwrap();
         store
             .write(async |tx| {
                 agents::record_turn_wait(
@@ -1096,6 +1107,7 @@ async fn a_refused_login_waits_without_a_limit_and_another_cause_starts_a_new_wa
                     lead,
                     "Invalid API key · Please run /login",
                     &wait,
+                    &account,
                     at(now),
                 )
                 .await
@@ -1103,15 +1115,47 @@ async fn a_refused_login_waits_without_a_limit_and_another_cause_starts_a_new_wa
             .await
             .unwrap()
     };
+    let waited = async |wait: TurnWait, now: i64| waited_on(wait, "work-a", now).await;
+    for _ in 0..3 {
+        store
+            .write(async |tx| {
+                agents::record_turn_error(tx, lead, "API Error: 529", false, at(5)).await
+            })
+            .await
+            .unwrap();
+    }
+    assert_eq!(row().await.failed_turns, 3);
     assert_eq!(waited(TurnWait::Login, 10).await, Some(true));
+    assert_eq!(
+        row().await.failed_turns,
+        0,
+        "a wait ends the run of failed turns, so the worker is not one that cannot reach the model"
+    );
     assert_eq!(waited(TurnWait::Login, 20).await, Some(false));
     let wait = row().await.wait.unwrap();
     assert_eq!(
         (wait.reason, wait.limit, wait.since, wait.tries, wait.reset),
         (WaitReason::Login, None, at(10), 1, None)
     );
+    assert_eq!(
+        wait.account.as_ref().map(AccountName::as_str),
+        Some("work-a")
+    );
+    assert_eq!(
+        waited_on(TurnWait::Login, "default", 25).await,
+        Some(false),
+        "a refusal on another account goes on with the same wait"
+    );
+    let wait = row().await.wait.unwrap();
+    assert_eq!(
+        (wait.since, wait.account.as_ref().map(AccountName::as_str)),
+        (at(10), Some("default")),
+        "and names the newest refused account"
+    );
     assert_eq!(waited(TurnWait::Network, 30).await, Some(true));
-    assert_eq!(row().await.wait.unwrap().group(), WaitGroup::NETWORK);
+    let network = row().await.wait.unwrap();
+    assert_eq!(network.group(), WaitGroup::NETWORK);
+    assert_eq!(network.account, None);
     assert_eq!(waited(TurnWait::Login, 40).await, Some(true));
     assert_eq!(
         store
@@ -1127,6 +1171,16 @@ async fn a_refused_login_waits_without_a_limit_and_another_cause_starts_a_new_wa
         ),
         format!(
             "UPDATE worker_processes SET wait_reason = 'login', wait_since = 1, wait_tried_at = 1, wait_reset = 'Mon' WHERE id = {lead}"
+        ),
+        format!(
+            "UPDATE worker_processes SET wait_reason = 'login', wait_since = 1, wait_tried_at = 1, wait_account = NULL WHERE id = {lead}"
+        ),
+        format!(
+            "UPDATE worker_processes SET wait_reason = 'login', wait_since = 1, wait_tried_at = 1, wait_account = '{}' WHERE id = {lead}",
+            "a".repeat(33)
+        ),
+        format!(
+            "UPDATE worker_processes SET wait_reason = 'network', wait_since = 1, wait_tried_at = 1, wait_account = 'work-a' WHERE id = {lead}"
         ),
     ] {
         assert!(exec(&store, &change).await.is_err(), "{change}");
