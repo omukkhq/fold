@@ -55,7 +55,7 @@ pub fn limit_turn(text: &str) -> String {
 }
 
 /// Labels `ui` and `server` and the areas `web` and `api` over them.
-async fn areas(harness: &Harness) {
+pub async fn areas(harness: &Harness) {
     for label in ["ui", "server"] {
         harness
             .call(
@@ -72,7 +72,7 @@ async fn areas(harness: &Harness) {
     }
 }
 
-async fn start_lead(harness: &mut Harness, area: &str) -> String {
+pub async fn start_lead(harness: &mut Harness, area: &str) -> String {
     let started = harness
         .call(
             MAIN,

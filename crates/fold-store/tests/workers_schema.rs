@@ -1077,6 +1077,63 @@ async fn a_turn_that_waits_keeps_its_start_counts_its_tries_and_counts_no_failed
 }
 
 #[tokio::test]
+async fn a_refused_login_waits_without_a_limit_and_another_cause_starts_a_new_wait() {
+    use fold_core::turn_waits::{TurnWait, WaitGroup, WaitReason};
+    let (_dir, store) = seeded().await;
+    let lead = process(&store, 1, Role::ReviewLead, None, "s1").await;
+    let row = async || {
+        let mut conn = store.read().acquire().await.unwrap();
+        agents::find_worker_process(&mut conn, &AgentName::parse("web-lead").unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    let waited = async |wait: TurnWait, now: i64| {
+        store
+            .write(async |tx| {
+                agents::record_turn_wait(
+                    tx,
+                    lead,
+                    "Invalid API key · Please run /login",
+                    &wait,
+                    at(now),
+                )
+                .await
+            })
+            .await
+            .unwrap()
+    };
+    assert_eq!(waited(TurnWait::Login, 10).await, Some(true));
+    assert_eq!(waited(TurnWait::Login, 20).await, Some(false));
+    let wait = row().await.wait.unwrap();
+    assert_eq!(
+        (wait.reason, wait.limit, wait.since, wait.tries, wait.reset),
+        (WaitReason::Login, None, at(10), 1, None)
+    );
+    assert_eq!(waited(TurnWait::Network, 30).await, Some(true));
+    assert_eq!(row().await.wait.unwrap().group(), WaitGroup::NETWORK);
+    assert_eq!(waited(TurnWait::Login, 40).await, Some(true));
+    assert_eq!(
+        store
+            .write(async |tx| agents::clear_turn_wait(tx, lead).await)
+            .await
+            .unwrap(),
+        Some(WaitGroup::LOGIN)
+    );
+    assert_eq!(row().await.wait, None);
+    for change in [
+        format!(
+            "UPDATE worker_processes SET wait_reason = 'login', wait_since = 1, wait_tried_at = 1, wait_limit = 'weekly' WHERE id = {lead}"
+        ),
+        format!(
+            "UPDATE worker_processes SET wait_reason = 'login', wait_since = 1, wait_tried_at = 1, wait_reset = 'Mon' WHERE id = {lead}"
+        ),
+    ] {
+        assert!(exec(&store, &change).await.is_err(), "{change}");
+    }
+}
+
+#[tokio::test]
 async fn a_park_needs_its_agent_its_reason_and_an_ended_row() {
     let (_dir, store) = seeded().await;
     let lead = process(&store, 1, Role::ReviewLead, None, "s1").await;
@@ -1361,4 +1418,71 @@ async fn the_supervised_main_has_no_area_and_a_project_has_one_and_old_rows_stay
     .await
     .unwrap_err();
     assert!(moved.to_string().contains("worker_processes_fixed"));
+}
+
+#[tokio::test]
+async fn a_wait_stored_before_the_login_waits_keeps_every_field() {
+    use fold_core::turn_waits::{LimitKind, WaitReason};
+    use sqlx::Connection;
+    let dir = tempfile::TempDir::new().unwrap();
+    let paths = fold_core::ProjectPaths::new(dir.path().join("project"));
+    std::fs::create_dir_all(paths.db().parent().unwrap()).unwrap();
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(paths.db())
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let mut conn = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap();
+    let mut before: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/project");
+    let login = before
+        .migrations
+        .iter()
+        .position(|migration| migration.description == "worker login waits")
+        .unwrap();
+    before.migrations = std::borrow::Cow::Owned(before.migrations[..login].to_vec());
+    before.run(&mut conn).await.unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO agents (id, name, created_at) VALUES (1, 'review-lead', 0), (2, 'web-lead', 0);
+         INSERT INTO worker_processes (id, agent_id, role, session_id, state, started_by, started_at, idle_since, last_error, last_error_at, wait_reason, wait_limit, wait_since, wait_tried_at, wait_tries, wait_reset, wait_resets_at)
+         VALUES (1, 1, 'review_lead', 's1', 'idle', 'main', 10, 10, 'You''ve hit your weekly limit', 20, 'usage_limit', 'weekly', 20, 30, 2, 'Mon 12:00am', 40),
+                (2, 2, 'main', 's2', 'idle', 'main', 10, 10, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL);",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    conn.close().await.unwrap();
+
+    let store = Store::open_project(&paths).await.unwrap();
+    let mut read = store.read().acquire().await.unwrap();
+    let lead = agents::find_worker_process(&mut read, &AgentName::parse("review-lead").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let wait = lead.wait.unwrap();
+    assert_eq!(
+        (
+            wait.reason,
+            wait.limit,
+            wait.since,
+            wait.tried_at,
+            wait.tries,
+            wait.reset.as_deref(),
+            wait.resets_at
+        ),
+        (
+            WaitReason::UsageLimit,
+            Some(LimitKind::Weekly),
+            at(20),
+            at(30),
+            2,
+            Some("Mon 12:00am"),
+            Some(at(40))
+        )
+    );
+    let other = agents::find_worker_process(&mut read, &AgentName::parse("web-lead").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(other.wait, None);
 }

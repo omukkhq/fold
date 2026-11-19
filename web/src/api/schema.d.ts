@@ -2054,10 +2054,10 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @description What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free, `waits_for_network` while its last turn could not reach the model, which fold runs again once the model answers, and `waits_for_usage_limit` while its last turn reached a usage limit, which fold runs again after the reset, and `parked` while it waits for the go of the agent that stopped it with `stop_worker`'s `wait_for`. `working`, `stopped`, `waits_for_slot`, `parked` and the waits are never stalls.
+         * @description What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free, `waits_for_network` while its last turn could not reach the model, which fold runs again once the model answers, `waits_for_usage_limit` while its last turn reached a usage limit, which fold runs again after the reset, `waits_for_login` while the API refused the login of its last turn, which fold runs again once the project's login changes or works, and `parked` while it waits for the go of the agent that stopped it with `stop_worker`'s `wait_for`. `working`, `stopped`, `waits_for_slot`, `parked` and the waits are never stalls.
          * @enum {string}
          */
-        ActivityState: "working" | "silent" | "long_call" | "stopped" | "failed" | "waits_for_slot" | "waits_for_network" | "waits_for_usage_limit" | "parked";
+        ActivityState: "working" | "silent" | "long_call" | "stopped" | "failed" | "waits_for_slot" | "waits_for_network" | "waits_for_usage_limit" | "waits_for_login" | "parked";
         /** @description One comment on the version the human read, as its own `comment` review. */
         AddCommentBody: components["schemas"]["CommentBody"] & {
             /**
@@ -3825,12 +3825,12 @@ export interface components {
         /** @description One item that waits for a human. Only the ids its kind has are set. */
         NeedsYouEntry: {
             /**
-             * @description The project's account of a `usage_limit` when fold lists the item, `default` for Claude Code's own login; null for every other kind.
+             * @description The project's account of a `usage_limit` or a `login_refused` when fold lists the item, `default` for Claude Code's own login; null for every other kind.
              * @example work-a
              */
             account: string | null;
             action: components["schemas"]["PersonAction"] | null;
-            /** @description What the human can do from the item, such as `pause` for a `usage_limit`; empty for most kinds. */
+            /** @description What the human can do from the item, such as `pause` for a `usage_limit` or a `login_refused`; empty for most kinds. */
             actions: components["schemas"]["NeedsYouActionEntry"][];
             activity: components["schemas"]["LiveActivity"] | null;
             /**
@@ -3938,7 +3938,7 @@ export interface components {
          * @description Why an item waits for a human.
          * @enum {string}
          */
-        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable" | "worker_model_unreachable" | "claude_not_found" | "notify_target_off" | "agent_change" | "shared_changed" | "worker_stalled" | "usage_limit" | "stale_claim";
+        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable" | "worker_model_unreachable" | "claude_not_found" | "notify_target_off" | "agent_change" | "shared_changed" | "worker_stalled" | "usage_limit" | "stale_claim" | "login_refused";
         /** @description Every item that waits for a human, oldest first. */
         NeedsYouList: {
             items: components["schemas"]["NeedsYouEntry"][];
@@ -5983,7 +5983,7 @@ export interface components {
          * @description The cause outside a worker that its last turn waits for.
          * @enum {string}
          */
-        TurnWaitReason: "network" | "usage_limit";
+        TurnWaitReason: "network" | "usage_limit" | "login";
         /** @description One path where the unstash conflicted with the project folder. */
         UnstashConflictView: {
             /** @description `both_modified_text`, `both_modified_binary`, `modify_delete`, `add_add` or `type_change`. */

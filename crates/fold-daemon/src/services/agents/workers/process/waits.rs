@@ -5,7 +5,9 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, SystemTime};
 
 use fold_core::accounts::AccountStamp;
-use fold_core::turn_waits::{LimitKind, WaitGroup, WaitingTurn, rerun_plan, rerun_turn};
+use fold_core::turn_waits::{
+    LOGIN_RELEASES, WaitGroup, WaitReason, WaitingTurn, rerun_plan, rerun_turn,
+};
 use fold_core::{AgentName, Timestamp, WorkerState};
 use fold_store::StoreError;
 use fold_store::agents::{self, WorkerProcessRow};
@@ -32,6 +34,8 @@ pub(super) struct OwedTurns {
     sent: HashMap<AgentName, Timestamp>,
     /// A change came after the loop's last read of the rows, so a loop that found no wait reads them once more before it ends.
     changed: bool,
+    /// Claude Code's own login changed since the loop's last plan, so each process on it whose turn waits for a working login starts again in its session.
+    login_changed: bool,
 }
 
 impl Drop for OwedTurns {
@@ -79,18 +83,27 @@ impl Supervisor {
         lock(&self.inner.owed).sent.remove(agent);
     }
 
-    /// Runs every turn that waits for a usage limit again at once, as after a change that ends the limit for the project.
-    pub fn run_limit_turns_now(&self) {
-        self.owed_turns_changed(LimitKind::ALL.map(WaitGroup::limit).to_vec());
+    /// Runs every turn that waits for a usage limit or a working login again at once, as after a change of the project's login: a switch of the account, or a new token or login of it.
+    pub fn run_login_turns_now(&self) {
+        self.owed_turns_changed(LOGIN_RELEASES.to_vec());
+    }
+
+    /// Restarts in its session each process on Claude Code's own login whose turn waits for a working login, whose restart then runs that turn again: Claude Code's own login changed, which a running process may not read again.
+    fn login_changed(&self) {
+        lock(&self.inner.owed).login_changed = true;
+        self.owed_turns_changed(Vec::new());
     }
 
     /// Runs again, in its own running process, each owed turn that the plan of [`rerun_plan`] makes due, and returns when the plan must be read again, `Some(None)` for only when woken; `Ok(None)` once no row waits. While the project's agents are paused nothing runs: the resume of the pause gives each worker a turn of its own, and wakes the loop.
     async fn serve_owed_turns(&self) -> Result<Option<Option<Timestamp>>, AgentError> {
         // The releases are taken before the rows are read, so each one meets rows at least as new as itself: a release that comes later, such as at the end of a switch while this read sees the row still starting, stays for the next plan.
-        let released = {
+        let (released, login_changed) = {
             let mut owed = lock(&self.inner.owed);
             owed.changed = false;
-            std::mem::take(&mut owed.released)
+            (
+                std::mem::take(&mut owed.released),
+                std::mem::take(&mut owed.login_changed),
+            )
         };
         let rows = match self.worker_rows().await {
             Ok(rows) => rows,
@@ -117,16 +130,26 @@ impl Supervisor {
                 return Err(error.into());
             }
         }
-        // A process that started with another account than the project's waits for its own switch, which runs its turn after it with the project's account. Nothing else switches a process whose turn waits, such as after `fld account update`, so the loop starts the switch.
+        // A process that started with another account than the project's waits for its own switch, which runs its turn after it with the project's account. Nothing else switches a process whose turn waits, such as after `fld account update`, so the loop starts the switch. A new login of Claude Code restarts each process on it whose login was refused the same way.
         let current = self.current_account().await.ok();
+        let on_own_login = matches!(current, Some(None));
+        let mut restarting = BTreeSet::new();
         for row in &rows {
-            if row.wait.is_some()
-                && row.state == WorkerState::Idle
-                && self.can_take_turn(&row.agent)
-                && !lock(&self.inner.refreshing).contains(&row.agent)
-                && !self.runs_account(&row.agent, current.as_ref())
+            if row.wait.is_none()
+                || row.state != WorkerState::Idle
+                || !self.can_take_turn(&row.agent)
+                || lock(&self.inner.refreshing).contains(&row.agent)
             {
+                continue;
+            }
+            if !self.runs_account(&row.agent, current.as_ref()) {
                 self.switch_soon(&row.agent);
+            } else if login_changed
+                && on_own_login
+                && row.wait.as_ref().map(|wait| wait.reason) == Some(WaitReason::Login)
+            {
+                restarting.insert(row.agent.clone());
+                self.restart_soon(&row.agent);
             }
         }
         let now = self.inner.clock.now();
@@ -134,6 +157,7 @@ impl Supervisor {
             .iter()
             .filter(|row| {
                 row.state == WorkerState::Idle
+                    && !restarting.contains(&row.agent)
                     && self.can_take_turn(&row.agent)
                     && self.runs_account(&row.agent, current.as_ref())
             })
@@ -229,6 +253,7 @@ async fn run_owed_turns(inner: Weak<Inner>, wake: Arc<Notify>) {
             .accounts_dir()
             .map(|dir| accounts::index_path(&dir));
         let seen = index_mark(index.as_deref()).await;
+        let login = supervisor.login_mark().await;
         let next = match supervisor.serve_owed_turns().await {
             Ok(Some(next)) => next,
             Ok(None) => {
@@ -264,6 +289,15 @@ async fn run_owed_turns(inner: Weak<Inner>, wake: Arc<Notify>) {
             }
             // `fld account update` changes no project and tells no daemon, so a new token shows only in the host's accounts index; a waiting turn then switches to it and runs again at once.
             if index_mark(index.as_deref()).await != seen {
+                break;
+            }
+            // `claude login` tells no daemon either: a new login shows only in its credentials.
+            let Some(strong) = inner.upgrade() else {
+                return;
+            };
+            let supervisor = Supervisor { inner: strong };
+            if supervisor.login_mark().await != login {
+                supervisor.login_changed();
                 break;
             }
         }

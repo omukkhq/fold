@@ -751,7 +751,7 @@ pub async fn parked_holders(
         .collect())
 }
 
-/// The workers, by `workers.id`, whose agent's row holds a turn that waits for the network or a usage limit, each with the row's state, which says whether the wait shows (see [`fold_core::turn_waits::shows_wait`]).
+/// The workers, by `workers.id`, whose agent's row holds a turn that waits for the network, a usage limit or a working login, each with the row's state, which says whether the wait shows (see [`fold_core::turn_waits::shows_wait`]).
 pub async fn turn_waiting_holders(
     executor: impl SqliteExecutor<'_>,
 ) -> Result<Vec<(i64, WorkerState)>, StoreError> {
@@ -917,7 +917,7 @@ pub async fn record_turn_wait(
     let reason = group.reason.as_str();
     let limit = group.limit.map(LimitKind::as_str);
     let (reset, resets_at) = match wait {
-        TurnWait::Network => (None, None),
+        TurnWait::Network | TurnWait::Login => (None, None),
         TurnWait::UsageLimit {
             reset, resets_at, ..
         } => (reset.as_deref(), resets_at.map(Timestamp::as_millis)),

@@ -188,6 +188,93 @@ pub struct AccountStamp {
     pub added_at: Timestamp,
 }
 
+/// The prompt of the one small turn with which `fld account add` and `update` check a new token: an answer of the model shows that the API takes the token.
+pub const TOKEN_CHECK_PROMPT: &str = "Reply with the word ok.";
+
+/// The longest that check waits for its turn.
+pub const TOKEN_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The result of the check's turn as Claude Code's `--output-format json` gives it: whether it is an error, its text, and whether any token of the turn reached the model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenCheckRun {
+    pub is_error: bool,
+    pub text: Option<String>,
+    pub reached_model: bool,
+}
+
+/// What the check's turn showed of a new token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenCheck {
+    /// The model answered the turn.
+    Works,
+    /// The API refused the token: the turn reached no model and Claude Code's text is a refused login, as a worker's turn that waits for a working login ends.
+    Rejected,
+    /// fold could not tell now, and stores the token with a warning.
+    Unchecked(Unchecked),
+}
+
+/// Why the check could not tell whether the API takes a token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unchecked {
+    /// Claude Code could not reach the model.
+    Network,
+    /// The account reached a usage limit, so the API took the token but the turn did not run.
+    UsageLimit,
+    /// Claude Code did not run, did not end within [`TOKEN_CHECK_TIMEOUT`], or gave no result that fold reads.
+    NoAnswer,
+}
+
+impl Unchecked {
+    /// Why fold could not check the token, after `fold could not check the token now: `.
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::Network => "Claude Code could not reach the model",
+            Self::UsageLimit => "the account is at a usage limit",
+            Self::NoAnswer => "claude gave no answer that fold reads",
+        }
+    }
+}
+
+/// Reads the check's turn, `None` when Claude Code gave no result. Only positive evidence decides: a refused login rejects the token, and only a turn that ended well and reached the model shows that it works; anything else leaves it unchecked, so a host where `claude` cannot run still keeps the token.
+pub fn token_check(run: Option<&TokenCheckRun>) -> TokenCheck {
+    let Some(run) = run else {
+        return TokenCheck::Unchecked(Unchecked::NoAnswer);
+    };
+    let wait = run
+        .text
+        .as_deref()
+        .and_then(crate::turn_errors::error_text)
+        .as_deref()
+        .and_then(crate::turn_waits::turn_wait);
+    match wait {
+        _ if !run.is_error && run.reached_model => TokenCheck::Works,
+        Some(_) if run.reached_model => TokenCheck::Unchecked(Unchecked::NoAnswer),
+        Some(crate::turn_waits::TurnWait::Login) => TokenCheck::Rejected,
+        Some(crate::turn_waits::TurnWait::Network) => TokenCheck::Unchecked(Unchecked::Network),
+        Some(crate::turn_waits::TurnWait::UsageLimit { .. }) => {
+            TokenCheck::Unchecked(Unchecked::UsageLimit)
+        }
+        None => TokenCheck::Unchecked(Unchecked::NoAnswer),
+    }
+}
+
+/// The refusal of a new token of the account `name` that the API refused in the check's turn. Nothing was stored; `update` says whether the token was to replace the account's token, which stays.
+pub fn token_rejected(name: &AccountName, update: bool) -> FoldError {
+    let (command, kept) = if update {
+        ("update", format!("the account {name} keeps its token"))
+    } else {
+        ("add", "fold stored nothing".to_owned())
+    };
+    FoldError::new(
+        codes::ACCOUNT_TOKEN_REJECTED,
+        format!("Claude Code's login with the new token of {name} was refused; {kept}"),
+    )
+    .with_hint(format!(
+        "run `claude setup-token` for a new token, then `fld account {command} {name}` with it on stdin"
+    ))
+    .with_details([("account", serde_json::json!(name.as_str()))])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +356,90 @@ mod tests {
                 .unwrap()
         ));
         assert!(!token_is_old(added, added.checked_sub(day).unwrap()));
+    }
+
+    fn run(is_error: bool, text: &str, reached_model: bool) -> TokenCheckRun {
+        TokenCheckRun {
+            is_error,
+            text: Some(text.to_owned()),
+            reached_model,
+        }
+    }
+
+    #[test]
+    fn only_a_refused_login_rejects_a_token_and_only_an_answer_shows_it_works() {
+        assert_eq!(
+            token_check(Some(&run(false, "ok", true))),
+            TokenCheck::Works
+        );
+        for refused in [
+            "Invalid API key · Please run /login",
+            "API Error: 401 Invalid authentication credentials",
+            "Failed to authenticate: OAuth token revoked",
+            "OAuth token has expired. Please obtain a new token or refresh your existing token.",
+        ] {
+            assert_eq!(
+                token_check(Some(&run(true, refused, false))),
+                TokenCheck::Rejected,
+                "{refused}"
+            );
+        }
+        assert_eq!(
+            token_check(Some(&run(
+                true,
+                "API Error: Can't reach the API server",
+                false
+            ))),
+            TokenCheck::Unchecked(Unchecked::Network)
+        );
+        assert_eq!(
+            token_check(Some(&run(true, "You've hit your weekly limit", false))),
+            TokenCheck::Unchecked(Unchecked::UsageLimit)
+        );
+        for unclear in [
+            run(true, "API Error: 529 Overloaded", false),
+            run(true, "Invalid API key", true),
+            run(false, "ok", false),
+            TokenCheckRun {
+                is_error: true,
+                text: None,
+                reached_model: false,
+            },
+        ] {
+            assert_eq!(
+                token_check(Some(&unclear)),
+                TokenCheck::Unchecked(Unchecked::NoAnswer),
+                "{unclear:?}"
+            );
+        }
+        assert_eq!(
+            token_check(None),
+            TokenCheck::Unchecked(Unchecked::NoAnswer)
+        );
+        for why in [
+            Unchecked::Network,
+            Unchecked::UsageLimit,
+            Unchecked::NoAnswer,
+        ] {
+            assert!(!why.words().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_rejected_token_names_the_account_and_the_command_that_gives_a_new_one() {
+        let name = AccountName::parse("work-a").unwrap();
+        let added = token_rejected(&name, false);
+        assert_eq!(added.code(), codes::ACCOUNT_TOKEN_REJECTED);
+        assert!(added.message().contains("fold stored nothing"));
+        assert!(added.hint().unwrap().contains("`fld account add work-a`"));
+        let updated = token_rejected(&name, true);
+        assert!(updated.message().contains("keeps its token"));
+        assert!(
+            updated
+                .hint()
+                .unwrap()
+                .contains("`fld account update work-a`")
+        );
+        assert_eq!(updated.details().unwrap()["account"], "work-a");
     }
 }

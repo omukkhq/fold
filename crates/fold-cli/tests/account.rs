@@ -29,7 +29,64 @@ impl Sandbox {
             "listen = \"127.0.0.1:0\"\n",
         )
         .unwrap();
+        sandbox.fake_claude();
         sandbox
+    }
+
+    /// A stand-in for `claude` first on the sandbox's `PATH`, so no test runs the real one. For the token check's turn it writes the result in `check-result.json`, or one the model answered, and appends one line per run to `check-runs`: which test token its environment held, whether a variable that outranks the token was left, whether it ran in a temporary folder outside the sandbox's home, and whether any argument holds a token.
+    fn fake_claude(&self) {
+        fs::create_dir_all(self.path("bin")).unwrap();
+        let script = format!(
+            r#"#!/bin/sh
+case "$CLAUDE_CODE_OAUTH_TOKEN" in
+  {TOKEN_A}) token=A ;;
+  {TOKEN_B}) token=B ;;
+  *) token=none ;;
+esac
+outranked=no
+[ -n "$ANTHROPIC_API_KEY$ANTHROPIC_AUTH_TOKEN" ] && outranked=yes
+case "$CLAUDE_CONFIG_DIR" in
+  "$(pwd -P)"/*) config=temp ;;
+  *) config=other ;;
+esac
+argument=no
+for arg in "$@"; do
+  case "$arg" in *sk-ant-*) argument=yes ;; esac
+done
+echo "token=$token outranked=$outranked config=$config argument=$argument args=$*" >> '{runs}'
+if [ -f '{result}' ]; then
+  cat '{result}'
+else
+  echo '{{"type":"result","subtype":"success","is_error":false,"result":"ok","usage":{{"input_tokens":12,"output_tokens":2}}}}'
+fi
+"#,
+            runs = self.path("check-runs").display(),
+            result = self.path("check-result.json").display(),
+        );
+        let program = self.path("bin/claude");
+        fs::write(&program, script).unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Makes the stand-in's next check turns end in Claude Code's error `text`, which reached no model.
+    fn check_ends_in(&self, text: &str) {
+        let result = serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "is_error": true,
+            "result": text,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        });
+        fs::write(self.path("check-result.json"), format!("{result}\n")).unwrap();
+    }
+
+    /// The lines the stand-in wrote, one per check turn.
+    fn check_runs(&self) -> Vec<String> {
+        fs::read_to_string(self.path("check-runs"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -60,7 +117,10 @@ impl Sandbox {
             .env("XDG_DATA_HOME", self.path("data"))
             .env("XDG_CONFIG_HOME", self.path("config"))
             .env("FOLD_HUMAN", "ana")
-            .env("PATH", system_path())
+            .env(
+                "PATH",
+                format!("{}:{}", self.path("bin").display(), system_path()),
+            )
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null");
         if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
@@ -382,4 +442,168 @@ fn use_goes_through_the_daemon_and_remove_is_refused_while_a_project_uses_the_ac
     );
     let log = fs::read_to_string(sandbox.path("daemon.log")).unwrap();
     assert!(!log.contains(TOKEN_A), "the daemon's log holds the token");
+}
+
+#[test]
+fn add_and_update_check_the_token_with_one_turn_that_holds_it_only_in_its_environment() {
+    let sandbox = Sandbox::new();
+    let added = sandbox
+        .command(&["account", "add", "work-a"])
+        .env("ANTHROPIC_API_KEY", "sk-ant-api03-cccccccccccccccccccccccc")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child.stdin.take().unwrap().write_all(TOKEN_A.as_bytes())?;
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert!(added.status.success(), "{}", stderr(&added));
+    holds_no_token(&added);
+    assert!(
+        !stdout(&added).contains("warning"),
+        "a token the model answered needs no warning"
+    );
+    let runs = sandbox.check_runs();
+    assert_eq!(runs.len(), 1, "one turn per check");
+    assert!(
+        runs[0].starts_with("token=A outranked=no config=temp argument=no "),
+        "{}",
+        runs[0]
+    );
+    for flag in [
+        "-p",
+        "--model haiku",
+        "--strict-mcp-config",
+        "--no-session-persistence",
+        "--max-turns 1",
+        "--output-format json",
+    ] {
+        assert!(runs[0].contains(flag), "{flag}: {}", runs[0]);
+    }
+    let updated = sandbox.fold_with_input(&["account", "update", "work-a"], TOKEN_B);
+    assert!(updated.status.success(), "{}", stderr(&updated));
+    assert!(sandbox.check_runs()[1].starts_with("token=B "));
+
+    let missing = sandbox.fold_with_input(&["account", "update", "work-b"], TOKEN_B);
+    assert!(stderr(&missing).contains("account_not_found: "));
+    let twice = sandbox.fold_with_input(&["account", "add", "work-a"], TOKEN_B);
+    assert!(stderr(&twice).contains("account_exists: "));
+    assert_eq!(
+        sandbox.check_runs().len(),
+        2,
+        "a change that is refused anyway spends no turn"
+    );
+}
+
+#[test]
+fn a_token_the_api_refuses_is_refused_with_its_code_and_nothing_is_stored() {
+    let sandbox = Sandbox::new();
+    for text in [
+        "Invalid API key · Please run /login",
+        "API Error: 401 Invalid authentication credentials",
+        "Failed to authenticate: OAuth token revoked",
+    ] {
+        sandbox.check_ends_in(text);
+        let refused = sandbox.fold_with_input(&["account", "add", "work-a"], TOKEN_A);
+        assert!(!refused.status.success(), "{text}");
+        holds_no_token(&refused);
+        let shown = stderr(&refused);
+        assert!(shown.contains("account_token_rejected: "), "{shown}");
+        assert!(shown.contains("fold stored nothing"), "{shown}");
+        assert!(
+            shown.contains("hint: run `claude setup-token` for a new token, then `fld account add work-a` with it on stdin"),
+            "{shown}"
+        );
+        assert!(
+            !sandbox.accounts().exists(),
+            "{text}: a refused token leaves no accounts folder"
+        );
+    }
+
+    fs::remove_file(sandbox.path("check-result.json")).unwrap();
+    let added = sandbox.fold_with_input(&["account", "add", "work-a"], TOKEN_A);
+    assert!(added.status.success(), "{}", stderr(&added));
+    sandbox.check_ends_in(
+        "OAuth token has expired. Please obtain a new token or refresh your existing token.",
+    );
+    let refused = sandbox.fold_with_input(&["account", "update", "work-a"], TOKEN_B);
+    assert!(!refused.status.success());
+    let shown = stderr(&refused);
+    assert!(shown.contains("account_token_rejected: "), "{shown}");
+    assert!(shown.contains("keeps its token"), "{shown}");
+    assert!(shown.contains("`fld account update work-a`"), "{shown}");
+    let (_, kept) = fold_daemon::services::agents::accounts::token(
+        &sandbox.accounts(),
+        &fold_core::accounts::AccountName::parse("work-a").unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(kept.expose() == TOKEN_A, "the account keeps its old token");
+    let holding_b = fs::read_dir(sandbox.accounts())
+        .unwrap()
+        .flatten()
+        .filter(|entry| fs::read_to_string(entry.path()).is_ok_and(|text| text.contains(TOKEN_B)))
+        .count();
+    assert_eq!(holding_b, 0, "no file holds the refused token");
+}
+
+#[test]
+fn a_token_fold_cannot_check_now_is_stored_with_a_warning() {
+    let sandbox = Sandbox::new();
+    for (name, text, why) in [
+        (
+            "work-a",
+            "API Error: Can't reach the API server — check your internet connection",
+            "Claude Code could not reach the model",
+        ),
+        (
+            "work-b",
+            "You've hit your weekly limit · resets Mon 12:00am",
+            "the account is at a usage limit",
+        ),
+        (
+            "work-c",
+            "API Error: 529 Overloaded",
+            "claude gave no answer that fold reads",
+        ),
+    ] {
+        sandbox.check_ends_in(text);
+        let added = sandbox.fold_with_input(&["account", "add", name], TOKEN_A);
+        assert!(added.status.success(), "{}", stderr(&added));
+        holds_no_token(&added);
+        let lines: Vec<String> = stdout(&added).lines().map(str::to_owned).collect();
+        assert!(
+            lines[0].starts_with(&format!("added account {name};")),
+            "{lines:?}"
+        );
+        assert_eq!(
+            lines[1],
+            format!(
+                "warning: fold could not check the token now: {why}. fold stored it; a worker whose login the API refuses waits for a working login, and Needs you names the account"
+            )
+        );
+    }
+    fs::remove_file(sandbox.path("bin/claude")).unwrap();
+    let without = sandbox
+        .command(&["account", "add", "work-d"])
+        .env("PATH", sandbox.path("bin"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child.stdin.take().unwrap().write_all(TOKEN_A.as_bytes())?;
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert!(without.status.success(), "{}", stderr(&without));
+    assert!(
+        stdout(&without)
+            .contains("warning: fold could not check the token now: claude gave no answer"),
+        "a host without claude keeps the token"
+    );
+    let listed = sandbox.fold(&["account", "list"]);
+    assert_eq!(stdout(&listed).lines().count(), 4, "{}", stdout(&listed));
 }

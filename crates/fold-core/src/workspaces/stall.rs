@@ -319,6 +319,8 @@ pub enum Activity {
     WaitsForNetwork { since: Timestamp },
     /// The worker's last turn reached a usage limit at `since`; fold runs it again after the reset.
     WaitsForUsageLimit { since: Timestamp },
+    /// The API refused the login of the worker's last turn at `since`; fold runs it again once the project's login changes or works again.
+    WaitsForLogin { since: Timestamp },
     /// An agent, its lead, stopped the worker at `since` to wait for its go: the lead's message resumes it in its session, so nobody else must act.
     Parked { since: Timestamp },
 }
@@ -343,13 +345,14 @@ impl Activity {
             | Self::Stopped { .. }
             | Self::WaitsForSlot { .. }
             | Self::WaitsForNetwork { .. }
-            | Self::WaitsForUsageLimit { .. } => None,
+            | Self::WaitsForUsageLimit { .. }
+            | Self::WaitsForLogin { .. } => None,
             Self::Parked { .. } => None,
         }
     }
 }
 
-/// Decides what the worker of a workspace does at `now`. Nothing is said while the project's agents are paused, nor of a worker without the implementation claim. A worker of an active workspace whose last turn waits for the network or a usage limit is `WaitsForNetwork` or `WaitsForUsageLimit`, never a stall, whatever else holds. Nothing is said either while its check run goes. A worker that an agent parked is `Parked` while its workspace is active or holds its sent version, fold owes it no resume and its work gave it no turn after the park: a proposal that came back, a check run that ended or a start; a person's answer does not end the park. Nothing else is said of a workspace that is not active, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A worker whose resume fold owes while the worker limits hold it is `WaitsForSlot`, never a stall; once a place is free for it, it is `Silent` when a stall window from that time, and from `start`, passed without a run. A process that ended is `Failed` at once when it ended without anyone asking and `Stopped` when someone asked for its stop, whatever changed in the workspace after the end, unless others gave the worker the turn after it ended (`given_at`), such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
+/// Decides what the worker of a workspace does at `now`. Nothing is said while the project's agents are paused, nor of a worker without the implementation claim. A worker of an active workspace whose last turn waits for the network, a usage limit or a working login is `WaitsForNetwork`, `WaitsForUsageLimit` or `WaitsForLogin`, never a stall, whatever else holds. Nothing is said either while its check run goes. A worker that an agent parked is `Parked` while its workspace is active or holds its sent version, fold owes it no resume and its work gave it no turn after the park: a proposal that came back, a check run that ended or a start; a person's answer does not end the park. Nothing else is said of a workspace that is not active, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A worker whose resume fold owes while the worker limits hold it is `WaitsForSlot`, never a stall; once a place is free for it, it is `Silent` when a stall window from that time, and from `start`, passed without a run. A process that ended is `Failed` at once when it ended without anyone asking and `Stopped` when someone asked for its stop, whatever changed in the workspace after the end, unless others gave the worker the turn after it ended (`given_at`), such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
 pub fn activity(
     now: Timestamp,
     facts: &StallFacts,
@@ -364,6 +367,7 @@ pub fn activity(
         match facts.waits {
             Some((WaitReason::Network, since)) => return Activity::WaitsForNetwork { since },
             Some((WaitReason::UsageLimit, since)) => return Activity::WaitsForUsageLimit { since },
+            Some((WaitReason::Login, since)) => return Activity::WaitsForLogin { since },
             None => {}
         }
     }
@@ -454,7 +458,10 @@ pub const WAITS_FOR_NETWORK: &str = "Waiting for the network";
 /// The words of a worker whose turn waits for the reset of a usage limit, in every view.
 pub const WAITS_FOR_USAGE_LIMIT: &str = "Waits for the usage limit reset";
 
-/// What fold saw of the worker `worker`, in the words that the board's chip, the task, Activity, Needs you and the notices all use: `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed`, `Waiting for a free slot`, `Waiting for the network`, `Waits for the usage limit reset` or `Waits for its lead's go`. The time is the span from the activity's start to `now`, rounded down, in seconds, minutes, hours or days. `None` for [`Activity::Quiet`]. [`activity_text_by`] names the agent that parked the worker.
+/// The words of a worker whose turn waits for a login that the API takes, in every view.
+pub const WAITS_FOR_LOGIN: &str = "Waits for a working login";
+
+/// What fold saw of the worker `worker`, in the words that the board's chip, the task, Activity, Needs you and the notices all use: `Running a command for 8 min`, `No activity from @web-worker for 12 min`, `A command of @web-worker has run for 25 min`, `@web-worker stopped`, `@web-worker failed`, `Waiting for a free slot`, `Waiting for the network`, `Waits for the usage limit reset`, `Waits for a working login` or `Waits for its lead's go`. The time is the span from the activity's start to `now`, rounded down, in seconds, minutes, hours or days. `None` for [`Activity::Quiet`]. [`activity_text_by`] names the agent that parked the worker.
 pub fn activity_text(activity: Activity, worker: &str, now: Timestamp) -> Option<String> {
     activity_text_by(activity, worker, None, now)
 }
@@ -508,6 +515,7 @@ pub fn activity_text_by(
         Activity::WaitsForSlot { .. } => Some("Waiting for a free slot".to_owned()),
         Activity::WaitsForNetwork { .. } => Some(WAITS_FOR_NETWORK.to_owned()),
         Activity::WaitsForUsageLimit { .. } => Some(WAITS_FOR_USAGE_LIMIT.to_owned()),
+        Activity::WaitsForLogin { .. } => Some(WAITS_FOR_LOGIN.to_owned()),
         Activity::Parked { .. } => Some(parked_text(parked_by)),
     }
 }
@@ -1440,6 +1448,10 @@ mod tests {
                 WaitReason::UsageLimit,
                 Activity::WaitsForUsageLimit { since: at(MINUTE) },
             ),
+            (
+                WaitReason::Login,
+                Activity::WaitsForLogin { since: at(MINUTE) },
+            ),
         ] {
             let waits = StallFacts {
                 waits: Some((reason, at(MINUTE))),
@@ -1478,6 +1490,10 @@ mod tests {
         assert_eq!(
             activity_text(Activity::WaitsForUsageLimit { since: at(0) }, "w", late).as_deref(),
             Some("Waits for the usage limit reset")
+        );
+        assert_eq!(
+            activity_text(Activity::WaitsForLogin { since: at(0) }, "w", late).as_deref(),
+            Some("Waits for a working login")
         );
     }
 

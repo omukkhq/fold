@@ -11,6 +11,7 @@ import {
   FileX,
   FolderClock,
   Gauge,
+  KeyRound,
   GitBranch,
   GitMerge,
   GitPullRequest,
@@ -94,6 +95,7 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   worker_stalled: Hand,
   usage_limit: Gauge,
   stale_claim: Hand,
+  login_refused: KeyRound,
 };
 
 const MINUTE_MS = 60_000;

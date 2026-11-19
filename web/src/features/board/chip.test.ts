@@ -6,6 +6,7 @@ import {
   Clock,
   CloudOff,
   Gauge,
+  KeyRound,
   Hand,
   Hourglass,
 } from "lucide-react";
@@ -324,6 +325,16 @@ describe("metaFact", () => {
       tone: "neutral",
       icon: Gauge,
       text: "Waits for the usage limit reset",
+    });
+    const login = {
+      ...working,
+      state: "waits_for_login" as const,
+      text: "Waits for a working login",
+    };
+    expect(cardChip(card, null, login)).toEqual({
+      tone: "neutral",
+      icon: KeyRound,
+      text: "Waits for a working login",
     });
   });
 

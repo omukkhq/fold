@@ -6,6 +6,7 @@ import {
   Clock,
   CloudOff,
   Gauge,
+  KeyRound,
   GitPullRequest,
   Hand,
   Hourglass,
@@ -66,6 +67,8 @@ function activityChip(activity: WorkerActivity): CardChip {
       return { tone: "neutral", icon: CloudOff, text: activity.text };
     case "waits_for_usage_limit":
       return { tone: "neutral", icon: Gauge, text: activity.text };
+    case "waits_for_login":
+      return { tone: "neutral", icon: KeyRound, text: activity.text };
     case "parked":
       return { tone: "neutral", icon: CirclePause, text: activity.text };
     default:

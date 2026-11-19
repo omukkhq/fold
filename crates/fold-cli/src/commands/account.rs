@@ -1,8 +1,14 @@
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use clap::{Args, Subcommand};
-use fold_core::accounts::{AccountName, check_token};
+use fold_core::accounts::{
+    ACCOUNT_ENV, AccountName, AccountToken, OAUTH_TOKEN_ENV, OVERRIDING_ENV, TOKEN_CHECK_PROMPT,
+    TOKEN_CHECK_TIMEOUT, TokenCheck, TokenCheckRun, Unchecked, check_token, token_check,
+    token_rejected,
+};
 use fold_core::{Clock, FoldError, HostPaths};
 use fold_daemon::SystemClock;
 use fold_daemon::services::agents::accounts;
@@ -26,7 +32,7 @@ pub struct AccountArgs {
 
 #[derive(Subcommand, Debug)]
 enum AccountCommand {
-    /// Add a Claude subscription under a new name, with the token that `claude setup-token` printed, read from stdin
+    /// Add a Claude subscription under a new name, with the token that `claude setup-token` printed, read from stdin; one small Claude Code turn checks the token first
     Add(NameArgs),
     /// List the accounts, default (Claude Code's own login, shown while `claude login` stored one on this host) first: name, when the token was added and which projects use each, never the token
     List,
@@ -34,7 +40,7 @@ enum AccountCommand {
     Remove(NameArgs),
     /// Make the account the one of the project in this folder, default for Claude Code's own login: each worker continues in its own session with it when its turn ends
     Use(UseArgs),
-    /// Give an account a new token from stdin, as for an expired or revoked one
+    /// Give an account a new token from stdin, as for an expired or revoked one; one small Claude Code turn checks the token first
     Update(NameArgs),
 }
 
@@ -104,16 +110,22 @@ pub fn run(
             name.check_not_reserved()?;
             let token = check_token(&read_token(input, terminal)?)?;
             let dir = host_paths(dirs)?.accounts_dir();
+            accounts::check_change(&dir, &name, false)?;
+            let checked = checked_token(&name, &token, false, terminal)?;
             accounts::add(&dir, &name, &token, SystemClock.now())?;
             output::line(out, &added_line(&name))?;
+            warn_unchecked(out, checked)?;
         }
         AccountCommand::Update(args) => {
             let name = AccountName::parse(&args.name)?;
             name.check_not_reserved()?;
             let token = check_token(&read_token(input, terminal)?)?;
             let dir = host_paths(dirs)?.accounts_dir();
+            accounts::check_change(&dir, &name, true)?;
+            let checked = checked_token(&name, &token, true, terminal)?;
             accounts::update(&dir, &name, &token, SystemClock.now())?;
             output::line(out, &updated_line(&name))?;
+            warn_unchecked(out, checked)?;
         }
         AccountCommand::List => {
             let host = host_paths(dirs)?;
@@ -158,6 +170,153 @@ pub fn run(
         }
     }
     Ok(())
+}
+
+/// The variables of a Claude Code session that a check's turn never takes, besides the ones that rank above the token ([`OVERRIDING_ENV`]): the check is no session of the caller's, and a token of an account fold gave the caller is not the new one.
+const CHECK_DROPPED_ENV: [&str; 8] = [
+    ACCOUNT_ENV,
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SSE_PORT",
+    "CLAUDE_CONFIG_DIR",
+];
+
+/// Refuses `token` for the account `name` when the check's turn shows that the API refuses it; otherwise gives what the check found, which the caller stores the token after. `update` names the command in the refusal.
+fn checked_token(
+    name: &AccountName,
+    token: &AccountToken,
+    update: bool,
+    terminal: bool,
+) -> Result<TokenCheck, AccountError> {
+    if terminal {
+        let _ = output::line(
+            &mut io::stderr().lock(),
+            "fold checks the token with one small Claude Code turn…",
+        );
+    }
+    match check_with_claude(Path::new("claude"), token) {
+        TokenCheck::Rejected => Err(token_rejected(name, update).into()),
+        checked => Ok(checked),
+    }
+}
+
+/// The line after a change whose token fold could not check.
+fn warn_unchecked(out: &mut impl Write, checked: TokenCheck) -> Result<(), AccountError> {
+    if let TokenCheck::Unchecked(why) = checked {
+        output::line(out, &unchecked_line(why))?;
+    }
+    Ok(())
+}
+
+fn unchecked_line(why: Unchecked) -> String {
+    format!(
+        "warning: fold could not check the token now: {}. fold stored it; a worker whose login the API refuses waits for a working login, and Needs you names the account",
+        why.words()
+    )
+}
+
+/// Runs one small turn of `claude` with `token` as the only login and reads its result (see [`token_check`]): the smallest model, no tools, no MCP server, no saved session, a temporary folder as the working folder and Claude Code's folder, and [`TOKEN_CHECK_TIMEOUT`]. The token goes only into the process's environment, never into an argument, a file or an output. A `claude` that cannot run, or that runs too long, leaves the token unchecked.
+fn check_with_claude(claude: &Path, token: &AccountToken) -> TokenCheck {
+    let Ok(dir) = tempfile::Builder::new()
+        .prefix("fold-token-check-")
+        .tempdir()
+    else {
+        return TokenCheck::Unchecked(Unchecked::NoAnswer);
+    };
+    let mcp = dir.path().join("mcp.json");
+    if std::fs::write(&mcp, b"{\"mcpServers\":{}}\n").is_err() {
+        return TokenCheck::Unchecked(Unchecked::NoAnswer);
+    }
+    let config = dir.path().join("claude");
+    if std::fs::create_dir(&config).is_err() {
+        return TokenCheck::Unchecked(Unchecked::NoAnswer);
+    }
+    let mut command = Command::new(claude);
+    command
+        .args([
+            "-p",
+            "--output-format",
+            "json",
+            "--model",
+            "haiku",
+            "--tools",
+            "",
+            "--strict-mcp-config",
+            "--mcp-config",
+        ])
+        .arg(&mcp)
+        .args(["--no-session-persistence", "--max-turns", "1"])
+        .arg(TOKEN_CHECK_PROMPT)
+        .current_dir(dir.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    for name in OVERRIDING_ENV.iter().chain(CHECK_DROPPED_ENV.iter()) {
+        command.env_remove(name);
+    }
+    command
+        .env("CLAUDE_CONFIG_DIR", &config)
+        .env(OAUTH_TOKEN_ENV, token.expose());
+    let run = run_bounded(&mut command, TOKEN_CHECK_TIMEOUT);
+    token_check(run.as_ref())
+}
+
+/// The most bytes fold reads of the check's output: its result is one short JSON object.
+const MAX_CHECK_OUTPUT: u64 = 1024 * 1024;
+
+/// The result of `command` as `--output-format json` writes it, `None` when it cannot start, runs past `timeout` (then it is killed) or writes no result.
+fn run_bounded(command: &mut Command, timeout: Duration) -> Option<TokenCheckRun> {
+    let mut child = command.spawn().ok()?;
+    let stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.take(MAX_CHECK_OUTPUT).read_to_end(&mut bytes);
+        bytes
+    });
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let bytes = reader.join().ok()?;
+    check_result(&String::from_utf8_lossy(&bytes))
+}
+
+/// The `result` object in Claude Code's output, the last one when it wrote several lines.
+fn check_result(output: &str) -> Option<TokenCheckRun> {
+    output.lines().rev().find_map(|line| {
+        let value: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+        if value["type"] != "result" {
+            return None;
+        }
+        let usage = &value["usage"];
+        let tokens = [
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        ]
+        .iter()
+        .map(|field| usage[field].as_u64().unwrap_or(0))
+        .fold(0_u64, u64::saturating_add);
+        Some(TokenCheckRun {
+            is_error: value["is_error"].as_bool().unwrap_or(true),
+            text: value["result"].as_str().map(str::to_owned),
+            reached_model: tokens > 0,
+        })
+    })
 }
 
 fn remove(host: &HostPaths, name: &AccountName) -> Result<(), AccountError> {
@@ -312,6 +471,45 @@ mod tests {
             "default Claude Code's own login used by app"
         );
         assert!(use_line(&name("work-b")).contains("fld claude"));
+    }
+
+    #[test]
+    fn the_check_reads_claude_codes_result_and_its_usage() {
+        let refused = r#"{"type":"result","subtype":"success","is_error":true,"result":"Invalid API key · Please run /login","usage":{"input_tokens":0,"output_tokens":0}}"#;
+        assert_eq!(
+            check_result(&format!("noise\n{refused}\n")),
+            Some(TokenCheckRun {
+                is_error: true,
+                text: Some("Invalid API key · Please run /login".to_owned()),
+                reached_model: false,
+            })
+        );
+        let answered = r#"{"type":"result","is_error":false,"result":"ok","usage":{"input_tokens":3,"output_tokens":1}}"#;
+        assert_eq!(
+            token_check(check_result(answered).as_ref()),
+            TokenCheck::Works
+        );
+        assert_eq!(check_result("{\"type\":\"system\"}\nnot json"), None);
+        assert!(unchecked_line(Unchecked::Network).starts_with(
+            "warning: fold could not check the token now: Claude Code could not reach the model."
+        ));
+    }
+
+    #[test]
+    fn a_claude_that_cannot_run_or_runs_too_long_leaves_the_token_unchecked() {
+        let token = check_token("sk-ant-oat01-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        assert_eq!(
+            check_with_claude(Path::new("/nonexistent/claude"), &token),
+            TokenCheck::Unchecked(Unchecked::NoAnswer)
+        );
+        let started = Instant::now();
+        let mut slow = Command::new("sleep");
+        slow.arg("30").stdout(Stdio::piped());
+        assert_eq!(run_bounded(&mut slow, Duration::from_millis(200)), None);
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the turn is killed at the timeout"
+        );
     }
 
     #[test]

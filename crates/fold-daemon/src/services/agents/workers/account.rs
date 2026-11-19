@@ -195,9 +195,9 @@ impl AgentService {
             return Err(error);
         }
         self.bus.publish(buffer);
-        // The turns at a usage limit run again: at once in a process that runs with the new account already, and in each other one after its switch.
+        // The turns at a usage limit or with a refused login run again: at once in a process that runs with the new account already, and in each other one after its switch.
         if let Some(workers) = &self.workers {
-            workers.run_limit_turns_now();
+            workers.run_login_turns_now();
         }
         Ok(self.project_account().await)
     }

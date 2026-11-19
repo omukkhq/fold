@@ -38,7 +38,7 @@ export interface NeedsYouLine {
   actions: readonly NeedsYouActionKind[];
   /** The other accounts of the host that the line's Switch to buttons make the project's, by name, in the daemon's order; empty for every other line. */
   switchTo: readonly string[];
-  /** The second line says what the person or fold does, so it wraps whole instead of being cut: a row that opens nothing, a stalled worker with its restart, a stale claim, and the waits for the network or a usage limit. */
+  /** The second line says what the person or fold does, so it wraps whole instead of being cut: a row that opens nothing, a stalled worker with its restart, a stale claim, and the waits for the network, a usage limit or a working login. */
   wholeTitle: boolean;
 }
 
@@ -90,6 +90,7 @@ const KIND_ORDER: readonly NeedsYouKind[] = [
   "worker_stalled",
   "usage_limit",
   "stale_claim",
+  "login_refused",
 ];
 
 /** Agents that ask, things that wait for the human's decision, and the project's own state, which includes workers fold cannot run. */
@@ -114,6 +115,7 @@ export const GROUP_OF: Readonly<Record<NeedsYouKind, NeedsYouGroupId>> = {
   worker_stalled: "wait",
   usage_limit: "project",
   stale_claim: "wait",
+  login_refused: "project",
 };
 
 /** The kinds whose title is the item's own name, which the sentence ends with. */
@@ -232,6 +234,14 @@ export function waitersText(
   const who = codeData(agentsText(agents));
   const waits = `${who} ${agents.length === 1 ? "waits" : "wait"}`;
   return next === null ? waits : `${waits}; ${next}`;
+}
+
+/** The line of the project's refused login: `The token of work-a was refused`, or `Claude Code's login was refused` for `default`, Claude Code's own login, and for an item that names no account. */
+export function loginRefusedText(account: string | null | undefined): string {
+  if (account === null || account === undefined || account === "default") {
+    return "Claude Code's login was refused";
+  }
+  return `The token of ${codeData(account)} was refused`;
 }
 
 /** `work-a reached its weekly limit, which resets Mon 12:00am`: the account that reached the limit, such as `default`, or `Claude Code` when the item names none, then the limit and its reset in Claude Code's words, or the reset instant in local time when the message gave one, or no reset at all. */
@@ -471,6 +481,17 @@ function lineOf(
         task: null,
         title: waitersText(item.agents, markedText(item.reason)),
         text: limitText(item, now),
+        href: projectPath(slug, "agents"),
+        wholeTitle: true,
+      };
+    case "login_refused":
+      return {
+        ...base,
+        person: null,
+        chip: null,
+        task: null,
+        title: waitersText(item.agents, markedText(item.reason)),
+        text: loginRefusedText(item.account),
         href: projectPath(slug, "agents"),
         wholeTitle: true,
       };

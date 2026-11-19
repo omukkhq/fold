@@ -60,7 +60,7 @@ impl Failures {
     }
 }
 
-/// `list` is the daemon's worker list, `None` when the daemon gave none. A stopped worker runs no turn, so it is left out. An error from before `started_at` is stated with that time and gives no fix, since the restart that the fix names has happened. Only the workers' names are shown, never Claude Code's error text.
+/// `list` is the daemon's worker list, `None` when the daemon gave none. A stopped worker runs no turn, so it is left out. An error from before `started_at` is stated with that time and gives no fix, since a daemon start runs the worker again. Only the workers' names are shown, never Claude Code's error text.
 pub(crate) fn workers_verdict(list: Option<&Value>, started_at: Option<Timestamp>) -> Check {
     let Some(list) = list else {
         return Check::ok(NAME, "the daemon gave no worker list");
@@ -93,7 +93,7 @@ pub(crate) fn workers_verdict(list: Option<&Value>, started_at: Option<Timestamp
             signed_out.current.join(", ")
         ));
         fixes.push(
-            "sign the workers in as the daemon claude and daemon environment checks say, then `fld restart`",
+            "give the project's account a working token with `fld account update <name>`, sign Claude Code in with `claude login` for the account default, or switch the account; fold then runs each waiting turn again in its session",
         );
     }
     if !unreachable.current.is_empty() {
@@ -188,7 +188,9 @@ mod tests {
         assert!(!check.message.contains("/login"));
         let fix = check.fix.unwrap();
         assert!(
-            fix.contains("`fld restart`") && fix.contains("usage limit"),
+            fix.contains("`fld account update <name>`")
+                && fix.contains("`claude login`")
+                && fix.contains("usage limit"),
             "{fix}"
         );
         assert_eq!(workers_verdict(Some(&list), None).status, Status::Warn);
@@ -230,6 +232,6 @@ mod tests {
                 "the last turn of api-worker failed because Claude Code is not signed in; before the daemon started at {start}, the last turn of web-worker failed because Claude Code was not signed in"
             )
         );
-        assert!(check.fix.unwrap().contains("`fld restart`"));
+        assert!(check.fix.unwrap().contains("runs each waiting turn again"));
     }
 }

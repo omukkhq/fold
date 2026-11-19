@@ -1,29 +1,30 @@
 use std::time::Duration;
 
+use crate::agents::accounts::AccountName;
 use crate::agents::roles::WorkerState;
 use crate::time::Timestamp;
 
-/// Why a worker's turn ended for a cause outside the worker: Claude Code could not reach the model, or the account reached a usage limit. Such a turn is owed: fold runs it again in the same session once the cause has passed, and it is never a stall or a failed turn.
+/// Why a worker's turn ended for a cause outside the worker: Claude Code could not reach the model, the account reached a usage limit, or the API refused the account's login. Such a turn is owed: fold runs it again in the same session once the cause has passed, and it is never a stall or a failed turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum WaitReason {
     Network,
     UsageLimit,
+    Login,
 }
 
 impl WaitReason {
+    pub const ALL: [Self; 3] = [Self::Network, Self::UsageLimit, Self::Login];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Network => "network",
             Self::UsageLimit => "usage_limit",
+            Self::Login => "login",
         }
     }
 
     pub fn parse(text: &str) -> Option<Self> {
-        match text {
-            "network" => Some(Self::Network),
-            "usage_limit" => Some(Self::UsageLimit),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|reason| reason.as_str() == text)
     }
 }
 
@@ -86,6 +87,8 @@ pub enum TurnWait {
         /// The reset instant, which only the older message gives, as seconds since the epoch.
         resets_at: Option<Timestamp>,
     },
+    /// The API refused the login Claude Code ran with: the account's token, or Claude Code's own login.
+    Login,
 }
 
 impl TurnWait {
@@ -93,6 +96,7 @@ impl TurnWait {
         match self {
             Self::Network => WaitGroup::NETWORK,
             Self::UsageLimit { kind, .. } => WaitGroup::limit(*kind),
+            Self::Login => WaitGroup::LOGIN,
         }
     }
 }
@@ -111,6 +115,19 @@ const LIMIT_TEXTS: [(&str, LimitKind); 4] = [
 /// The older usage limit message, `Claude AI usage limit reached|<epoch seconds>`.
 const OLD_LIMIT_TEXT: &str = "Claude AI usage limit reached";
 
+/// The starts of Claude Code's messages when the API refuses its login, after an optional `API Error: `: the documented `Not logged in · Please run /login`, `Authentication required · Sign in again to continue`, `Invalid API key`, `API Error: 401 Invalid authentication credentials`, `Failed to authenticate: OAuth token revoked`, `OAuth token has expired` and `OAuth token refresh failed — run /login to re-authenticate`, and the older `OAuth token has been revoked`. `401 ` is the status of any refused login, such as `API Error: 401 {"type":"error","error":{"type":"authentication_error",…}}`; a 403 or a 529 is no refused login.
+const LOGIN_TEXTS: [&str; 9] = [
+    "Not logged in",
+    "Authentication required",
+    "Invalid API key",
+    "Failed to authenticate",
+    "OAuth token has expired",
+    "OAuth token revoked",
+    "OAuth token has been revoked",
+    "OAuth token refresh failed",
+    "401 ",
+];
+
 /// What a turn that ended with Claude Code's `text`, cleaned as [`crate::turn_errors::error_text`] cleans it, waits for; `None` for any other text. Only the start of the text counts, so a text that quotes one of these further on is no wait. A typographic apostrophe counts as a plain one.
 pub fn turn_wait(text: &str) -> Option<TurnWait> {
     let text = text.trim_start().replace('\u{2019}', "'");
@@ -121,6 +138,10 @@ pub fn turn_wait(text: &str) -> Option<TurnWait> {
         .starts_with(NETWORK_TEXT)
     {
         return Some(TurnWait::Network);
+    }
+    let login = first.strip_prefix("API Error: ").unwrap_or(first);
+    if LOGIN_TEXTS.iter().any(|start| login.starts_with(start)) {
+        return Some(TurnWait::Login);
     }
     for (start, kind) in LIMIT_TEXTS {
         if let Some(rest) = first.strip_prefix(start) {
@@ -154,17 +175,22 @@ fn reset_wording(rest: &str) -> Option<String> {
     (!wording.is_empty() && wording.len() <= MAX_RESET_LEN).then(|| wording.to_owned())
 }
 
-/// The waits that one check settles together: every turn that could not reach the model, or every turn at one kind of usage limit.
+/// The waits that one check settles together: every turn that could not reach the model, every turn at one kind of usage limit, or every turn whose login the API refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WaitGroup {
     pub reason: WaitReason,
-    /// The limit of a `UsageLimit` group; `None` for the network.
+    /// The limit of a `UsageLimit` group; `None` for the network and the login.
     pub limit: Option<LimitKind>,
 }
 
 impl WaitGroup {
     pub const NETWORK: Self = Self {
         reason: WaitReason::Network,
+        limit: None,
+    };
+
+    pub const LOGIN: Self = Self {
+        reason: WaitReason::Login,
         limit: None,
     };
 
@@ -187,11 +213,16 @@ pub const LIMIT_LONGEST_WAIT: Duration = Duration::from_secs(60 * 60);
 /// A known reset instant is taken this long after it, so the account's limit has surely reset.
 pub const RESET_MARGIN: Duration = Duration::from_secs(60);
 
+/// The same for a refused login. A new token, a switch of the account or a new login of Claude Code runs the waiting turns at once (see [`LOGIN_RELEASES`]); the timed re-runs only find a login that came back by itself, such as after a fault of the API, and a refused login costs no usage.
+pub const LOGIN_FIRST_WAIT: Duration = Duration::from_secs(10 * 60);
+pub const LOGIN_LONGEST_WAIT: Duration = Duration::from_secs(60 * 60);
+
 /// How long after its last try a group's next re-run comes, when it was tried `tries` times again already.
 pub fn wait_after(reason: WaitReason, tries: u32) -> Duration {
     let (first, longest) = match reason {
         WaitReason::Network => (NETWORK_FIRST_WAIT, NETWORK_LONGEST_WAIT),
         WaitReason::UsageLimit => (LIMIT_FIRST_WAIT, LIMIT_LONGEST_WAIT),
+        WaitReason::Login => (LOGIN_FIRST_WAIT, LOGIN_LONGEST_WAIT),
     };
     first
         .checked_mul(2_u32.saturating_pow(tries.min(16)))
@@ -266,12 +297,12 @@ pub fn rerun_plan<K: Clone>(
     RerunPlan { due, next_at }
 }
 
-/// The groups whose waiting turns a finished turn releases. A turn that reached the model, or ended well, shows that the model answers, which releases every turn that could not reach it, and, when that turn was itself a usage limit's wait, the other turns at that limit. A worker of another model can work through an Opus or Sonnet limit, so only a turn of the same wait releases a limit. A turn that reached no model releases nothing.
+/// The groups whose waiting turns a finished turn releases. A turn that reached the model, or ended well, shows that the model answers and takes the project's login, which releases every turn that could not reach it and every turn whose login was refused, and, when that turn was itself a usage limit's wait, the other turns at that limit. A worker of another model can work through an Opus or Sonnet limit, so only a turn of the same wait releases a limit. A turn that reached no model releases nothing.
 pub fn released_by(answered: bool, cleared: Option<WaitGroup>) -> Vec<WaitGroup> {
     if !answered {
         return Vec::new();
     }
-    let mut groups = vec![WaitGroup::NETWORK];
+    let mut groups = vec![WaitGroup::NETWORK, WaitGroup::LOGIN];
     if let Some(group) = cleared.filter(|group| group.reason == WaitReason::UsageLimit) {
         groups.push(group);
     }
@@ -292,19 +323,66 @@ pub const NETWORK_RERUN_TURN: &str = "fold runs your turn again: your last turn 
 /// The turn fold sends to run a turn that reached a usage limit again.
 pub const LIMIT_RERUN_TURN: &str = "fold runs your turn again: your last turn ended at Claude Code's usage limit. Messages that came meanwhile wait in your inbox, and a lease can have expired while you waited: check your inbox, your claims and your workspace, then continue your work.";
 
+/// The turn fold sends to run a turn whose login the API refused again.
+pub const LOGIN_RERUN_TURN: &str = "fold runs your turn again: your last turn ended because the API refused Claude Code's login. Messages that came meanwhile wait in your inbox, and a lease can have expired while you waited: check your inbox, your claims and your workspace, then continue your work.";
+
 /// The re-run turn of a wait for `reason`.
 pub fn rerun_turn(reason: WaitReason) -> &'static str {
     match reason {
         WaitReason::Network => NETWORK_RERUN_TURN,
         WaitReason::UsageLimit => LIMIT_RERUN_TURN,
+        WaitReason::Login => LOGIN_RERUN_TURN,
     }
 }
+
+/// The groups that a change of the project's login releases whole: a switch of the account, a new token of the account, or a new login of Claude Code for `default`. A new account can be past the usage limit that the old one reached, and a new login can be one the API takes.
+pub const LOGIN_RELEASES: [WaitGroup; 6] = [
+    WaitGroup::LOGIN,
+    WaitGroup {
+        reason: WaitReason::UsageLimit,
+        limit: Some(LimitKind::Session),
+    },
+    WaitGroup {
+        reason: WaitReason::UsageLimit,
+        limit: Some(LimitKind::Weekly),
+    },
+    WaitGroup {
+        reason: WaitReason::UsageLimit,
+        limit: Some(LimitKind::Opus),
+    },
+    WaitGroup {
+        reason: WaitReason::UsageLimit,
+        limit: Some(LimitKind::Sonnet),
+    },
+    WaitGroup {
+        reason: WaitReason::UsageLimit,
+        limit: Some(LimitKind::Usage),
+    },
+];
 
 /// What a human knows of turns that wait for the network.
 pub const NETWORK_WAIT_HINT: &str = "fold runs each waiting turn again once the model answers; check the internet connection of the daemon's machine";
 
 /// What a human knows and can do of turns that wait for a usage limit.
 pub const LIMIT_WAIT_HINT: &str = "fold runs each waiting turn again after the reset; pause the agents to start no new turns until then";
+
+/// The words of the project's one item for turns whose login the API refused, when the project runs on `account`, `None` for Claude Code's own login: `The token of work-a was refused` or `Claude Code's login was refused`.
+pub fn login_refused_title(account: Option<&AccountName>) -> String {
+    match account.filter(|name| !name.is_default()) {
+        Some(name) => format!("The token of {name} was refused"),
+        None => "Claude Code's login was refused".to_owned(),
+    }
+}
+
+/// What a human does about turns whose login the API refused, when the project runs on `account`, `None` for Claude Code's own login: a new token for an account, a new login for Claude Code, or another account. Each of these runs the waiting turns again at once.
+pub fn login_wait_hint(account: Option<&AccountName>) -> String {
+    match account.filter(|name| !name.is_default()) {
+        Some(name) => format!(
+            "run `claude setup-token` for a new token and `fld account update {name}` with it on stdin, or switch the account; fold then runs each waiting turn again at once"
+        ),
+        None => "run `claude login` on the daemon's host, or switch the account; fold then runs each waiting turn again at once".to_owned(),
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -368,8 +446,10 @@ mod tests {
             limit(LimitKind::Usage, None)
         );
         for other in [
-            "Not logged in · Please run /login",
             "API Error: 529",
+            "API Error: 403 {\"type\":\"error\",\"error\":{\"type\":\"permission_error\"}}",
+            "API Error: 4010 tokens",
+            "The tool said: Not logged in · Please run /login",
             "No conversation found with session ID: x",
             "The tool said: Can't reach the API server",
             "Quoting: You've hit your weekly limit",
@@ -380,13 +460,63 @@ mod tests {
     }
 
     #[test]
+    fn each_refused_login_is_a_wait_for_the_login() {
+        for text in [
+            "Not logged in · Please run /login",
+            "Authentication required · Sign in again to continue",
+            "Invalid API key · Please run /login",
+            "Invalid API key · Fix external API key",
+            "API Error: 401 Invalid authentication credentials",
+            "API Error: 401 {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"}}",
+            "Failed to authenticate: OAuth token revoked",
+            "Failed to authenticate. API Error: 401 {\"type\":\"error\"}",
+            "OAuth token has expired. Please obtain a new token or refresh your existing token.",
+            "OAuth token revoked · Please run /login",
+            "OAuth token has been revoked",
+            "OAuth token refresh failed — run /login to re-authenticate",
+            "  Not logged in\nsecond line",
+        ] {
+            assert_eq!(turn_wait(text), Some(TurnWait::Login), "{text}");
+        }
+        assert_eq!(TurnWait::Login.group(), WaitGroup::LOGIN);
+        assert_eq!(wait_after(WaitReason::Login, 0), LOGIN_FIRST_WAIT);
+        assert_eq!(wait_after(WaitReason::Login, 9), LOGIN_LONGEST_WAIT);
+        assert_eq!(rerun_turn(WaitReason::Login), LOGIN_RERUN_TURN);
+        assert!(LOGIN_RELEASES.contains(&WaitGroup::LOGIN));
+        for kind in LimitKind::ALL {
+            assert!(LOGIN_RELEASES.contains(&WaitGroup::limit(kind)));
+        }
+        assert!(!LOGIN_RELEASES.contains(&WaitGroup::NETWORK));
+    }
+
+    #[test]
+    fn the_login_hint_names_the_accounts_own_fix() {
+        let named = AccountName::parse("work-a").unwrap();
+        assert!(login_wait_hint(Some(&named)).contains("`fld account update work-a`"));
+        assert_eq!(
+            login_refused_title(Some(&named)),
+            "The token of work-a was refused"
+        );
+        assert_eq!(login_refused_title(None), "Claude Code's login was refused");
+        assert_eq!(
+            login_refused_title(Some(&AccountName::default_account())),
+            "Claude Code's login was refused"
+        );
+        for default in [None, Some(&AccountName::default_account())] {
+            let hint = login_wait_hint(default);
+            assert!(hint.contains("`claude login`"), "{hint}");
+            assert!(!hint.contains("fld account update"), "{hint}");
+        }
+    }
+
+    #[test]
     fn every_name_reads_back() {
         for kind in LimitKind::ALL {
             assert_eq!(LimitKind::parse(kind.as_str()), Some(kind));
             assert!(kind.words().ends_with("limit"));
         }
         assert_eq!(LimitKind::parse("daily"), None);
-        for reason in [WaitReason::Network, WaitReason::UsageLimit] {
+        for reason in WaitReason::ALL {
             assert_eq!(WaitReason::parse(reason.as_str()), Some(reason));
         }
         assert_eq!(WaitReason::parse("tired"), None);
@@ -492,14 +622,22 @@ mod tests {
     #[test]
     fn only_an_answered_turn_releases_and_a_limit_only_by_its_own_wait() {
         assert!(released_by(false, Some(WaitGroup::NETWORK)).is_empty());
-        assert_eq!(released_by(true, None), [WaitGroup::NETWORK]);
+        assert!(released_by(false, Some(WaitGroup::LOGIN)).is_empty());
         assert_eq!(
-            released_by(true, Some(WaitGroup::limit(LimitKind::Opus))),
-            [WaitGroup::NETWORK, WaitGroup::limit(LimitKind::Opus)]
+            released_by(true, None),
+            [WaitGroup::NETWORK, WaitGroup::LOGIN]
         );
         assert_eq!(
-            released_by(true, Some(WaitGroup::NETWORK)),
-            [WaitGroup::NETWORK]
+            released_by(true, Some(WaitGroup::limit(LimitKind::Opus))),
+            [
+                WaitGroup::NETWORK,
+                WaitGroup::LOGIN,
+                WaitGroup::limit(LimitKind::Opus)
+            ]
+        );
+        assert_eq!(
+            released_by(true, Some(WaitGroup::LOGIN)),
+            [WaitGroup::NETWORK, WaitGroup::LOGIN]
         );
     }
 

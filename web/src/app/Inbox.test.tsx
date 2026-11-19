@@ -382,6 +382,40 @@ describe("Inbox, Needs you", () => {
     expect(calls.some((call) => call.method === "PUT")).toBe(false);
   });
 
+  it("shows a refused login with the account, its whole fix, Pause and one Switch account control", async () => {
+    const { calls } = await renderInbox(
+      [
+        needsItem({
+          kind: "login_refused",
+          screen: "worker",
+          agents: ["web-lead", "api-worker"],
+          account: "work-a",
+          title: "Invalid API key · Please run /login",
+          reason:
+            "run `claude setup-token` for a new token and `fld account update work-a` with it on stdin, or switch the account; fold then runs each waiting turn again at once",
+          actions: [
+            { action: "pause" },
+            { action: "switch_account", account: "work-b" },
+          ],
+        }),
+      ],
+      "tanim",
+    );
+    const inbox = await openInbox();
+    const project = within(inbox).getByRole("region", { name: "Project" });
+    expect(within(project).getByText(/The token of/).textContent).toContain(
+      "work-a",
+    );
+    const command = within(project).getByText("fld account update work-a");
+    const title = command.closest(".basis-full");
+    expect(title?.className).toContain("wrap-anywhere");
+    expect(title?.className).not.toContain("truncate");
+    expect(
+      await within(project).findByRole("button", { name: "Switch account" }),
+    ).toBeTruthy();
+    expect(calls.some((call) => call.method === "PUT")).toBe(false);
+  });
+
   it("shows main's invalid checks file as a line that opens nothing and counts it", async () => {
     await renderInbox(
       [

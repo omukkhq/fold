@@ -167,6 +167,24 @@ describe("a turn that waits for the network or a usage limit", () => {
     since: NOW - 20 * MINUTE,
   });
   const limit = seen({ ...network, state: "waits_for_usage_limit" });
+  const login = seen({ ...network, state: "waits_for_login" });
+
+  it("says the wait for a working login in the neutral words of every view", () => {
+    expect(activityText(login, "web-worker", NOW)).toBe(
+      "Waits for a working login",
+    );
+    expect(activityVerb(login, NOW)).toBe("waits for a working login");
+    expect(isStall(login.state)).toBe(false);
+    const view = workerActivity(
+      { activity: login, stalled: true, worker: "web-worker" },
+      NOW,
+    );
+    expect(view).toMatchObject({
+      stall: false,
+      needsYou: false,
+      restart: null,
+    });
+  });
 
   it("says the wait with no time and no name", () => {
     expect(activityText(network, "web-worker", NOW)).toBe(

@@ -245,6 +245,7 @@ impl From<fold_core::WorkerState> for WorkerProcessState {
 pub enum TurnWaitReason {
     Network,
     UsageLimit,
+    Login,
 }
 
 impl From<fold_core::turn_waits::WaitReason> for TurnWaitReason {
@@ -252,6 +253,7 @@ impl From<fold_core::turn_waits::WaitReason> for TurnWaitReason {
         match reason {
             fold_core::turn_waits::WaitReason::Network => Self::Network,
             fold_core::turn_waits::WaitReason::UsageLimit => Self::UsageLimit,
+            fold_core::turn_waits::WaitReason::Login => Self::Login,
         }
     }
 }
@@ -309,7 +311,7 @@ pub struct WorkerEntry {
     pub failed_turns: u64,
     /// The worker's turns failed often enough in a row without reaching the model that it cannot work until a human fixes Claude Code; the daemon decides it, and the human's list of what waits for them holds an item for it.
     pub model_unreachable: bool,
-    /// What the idle worker's last turn waits for: `network` when Claude Code could not reach the model, `usage_limit` when the account reached a usage limit. fold runs the turn again in the worker's session once the cause has passed, so the worker is neither stalled nor failing; null when it waits for nothing.
+    /// What the idle worker's last turn waits for: `network` when Claude Code could not reach the model, `usage_limit` when the account reached a usage limit, `login` when the API refused the login of the project's account. fold runs the turn again in the worker's session once the cause has passed, so the worker is neither stalled nor failing; null when it waits for nothing.
     #[schema(required = true)]
     pub waits_for: Option<TurnWaitReason>,
     /// What the human checks for a worker that cannot reach the model; null otherwise.

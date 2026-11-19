@@ -582,7 +582,7 @@ mod tests {
             Some(Some(TurnError {
                 text: "Not logged in · Please run /login".to_owned(),
                 reached_model: false,
-                wait: None,
+                wait: Some(TurnWait::Login),
             }))
         );
         let init = effect_of(

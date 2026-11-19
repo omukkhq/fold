@@ -221,7 +221,8 @@ fn verdict_since(verdict: Activity) -> Option<Timestamp> {
         | Activity::Stopped { .. }
         | Activity::WaitsForSlot { .. }
         | Activity::WaitsForNetwork { .. }
-        | Activity::WaitsForUsageLimit { .. } => None,
+        | Activity::WaitsForUsageLimit { .. }
+        | Activity::WaitsForLogin { .. } => None,
         Activity::Parked { .. } => None,
     }
 }

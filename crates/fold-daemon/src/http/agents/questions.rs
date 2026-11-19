@@ -164,6 +164,8 @@ pub enum NeedsYouItemKind {
     UsageLimit,
     /// The claim of the worker `agent` on `task`, or its review claim on `proposal`, went stale: it made no fold call for the lease, fold told its lead, or else the main agent, and one more stall window passed without a renewal, or no agent can act on it. `action` and `reason` say what the human does. The item ends when the worker renews the claim with any fold call, or when the claim is released or taken over.
     StaleClaim,
+    /// The API refused the login of turns of the project's workers: the token of the project's account `account`, or Claude Code's own login when `account` is `default`. One item for the project: `agents` names the workers whose turn waits, `title` holds Claude Code's newest message, `reason` what the human does (`fld account update <account>` with a new token, or `claude login` for `default`) and `actions` a pause and a `switch_account` to each other account. A new token of the account, a switch of the account or a new login of Claude Code runs each waiting turn again at once in its session, which ends the item.
+    LoginRefused,
 }
 
 /// A usage limit of Claude Code: `session`, `weekly`, `opus`, `sonnet`, or `usage` for the older message that names no kind.
@@ -309,12 +311,12 @@ pub struct NeedsYouEntry {
     /// UTC milliseconds of the reset of a `usage_limit`, when Claude Code's message gives the instant; null otherwise.
     #[schema(value_type = Option<i64>, required = true)]
     pub resets_at: Option<fold_core::Timestamp>,
-    /// What the human can do from the item, such as `pause` for a `usage_limit`; empty for most kinds.
+    /// What the human can do from the item, such as `pause` for a `usage_limit` or a `login_refused`; empty for most kinds.
     pub actions: Vec<NeedsYouActionEntry>,
     /// What the human does about the worker of a `worker_stalled` or a `stale_claim`; null for every other kind.
     #[schema(required = true)]
     pub action: Option<crate::http::tasks::PersonAction>,
-    /// The project's account of a `usage_limit` when fold lists the item, `default` for Claude Code's own login; null for every other kind.
+    /// The project's account of a `usage_limit` or a `login_refused` when fold lists the item, `default` for Claude Code's own login; null for every other kind.
     #[schema(required = true, example = "work-a")]
     pub account: Option<String>,
 }
@@ -342,6 +344,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::WorkerStalled => NeedsYouItemKind::WorkerStalled,
             NeedsYouKind::UsageLimit => NeedsYouItemKind::UsageLimit,
             NeedsYouKind::StaleClaim => NeedsYouItemKind::StaleClaim,
+            NeedsYouKind::LoginRefused => NeedsYouItemKind::LoginRefused,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,
