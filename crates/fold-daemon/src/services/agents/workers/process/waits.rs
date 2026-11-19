@@ -35,10 +35,14 @@ pub(super) struct OwedTurns {
     sent: HashMap<AgentName, Timestamp>,
     /// A change came after the loop's last read of the rows, so a loop that found no wait reads them once more before it ends.
     changed: bool,
-    /// Claude Code's own login changed since the loop's last plan, so each process on it whose turn waits for a working login starts again in its session.
-    login_changed: bool,
-    /// When fold last started each process again for a new login of Claude Code (see [`relogin_due`]).
-    relogins: HashMap<AgentName, Timestamp>,
+    /// The groups a release met while the agent's process still started, which the plan that finds it idle runs: one worker's start never runs the others' turns again.
+    pending: HashMap<AgentName, Vec<WaitGroup>>,
+    /// The mark of Claude Code's own login that the loop saw last, `None` before its first look; it outlives each plan, so no change between two looks is lost.
+    login_seen: Option<Option<accounts::LoginMark>>,
+    /// How many changes of Claude Code's own login the loop saw since it started.
+    logins: u64,
+    /// Each process fold started again for a new login of Claude Code: the change it read, counted as [`OwedTurns::logins`] counts, and when it started (see [`relogin_due`]).
+    relogins: HashMap<AgentName, (u64, Timestamp)>,
 }
 
 impl Drop for OwedTurns {
@@ -91,28 +95,58 @@ impl Supervisor {
         self.owed_turns_changed(LOGIN_RELEASES.to_vec());
     }
 
-    /// Restarts in its session each process on Claude Code's own login whose turn waits for a working login, whose restart then runs that turn again: Claude Code's own login changed, which a running process may not read again.
-    fn login_changed(&self) {
-        lock(&self.inner.owed).login_changed = true;
+    /// Notes `mark`, the mark of Claude Code's own login now, and returns whether it changed since the loop's last look. A change makes each process on that login whose turn waits for a working login start again in its session, whose restart then runs that turn again: a running process may not read the new login.
+    fn note_login(&self, mark: Option<accounts::LoginMark>) -> bool {
+        let mut owed = lock(&self.inner.owed);
+        match &owed.login_seen {
+            Some(seen) if *seen == mark => false,
+            Some(_) => {
+                owed.login_seen = Some(mark);
+                owed.logins += 1;
+                true
+            }
+            None => {
+                owed.login_seen = Some(mark);
+                false
+            }
+        }
+    }
+
+    /// Records that the process of `agent` started again for the `login`th change of Claude Code's own login.
+    pub(super) fn relogin_ran(&self, agent: &AgentName, login: u64) {
+        let now = self.inner.clock.now();
+        lock(&self.inner.owed)
+            .relogins
+            .insert(agent.clone(), (login, now));
+    }
+
+    /// Runs the turn of `agent` that waits in `group` again once its process is idle, and no other turn.
+    pub(super) fn release_for(&self, agent: &AgentName, group: WaitGroup) {
+        {
+            let mut owed = lock(&self.inner.owed);
+            let groups = owed.pending.entry(agent.clone()).or_default();
+            if !groups.contains(&group) {
+                groups.push(group);
+            }
+        }
         self.owed_turns_changed(Vec::new());
     }
 
     /// Runs again, in its own running process, each owed turn that the plan of [`rerun_plan`] makes due, and returns when the plan must be read again, `Some(None)` for only when woken; `Ok(None)` once no row waits. While the project's agents are paused nothing runs: the resume of the pause gives each worker a turn of its own, and wakes the loop.
     async fn serve_owed_turns(&self) -> Result<Option<Option<Timestamp>>, AgentError> {
         // The releases are taken before the rows are read, so each one meets rows at least as new as itself: a release that comes later, such as at the end of a switch while this read sees the row still starting, stays for the next plan.
-        let (released, login_changed) = {
+        let (released, pending, logins) = {
             let mut owed = lock(&self.inner.owed);
             owed.changed = false;
             (
                 std::mem::take(&mut owed.released),
-                std::mem::take(&mut owed.login_changed),
+                std::mem::take(&mut owed.pending),
+                owed.logins,
             )
         };
         let keep = |supervisor: &Self, released: Vec<WaitGroup>| {
             supervisor.keep_released(released);
-            if login_changed {
-                lock(&supervisor.inner.owed).login_changed = true;
-            }
+            supervisor.keep_pending(pending.clone());
         };
         let rows = match self.worker_rows().await {
             Ok(rows) => rows,
@@ -139,7 +173,7 @@ impl Supervisor {
                 return Err(error.into());
             }
         }
-        // A process that started with another account than the project's waits for its own switch, which runs its turn after it with the project's account. Nothing else switches a process whose turn waits, such as after `fld account update`, so the loop starts the switch. A new login of Claude Code restarts each process on it whose login was refused the same way.
+        // A process that started with another account than the project's waits for its own switch, which runs its turn after it with the project's account. Nothing else switches a process whose turn waits, such as after `fld account update`, so the loop starts the switch. A new login of Claude Code restarts each process on it whose login was refused the same way, once per change and with the backoff of [`relogin_due`]; a process that cannot start again now, such as a working one, is looked at again in the next plan, and only a restart that ran counts.
         let current = self.current_account().await.ok();
         let on_own_login = matches!(current, Some(None));
         let now = self.inner.clock.now();
@@ -158,23 +192,20 @@ impl Supervisor {
             } else if let Some(wait) = row
                 .wait
                 .as_ref()
-                .filter(|wait| login_changed && on_own_login && wait.reason == WaitReason::Login)
+                .filter(|wait| logins > 0 && on_own_login && wait.reason == WaitReason::Login)
             {
-                let last = lock(&self.inner.owed).relogins.get(&row.agent).copied();
+                let done = lock(&self.inner.owed).relogins.get(&row.agent).copied();
+                if done.is_some_and(|(login, _)| login >= logins) {
+                    continue;
+                }
+                let last = done.map(|(_, at)| at);
                 if relogin_due(last, wait.tries, now) {
-                    lock(&self.inner.owed)
-                        .relogins
-                        .insert(row.agent.clone(), now);
                     restarting.insert(row.agent.clone());
-                    self.restart_soon(&row.agent);
+                    self.restart_soon(&row.agent, logins);
                 } else if let Some(at) = relogin_at(last, wait.tries) {
                     relogin_next = Some(relogin_next.map_or(at, |next| next.min(at)));
                 }
             }
-        }
-        if relogin_next.is_some() {
-            // The new login still waits for a process that started again for a login a short time ago.
-            lock(&self.inner.owed).login_changed = true;
         }
         let mut waiting: Vec<(&WorkerProcessRow, WaitingTurn<AgentName>)> = rows
             .iter()
@@ -205,19 +236,40 @@ impl Supervisor {
         waiting.sort_by(|a, b| (a.1.since, &a.1.key).cmp(&(b.1.since, &b.1.key)));
         let turns: Vec<WaitingTurn<AgentName>> =
             waiting.iter().map(|(_, turn)| turn.clone()).collect();
-        let plan = rerun_plan(now, &turns, &released);
-        // A release that comes while a waiting worker's process still starts, such as at a daemon start, stays for the plan that finds it idle.
-        let starting: Vec<WaitGroup> = released
-            .iter()
-            .copied()
-            .filter(|group| {
-                rows.iter().any(|row| {
-                    row.state == WorkerState::Starting
-                        && row.wait.as_ref().is_some_and(|wait| wait.group() == *group)
-                })
-            })
-            .collect();
-        self.keep_released(starting);
+        let mut plan = rerun_plan(now, &turns, &released);
+        // A release that comes while a waiting worker's process still starts, such as at a daemon start, stays for that worker alone, and the plan that finds it idle runs its turn.
+        let mut still: HashMap<AgentName, Vec<WaitGroup>> = HashMap::new();
+        for row in &rows {
+            let Some(wait) = row.wait.as_ref() else {
+                continue;
+            };
+            let group = wait.group();
+            if lock(&self.inner.owed).sent.get(&row.agent) == Some(&wait.tried_at) {
+                // Its re-run is on its way already.
+                continue;
+            }
+            let owed = released.contains(&group)
+                || pending
+                    .get(&row.agent)
+                    .is_some_and(|groups| groups.contains(&group));
+            if !owed {
+                continue;
+            }
+            let ready = turns
+                .iter()
+                .any(|turn| turn.key == row.agent && turn.group == group);
+            if ready {
+                if !plan.due.contains(&row.agent) {
+                    plan.due.push(row.agent.clone());
+                }
+            } else if row.state == WorkerState::Starting
+                || (row.state == WorkerState::Idle && !restarting.contains(&row.agent))
+            {
+                // An idle row that cannot take the turn now, such as one with a turn still queued or under a switch, takes it in a later plan.
+                still.entry(row.agent.clone()).or_default().push(group);
+            }
+        }
+        self.keep_pending(still);
         for agent in &plan.due {
             let Some((row, turn)) = waiting.iter().find(|(_, turn)| &turn.key == agent) else {
                 continue;
@@ -249,6 +301,19 @@ impl Supervisor {
             .await
             .map_err(StoreError::from)?;
         Ok(agents::list_worker_processes(&mut conn).await?)
+    }
+
+    /// Puts back the releases of single workers that a plan did not use.
+    fn keep_pending(&self, pending: HashMap<AgentName, Vec<WaitGroup>>) {
+        let mut owed = lock(&self.inner.owed);
+        for (agent, groups) in pending {
+            let kept = owed.pending.entry(agent).or_default();
+            for group in groups {
+                if !kept.contains(&group) {
+                    kept.push(group);
+                }
+            }
+        }
     }
 
     /// Puts back releases that a plan did not use, before any that came meanwhile.
@@ -292,7 +357,7 @@ async fn run_owed_turns(inner: Weak<Inner>, wake: Arc<Notify>) {
             .accounts_dir()
             .map(|dir| accounts::index_path(&dir));
         let seen = index_mark(index.as_deref()).await;
-        let login = supervisor.login_mark().await;
+        supervisor.note_login(supervisor.login_mark().await);
         let next = match supervisor.serve_owed_turns().await {
             Ok(Some(next)) => next,
             Ok(None) => {
@@ -302,6 +367,11 @@ async fn run_owed_turns(inner: Weak<Inner>, wake: Arc<Notify>) {
                     continue;
                 }
                 drop(owed.task.take());
+                // The next wait starts from the login there is then.
+                owed.login_seen = None;
+                owed.logins = 0;
+                owed.relogins.clear();
+                owed.pending.clear();
                 return;
             }
             Err(error) => {
@@ -335,8 +405,7 @@ async fn run_owed_turns(inner: Weak<Inner>, wake: Arc<Notify>) {
                 return;
             };
             let supervisor = Supervisor { inner: strong };
-            if supervisor.login_mark().await != login {
-                supervisor.login_changed();
+            if supervisor.note_login(supervisor.login_mark().await) {
                 break;
             }
         }
