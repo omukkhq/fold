@@ -5,9 +5,11 @@ use std::sync::Arc;
 
 use fold_core::events::{EventType, types};
 use fold_core::layout::WS_DIR;
+use fold_core::object::ObjectHash;
 use fold_core::removal::{
     ClosedDecision, KeepReason, decide_closed, owner_hold_cutoff, window_cutoff,
 };
+use fold_core::tree::{FlatEntry, FlatTree};
 use fold_core::{Actor, CheckpointId, FoldError, Timestamp, WorkspaceId, codes};
 use fold_store::StoreError;
 use fold_store::agents;
@@ -20,7 +22,7 @@ use fold_vcs::snapshot::{Warning, WarningReason};
 use tokio::sync::Notify;
 use tokio::sync::broadcast::{self, error::RecvError, error::TryRecvError};
 
-use super::files::{checkpoint_in_tx, not_found};
+use super::files::{Files, checkpoint_in_tx, not_found};
 use super::lifecycle::io_error;
 use super::{WorkspaceError, WorkspaceService, blocking};
 use crate::services::agents::{FolderDecision, collect_worker_folders};
@@ -212,8 +214,8 @@ impl WorkspaceService {
         let located =
             blocking(move || locate_workspace_dir(&root, &path).map_err(FoldError::from)).await?;
         let checkpoint = match located {
-            Some(_) if !closed.removal_started => self.start_removal(&row).await?,
-            _ => None,
+            Some(_) => self.start_removal(&row, closed.removal_started).await?,
+            None => None,
         };
         #[cfg(feature = "failpoints")]
         fail::fail_point!("workspace_removal_after_checkpoint", |_| {
@@ -294,10 +296,11 @@ impl WorkspaceService {
         removed
     }
 
-    /// Records that the removal of the directory starts, with the `before_removal` checkpoint of a closed task or main workspace whose tracked files fold has not recorded in the same write, and returns that checkpoint.
+    /// Records that the removal of the directory starts, with the `before_removal` checkpoint of a closed task or main workspace whose tracked files fold has not recorded in the same write, and returns that checkpoint. With `again`, a removal that started before left the directory there: a delete that failed half-way, or one that completed before a stop, after which something wrote at the path again. Its files then get a checkpoint only when one of them is in no tree fold holds for the workspace (see [`workspaces::recorded_trees`]), so what came back is recorded while a partly deleted directory, whose files the first start recorded, gets no checkpoint that shows its files as deleted.
     async fn start_removal(
         &self,
         row: &WorkspaceRow,
+        again: bool,
     ) -> Result<Option<CheckpointId>, WorkspaceError> {
         let _objects = self.objects.clone().read_owned().await;
         let unrecorded = if row.kind == WorkspaceKind::Review {
@@ -320,8 +323,16 @@ impl WorkspaceService {
                 .with_hint("fold removes the directory once every tracked file can be read; `fld gc` tries again")
                 .into());
             }
-            let recorded =
-                workspaces::tree_recorded(self.store.read(), row.id, &snapshot.tree).await?;
+            let recorded = if again {
+                let trees = workspaces::recorded_trees(self.store.read(), row.id).await?;
+                blocking({
+                    let files = Arc::clone(&files);
+                    move || every_file_recorded(&files, &snapshot.entries, &trees)
+                })
+                .await?
+            } else {
+                workspaces::tree_recorded(self.store.read(), row.id, &snapshot.tree).await?
+            };
             (!recorded).then_some(snapshot.tree)
         };
         let now = self.clock.now();
@@ -355,6 +366,23 @@ impl WorkspaceService {
         }
         Ok(checkpoint)
     }
+}
+
+/// Whether each file of `entries` is in one of `trees` at the same path with the same content. Blocking.
+fn every_file_recorded(
+    files: &Files,
+    entries: &FlatTree,
+    trees: &[ObjectHash],
+) -> Result<bool, FoldError> {
+    let mut missing: Vec<(&Vec<u8>, &FlatEntry)> = entries.iter().collect();
+    for tree in trees {
+        if missing.is_empty() {
+            break;
+        }
+        let recorded = files.flat_tree(tree)?;
+        missing.retain(|(path, entry)| recorded.get(*path) != Some(*entry));
+    }
+    Ok(missing.is_empty())
 }
 
 /// Removes the directories of the project's closed workspaces as they become due, through [`WorkspaceService::remove_closed_directories`]: after each committed event that closes a workspace, ends a worker process or ends a session, which can make a closed workspace of that agent due, after a missed event, and whenever `catch_up` is notified, as the daemon does when it opens the project, so what a stopped daemon left goes too. A catch-up also removes the folders of the finished task workers and reviewers (see [`collect_worker_folders`]), which only the passing of `closed_workspace_days` makes due; the daily garbage collection removes those that become due while the daemon runs. `events` is subscribed before the call, so nothing published after it is missed. It ends once the bus closes; a removal in progress finishes first.

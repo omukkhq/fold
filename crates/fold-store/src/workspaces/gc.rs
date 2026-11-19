@@ -253,6 +253,33 @@ pub async fn tree_recorded<'e>(
     Ok(recorded)
 }
 
+/// Every tree that [`tree_recorded`] counts for the workspace, each once, so a caller can ask whether each file of a directory is recorded in one of them.
+pub async fn recorded_trees<'e>(
+    db: impl SqliteExecutor<'e>,
+    workspace: WorkspaceId,
+) -> Result<Vec<ObjectHash>, StoreError> {
+    let workspace = workspace.to_db();
+    let rows = sqlx::query_scalar!(
+        r#"SELECT r.tree_hash AS "tree!: String" FROM workspaces w
+             JOIN revisions r ON r.id = w.base_revision_id WHERE w.number = ?1
+           UNION SELECT c.tree_hash FROM workspaces w JOIN checkpoints c ON c.workspace_id = w.id
+             WHERE w.number = ?1 AND c.kind = 'explicit' AND c.pruned_at IS NULL
+           UNION SELECT c.tree_hash FROM workspaces w JOIN changesets c ON c.workspace_id = w.id
+             WHERE w.number = ?1
+           UNION SELECT v.tree_hash FROM workspaces w JOIN proposals p ON p.task_id = w.task_id
+             JOIN proposal_versions v ON v.proposal_id = p.id WHERE w.number = ?1"#,
+        workspace
+    )
+    .fetch_all(db)
+    .await?;
+    rows.iter()
+        .map(|text| {
+            text.parse()
+                .map_err(|_| StoreError::Corrupt("recorded_trees"))
+        })
+        .collect()
+}
+
 /// Records that fold started to remove the directory of the closed workspace, in the write that commits its final checkpoint when it needs one. False when no closed workspace whose directory is still there has this id, or the start is already recorded.
 pub async fn start_directory_removal(
     tx: &mut WriteTx,
