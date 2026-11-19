@@ -146,7 +146,7 @@ pub struct LiveActivity {
     /// The role whose free place a `waits_for_slot` worker waits for; null for the other states.
     #[schema(required = true)]
     pub slot: Option<LiveSlot>,
-    /// UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, the time the work came that fold owes a `waits_for_slot` worker, the end of the first turn of a wait for the network or a usage limit, or the time a `parked` worker was parked.
+    /// UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, the time the work came that fold owes a `waits_for_slot` worker, the end of the first turn of a wait for the network, a usage limit or a working login, or the time a `parked` worker was parked.
     #[schema(value_type = i64)]
     pub since: Timestamp,
     /// fold runs the worker's process, so `restart_worker` can start it again in a new session.

@@ -13,7 +13,7 @@ export interface WorkerActivity {
   text: string;
   /** What a parked worker waits for, in the words of the agent that parked it; null for every other state. */
   waitFor: string | null;
-  /** Silent, a call that ran long, or a process that failed: someone must act. Work in progress, a process that was stopped on purpose, a resume that waits for a free slot, a turn that waits for the network or a usage limit, which fold runs again, and a wait for a lead's go are never a stall. */
+  /** Silent, a call that ran long, or a process that failed: someone must act. Work in progress, a process that was stopped on purpose, a resume that waits for a free slot, a turn that waits for the network, a usage limit or a working login, which fold runs again, and a wait for a lead's go are never a stall. */
   stall: boolean;
   /** The stall waits for a person: fold told the lead and it lasted one more window, or no agent can act. */
   needsYou: boolean;

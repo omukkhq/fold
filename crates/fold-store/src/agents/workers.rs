@@ -118,7 +118,7 @@ pub struct TurnTotals {
     pub cache_write_tokens: u64,
     /// The turn ended in Claude Code's error.
     pub failed: bool,
-    /// The turn ended for a cause outside the worker, the network or a usage limit, and fold runs it again: it is no turn of the worker's own count, so a wait never uses up the turns a lead has for its hand-off note.
+    /// The turn ended for a cause outside the worker, the network, a usage limit or a working login, and fold runs it again: it is no turn of the worker's own count, so a wait never uses up the turns a lead has for its hand-off note.
     pub waited: bool,
 }
 

@@ -110,7 +110,7 @@ fn turn_error(result: &ResultMessage) -> TurnError {
     }
 }
 
-/// The error of a result: every result marked as an error, and one that is not but reached no model and names the network or a usage limit, which Claude Code's documentation leaves open.
+/// The error of a result: every result marked as an error, and one that is not but reached no model and names the network, a usage limit or a working login, which Claude Code's documentation leaves open.
 fn result_error(result: &ResultMessage) -> Option<TurnError> {
     let error = turn_error(result);
     (result.is_error || (!error.reached_model && error.wait.is_some())).then_some(error)

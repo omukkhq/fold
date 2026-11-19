@@ -3594,7 +3594,7 @@ export interface components {
             parked_by: string | null;
             /**
              * Format: int64
-             * @description UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, the time the work came that fold owes a `waits_for_slot` worker, the end of the first turn of a wait for the network or a usage limit, or the time a `parked` worker was parked.
+             * @description UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, the time the work came that fold owes a `waits_for_slot` worker, the end of the first turn of a wait for the network, a usage limit or a working login, or the time a `parked` worker was parked.
              */
             since: number;
             slot: components["schemas"]["LiveSlot"] | null;

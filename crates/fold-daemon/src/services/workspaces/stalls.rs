@@ -324,7 +324,7 @@ pub async fn follow_stall_turns(
     }
 }
 
-/// A message of a person or an agent, which can be an answer or an ask, the closure of an ask, a permission question or its answer, a verdict, a start of a worker process, the end of a process or a session, which shows the worker stopped at once or frees a place for an owed resume, a send-back, which owes its task worker a resume, a change of the worker limits, a pause or its resume, which clears or restarts every stall time, the start or end of a worker's wait for the network or a usage limit, and a park, which shows the wait at once. fold's own messages, such as check results, give no turn.
+/// A message of a person or an agent, which can be an answer or an ask, the closure of an ask, a permission question or its answer, a verdict, a start of a worker process, the end of a process or a session, which shows the worker stopped at once or frees a place for an owed resume, a send-back, which owes its task worker a resume, a change of the worker limits, a pause or its resume, which clears or restarts every stall time, the start or end of a worker's wait for the network, a usage limit or a working login, and a park, which shows the wait at once. fold's own messages, such as check results, give no turn.
 fn gives_a_turn(event: &Event) -> bool {
     if event.event_type == types::MESSAGE_SENT {
         return event.actor != EventActor::fold();

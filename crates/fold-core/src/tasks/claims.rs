@@ -58,7 +58,7 @@ pub struct HolderWait {
     pub parked_by_running_agent: bool,
     /// Every claim the holder holds waits on others, by [`ClaimWait::waits_on_others`].
     pub claims_wait_on_others: bool,
-    /// The holder's last turn waits for the network or a usage limit while its process runs (see [`crate::turn_waits::shows_wait`]): fold runs the turn again itself once the cause has passed.
+    /// The holder's last turn waits for the network, a usage limit or a working login while its process runs (see [`crate::turn_waits::shows_wait`]): fold runs the turn again itself once the cause has passed.
     pub turn_waits: bool,
 }
 

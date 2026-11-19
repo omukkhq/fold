@@ -244,7 +244,7 @@ impl Supervisor {
         }
     }
 
-    /// Records the context size of a request the model answered. A model that answers ends the worker's wait for the network or a usage limit at once, with the wait's error and with `worker.wait_ended`, and releases the turns that wait for the same cause, so the turn that runs again shows as work while it works.
+    /// Records the context size of a request the model answered. A model that answers ends the worker's wait for the network, a usage limit or a working login at once, with the wait's error and with `worker.wait_ended`, and releases the turns that wait for the same cause, so the turn that runs again shows as work while it works.
     async fn record_context(
         &self,
         process: &Process,
@@ -279,7 +279,7 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Counts a finished turn. A turn that ended in an error leaves Claude Code's text on the row; the turn that makes [`MODEL_UNREACHABLE_TURNS`] in a row that reached no model appends `worker.model_unreachable`, once per run of such turns, so the main agent and the worker's starter hear of it. A turn that ended for a cause outside the worker, the network or a usage limit, is no failed turn: the row holds the wait, the start of a wait appends `worker.waiting`, and fold runs the turn again once the cause has passed (see [`Supervisor::owed_turns_changed`]). Any other end of a turn ends the row's wait with `worker.wait_ended`, and a turn that reached the model or ended well releases the turns that wait for it. A turn that ended well clears the error. Returns whether the turn waits.
+    /// Counts a finished turn. A turn that ended in an error leaves Claude Code's text on the row; the turn that makes [`MODEL_UNREACHABLE_TURNS`] in a row that reached no model appends `worker.model_unreachable`, once per run of such turns, so the main agent and the worker's starter hear of it. A turn that ended for a cause outside the worker, the network, a usage limit or a working login, is no failed turn: the row holds the wait, the start of a wait appends `worker.waiting`, and fold runs the turn again once the cause has passed (see [`Supervisor::owed_turns_changed`]). Any other end of a turn ends the row's wait with `worker.wait_ended`, and a turn that reached the model or ended well releases the turns that wait for it. A turn that ended well clears the error. Returns whether the turn waits.
     async fn end_turn(
         &self,
         process: &Process,
