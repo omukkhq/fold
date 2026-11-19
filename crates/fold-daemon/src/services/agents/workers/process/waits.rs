@@ -29,14 +29,18 @@ pub(super) struct OwedTurns {
     task: Option<JoinHandle<()>>,
     /// Wakes the loop: a turn waits, a wait ended, or a pause ended.
     wake: Arc<Notify>,
-    /// The groups a turn showed to have passed, which the loop's next plan runs whole.
-    released: Vec<WaitGroup>,
+    /// The groups a turn or a change of the login showed to have passed, each with the [`OwedTurns::epoch`] of its release: each waiting turn of the group whose worker got no turn since then runs again once.
+    released: Vec<(WaitGroup, u64)>,
     /// The re-run sent to each agent, by the end of the turn it runs again, so a plan read before the worker shows `working` never sends it twice.
     sent: HashMap<AgentName, Timestamp>,
     /// A change came after the loop's last read of the rows, so a loop that found no wait reads them once more before it ends.
     changed: bool,
-    /// The groups a release met while the agent's process still started, which the plan that finds it idle runs: one worker's start never runs the others' turns again.
-    pending: HashMap<AgentName, Vec<WaitGroup>>,
+    /// The releases of one worker's turn alone, such as after its own restart for a new login, each with its epoch.
+    pending: HashMap<AgentName, Vec<(WaitGroup, u64)>>,
+    /// Counts the releases and the turns written to the workers, so a release meets only the turns that ran before it.
+    epoch: u64,
+    /// The epoch of the newest turn written to each worker's process: a release older than it was answered by that turn, so it runs no other one.
+    turned: HashMap<AgentName, u64>,
     /// The mark of Claude Code's own login that the loop saw last, `None` before its first look; it outlives each plan, so no change between two looks is lost.
     login_seen: Option<Option<accounts::LoginMark>>,
     /// How many changes of Claude Code's own login the loop saw since it started.
@@ -70,9 +74,9 @@ impl Supervisor {
         let mut owed = lock(&self.inner.owed);
         owed.changed = true;
         for group in released {
-            if !owed.released.contains(&group) {
-                owed.released.push(group);
-            }
+            owed.epoch += 1;
+            let epoch = owed.epoch;
+            add_release(&mut owed.released, group, epoch);
         }
         if owed.task.as_ref().is_none_or(JoinHandle::is_finished) {
             let wake = owed.wake.clone();
@@ -124,12 +128,19 @@ impl Supervisor {
     pub(super) fn release_for(&self, agent: &AgentName, group: WaitGroup) {
         {
             let mut owed = lock(&self.inner.owed);
-            let groups = owed.pending.entry(agent.clone()).or_default();
-            if !groups.contains(&group) {
-                groups.push(group);
-            }
+            owed.epoch += 1;
+            let epoch = owed.epoch;
+            add_release(owed.pending.entry(agent.clone()).or_default(), group, epoch);
         }
         self.owed_turns_changed(Vec::new());
+    }
+
+    /// Records that a user turn reached the process of `agent`: the releases that came before it are answered by it.
+    pub(super) fn turn_written(&self, agent: &AgentName) {
+        let mut owed = lock(&self.inner.owed);
+        owed.epoch += 1;
+        let epoch = owed.epoch;
+        owed.turned.insert(agent.clone(), epoch);
     }
 
     /// Runs again, in its own running process, each owed turn that the plan of [`rerun_plan`] makes due, and returns when the plan must be read again, `Some(None)` for only when woken; `Ok(None)` once no row waits. While the project's agents are paused nothing runs: the resume of the pause gives each worker a turn of its own, and wakes the loop.
@@ -144,7 +155,7 @@ impl Supervisor {
                 owed.logins,
             )
         };
-        let keep = |supervisor: &Self, released: Vec<WaitGroup>| {
+        let keep = |supervisor: &Self, released: Vec<(WaitGroup, u64)>| {
             supervisor.keep_released(released);
             supervisor.keep_pending(pending.clone());
         };
@@ -236,9 +247,13 @@ impl Supervisor {
         waiting.sort_by(|a, b| (a.1.since, &a.1.key).cmp(&(b.1.since, &b.1.key)));
         let turns: Vec<WaitingTurn<AgentName>> =
             waiting.iter().map(|(_, turn)| turn.clone()).collect();
-        let mut plan = rerun_plan(now, &turns, &released);
-        // A release that comes while a waiting worker's process still starts, such as at a daemon start, stays for that worker alone, and the plan that finds it idle runs its turn.
-        let mut still: HashMap<AgentName, Vec<WaitGroup>> = HashMap::new();
+        let mut plan = rerun_plan(now, &turns, &[]);
+        // A release runs each waiting turn of its group again once, in the plan that finds the worker idle, unless a turn reached the worker after the release, such as the own turn of a resume, which is that re-run. A release that meets a worker whose process starts, or an idle one that cannot take the turn now, stays for a later plan; one that meets nobody it is owed to ends.
+        let turned = lock(&self.inner.owed).turned.clone();
+        let owed_to =
+            |agent: &AgentName, epoch: u64| turned.get(agent).is_none_or(|turn| *turn < epoch);
+        let mut kept_released: Vec<(WaitGroup, u64)> = Vec::new();
+        let mut kept_pending: HashMap<AgentName, Vec<(WaitGroup, u64)>> = HashMap::new();
         for row in &rows {
             let Some(wait) = row.wait.as_ref() else {
                 continue;
@@ -248,11 +263,19 @@ impl Supervisor {
                 // Its re-run is on its way already.
                 continue;
             }
-            let owed = released.contains(&group)
-                || pending
-                    .get(&row.agent)
-                    .is_some_and(|groups| groups.contains(&group));
-            if !owed {
+            let shared = released
+                .iter()
+                .copied()
+                .filter(|(released, epoch)| *released == group && owed_to(&row.agent, *epoch))
+                .max_by_key(|(_, epoch)| *epoch);
+            let own = pending
+                .get(&row.agent)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|(released, epoch)| *released == group && owed_to(&row.agent, *epoch))
+                .max_by_key(|(_, epoch)| *epoch);
+            if shared.is_none() && own.is_none() {
                 continue;
             }
             let ready = turns
@@ -265,11 +288,20 @@ impl Supervisor {
             } else if row.state == WorkerState::Starting
                 || (row.state == WorkerState::Idle && !restarting.contains(&row.agent))
             {
-                // An idle row that cannot take the turn now, such as one with a turn still queued or under a switch, takes it in a later plan.
-                still.entry(row.agent.clone()).or_default().push(group);
+                if let Some((group, epoch)) = shared {
+                    add_release(&mut kept_released, group, epoch);
+                }
+                if let Some((group, epoch)) = own {
+                    add_release(
+                        kept_pending.entry(row.agent.clone()).or_default(),
+                        group,
+                        epoch,
+                    );
+                }
             }
         }
-        self.keep_pending(still);
+        self.keep_released(kept_released);
+        self.keep_pending(kept_pending);
         for agent in &plan.due {
             let Some((row, turn)) = waiting.iter().find(|(_, turn)| &turn.key == agent) else {
                 continue;
@@ -304,25 +336,21 @@ impl Supervisor {
     }
 
     /// Puts back the releases of single workers that a plan did not use.
-    fn keep_pending(&self, pending: HashMap<AgentName, Vec<WaitGroup>>) {
+    fn keep_pending(&self, pending: HashMap<AgentName, Vec<(WaitGroup, u64)>>) {
         let mut owed = lock(&self.inner.owed);
-        for (agent, groups) in pending {
+        for (agent, releases) in pending {
             let kept = owed.pending.entry(agent).or_default();
-            for group in groups {
-                if !kept.contains(&group) {
-                    kept.push(group);
-                }
+            for (group, epoch) in releases {
+                add_release(kept, group, epoch);
             }
         }
     }
 
-    /// Puts back releases that a plan did not use, before any that came meanwhile.
-    fn keep_released(&self, released: Vec<WaitGroup>) {
+    /// Puts back releases that a plan did not use, beside any that came meanwhile.
+    fn keep_released(&self, released: Vec<(WaitGroup, u64)>) {
         let mut owed = lock(&self.inner.owed);
-        for group in released {
-            if !owed.released.contains(&group) {
-                owed.released.push(group);
-            }
+        for (group, epoch) in released {
+            add_release(&mut owed.released, group, epoch);
         }
     }
 
@@ -372,6 +400,7 @@ async fn run_owed_turns(inner: Weak<Inner>, wake: Arc<Notify>) {
                 owed.logins = 0;
                 owed.relogins.clear();
                 owed.pending.clear();
+                owed.turned.clear();
                 return;
             }
             Err(error) => {
@@ -417,4 +446,12 @@ async fn index_mark(index: Option<&Path>) -> Option<(u64, SystemTime)> {
     use std::os::unix::fs::MetadataExt as _;
     let meta = tokio::fs::metadata(index?).await.ok()?;
     Some((meta.ino(), meta.modified().ok()?))
+}
+
+/// Adds the release of `group` at `epoch` to `releases`, which holds one release per group, the newest: it is owed to every turn that an older one is owed to.
+fn add_release(releases: &mut Vec<(WaitGroup, u64)>, group: WaitGroup, epoch: u64) {
+    match releases.iter_mut().find(|(held, _)| *held == group) {
+        Some(held) => held.1 = held.1.max(epoch),
+        None => releases.push((group, epoch)),
+    }
 }

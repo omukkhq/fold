@@ -7,13 +7,14 @@ use fold_core::accounts::{AccountName, check_token};
 use fold_core::turn_waits::{LOGIN_FIRST_WAIT, LOGIN_RERUN_TURN, WaitReason};
 use fold_core::{ManualClock, WorkerState};
 use fold_daemon::services::agents::accounts;
+use fold_store::testing::eventually;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use crate::accounts::{
     TOKEN_A, TOKEN_B, accounts_with_two, choose, host_accounts, ran_with, until_started,
 };
-use crate::common::acceptance::{HUMAN, Harness};
+use crate::common::acceptance::{HUMAN, Harness, WAIT};
 use crate::project_pause::{LEAD, lead_running, until_not_running};
 use crate::turn_waits::{
     advance, areas, events_of, fake_with_turn, needs_you, read_fixture, reruns_of, set_turn,
@@ -503,4 +504,93 @@ async fn a_reviewer_whose_login_is_refused_waits_and_runs_its_turn_again_in_its_
     );
     let done = until_idle(&harness, REVIEWER, |row| row.wait.is_none()).await;
     assert_eq!(done.session_id, row.session_id);
+}
+
+/// The lines of all runs of `agent` that hold `text`, one per turn that carried it.
+fn turns_with(fake: &FakeClaude, agent: &str, text: &str) -> usize {
+    reruns_of(fake, agent, text)
+}
+
+#[tokio::test]
+async fn a_resume_on_a_refused_account_gives_each_waiting_worker_one_turn() {
+    use crate::worker_resume::{TASK_WORKER, task_worker_for};
+    use fold_core::turn_waits::LOGIN_LONGEST_WAIT;
+    use fold_daemon::services::agents::PAUSE_TURN;
+    let clock = ManualClock::new();
+    let (_accounts, dir) = accounts_with_two(&clock);
+    let turns = TempDir::new().unwrap();
+    let (mut fake, _turn) = fake_with_turn(&turns, &login_turn(RECORDED));
+    host_accounts(&mut fake, &dir, true);
+    let harness = task_worker_for(&fake, &["Draw the page"], WorkerState::Idle).await;
+    harness
+        .start_work(crate::worker_resume::TASK_WORKER, "T-1")
+        .await;
+    let agents = [LEAD, TASK_WORKER];
+    for agent in agents {
+        until_idle(&harness, agent, |row| row.wait.is_some()).await;
+    }
+    let paused = harness.call(MAIN, "pause_project", json!({})).await;
+    assert_eq!(paused["paused"], true, "{paused}");
+    for agent in agents {
+        until_not_running(&harness, agent).await;
+    }
+    // A switch during the pause releases the login waits, and work-a is refused too.
+    let (status, body) = choose(&harness, Some("work-a")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let mut before = Vec::new();
+    for agent in agents {
+        before.push((
+            worker(&harness, agent).await.wait.unwrap().tries,
+            turns_with(&fake, agent, LOGIN_RERUN_TURN),
+        ));
+    }
+
+    let resumed = harness.call(MAIN, "resume_project", json!({})).await;
+    assert_eq!(resumed["paused"], false, "{resumed}");
+    for (agent, (tries, _)) in agents.iter().zip(&before) {
+        until_idle(&harness, agent, |row| {
+            row.wait.as_ref().is_some_and(|wait| wait.tries > *tries)
+                && ran_with(fake.runs_of(agent).last().unwrap(), Some(TOKEN_A))
+        })
+        .await;
+        assert_eq!(turns_with(&fake, agent, PAUSE_TURN), 1, "{agent}");
+    }
+    // The next re-run is the timed one, of the oldest wait alone; a re-run that the resume or the switch owed would have come first.
+    let total = |fake: &FakeClaude| {
+        agents
+            .iter()
+            .map(|agent| turns_with(fake, agent, LOGIN_RERUN_TURN))
+            .sum::<usize>()
+    };
+    let owed_before: usize = before.iter().map(|(_, reruns)| reruns).sum();
+    advance(&harness, LOGIN_LONGEST_WAIT);
+    eventually(WAIT, async || {
+        let seen = total(&fake);
+        if seen > owed_before && one_more_refused(&harness, &agents, &before).await {
+            Ok(())
+        } else {
+            Err(seen)
+        }
+    })
+    .await;
+    assert_eq!(
+        total(&fake),
+        owed_before + 1,
+        "the resume's own turn is the re-run of each waiting turn"
+    );
+}
+
+/// Whether every agent of `agents` is idle and one of them ended one more refused turn after the one of the resume.
+async fn one_more_refused(harness: &Harness, agents: &[&str], before: &[(u32, usize)]) -> bool {
+    let mut more = 0;
+    for (agent, (tries, _)) in agents.iter().zip(before) {
+        let row = worker(harness, agent).await;
+        if row.state != WorkerState::Idle {
+            return false;
+        }
+        if row.wait.as_ref().is_some_and(|wait| wait.tries > tries + 1) {
+            more += 1;
+        }
+    }
+    more == 1
 }
