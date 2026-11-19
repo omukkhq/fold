@@ -51,11 +51,7 @@ pub use changes::{WorkspaceChanges, WorkspaceEntry};
 pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
-pub(crate) use cleanup::window_cutoff;
-pub use cleanup::{
-    ClosedDecision, ClosedDirectory, DirectoryRemoval, KeepReason, RemovalReason,
-    follow_closed_workspaces,
-};
+pub use cleanup::{ClosedDirectory, DirectoryRemoval, follow_closed_workspaces};
 pub(crate) use compare::CARRY_CACHE_ENTRIES;
 pub use compare::{
     BatchMergeCache, BatchMergeComparison, BatchMergeKey, BatchMergeView, CarriedComparison, Carry,
@@ -64,6 +60,7 @@ pub use compare::{
 pub use direct::OpenedMainWorkspace;
 pub(crate) use direct::{main_agent, main_agent_in_tx};
 pub(crate) use files::checkpoint_in_tx;
+pub use fold_core::removal::{ClosedDecision, KeepReason, RemovalReason};
 pub use human_change::TouchedTask;
 pub use lifecycle::{
     Abandoned, ArchiveReason, CreatedWorkspace, WorkspaceDetails, WorkspaceRef, WorkspaceView,

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use fold_core::object::ObjectHash;
+pub use fold_core::removal::OwnerHold;
 use fold_core::{Timestamp, WorkspaceId};
 use sqlx::SqliteExecutor;
 
@@ -73,15 +74,6 @@ pub struct ClosedWorkspace {
     pub hold: Option<OwnerHold>,
     /// The workspace closed before the cutoff the caller passed: the `closed_workspace_days` window has passed, and past it the owner does not hold the directory back.
     pub past_window: bool,
-}
-
-/// What of a closed workspace's owning agent keeps fold from removing its directory before the `closed_workspace_days` window has passed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OwnerHold {
-    /// A worker process of the agent has not ended.
-    Process,
-    /// The agent has an open session.
-    Session,
 }
 
 impl ClosedWorkspace {

@@ -2,15 +2,15 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use fold_core::events::{EventType, types};
 use fold_core::layout::WS_DIR;
+use fold_core::removal::{ClosedDecision, KeepReason, decide_closed, window_cutoff};
 use fold_core::{Actor, CheckpointId, FoldError, Timestamp, WorkspaceId, codes};
 use fold_store::StoreError;
 use fold_store::agents;
 use fold_store::workspaces::{
-    self, CheckpointReason, ClosedWorkspace, OwnerHold, WorkspaceKind, WorkspaceRow,
+    self, CheckpointReason, ClosedWorkspace, WorkspaceKind, WorkspaceRow,
 };
 use fold_vcs::gc::{locate_workspace_dir, remove_workspace_dir};
 use fold_vcs::scan::SkipReason;
@@ -33,37 +33,6 @@ pub enum DirectoryRemoval {
     Kept(KeepReason),
     /// Nothing was done: the workspace is live or its removal is already recorded.
     NotDue,
-}
-
-/// Why fold removes the directory of a closed workspace now.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RemovalReason {
-    /// Its owning agent has no worker process that has not ended and no open session.
-    OwnerEnded,
-    /// It closed longer than `closed_workspace_days` ago, past which its owner does not hold it back.
-    PastWindow,
-}
-
-/// Why fold keeps the directory of a closed workspace for now.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeepReason {
-    /// A worker process of its owning agent has not ended, and the window has not passed.
-    OwnerProcess,
-    /// Its owning agent has an open session, and the window has not passed.
-    OwnerSession,
-    /// An open session works in the directory.
-    SessionInside,
-    /// The path names no directory directly below `.fold/ws/` (see [`locate_workspace_dir`]).
-    InvalidPath,
-    /// The removal failed with this code, such as `unrecorded_changes`; the next run tries again.
-    Failed(&'static str),
-}
-
-/// What fold does, or would do, with the directory of one closed workspace.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClosedDecision {
-    Remove(RemovalReason),
-    Keep(KeepReason),
 }
 
 /// A closed workspace whose directory fold has not removed, or whose directory came back after fold removed it, with what fold does about it.
@@ -95,27 +64,13 @@ impl RemovalWindow {
     }
 }
 
-/// The instant `days` days before `now`; `None` when it lies before the epoch, so nothing is past the window.
-pub(crate) fn window_cutoff(now: Timestamp, days: u64) -> Option<Timestamp> {
-    u32::try_from(days)
-        .ok()
-        .and_then(|days| DAY.checked_mul(days))
-        .and_then(|window| now.checked_sub(window))
-}
-
-const DAY: Duration = Duration::from_secs(24 * 60 * 60);
-
-/// What fold does with the directory of `closed` under `window`: an open session working in it keeps it; otherwise it goes once nothing of its owner holds it or the window has passed.
+/// What fold does with the directory of `closed` under `window` (see [`decide_closed`]).
 fn decide(closed: &ClosedWorkspace, window: &RemovalWindow, root: &Path) -> ClosedDecision {
-    if window.session_inside(&root.join(&closed.path)) {
-        return ClosedDecision::Keep(KeepReason::SessionInside);
-    }
-    match closed.hold {
-        None => ClosedDecision::Remove(RemovalReason::OwnerEnded),
-        Some(_) if closed.past_window => ClosedDecision::Remove(RemovalReason::PastWindow),
-        Some(OwnerHold::Process) => ClosedDecision::Keep(KeepReason::OwnerProcess),
-        Some(OwnerHold::Session) => ClosedDecision::Keep(KeepReason::OwnerSession),
-    }
+    decide_closed(
+        window.session_inside(&root.join(&closed.path)),
+        closed.hold,
+        closed.past_window,
+    )
 }
 
 impl WorkspaceService {

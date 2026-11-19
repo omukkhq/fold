@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use fold_core::object::ObjectHash;
+use fold_core::removal::window_cutoff;
 use fold_core::{CheckpointId, FoldError, Timestamp, WorkspaceId, codes};
 use fold_store::workspaces::{
     closed_checkpoints_due, closed_directories, gc_roots, mark_directory_removed, prune_auto,
@@ -18,7 +19,7 @@ use crate::services::agents::{FolderDecision, WorkerFolder, collect_worker_folde
 use crate::services::events::EventBuffer;
 use crate::services::workspaces::{
     ClosedDecision, ClosedDirectory, DirectoryRemoval, KeepReason, WorkspaceError,
-    WorkspaceService, pruned_event, window_cutoff,
+    WorkspaceService, pruned_event,
 };
 
 /// What one garbage collection run did, or would do in a dry run.

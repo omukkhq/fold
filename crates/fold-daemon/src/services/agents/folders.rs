@@ -3,6 +3,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use fold_core::worker_folders::{FolderDecision, FolderKeep, FolderTies, decide_folder};
 use fold_core::{AgentName, FoldError, ProjectPaths, Timestamp, codes};
 use fold_store::agents::{self, EndedWorker};
 use fold_store::{Store, messages};
@@ -13,34 +14,6 @@ use crate::support::blocking;
 
 /// The name a worker's folder takes while fold deletes it. No agent name holds a `.`, so it never meets the folder of an agent.
 const REMOVING_PREFIX: &str = ".removing-";
-
-/// Why fold keeps the folder of a task worker or reviewer that stopped before the `closed_workspace_days` window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FolderKeep {
-    /// A worker row of the agent holds an unreleased claim.
-    Claim,
-    /// The agent has an open session, or an open session works in the folder.
-    Session,
-    /// An agent stopped the worker to wait for its go.
-    Parked,
-    /// Its last turn ended for a cause outside it, and fold owes it a re-run.
-    Waiting,
-    /// fold owes the worker a resume: requested changes, a conflict, failed checks, a send-back or a new version to review.
-    OwedResume,
-    /// A message waits for the worker, which fold starts again to answer it.
-    OwedMessage,
-    /// The folder is no directory, or a symlink.
-    InvalidPath,
-    /// The removal failed; the next run tries again.
-    Failed,
-}
-
-/// What fold does, or would do, with the folder of one worker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FolderDecision {
-    Remove,
-    Keep(FolderKeep),
-}
 
 /// The folder `.fold/workers/<agent>` of a task worker or reviewer that stopped before the window, with its size and what fold does about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,24 +56,16 @@ impl Owed {
         })
     }
 
-    /// Whether the worker can never run again unless someone sends it new work, and nothing uses its folder, named by each of `dirs`.
+    /// What fold does with the folder of `worker`, named by each of `dirs` (see [`decide_folder`]).
     fn decide(&self, worker: &EndedWorker, dirs: &[PathBuf]) -> FolderDecision {
-        let keep = if worker.claim {
-            Some(FolderKeep::Claim)
-        } else if worker.session || used(&self.session_folders, dirs) {
-            Some(FolderKeep::Session)
-        } else if worker.parked {
-            Some(FolderKeep::Parked)
-        } else if worker.waiting {
-            Some(FolderKeep::Waiting)
-        } else if self.resumes.contains(&worker.agent) {
-            Some(FolderKeep::OwedResume)
-        } else if self.messages.contains(&worker.agent) {
-            Some(FolderKeep::OwedMessage)
-        } else {
-            None
-        };
-        keep.map_or(FolderDecision::Remove, FolderDecision::Keep)
+        decide_folder(FolderTies {
+            claim: worker.claim,
+            session: worker.session || used(&self.session_folders, dirs),
+            parked: worker.parked,
+            waiting: worker.waiting,
+            owed_resume: self.resumes.contains(&worker.agent),
+            owed_message: self.messages.contains(&worker.agent),
+        })
     }
 }
 
