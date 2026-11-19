@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use fold_core::events::{EventType, types};
 use fold_core::layout::WS_DIR;
-use fold_core::removal::{ClosedDecision, KeepReason, decide_closed, window_cutoff};
+use fold_core::removal::{
+    ClosedDecision, KeepReason, decide_closed, owner_hold_cutoff, window_cutoff,
+};
 use fold_core::{Actor, CheckpointId, FoldError, Timestamp, WorkspaceId, codes};
 use fold_store::StoreError;
 use fold_store::agents;
@@ -74,10 +76,10 @@ fn decide(closed: &ClosedWorkspace, window: &RemovalWindow, root: &Path) -> Clos
 }
 
 impl WorkspaceService {
-    /// The window at the service's `now`: `closed_workspace_days` from `config.toml`, read on each call, and the open sessions' folders. A file that cannot be read gives no cutoff, so only the owner rule removes directories until it is fixed.
+    /// The window at the service's `now`: `closed_workspace_days` from `config.toml`, read on each call, through [`owner_hold_cutoff`], so 0 never overrides an owner, and the open sessions' folders. A file that cannot be read gives no cutoff, so only the owner rule removes directories until it is fixed.
     pub(crate) async fn removal_window(&self) -> Result<RemovalWindow, WorkspaceError> {
         let cutoff = match crate::services::projects::load_config(&self.paths).await {
-            Ok(config) => window_cutoff(self.clock.now(), config.closed_workspace_days),
+            Ok(config) => owner_hold_cutoff(self.clock.now(), config.closed_workspace_days),
             Err(error) => {
                 tracing::warn!(
                     code = error.log_code(),
@@ -380,8 +382,8 @@ pub async fn follow_closed_workspaces(
 impl WorkspaceService {
     /// [`collect_worker_folders`] for the project, with the window of `config.toml`; a failure is logged and left for the next run.
     async fn remove_worker_folders(&self) {
-        let cutoff = match self.removal_window().await {
-            Ok(window) => window.cutoff,
+        let cutoff = match crate::services::projects::load_config(&self.paths).await {
+            Ok(config) => window_cutoff(self.clock.now(), config.closed_workspace_days),
             Err(error) => {
                 tracing::warn!(code = error.log_code(), "the worker folders were not read");
                 return;

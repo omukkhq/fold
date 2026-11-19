@@ -52,7 +52,16 @@ pub fn window_cutoff(now: Timestamp, days: u64) -> Option<Timestamp> {
         .and_then(|window| now.checked_sub(window))
 }
 
-/// What fold does with the directory of a closed workspace: an open session working in it keeps it; otherwise it goes once nothing of its owner holds it, or once it closed before the cutoff of the `closed_workspace_days` window.
+/// The instant before which a closed workspace's owner no longer holds its directory back, or `None` when the window never overrides the owner. `config.toml` refuses `closed_workspace_days = 0`; a configuration built with 0 keeps the owner's hold too, because a workspace can close in the middle of its worker's turn, such as when a lead releases the claim, and its directory must not go while that worker still runs in it.
+pub fn owner_hold_cutoff(now: Timestamp, days: u64) -> Option<Timestamp> {
+    if days == 0 {
+        None
+    } else {
+        window_cutoff(now, days)
+    }
+}
+
+/// What fold does with the directory of a closed workspace: an open session working in it keeps it; otherwise it goes once nothing of its owner holds it, or once it closed before the cutoff of [`owner_hold_cutoff`].
 pub fn decide_closed(
     session_inside: bool,
     hold: Option<OwnerHold>,
@@ -119,5 +128,13 @@ mod tests {
         assert_eq!(window_cutoff(now, 0), Some(now));
         assert_eq!(window_cutoff(now, 1), Some(at(29 * 24 * 60 * 60 * 1000)));
         assert_eq!(window_cutoff(now, u64::MAX), None);
+    }
+
+    #[test]
+    fn zero_days_never_overrides_the_owner() {
+        let now = at(30 * 24 * 60 * 60 * 1000);
+        assert_eq!(owner_hold_cutoff(now, 0), None);
+        assert_eq!(owner_hold_cutoff(now, 1), window_cutoff(now, 1));
+        assert_eq!(owner_hold_cutoff(now, u64::MAX), None);
     }
 }

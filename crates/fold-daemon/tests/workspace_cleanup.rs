@@ -597,6 +597,46 @@ async fn a_review_checkout_of_a_lead_that_never_stops_goes_once_the_window_has_p
     assert!(fx.project.paths().root().join("README.md").is_file());
 }
 
+/// `closed_workspace_days = 0` never overrides an owner, as a workspace can close in the middle of its worker's turn: the configuration refuses it, gc stops on it, and the sweep keeps to the owner rule until it is fixed.
+#[tokio::test]
+async fn zero_days_keep_the_closed_directory_of_a_running_owner() {
+    let fx = Fixture::new().await;
+    let (checkout, dir) = checkout_of_a_running_lead(&fx).await;
+    let config = fx.project.paths().config();
+    let text = fs::read_to_string(&config).unwrap_or_default();
+    fs::write(&config, format!("closed_workspace_days = 0\n{text}")).unwrap();
+    fx.advance(14 * DAY_MINUTES + 1);
+    assert_eq!(
+        fx.workspaces
+            .remove_closed_directory(ws(checkout))
+            .await
+            .unwrap(),
+        DirectoryRemoval::Kept(KeepReason::OwnerProcess)
+    );
+    assert_eq!(fx.workspaces.remove_closed_directories(&|| false).await, 0);
+    let handle = handle(&fx).await;
+    let refused = gc(&handle, false).await.unwrap_err();
+    assert_eq!(refused.code(), Some("invalid_config"));
+    assert!(dir.is_dir());
+
+    fx.execute(&format!(
+        "UPDATE worker_processes SET state = 'stopped', stopped_at = 0 WHERE agent_id = {}",
+        fx.review.worker.agent_id
+    ))
+    .await;
+    fx.agents.end_session(&fx.review.ctx).await.unwrap();
+    let removal = fx
+        .workspaces
+        .remove_closed_directory(ws(checkout))
+        .await
+        .unwrap();
+    assert!(
+        matches!(removal, DirectoryRemoval::Removed { .. }),
+        "{removal:?}"
+    );
+    assert!(!dir.exists());
+}
+
 #[tokio::test]
 async fn gc_removes_a_closed_directory_past_the_window_and_names_why_it_keeps_the_others() {
     let fx = Fixture::new().await;
