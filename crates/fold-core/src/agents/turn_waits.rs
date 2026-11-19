@@ -217,6 +217,16 @@ pub const RESET_MARGIN: Duration = Duration::from_secs(60);
 pub const LOGIN_FIRST_WAIT: Duration = Duration::from_secs(10 * 60);
 pub const LOGIN_LONGEST_WAIT: Duration = Duration::from_secs(60 * 60);
 
+/// Whether a process on Claude Code's own login whose turn waits for a working login starts again now to read a new login, `last` being the time of its last such start, when it had one, and `tries` the re-runs of its wait that failed again. The first start comes at once; each later one waits as long as the wait's next timed re-run would ([`wait_after`]), so a login file that Claude Code itself rewrites at each refused turn never starts the process again and again.
+pub fn relogin_due(last: Option<Timestamp>, tries: u32, now: Timestamp) -> bool {
+    relogin_at(last, tries).is_none_or(|at| at <= now)
+}
+
+/// The time from which [`relogin_due`] holds; `None` for at once.
+pub fn relogin_at(last: Option<Timestamp>, tries: u32) -> Option<Timestamp> {
+    last.and_then(|last| last.checked_add(wait_after(WaitReason::Login, tries)))
+}
+
 /// How long after its last try a group's next re-run comes, when it was tried `tries` times again already.
 pub fn wait_after(reason: WaitReason, tries: u32) -> Duration {
     let (first, longest) = match reason {
@@ -487,6 +497,17 @@ mod tests {
             assert!(LOGIN_RELEASES.contains(&WaitGroup::limit(kind)));
         }
         assert!(!LOGIN_RELEASES.contains(&WaitGroup::NETWORK));
+    }
+
+    #[test]
+    fn a_new_login_restarts_a_process_at_once_and_again_only_after_the_backoff() {
+        assert!(relogin_due(None, 0, at(0)));
+        assert_eq!(relogin_at(None, 3), None);
+        let first = LOGIN_FIRST_WAIT.as_millis() as i64;
+        assert!(!relogin_due(Some(at(1_000)), 0, at(1_000 + first - 1)));
+        assert!(relogin_due(Some(at(1_000)), 0, at(1_000 + first)));
+        assert!(!relogin_due(Some(at(1_000)), 1, at(1_000 + first)));
+        assert_eq!(relogin_at(Some(at(1_000)), 1), Some(at(1_000 + 2 * first)));
     }
 
     #[test]

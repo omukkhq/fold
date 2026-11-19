@@ -65,7 +65,8 @@ impl Supervisor {
         tokio::spawn(self.clone().resume_owed_reviewers(None));
         tokio::spawn(self.clone().resume_owed_messages());
         tokio::spawn(self.clone().catch_up_main());
-        self.owed_turns_changed(Vec::new());
+        // A new token or login that came while the daemon was down shows in no change the loop sees, and a refused login costs no usage, so each turn that waits for a login runs again once its process is up.
+        self.owed_turns_changed(vec![fold_core::turn_waits::WaitGroup::LOGIN]);
         Ok(())
     }
 

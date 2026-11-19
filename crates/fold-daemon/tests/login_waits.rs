@@ -292,3 +292,30 @@ async fn a_new_login_of_claude_code_restarts_the_refused_turn_in_its_session() {
         .await;
     assert_eq!(workers["workers"][0]["waits_for"], Value::Null);
 }
+
+#[tokio::test]
+async fn a_daemon_start_runs_a_refused_turn_again_once_its_process_is_up() {
+    let clock = ManualClock::new();
+    let (_accounts, dir) = accounts_with_two(&clock);
+    let turns = TempDir::new().unwrap();
+    let (mut fake, turn) = fake_with_turn(&turns, &read_fixture("result"));
+    host_accounts(&mut fake, &dir, true);
+    let mut harness = lead_running(&fake, WorkerState::Idle).await;
+    let session = worker(&harness, LEAD).await.session_id;
+    set_turn(&turn, &login_turn(RECORDED));
+    harness
+        .call(
+            MAIN,
+            "send_message",
+            json!({"to": [LEAD], "body": "look at T-1"}),
+        )
+        .await;
+    until_idle(&harness, LEAD, |row| row.wait.is_some()).await;
+
+    // The person signs Claude Code in while the daemon is down.
+    set_turn(&turn, &read_fixture("result"));
+    harness.restart().await;
+    let rerun = the_rerun(&fake, 1).await;
+    assert_eq!(rerun.flag("--resume"), Some(session.as_str()));
+    until_idle(&harness, LEAD, |row| row.wait.is_none()).await;
+}

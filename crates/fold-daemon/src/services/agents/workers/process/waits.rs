@@ -6,7 +6,8 @@ use std::time::{Duration, SystemTime};
 
 use fold_core::accounts::AccountStamp;
 use fold_core::turn_waits::{
-    LOGIN_RELEASES, WaitGroup, WaitReason, WaitingTurn, rerun_plan, rerun_turn,
+    LOGIN_RELEASES, WaitGroup, WaitReason, WaitingTurn, relogin_at, relogin_due, rerun_plan,
+    rerun_turn,
 };
 use fold_core::{AgentName, Timestamp, WorkerState};
 use fold_store::StoreError;
@@ -36,6 +37,8 @@ pub(super) struct OwedTurns {
     changed: bool,
     /// Claude Code's own login changed since the loop's last plan, so each process on it whose turn waits for a working login starts again in its session.
     login_changed: bool,
+    /// When fold last started each process again for a new login of Claude Code (see [`relogin_due`]).
+    relogins: HashMap<AgentName, Timestamp>,
 }
 
 impl Drop for OwedTurns {
@@ -105,10 +108,16 @@ impl Supervisor {
                 std::mem::take(&mut owed.login_changed),
             )
         };
+        let keep = |supervisor: &Self, released: Vec<WaitGroup>| {
+            supervisor.keep_released(released);
+            if login_changed {
+                lock(&supervisor.inner.owed).login_changed = true;
+            }
+        };
         let rows = match self.worker_rows().await {
             Ok(rows) => rows,
             Err(error) => {
-                self.keep_released(released);
+                keep(self, released);
                 return Err(error);
             }
         };
@@ -122,18 +131,20 @@ impl Supervisor {
         match self.is_paused().await {
             Ok(false) => {}
             Ok(true) => {
-                self.keep_released(released);
+                keep(self, released);
                 return Ok(Some(None));
             }
             Err(error) => {
-                self.keep_released(released);
+                keep(self, released);
                 return Err(error.into());
             }
         }
         // A process that started with another account than the project's waits for its own switch, which runs its turn after it with the project's account. Nothing else switches a process whose turn waits, such as after `fld account update`, so the loop starts the switch. A new login of Claude Code restarts each process on it whose login was refused the same way.
         let current = self.current_account().await.ok();
         let on_own_login = matches!(current, Some(None));
+        let now = self.inner.clock.now();
         let mut restarting = BTreeSet::new();
+        let mut relogin_next: Option<Timestamp> = None;
         for row in &rows {
             if row.wait.is_none()
                 || row.state != WorkerState::Idle
@@ -144,15 +155,27 @@ impl Supervisor {
             }
             if !self.runs_account(&row.agent, current.as_ref()) {
                 self.switch_soon(&row.agent);
-            } else if login_changed
-                && on_own_login
-                && row.wait.as_ref().map(|wait| wait.reason) == Some(WaitReason::Login)
+            } else if let Some(wait) = row
+                .wait
+                .as_ref()
+                .filter(|wait| login_changed && on_own_login && wait.reason == WaitReason::Login)
             {
-                restarting.insert(row.agent.clone());
-                self.restart_soon(&row.agent);
+                let last = lock(&self.inner.owed).relogins.get(&row.agent).copied();
+                if relogin_due(last, wait.tries, now) {
+                    lock(&self.inner.owed)
+                        .relogins
+                        .insert(row.agent.clone(), now);
+                    restarting.insert(row.agent.clone());
+                    self.restart_soon(&row.agent);
+                } else if let Some(at) = relogin_at(last, wait.tries) {
+                    relogin_next = Some(relogin_next.map_or(at, |next| next.min(at)));
+                }
             }
         }
-        let now = self.inner.clock.now();
+        if relogin_next.is_some() {
+            // The new login still waits for a process that started again for a login a short time ago.
+            lock(&self.inner.owed).login_changed = true;
+        }
         let mut waiting: Vec<(&WorkerProcessRow, WaitingTurn<AgentName>)> = rows
             .iter()
             .filter(|row| {
@@ -183,6 +206,18 @@ impl Supervisor {
         let turns: Vec<WaitingTurn<AgentName>> =
             waiting.iter().map(|(_, turn)| turn.clone()).collect();
         let plan = rerun_plan(now, &turns, &released);
+        // A release that comes while a waiting worker's process still starts, such as at a daemon start, stays for the plan that finds it idle.
+        let starting: Vec<WaitGroup> = released
+            .iter()
+            .copied()
+            .filter(|group| {
+                rows.iter().any(|row| {
+                    row.state == WorkerState::Starting
+                        && row.wait.as_ref().is_some_and(|wait| wait.group() == *group)
+                })
+            })
+            .collect();
+        self.keep_released(starting);
         for agent in &plan.due {
             let Some((row, turn)) = waiting.iter().find(|(_, turn)| &turn.key == agent) else {
                 continue;
@@ -198,7 +233,11 @@ impl Supervisor {
             tracing::info!(%agent, reason = turn.group.reason.as_str(), "fold runs a worker's waiting turn again");
             self.send_turn(agent, &text);
         }
-        Ok(Some(plan.next_at))
+        let next_at = match (plan.next_at, relogin_next) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        Ok(Some(next_at))
     }
 
     async fn worker_rows(&self) -> Result<Vec<WorkerProcessRow>, AgentError> {
