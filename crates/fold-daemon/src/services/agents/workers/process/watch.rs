@@ -7,7 +7,7 @@ use fold_core::agent_changes::may_write_files;
 use fold_core::events::types;
 use fold_core::roles::MCP_UNAVAILABLE;
 use fold_core::turn_errors::MODEL_UNREACHABLE_TURNS;
-use fold_core::turn_waits::{LimitKind, WaitGroup, released_by};
+use fold_core::turn_waits::{LimitKind, TurnWait, WaitGroup, released_by};
 use fold_core::{AgentName, EventActor, LiveEvent, NewEvent, WorkerState, codes};
 use fold_store::StoreError;
 use fold_store::agents::{self, ProcessEnd, TurnTotals};
@@ -301,7 +301,8 @@ impl Supervisor {
                     .as_ref()
                     .map_or_else(AccountName::default_account, |stamp| stamp.name.clone())
             });
-        let account = match ran_with {
+        let answered = error.is_none_or(|error| error.reached_model);
+        let account = match ran_with.clone() {
             Some(account) => account,
             None if wait.is_none() => AccountName::default_account(),
             None => self
@@ -321,6 +322,9 @@ impl Supervisor {
                         let new =
                             agents::record_turn_wait(tx, id, &error.text, wait, &account, now)
                                 .await?;
+                        if matches!(wait, TurnWait::Login) {
+                            agents::record_refused_login(tx, &account, now).await?;
+                        }
                         if new == Some(true) {
                             // A full lease from the start of the wait, which the sweeper keeps while it lasts.
                             if let Some(row) = agents::find_worker_process(tx.conn(), agent).await?
@@ -370,6 +374,10 @@ impl Supervisor {
                     }
                     (None, _) => agents::clear_turn_error(tx, id).await?,
                 }
+                if let (true, None, Some(account)) = (answered, wait, &ran_with) {
+                    // The account's login works: a switch to it is a fix again.
+                    agents::clear_refused_login(tx, account).await?;
+                }
                 if wait.is_none() {
                     cleared = agents::clear_turn_wait(tx, id).await?;
                     if let Some(group) = cleared {
@@ -385,7 +393,6 @@ impl Supervisor {
             tracing::info!(%agent, reason = wait.group().reason.as_str(), "a worker's turn waits for a cause outside it");
             self.owed_turns_changed(Vec::new());
         } else {
-            let answered = error.is_none_or(|error| error.reached_model);
             let released = released_by(answered, cleared);
             if cleared.is_some() || self.has_owed_turns() {
                 self.owed_turns_changed(released);

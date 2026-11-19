@@ -745,7 +745,7 @@ impl AgentService {
         ))
     }
 
-    /// Gives each usage-limit item and the refused-login item one switch to every account other than the project's, by name, after its pause: `default` first when the project runs on another account and Claude Code has its own login on the host. An account whose login a waiting turn names as refused is never offered (see [`AgentService::refused_accounts`]). A usage-limit item also gets the project's account; the refused-login item keeps the refused account it names, which a pause or a switch does not change.
+    /// Gives each usage-limit item and the refused-login item one switch to every account other than the project's, by name, after its pause: `default` first when the project runs on another account and Claude Code has its own login on the host. An account whose login a turn found refused is never offered, and the refused-login fix names a switch only when there is one (see [`AgentService::refused_accounts`]). A usage-limit item also gets the project's account; the refused-login item keeps the refused account it names, which a pause or a switch does not change.
     async fn offer_account_switches(&self, items: &mut [crate::services::agents::NeedsYouItem]) {
         use crate::services::agents::{NeedsYouAction, NeedsYouKind};
         let switched = |kind: NeedsYouKind| {
@@ -763,8 +763,16 @@ impl AgentService {
             .map(NeedsYouAction::SwitchAccount)
             .collect();
         for item in items.iter_mut().filter(|item| switched(item.kind)) {
-            if item.kind == NeedsYouKind::UsageLimit {
-                item.account = Some(view.account.clone());
+            match item.kind {
+                NeedsYouKind::UsageLimit => item.account = Some(view.account.clone()),
+                // The fix names a switch only when the item offers one.
+                NeedsYouKind::LoginRefused => {
+                    item.reason = Some(fold_core::turn_waits::login_wait_hint(
+                        item.account.as_ref(),
+                        !others.is_empty(),
+                    ));
+                }
+                _ => {}
             }
             item.actions.extend(others.iter().cloned());
         }

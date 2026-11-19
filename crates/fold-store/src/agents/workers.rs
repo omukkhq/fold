@@ -960,6 +960,57 @@ pub async fn record_turn_wait(
     Ok(tries.map(|tries| tries == 0))
 }
 
+/// Records that a turn on `account` found its login refused at `now`, the newest refusal of that account.
+pub async fn record_refused_login(
+    tx: &mut WriteTx,
+    account: &AccountName,
+    now: Timestamp,
+) -> Result<(), StoreError> {
+    let account = account.as_str();
+    let now = now.as_millis();
+    sqlx::query!(
+        "INSERT INTO refused_logins (account, refused_at) VALUES (?1, ?2)
+         ON CONFLICT (account) DO UPDATE SET refused_at = max(refused_at, excluded.refused_at)",
+        account,
+        now
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
+/// Forgets the refusals of `account`, whose login a turn showed to work.
+pub async fn clear_refused_login(
+    tx: &mut WriteTx,
+    account: &AccountName,
+) -> Result<(), StoreError> {
+    let account = account.as_str();
+    sqlx::query!("DELETE FROM refused_logins WHERE account = ?", account)
+        .execute(tx.conn())
+        .await?;
+    Ok(())
+}
+
+/// Every account with a refused login and its newest refusal, by name.
+pub async fn refused_logins(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<(AccountName, Timestamp)>, StoreError> {
+    sqlx::query!(
+        r#"SELECT account AS "account!: String", refused_at AS "refused_at!: i64" FROM refused_logins ORDER BY account"#
+    )
+    .fetch_all(executor)
+    .await?
+    .into_iter()
+    .map(|row| {
+        Ok((
+            AccountName::parse(&row.account)
+                .map_err(|_| StoreError::Corrupt("refused_logins.account"))?,
+            time(row.refused_at, "refused_logins.refused_at")?,
+        ))
+    })
+    .collect()
+}
+
 /// Ends the row's wait, because a turn ended for another reason. Returns the group it waited in, or `None` when it waited for nothing.
 pub async fn clear_turn_wait(tx: &mut WriteTx, id: i64) -> Result<Option<WaitGroup>, StoreError> {
     let held = sqlx::query!(

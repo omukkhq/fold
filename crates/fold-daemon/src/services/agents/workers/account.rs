@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use fold_core::accounts::{AccountName, DEFAULT_ACCOUNT};
 use fold_core::config::ACCOUNT_KEY;
 use fold_core::events::types;
-use fold_core::turn_waits::{WaitReason, shows_wait};
 use fold_core::{Actor, FoldError, NewEvent, ProjectConfig, Timestamp, codes, policy};
 use fold_store::agents;
 use fold_vcs::atomic::EditLock;
@@ -94,24 +93,13 @@ impl AgentService {
         ProjectAccount { account, accounts }
     }
 
-    /// The accounts whose login a turn that waits now names as refused, unless the account got a new token after that refusal: a switch to one of them is no fix. Claude Code's own login counts as refused until its wait ends, since fold cannot tell a new login of it from the old one here.
+    /// The accounts whose login a worker's turn found refused, unless the account got a newer token since its newest refusal or a turn on it was answered: a switch to one of them is no fix. Claude Code's own login stays refused until a turn on it is answered, since fold cannot tell a new login of it from the old one here.
     pub(in crate::services::agents::workers) async fn refused_accounts(
         &self,
     ) -> BTreeSet<AccountName> {
-        let Ok(mut conn) = self.store.read().acquire().await else {
+        let Ok(refusals) = agents::refused_logins(self.store.read()).await else {
             return BTreeSet::new();
         };
-        let Ok(rows) = agents::list_worker_processes(&mut conn).await else {
-            return BTreeSet::new();
-        };
-        drop(conn);
-        let refusals: Vec<(AccountName, Timestamp)> = rows
-            .into_iter()
-            .filter(|row| shows_wait(row.state))
-            .filter_map(|row| row.wait)
-            .filter(|wait| wait.reason == WaitReason::Login)
-            .filter_map(|wait| Some((wait.account?, wait.tried_at)))
-            .collect();
         if refusals.is_empty() {
             return BTreeSet::new();
         }

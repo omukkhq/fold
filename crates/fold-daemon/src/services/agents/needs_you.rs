@@ -65,7 +65,7 @@ pub enum NeedsYouKind {
     UsageLimit,
     /// A claim went stale: its holder made no fold call for the lease, fold told the holder's lead, or else the main agent, and one more stall window passed without a renewal, or no agent can act on it. `agent` names the holder, `task` its task, `proposal` the proposal of a review claim, `action` and `reason` what the human does. The item ends when the holder renews the claim, which any of its fold calls does, or when the claim is released or taken over.
     StaleClaim,
-    /// The API refused the login of turns of the project's workers: the token of an account, or Claude Code's own login for `default`. One item for the project: `agents` names the workers whose turn waits, `title` holds Claude Code's newest message, `account` the account of that newest refusal, which the process ran with, `reason` that account's fix and `actions` the pause and a switch to each account other than the project's and other than a refused one. A new token of the account, a switch of the account or a new login of Claude Code runs every waiting turn again at once in its session; the item ends when no turn waits for a working login.
+    /// The API refused the login of turns of the project's workers: the token of an account, or Claude Code's own login for `default`. One item for the project: `agents` names the workers whose turn waits, `title` holds Claude Code's newest message, `account` the account of that newest refusal, which the process ran with, `reason` that account's fix and `actions` the pause and a switch to each account other than the project's and other than a refused one; `reason` names a switch only when there is one. A new token of the account, a switch of the account or a new login of Claude Code runs every waiting turn again at once in its session; the item ends when no turn waits for a working login.
     LoginRefused,
 }
 
@@ -620,7 +620,7 @@ fn wait_items(rows: &[agents::WorkerProcessRow]) -> Vec<NeedsYouItem> {
                     .and_then(|(_, wait)| wait.account.clone())
                     .unwrap_or_else(fold_core::accounts::AccountName::default_account);
                 let mut item = NeedsYouItem::new(NeedsYouKind::LoginRefused, since);
-                item.reason = Some(login_wait_hint(Some(&account)));
+                item.reason = Some(login_wait_hint(Some(&account), false));
                 item.about = Some(account.as_str().to_owned());
                 item.account = Some(account);
                 item.actions = vec![NeedsYouAction::Pause];

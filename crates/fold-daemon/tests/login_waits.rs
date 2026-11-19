@@ -650,3 +650,84 @@ async fn another_workers_answer_after_a_resume_gives_a_refused_worker_no_extra_t
         "only the timed re-run: an answer of another worker shows nothing of the lead's refused login"
     );
 }
+
+#[tokio::test]
+async fn every_refused_account_stays_out_of_the_switches_until_it_gets_a_newer_token() {
+    let clock = ManualClock::new();
+    let (_accounts, dir) = accounts_with_two(&clock);
+    let turns = TempDir::new().unwrap();
+    let (mut fake, turn) = fake_with_turn(&turns, &read_fixture("result"));
+    // No login of Claude Code on the host, so the accounts are work-a and work-b alone.
+    host_accounts(&mut fake, &dir, false);
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    assert_eq!(choose(&harness, Some("work-a")).await.0, StatusCode::OK);
+    until_started(&fake, LEAD, 2).await;
+    until_state(&harness, LEAD, WorkerState::Idle).await;
+    set_turn(&turn, &login_turn("Invalid API key · Please run /login"));
+    harness
+        .call(
+            MAIN,
+            "send_message",
+            json!({"to": [LEAD], "body": "look at T-1"}),
+        )
+        .await;
+    until_idle(&harness, LEAD, |row| row.wait.is_some()).await;
+    let item = |items: Vec<Value>| login_items(&items)[0].clone();
+    let first = item(needs_you(&harness).await);
+    assert_eq!(first["account"], "work-a");
+    assert_eq!(
+        first["actions"],
+        json!([{"action": "pause"}, {"action": "switch_account", "account": "work-b"}])
+    );
+    assert!(
+        first["reason"]
+            .as_str()
+            .unwrap()
+            .contains("or switch the account"),
+        "{first}"
+    );
+
+    // work-b is refused too: the worker's wait names work-b now, and work-a stays refused.
+    assert_eq!(choose(&harness, Some("work-b")).await.0, StatusCode::OK);
+    until_idle(&harness, LEAD, |row| {
+        row.wait
+            .as_ref()
+            .and_then(|wait| wait.account.as_ref())
+            .is_some_and(|account| account.as_str() == "work-b")
+    })
+    .await;
+    let second = item(needs_you(&harness).await);
+    assert_eq!(second["account"], "work-b");
+    assert_eq!(
+        second["actions"],
+        json!([{"action": "pause"}]),
+        "neither the project's account nor the refused work-a"
+    );
+    let reason = second["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("`fld account update work-b`") && !reason.contains("switch"),
+        "the fix offers no switch the item does not offer: {reason}"
+    );
+
+    // A newer token of work-a makes it a fix again.
+    let later = ManualClock::new();
+    later.advance(Duration::from_secs(24 * 60 * 60)).unwrap();
+    accounts::update(
+        &dir,
+        &AccountName::parse("work-a").unwrap(),
+        &check_token(TOKEN_A).unwrap(),
+        fold_core::Clock::now(&later),
+    )
+    .unwrap();
+    let third = item(needs_you(&harness).await);
+    assert_eq!(
+        third["actions"],
+        json!([{"action": "pause"}, {"action": "switch_account", "account": "work-a"}])
+    );
+    assert!(
+        third["reason"]
+            .as_str()
+            .unwrap()
+            .contains("or switch the account")
+    );
+}

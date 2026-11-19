@@ -1540,3 +1540,38 @@ async fn a_wait_stored_before_the_login_waits_keeps_every_field() {
         .unwrap();
     assert_eq!(other.wait, None);
 }
+
+#[tokio::test]
+async fn a_refused_login_keeps_its_newest_refusal_until_it_is_cleared() {
+    let (_dir, store) = seeded().await;
+    let work_a = AccountName::parse("work-a").unwrap();
+    let default = AccountName::default_account();
+    for (account, now) in [(&work_a, 20), (&work_a, 10), (&default, 15)] {
+        store
+            .write(async |tx| agents::record_refused_login(tx, account, at(now)).await)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        agents::refused_logins(store.read()).await.unwrap(),
+        [(default.clone(), at(15)), (work_a.clone(), at(20))],
+        "the newest refusal of each account, even after an older one is recorded"
+    );
+    store
+        .write(async |tx| agents::clear_refused_login(tx, &work_a).await)
+        .await
+        .unwrap();
+    assert_eq!(
+        agents::refused_logins(store.read()).await.unwrap(),
+        [(default, at(15))]
+    );
+    let long = "a".repeat(33);
+    assert!(
+        exec(
+            &store,
+            &format!("INSERT INTO refused_logins (account, refused_at) VALUES ('{long}', 1)")
+        )
+        .await
+        .is_err()
+    );
+}

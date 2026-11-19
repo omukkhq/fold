@@ -395,14 +395,20 @@ pub fn login_refused_title(account: Option<&AccountName>) -> String {
     }
 }
 
-/// What a human does about turns whose login the API refused, when the project runs on `account`, `None` for Claude Code's own login: a new token for an account, a new login for Claude Code, or another account. Each of these runs the waiting turns again at once.
-pub fn login_wait_hint(account: Option<&AccountName>) -> String {
-    match account.filter(|name| !name.is_default()) {
+/// What a human does about turns whose login the API refused, when the refused login is `account`'s, `None` for Claude Code's own login: a new token for an account, a new login for Claude Code, or, when `can_switch` says that another account can be chosen, a switch to it. Each of these runs the waiting turns again at once.
+pub fn login_wait_hint(account: Option<&AccountName>, can_switch: bool) -> String {
+    let fix = match account.filter(|name| !name.is_default()) {
         Some(name) => format!(
-            "run `claude setup-token` for a new token and `fld account update {name}` with it on stdin, or switch the account; fold then runs each waiting turn again at once"
+            "run `claude setup-token` for a new token and `fld account update {name}` with it on stdin"
         ),
-        None => "run `claude login` on the daemon's host, or switch the account; fold then runs each waiting turn again at once".to_owned(),
-    }
+        None => "run `claude login` on the daemon's host".to_owned(),
+    };
+    let switch = if can_switch {
+        ", or switch the account"
+    } else {
+        ""
+    };
+    format!("{fix}{switch}; fold then runs each waiting turn again at once")
 }
 
 #[cfg(test)]
@@ -535,7 +541,12 @@ mod tests {
     #[test]
     fn the_login_hint_names_the_accounts_own_fix() {
         let named = AccountName::parse("work-a").unwrap();
-        assert!(login_wait_hint(Some(&named)).contains("`fld account update work-a`"));
+        assert!(login_wait_hint(Some(&named), true).contains("`fld account update work-a`"));
+        assert!(login_wait_hint(Some(&named), true).contains("or switch the account"));
+        assert!(
+            !login_wait_hint(Some(&named), false).contains("switch"),
+            "no switch is offered"
+        );
         assert_eq!(
             login_refused_title(Some(&named)),
             "The token of work-a was refused"
@@ -546,7 +557,7 @@ mod tests {
             "Claude Code's login was refused"
         );
         for default in [None, Some(&AccountName::default_account())] {
-            let hint = login_wait_hint(default);
+            let hint = login_wait_hint(default, true);
             assert!(hint.contains("`claude login`"), "{hint}");
             assert!(!hint.contains("fld account update"), "{hint}");
         }
