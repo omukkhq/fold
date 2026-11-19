@@ -745,7 +745,7 @@ impl AgentService {
         ))
     }
 
-    /// Gives each usage-limit item and the refused-login item one switch to every account other than the project's, by name, after its pause: `default` first when the project runs on another account and Claude Code has its own login on the host. A usage-limit item also gets the project's account; the refused-login item keeps the refused account it names, which a pause or a switch does not change.
+    /// Gives each usage-limit item and the refused-login item one switch to every account other than the project's, by name, after its pause: `default` first when the project runs on another account and Claude Code has its own login on the host. An account whose login a waiting turn names as refused is never offered (see [`AgentService::refused_accounts`]). A usage-limit item also gets the project's account; the refused-login item keeps the refused account it names, which a pause or a switch does not change.
     async fn offer_account_switches(&self, items: &mut [crate::services::agents::NeedsYouItem]) {
         use crate::services::agents::{NeedsYouAction, NeedsYouKind};
         let switched = |kind: NeedsYouKind| {
@@ -755,10 +755,11 @@ impl AgentService {
             return;
         }
         let view = self.project_account().await;
+        let refused = self.refused_accounts().await;
         let others: Vec<NeedsYouAction> = view
             .accounts
             .into_iter()
-            .filter(|name| name != &view.account)
+            .filter(|name| name != &view.account && !refused.contains(name))
             .map(NeedsYouAction::SwitchAccount)
             .collect();
         for item in items.iter_mut().filter(|item| switched(item.kind)) {

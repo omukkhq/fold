@@ -216,7 +216,7 @@ async fn the_item_of_a_named_account_names_its_token_its_update_and_the_other_ac
 
 #[tokio::test]
 async fn the_item_keeps_naming_the_refused_account_through_a_pause_and_a_switch() {
-    let (_accounts, _dir, _turns, fake, harness, session) = lead_refused().await;
+    let (_accounts, dir, _turns, fake, harness, session) = lead_refused().await;
     let paused = harness.call(MAIN, "pause_project", json!({})).await;
     assert_eq!(paused["paused"], true, "{paused}");
     until_not_running(&harness, LEAD).await;
@@ -241,10 +241,29 @@ async fn the_item_keeps_naming_the_refused_account_through_a_pause_and_a_switch(
         item["actions"],
         json!([
             {"action": "pause"},
+            {"action": "switch_account", "account": "default"}
+        ]),
+        "the switches go to every account other than the project's and the refused one"
+    );
+    // A new token of the refused account makes it a fix again.
+    let later = ManualClock::new();
+    later.advance(Duration::from_secs(24 * 60 * 60)).unwrap();
+    accounts::update(
+        &dir,
+        &AccountName::parse("work-a").unwrap(),
+        &check_token(TOKEN_A).unwrap(),
+        fold_core::Clock::now(&later),
+    )
+    .unwrap();
+    let items = needs_you(&harness).await;
+    assert_eq!(
+        login_items(&items)[0]["actions"],
+        json!([
+            {"action": "pause"},
             {"action": "switch_account", "account": "default"},
             {"action": "switch_account", "account": "work-a"}
         ]),
-        "the switches go to every account other than the project's"
+        "{items:?}"
     );
 
     let resumed = harness.call(MAIN, "resume_project", json!({})).await;

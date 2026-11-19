@@ -1,9 +1,12 @@
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use fold_core::accounts::{AccountName, DEFAULT_ACCOUNT};
 use fold_core::config::ACCOUNT_KEY;
 use fold_core::events::types;
-use fold_core::{Actor, FoldError, NewEvent, ProjectConfig, codes, policy};
+use fold_core::turn_waits::{WaitReason, shows_wait};
+use fold_core::{Actor, FoldError, NewEvent, ProjectConfig, Timestamp, codes, policy};
+use fold_store::agents;
 use fold_vcs::atomic::EditLock;
 use serde_json::json;
 use toml_edit::{DocumentMut, value};
@@ -89,6 +92,49 @@ impl AgentService {
             .chain(host)
             .collect();
         ProjectAccount { account, accounts }
+    }
+
+    /// The accounts whose login a turn that waits now names as refused, unless the account got a new token after that refusal: a switch to one of them is no fix. Claude Code's own login counts as refused until its wait ends, since fold cannot tell a new login of it from the old one here.
+    pub(in crate::services::agents::workers) async fn refused_accounts(
+        &self,
+    ) -> BTreeSet<AccountName> {
+        let Ok(mut conn) = self.store.read().acquire().await else {
+            return BTreeSet::new();
+        };
+        let Ok(rows) = agents::list_worker_processes(&mut conn).await else {
+            return BTreeSet::new();
+        };
+        drop(conn);
+        let refusals: Vec<(AccountName, Timestamp)> = rows
+            .into_iter()
+            .filter(|row| shows_wait(row.state))
+            .filter_map(|row| row.wait)
+            .filter(|wait| wait.reason == WaitReason::Login)
+            .filter_map(|wait| Some((wait.account?, wait.tried_at)))
+            .collect();
+        if refusals.is_empty() {
+            return BTreeSet::new();
+        }
+        let added: HashMap<AccountName, Timestamp> = match self.accounts_dir() {
+            Some(dir) => tokio::task::spawn_blocking(move || accounts::list(&dir))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|entry| (entry.name, entry.added_at))
+                .collect(),
+            None => HashMap::new(),
+        };
+        refusals
+            .into_iter()
+            .filter(|(account, refused_at)| {
+                added
+                    .get(account)
+                    .is_none_or(|added_at| added_at <= refused_at)
+            })
+            .map(|(account, _)| account)
+            .collect()
     }
 
     /// A named human chooses the project's account, `None` for Claude Code's own login, which is refused with `account_not_found` while that login is not on the host. The name goes into `.fold/config.toml`, which stays the single source, through a flushed temporary file and a rename that keeps every other byte, and `workers.account_changed` with the old and the new name is stored in the same write; a commit that fails puts the old file back. A choice of the account the file names already writes nothing. Once the event is out, each running worker continues in its own session with the new account when it is idle (see [`super::Supervisor::switch_accounts`]); a start reads the file, so a daemon that stops between the rename and the commit starts its workers with the new account, without the event.
