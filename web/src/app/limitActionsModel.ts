@@ -4,7 +4,7 @@ export interface SwitchItem {
   label: string;
 }
 
-/** The entries of the usage-limit line's one Switch account list, by name in the daemon's order, whatever their number; null without a target, which leaves the control out. */
+/** The entries of the one Switch account list of the usage-limit line and of the refused-login line, by name in the daemon's order, whatever their number; null without a target, which leaves the control out. */
 export function switchItems(accounts: readonly string[]): SwitchItem[] | null {
   if (accounts.length === 0) {
     return null;

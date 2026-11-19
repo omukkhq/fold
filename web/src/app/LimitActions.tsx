@@ -15,7 +15,7 @@ import {
   switchPendingLabel,
 } from "./limitActionsModel";
 
-/** The usage-limit line's actions: Pause, and one Switch account control for any number of other accounts, whose list makes the chosen account the project's at once; fold then runs the waiting turns again on it. A switch stays pending until the daemon answers and Needs you is read again. */
+/** The actions of the usage-limit line and of the refused-login line: Pause, and one Switch account control for any number of other accounts, whose list makes the chosen account the project's at once; fold then runs the waiting turns again on it. A switch stays pending until the daemon answers and Needs you is read again. */
 export function LimitActions({
   slug,
   accounts,
