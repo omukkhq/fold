@@ -51,7 +51,11 @@ pub use changes::{WorkspaceChanges, WorkspaceEntry};
 pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
-pub use cleanup::{DirectoryRemoval, follow_closed_workspaces};
+pub(crate) use cleanup::window_cutoff;
+pub use cleanup::{
+    ClosedDecision, ClosedDirectory, DirectoryRemoval, KeepReason, RemovalReason,
+    follow_closed_workspaces,
+};
 pub(crate) use compare::CARRY_CACHE_ENTRIES;
 pub use compare::{
     BatchMergeCache, BatchMergeComparison, BatchMergeKey, BatchMergeView, CarriedComparison, Carry,

@@ -596,7 +596,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Collects the project's garbage: prunes checkpoints, removes the closed workspace directories that are still there and deletes unreferenced objects. Socket only; used by `fld gc`. */
+        /** Collects the project's garbage: prunes checkpoints, removes the closed workspace directories that are due and the folders of finished task workers and reviewers, and deletes unreferenced objects. Socket only; used by `fld gc`. */
         post: operations["run_gc"];
         delete?: never;
         options?: never;
@@ -3329,7 +3329,12 @@ export interface components {
         GateName: "open" | "version" | "caller" | "approval" | "human_review" | "prerequisites" | "merge";
         /** @enum {string} */
         GateStatusKind: "met" | "unmet" | "checked_at_integration";
-        /** @description The counts of one garbage collection run. */
+        /**
+         * @description Whether the run removed a directory or folder, or would in a dry run, or kept it.
+         * @enum {string}
+         */
+        GcAction: "remove" | "keep";
+        /** @description The counts of one garbage collection run, with each closed workspace directory and worker folder it looked at. */
         GcCounts: {
             /**
              * Format: int64
@@ -3365,6 +3370,20 @@ export interface components {
             tmp_removed: number;
             /**
              * Format: int64
+             * @description The bytes of the files in those folders.
+             */
+            worker_bytes_freed: number;
+            /** @description Every folder of a task worker or reviewer that stopped longer than `closed_workspace_days` ago, by agent. */
+            workers: components["schemas"]["GcWorker"][];
+            /**
+             * Format: int64
+             * @description Folders `.fold/workers/<name>` of finished task workers and reviewers that the run removed.
+             */
+            workers_removed: number;
+            /** @description Every closed workspace whose directory was still there, or came back after its removal, by id. */
+            workspaces: components["schemas"]["GcWorkspace"][];
+            /**
+             * Format: int64
              * @description Directories of archived or abandoned workspaces that the run removed.
              */
             workspaces_removed: number;
@@ -3373,6 +3392,43 @@ export interface components {
             /** @description Count what a run would remove and change nothing. */
             dry_run?: boolean;
         };
+        /** @description One folder `.fold/workers/<name>` of a task worker or reviewer that stopped longer than `closed_workspace_days` ago. */
+        GcWorker: {
+            action: components["schemas"]["GcAction"];
+            /** @description The worker's agent name. */
+            agent: string;
+            /**
+             * Format: int64
+             * @description The bytes of the files in the folder.
+             */
+            bytes: number;
+            reason: components["schemas"]["GcWorkerReason"];
+        };
+        /**
+         * @description Why the run removes or keeps the folder of a finished task worker or reviewer.
+         * @enum {string}
+         */
+        GcWorkerReason: "finished" | "claim" | "session" | "parked" | "waiting" | "owed_resume" | "owed_message" | "invalid_path" | "failed";
+        /** @description One closed workspace whose directory was still there. */
+        GcWorkspace: {
+            action: components["schemas"]["GcAction"];
+            /** @description The error code of a removal that failed. */
+            code: string | null;
+            /** @description The worker that owns the workspace. */
+            owner: string | null;
+            /** @description The directory relative to the project folder. */
+            path: string;
+            reason: components["schemas"]["GcWorkspaceReason"];
+            /** @description fold had removed the directory, and a directory was at its path again. */
+            returned: boolean;
+            /** @description The workspace id, such as `ws-9`. */
+            workspace: string;
+        };
+        /**
+         * @description Why the run removes or keeps the directory of a closed workspace.
+         * @enum {string}
+         */
+        GcWorkspaceReason: "owner_ended" | "past_window" | "owner_process" | "owner_session" | "session_inside" | "invalid_path" | "failed";
         /** @description What turning Git on did. */
         GitEnabledView: {
             /** @description The commit the Git branch points to; null while main holds only the empty genesis. */

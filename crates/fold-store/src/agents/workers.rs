@@ -1510,3 +1510,61 @@ pub async fn proposals_without_verdict(
         "worker_proposals",
     )
 }
+
+/// A task worker or reviewer whose process stopped or failed before a cutoff, with what still ties it to work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndedWorker {
+    pub agent: AgentName,
+    pub role: Role,
+    pub stopped_at: Timestamp,
+    /// A worker row of the agent holds an unreleased claim of either kind.
+    pub claim: bool,
+    /// The agent has an open session.
+    pub session: bool,
+    /// An agent stopped the worker to wait for its go.
+    pub parked: bool,
+    /// Its last turn ended for a cause outside it, which fold owes a re-run.
+    pub waiting: bool,
+}
+
+/// The task workers and reviewers in state `stopped` or `failed` whose process stopped before `cutoff`, by agent name, or only `agent` when it is one of them. Leads and the main agent are long-lived and never listed.
+pub async fn ended_short_lived_workers(
+    executor: impl SqliteExecutor<'_>,
+    cutoff: Timestamp,
+    agent: Option<&AgentName>,
+) -> Result<Vec<EndedWorker>, StoreError> {
+    let cutoff = cutoff.as_millis();
+    let agent = agent.map(AgentName::as_str);
+    let rows = sqlx::query!(
+        r#"SELECT g.name AS "agent!: String", p.role AS "role!: String",
+                  p.stopped_at AS "stopped_at!: i64",
+                  EXISTS (SELECT 1 FROM claims c JOIN workers k ON k.id = c.worker_id
+                          WHERE k.agent_id = p.agent_id AND c.released_at IS NULL) AS "claim!: bool",
+                  EXISTS (SELECT 1 FROM sessions s
+                          WHERE s.agent_id = p.agent_id AND s.ended_at IS NULL) AS "session!: bool",
+                  p.parked_at IS NOT NULL AS "parked!: bool",
+                  p.wait_reason IS NOT NULL AS "waiting!: bool"
+           FROM worker_processes p JOIN agents g ON g.id = p.agent_id
+           WHERE p.role IN ('task_worker', 'reviewer') AND p.state IN ('stopped', 'failed')
+             AND p.stopped_at < ?1 AND (?2 IS NULL OR g.name = ?2)
+           ORDER BY g.name"#,
+        cutoff,
+        agent
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(EndedWorker {
+                agent: AgentName::parse(&row.agent)
+                    .map_err(|_| StoreError::Corrupt("agents.name"))?,
+                role: Role::parse(&row.role).ok_or(StoreError::Corrupt("worker_processes.role"))?,
+                stopped_at: time(row.stopped_at, "worker_processes.stopped_at")?,
+                claim: row.claim,
+                session: row.session,
+                parked: row.parked,
+                waiting: row.waiting,
+            })
+        })
+        .collect()
+}

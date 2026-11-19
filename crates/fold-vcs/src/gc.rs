@@ -177,6 +177,79 @@ pub fn remove_workspace_dir(project_root: &Path, path: &Path) -> Result<bool, Wo
     }
 }
 
+/// The canonical folder `name` directly below the project's `.fold/workers/`, or `None` when nothing is there. `.fold/workers` must be a real directory and `name` a plain folder name whose entry is a directory, never a symlink; anything else is `InvalidInput`, so a link a worker's shell planted is never followed.
+pub fn locate_worker_dir(paths: &ProjectPaths, name: &str) -> io::Result<Option<PathBuf>> {
+    let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "not a worker folder");
+    let mut components = Path::new(name).components();
+    if !matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    ) {
+        return Err(invalid());
+    }
+    let workers = paths.workers_dir();
+    let workers = match fs::symlink_metadata(&workers) {
+        Ok(meta) if meta.is_dir() => fs::canonicalize(&workers)?,
+        Ok(_) => return Err(invalid()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let dir = workers.join(name);
+    match fs::symlink_metadata(&dir) {
+        Ok(meta) if meta.is_dir() => Ok(Some(dir)),
+        Ok(_) => Err(invalid()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Deletes the directory `dir` and everything below it, opening up directories that refuse removal first and removing symlinks inside without following them, the way [`remove_workspace_dir`] deletes a workspace. False when nothing was at `dir`; an entry at `dir` that is no directory is `InvalidInput`.
+pub fn remove_tree(dir: &Path) -> io::Result<bool> {
+    match make_removable(dir) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a directory",
+            ));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    }
+    match fs::remove_dir_all(dir) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
+/// The bytes of the files and symlinks below `dir`, by their length, never following a symlink; zero when nothing is there. An entry removed during the walk counts nothing.
+pub fn tree_bytes(dir: &Path) -> io::Result<u64> {
+    let mut bytes = 0u64;
+    let mut pending = vec![dir.to_owned()];
+    while let Some(at) = pending.pop() {
+        let entries = match fs::read_dir(&at) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        for item in entries {
+            let item = item?;
+            let meta = match fs::symlink_metadata(item.path()) {
+                Ok(meta) => meta,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            if meta.is_dir() {
+                pending.push(item.path());
+            } else {
+                bytes = bytes.saturating_add(meta.len());
+            }
+        }
+    }
+    Ok(bytes)
+}
+
 /// The canonical directory [`remove_workspace_dir`] would delete, or `None` when it is already gone. The path must name a direct child of the project's workspace directory `.fold/ws/` once its parent is resolved, must hold no `..`, and must not be a symlink itself; anything else is `invalid_path`.
 pub fn locate_workspace_dir(
     project_root: &Path,
