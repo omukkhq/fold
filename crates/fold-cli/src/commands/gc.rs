@@ -167,7 +167,7 @@ fn action(action: GcAction, dry_run: bool) -> &'static str {
     }
 }
 
-/// One closed workspace as `workspace ws-6 .fold/ws/review-p-4: would remove, it closed more than closed_workspace_days ago`.
+/// One closed workspace as `workspace ws-2 .fold/ws/review-p-1: would remove, it closed more than closed_workspace_days ago`.
 fn workspace_line(workspace: &GcWorkspace, dry_run: bool) -> String {
     let owner = workspace.owner.as_deref().unwrap_or("its owner");
     let why = match workspace.reason {
@@ -260,7 +260,7 @@ mod tests {
             "tmp_removed": 0, "missing": 0, "workspaces_removed": 0, "checkpoints_pruned": 1,
             "workers_removed": 1, "worker_bytes_freed": 372,
             "workspaces": [
-                {"workspace": "ws-6", "path": ".fold/ws/review-p-4", "owner": "review-lead",
+                {"workspace": "ws-2", "path": ".fold/ws/review-p-1", "owner": "review-lead",
                  "returned": false, "action": "remove", "reason": "past_window", "code": null},
                 {"workspace": "ws-9", "path": ".fold/ws/t-5", "owner": "main",
                  "returned": true, "action": "keep", "reason": "owner_session", "code": null},
@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(lines[9], "worker folder bytes freed: 372");
         assert_eq!(
             lines[10],
-            "workspace ws-6 .fold/ws/review-p-4: would remove, it closed more than closed_workspace_days ago"
+            "workspace ws-2 .fold/ws/review-p-1: would remove, it closed more than closed_workspace_days ago"
         );
         assert_eq!(
             lines[11],
@@ -343,7 +343,7 @@ mod tests {
         print_counts(&mut out, "demo", false, &counts).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(
-            text.contains("ws-6 .fold/ws/review-p-4: removed, it closed"),
+            text.contains("ws-2 .fold/ws/review-p-1: removed, it closed"),
             "{text}"
         );
         assert!(text.contains("reviewer-3, 372 bytes: removed, "), "{text}");

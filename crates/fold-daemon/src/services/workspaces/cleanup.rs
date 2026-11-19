@@ -40,7 +40,7 @@ pub enum DirectoryRemoval {
 pub enum RemovalReason {
     /// Its owning agent has no worker process that has not ended and no open session.
     OwnerEnded,
-    /// It closed longer than `closed_workspace_days` ago, so its owner no longer holds it back.
+    /// It closed longer than `closed_workspace_days` ago, past which its owner does not hold it back.
     PastWindow,
 }
 
@@ -105,7 +105,7 @@ pub(crate) fn window_cutoff(now: Timestamp, days: u64) -> Option<Timestamp> {
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// What fold does with the directory of `closed` under `window`: an open session working in it keeps it; otherwise it goes once its owner holds it no longer or the window has passed.
+/// What fold does with the directory of `closed` under `window`: an open session working in it keeps it; otherwise it goes once nothing of its owner holds it or the window has passed.
 fn decide(closed: &ClosedWorkspace, window: &RemovalWindow, root: &Path) -> ClosedDecision {
     if window.session_inside(&root.join(&closed.path)) {
         return ClosedDecision::Keep(KeepReason::SessionInside);

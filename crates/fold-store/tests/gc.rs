@@ -496,7 +496,7 @@ async fn a_review_checkout_of_a_lead_that_never_stops_is_due_once_the_window_has
     }
     let now = project.now();
     let ago = |days: u32| now.checked_sub(DAY * days).unwrap();
-    // As fold kept the review checkouts that the review lead itself opened: its process is long-lived and never ends.
+    // The review lead's process is long-lived and never ends, and it owns review checkouts it opened itself.
     execute(
         store,
         &format!(
@@ -504,7 +504,7 @@ async fn a_review_checkout_of_a_lead_that_never_stops_is_due_once_the_window_has
              INSERT INTO workers (id, agent_id, name, parent_worker_id, created_at) VALUES (1, 1, 'review-lead', NULL, 0), (2, 2, 'main', NULL, 0);
              INSERT INTO worker_processes (agent_id, role, session_id, state, started_by, started_at) VALUES (1, 'review_lead', 's1', 'working', 'main', 0);
              INSERT INTO sessions (id, agent_id, pid, started_at) VALUES (1, 2, 10, 0);
-             UPDATE workspaces SET state = 'archived', kind = 'review', path = '.fold/ws/review-p-4', closed_at = {old}, worker_id = 1 WHERE number = 1;
+             UPDATE workspaces SET state = 'archived', kind = 'review', path = '.fold/ws/review-p-1', closed_at = {old}, worker_id = 1 WHERE number = 1;
              UPDATE workspaces SET state = 'archived', kind = 'review', path = '.fold/ws/review-p-9', closed_at = {recent}, worker_id = 1 WHERE number = 2;
              UPDATE workspaces SET state = 'archived', closed_at = {recent}, worker_id = 2 WHERE number = 3;",
             old = ago(29).as_millis(),
@@ -568,13 +568,13 @@ async fn a_removal_mark_is_found_by_path_and_reopened_from_its_start() {
     }
     execute(
         store,
-        "UPDATE workspaces SET state = 'archived', path = '.fold/ws/t-517', closed_at = 5, removal_started_at = 6, directory_removed_at = 7 WHERE number = 1;
+        "UPDATE workspaces SET state = 'archived', path = '.fold/ws/t-1', closed_at = 5, removal_started_at = 6, directory_removed_at = 7 WHERE number = 1;
          UPDATE workspaces SET state = 'archived', path = '.fold/ws/t-2', closed_at = 5 WHERE number = 2;
          UPDATE workspaces SET path = '.fold/ws/t-3', directory_removed_at = 7 WHERE number = 3;",
     )
     .await;
     let paths: Vec<String> = [
-        ".fold/ws/t-517",
+        ".fold/ws/t-1",
         ".fold/ws/t-2",
         ".fold/ws/t-3",
         ".fold/ws/other",

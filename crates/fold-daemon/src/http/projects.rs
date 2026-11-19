@@ -603,12 +603,16 @@ pub struct GcCounts {
     /// Automatic checkpoints beyond the kept number, and every checkpoint of a workspace closed for longer than `closed_workspace_days`.
     pub checkpoints_pruned: u64,
     /// Folders `.fold/workers/<name>` of finished task workers and reviewers that the run removed.
+    #[serde(default)]
     pub workers_removed: u64,
     /// The bytes of the files in those folders.
+    #[serde(default)]
     pub worker_bytes_freed: u64,
     /// Every closed workspace whose directory was still there, or came back after its removal, by id.
+    #[serde(default)]
     pub workspaces: Vec<GcWorkspace>,
     /// Every folder of a task worker or reviewer that stopped longer than `closed_workspace_days` ago, by agent.
+    #[serde(default)]
     pub workers: Vec<GcWorker>,
 }
 

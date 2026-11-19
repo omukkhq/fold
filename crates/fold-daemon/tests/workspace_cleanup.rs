@@ -528,7 +528,7 @@ fn reported(report: &GcReport, workspace: u32) -> &ClosedDirectory {
         .unwrap_or_else(|| panic!("ws-{workspace} in {:?}", report.workspaces))
 }
 
-/// The integrated `P-1` leaves a closed review checkout of `review`, whose process then runs on, as a review lead's long-lived process does: fold kept the checkouts such a lead opened itself.
+/// The integrated `P-1` leaves a closed review checkout of `review`, whose process then runs on, as a review lead's long-lived process does.
 async fn checkout_of_a_running_lead(fx: &Fixture) -> (u32, std::path::PathBuf) {
     fx.proposal().await;
     let review = reviewer(fx).await;
@@ -641,9 +641,9 @@ async fn a_directory_that_comes_back_after_its_removal_gets_a_final_checkpoint_a
     assert!(matches!(removal, DirectoryRemoval::Removed { .. }));
     assert_eq!(final_checkpoints(&fx).await, 1);
     // As an agent that still knows the path writes into it by its full path.
-    let back = fx.task_dir().join("backend/tests/route_cache.py");
+    let back = fx.task_dir().join("notes/later.txt");
     fs::create_dir_all(back.parent().unwrap()).unwrap();
-    fs::write(&back, "CACHE = {}\n").unwrap();
+    fs::write(&back, "written after the removal\n").unwrap();
 
     let handle = handle(&fx).await;
     let planned = gc(&handle, true).await.unwrap();
@@ -672,11 +672,11 @@ async fn a_directory_that_comes_back_after_its_removal_gets_a_final_checkpoint_a
     let objects = ObjectStore::open(&fx.project.paths().fold_dir()).unwrap();
     let files = load_flat(&objects, &last.tree).unwrap();
     let kept = objects
-        .read(&files[b"backend/tests/route_cache.py".as_slice()].hash)
+        .read(&files[b"notes/later.txt".as_slice()].hash)
         .unwrap()
         .payload;
     assert_eq!(
-        kept, b"CACHE = {}\n",
+        kept, b"written after the removal\n",
         "what came back is recorded before it goes"
     );
     assert!(gc(&handle, true).await.unwrap().workspaces.is_empty());
@@ -695,7 +695,7 @@ async fn the_sweep_removes_a_returned_directory_and_finishes_a_removal_an_older_
         .unwrap();
     let second = fx.project.paths().root().join(".fold/ws/t-2");
     assert!(second.is_dir());
-    // A stop of an older fold left ws-2's removal started, and ws-1 marked removed while its directory is there.
+    // ws-2's removal started without being recorded as done, and ws-1 is marked removed while its directory is there.
     let now = fx.project.now().as_millis();
     fx.execute(&format!(
         "UPDATE workspaces SET removal_started_at = {now} WHERE number = 2;

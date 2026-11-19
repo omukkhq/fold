@@ -71,7 +71,7 @@ pub struct ClosedWorkspace {
     pub owner: Option<String>,
     /// What of its owning agent holds the directory back, `None` once nothing does.
     pub hold: Option<OwnerHold>,
-    /// The workspace closed before the cutoff the caller passed: the `closed_workspace_days` window has passed, so the owner no longer holds the directory back.
+    /// The workspace closed before the cutoff the caller passed: the `closed_workspace_days` window has passed, and past it the owner does not hold the directory back.
     pub past_window: bool,
 }
 

@@ -3372,16 +3372,16 @@ export interface components {
              * Format: int64
              * @description The bytes of the files in those folders.
              */
-            worker_bytes_freed: number;
+            worker_bytes_freed?: number;
             /** @description Every folder of a task worker or reviewer that stopped longer than `closed_workspace_days` ago, by agent. */
-            workers: components["schemas"]["GcWorker"][];
+            workers?: components["schemas"]["GcWorker"][];
             /**
              * Format: int64
              * @description Folders `.fold/workers/<name>` of finished task workers and reviewers that the run removed.
              */
-            workers_removed: number;
+            workers_removed?: number;
             /** @description Every closed workspace whose directory was still there, or came back after its removal, by id. */
-            workspaces: components["schemas"]["GcWorkspace"][];
+            workspaces?: components["schemas"]["GcWorkspace"][];
             /**
              * Format: int64
              * @description Directories of archived or abandoned workspaces that the run removed.

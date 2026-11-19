@@ -127,6 +127,15 @@ pub async fn collect_worker_folders(
     if ended.is_empty() {
         return Ok(Vec::new());
     }
+    let workers = paths.workers_dir();
+    let present = blocking(move || folder_names(&workers)).await?;
+    let ended: Vec<EndedWorker> = ended
+        .into_iter()
+        .filter(|worker| present.contains(worker.agent.as_str()))
+        .collect();
+    if ended.is_empty() {
+        return Ok(Vec::new());
+    }
     let owed = Owed::read(store).await?;
     let mut folders = Vec::new();
     for worker in ended {
@@ -252,6 +261,22 @@ fn used(session_folders: &[PathBuf], dirs: &[PathBuf]) -> bool {
     session_folders
         .iter()
         .any(|folder| dirs.iter().any(|dir| folder.starts_with(dir)))
+}
+
+/// The names of the entries below `workers`, so a run reads only the folders that are there. Blocking.
+fn folder_names(workers: &Path) -> Result<HashSet<String>, FoldError> {
+    let entries = match fs::read_dir(workers) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(error) => return Err(folder_error(error)),
+    };
+    let mut names = HashSet::new();
+    for entry in entries {
+        if let Ok(name) = entry.map_err(folder_error)?.file_name().into_string() {
+            names.insert(name);
+        }
+    }
+    Ok(names)
 }
 
 /// Deletes every folder below `workers` that fold moved aside to delete and a stopped run left. Blocking.

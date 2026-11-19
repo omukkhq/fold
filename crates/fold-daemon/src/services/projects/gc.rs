@@ -99,14 +99,21 @@ pub async fn gc(project: &ProjectHandle, dry_run: bool) -> Result<GcReport, Proj
     for hash in &swept.missing {
         tracing::warn!(project = %project.slug, code = codes::OBJECT_MISSING, object = %hash, "garbage collection reached an object the store does not hold");
     }
-    let workers = collect_worker_folders(
+    // The sweep has run, so a failure here leaves the folders for the next run instead of failing the report of what was done.
+    let workers = match collect_worker_folders(
         &project.store,
         &project.paths,
         window_cutoff(now, days),
         dry_run,
     )
     .await
-    .map_err(|error| FoldError::new(error.log_code(), error.to_string()))?;
+    {
+        Ok(workers) => workers,
+        Err(error) => {
+            tracing::warn!(project = %project.slug, code = error.log_code(), "the worker folders were not read; the next run tries again");
+            Vec::new()
+        }
+    };
     let removed: Vec<&WorkerFolder> = workers
         .iter()
         .filter(|folder| folder.decision == FolderDecision::Remove)
