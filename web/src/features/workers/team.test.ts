@@ -200,11 +200,11 @@ describe("steps", () => {
     expect(
       errorHoverText({
         title: "cannot reach the model",
-        text: "Invalid API key",
+        text: "There's an issue with the selected model",
         hint: null,
         waits: false,
       }),
-    ).toBe("cannot reach the model: Invalid API key");
+    ).toBe("cannot reach the model: There's an issue with the selected model");
   });
 
   it("uses the live step only while the process works", () => {
