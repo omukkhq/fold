@@ -604,15 +604,19 @@ pub struct GcCounts {
     pub checkpoints_pruned: u64,
     /// Folders `.fold/workers/<name>` of finished task workers and reviewers that the run removed.
     #[serde(default)]
+    #[schema(required = true)]
     pub workers_removed: u64,
     /// The bytes of the files in those folders.
     #[serde(default)]
+    #[schema(required = true)]
     pub worker_bytes_freed: u64,
-    /// Every closed workspace whose directory was still there, or came back after its removal, by id.
+    /// Every closed workspace not recorded as removed, or whose directory came back after its removal, by id.
     #[serde(default)]
+    #[schema(required = true)]
     pub workspaces: Vec<GcWorkspace>,
     /// Every folder of a task worker or reviewer that stopped longer than `closed_workspace_days` ago, by agent.
     #[serde(default)]
+    #[schema(required = true)]
     pub workers: Vec<GcWorker>,
 }
 
@@ -646,7 +650,7 @@ pub enum GcWorkspaceReason {
     Failed,
 }
 
-/// One closed workspace whose directory was still there.
+/// One closed workspace not recorded as removed, or whose directory came back.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct GcWorkspace {
     /// The workspace id, such as `ws-9`.
