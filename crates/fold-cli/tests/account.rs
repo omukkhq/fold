@@ -56,12 +56,14 @@ done
 echo "token=$token outranked=$outranked config=$config argument=$argument args=$*" >> '{runs}'
 if [ -f '{result}' ]; then
   cat '{result}'
+  if [ -f '{exit}' ]; then exit "$(cat '{exit}')"; fi
 else
   echo '{{"type":"result","subtype":"success","is_error":false,"result":"ok","usage":{{"input_tokens":12,"output_tokens":2}}}}'
 fi
 "#,
             runs = self.path("check-runs").display(),
             result = self.path("check-result.json").display(),
+            exit = self.path("check-exit").display(),
         );
         let program = self.path("bin/claude");
         fs::write(&program, script).unwrap();
@@ -606,4 +608,42 @@ fn a_token_fold_cannot_check_now_is_stored_with_a_warning() {
     );
     let listed = sandbox.fold(&["account", "list"]);
     assert_eq!(stdout(&listed).lines().count(), 4, "{}", stdout(&listed));
+}
+
+/// The result Claude Code printed for the check's turn with an invalid token, recorded once, with fixed ids.
+#[cfg(test)]
+const RECORDED_REFUSAL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../fold-daemon/tests/fixtures/claude/login_refused_result.json"
+));
+
+#[test]
+fn the_recorded_refusal_with_exit_code_1_is_refused_and_stores_nothing() {
+    let sandbox = Sandbox::new();
+    fs::write(sandbox.path("check-result.json"), RECORDED_REFUSAL).unwrap();
+    fs::write(sandbox.path("check-exit"), "1").unwrap();
+    let refused = sandbox.fold_with_input(&["account", "add", "work-a"], TOKEN_A);
+    assert!(!refused.status.success());
+    holds_no_token(&refused);
+    let shown = stderr(&refused);
+    assert!(shown.contains("account_token_rejected: "), "{shown}");
+    assert!(shown.contains("hint: run `claude setup-token`"), "{shown}");
+    assert!(!sandbox.accounts().exists(), "nothing is stored");
+    assert_eq!(sandbox.check_runs().len(), 1);
+
+    fs::remove_file(sandbox.path("check-result.json")).unwrap();
+    fs::remove_file(sandbox.path("check-exit")).unwrap();
+    let added = sandbox.fold_with_input(&["account", "add", "work-a"], TOKEN_A);
+    assert!(added.status.success(), "{}", stderr(&added));
+    fs::write(sandbox.path("check-result.json"), RECORDED_REFUSAL).unwrap();
+    fs::write(sandbox.path("check-exit"), "1").unwrap();
+    let update = sandbox.fold_with_input(&["account", "update", "work-a"], TOKEN_B);
+    assert!(stderr(&update).contains("account_token_rejected: "));
+    let (_, kept) = fold_daemon::services::agents::accounts::token(
+        &sandbox.accounts(),
+        &fold_core::accounts::AccountName::parse("work-a").unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(kept.expose() == TOKEN_A, "the account keeps its token");
 }

@@ -194,12 +194,13 @@ pub const TOKEN_CHECK_PROMPT: &str = "Reply with the word ok.";
 /// The longest that check waits for its turn.
 pub const TOKEN_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// The result of the check's turn as Claude Code's `--output-format json` gives it: whether it is an error, its text, and whether any token of the turn reached the model.
+/// The result of the check's turn as Claude Code's `--output-format json` gives it: whether it is an error, its text, whether any token of the turn reached the model, and whether its structured fields name a refused login (see [`crate::turn_waits::is_refused_login`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenCheckRun {
     pub is_error: bool,
     pub text: Option<String>,
     pub reached_model: bool,
+    pub refused_login: bool,
 }
 
 /// What the check's turn showed of a new token.
@@ -235,11 +236,14 @@ impl Unchecked {
     }
 }
 
-/// Reads the check's turn, `None` when Claude Code gave no result. Only positive evidence decides: a refused login rejects the token, and only a turn that ended well and reached the model shows that it works; anything else leaves it unchecked, so a host where `claude` cannot run still keeps the token.
+/// Reads the check's turn, `None` when Claude Code gave no result. Only positive evidence decides: a refused login, by the result's structured fields or else by its text, rejects the token, and only a turn that ended well and reached the model shows that it works; anything else leaves it unchecked, so a host where `claude` cannot run still keeps the token.
 pub fn token_check(run: Option<&TokenCheckRun>) -> TokenCheck {
     let Some(run) = run else {
         return TokenCheck::Unchecked(Unchecked::NoAnswer);
     };
+    if run.refused_login && !run.reached_model {
+        return TokenCheck::Rejected;
+    }
     let wait = run
         .text
         .as_deref()
@@ -363,6 +367,7 @@ mod tests {
             is_error,
             text: Some(text.to_owned()),
             reached_model,
+            refused_login: false,
         }
     }
 
@@ -377,6 +382,7 @@ mod tests {
             "API Error: 401 Invalid authentication credentials",
             "Failed to authenticate: OAuth token revoked",
             "OAuth token has expired. Please obtain a new token or refresh your existing token.",
+            "Failed to authenticate. API Error: 401 OAuth access token is invalid.",
         ] {
             assert_eq!(
                 token_check(Some(&run(true, refused, false))),
@@ -404,6 +410,7 @@ mod tests {
                 is_error: true,
                 text: None,
                 reached_model: false,
+                refused_login: false,
             },
         ] {
             assert_eq!(
@@ -416,6 +423,11 @@ mod tests {
             token_check(None),
             TokenCheck::Unchecked(Unchecked::NoAnswer)
         );
+        let structured = TokenCheckRun {
+            refused_login: true,
+            ..run(true, "a wording fold does not know", false)
+        };
+        assert_eq!(token_check(Some(&structured)), TokenCheck::Rejected);
         for why in [
             Unchecked::Network,
             Unchecked::UsageLimit,

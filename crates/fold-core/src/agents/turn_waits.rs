@@ -175,6 +175,17 @@ fn reset_wording(rest: &str) -> Option<String> {
     (!wording.is_empty() && wording.len() <= MAX_RESET_LEN).then(|| wording.to_owned())
 }
 
+/// The status of a refused login in the `api_error_status` field of Claude Code's result.
+pub const LOGIN_STATUS: u64 = 401;
+
+/// The type of a refused login in the `api_error_type` field of Claude Code's result.
+pub const LOGIN_ERROR_TYPE: &str = "authentication_error";
+
+/// Whether the structured fields of Claude Code's result, `api_error_status` and `api_error_type` when it has them, say that the API refused the login. They outrank the text, which [`turn_wait`] reads when they are absent: a result of Claude Code 2.1.3xx with an invalid token has `"api_error_status":401`, `"api_error_type":"authentication_error"` and the text `Failed to authenticate. API Error: 401 OAuth access token is invalid.`.
+pub fn is_refused_login(status: Option<u64>, error_type: Option<&str>) -> bool {
+    status == Some(LOGIN_STATUS) || error_type == Some(LOGIN_ERROR_TYPE)
+}
+
 /// The waits that one check settles together: every turn that could not reach the model, every turn at one kind of usage limit, or every turn whose login the API refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WaitGroup {
@@ -484,6 +495,7 @@ mod tests {
             "OAuth token revoked · Please run /login",
             "OAuth token has been revoked",
             "OAuth token refresh failed — run /login to re-authenticate",
+            "Failed to authenticate. API Error: 401 OAuth access token is invalid.",
             "  Not logged in\nsecond line",
         ] {
             assert_eq!(turn_wait(text), Some(TurnWait::Login), "{text}");
@@ -508,6 +520,16 @@ mod tests {
         assert!(relogin_due(Some(at(1_000)), 0, at(1_000 + first)));
         assert!(!relogin_due(Some(at(1_000)), 1, at(1_000 + first)));
         assert_eq!(relogin_at(Some(at(1_000)), 1), Some(at(1_000 + 2 * first)));
+    }
+
+    #[test]
+    fn the_structured_fields_of_a_refused_login_count_alone() {
+        assert!(is_refused_login(Some(401), Some("authentication_error")));
+        assert!(is_refused_login(Some(401), None));
+        assert!(is_refused_login(None, Some("authentication_error")));
+        assert!(!is_refused_login(Some(403), Some("permission_error")));
+        assert!(!is_refused_login(Some(529), Some("overloaded_error")));
+        assert!(!is_refused_login(None, None));
     }
 
     #[test]

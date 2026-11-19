@@ -267,7 +267,7 @@ fn check_with_claude(claude: &Path, token: &AccountToken) -> TokenCheck {
 /// The most bytes fold reads of the check's output: its result is one short JSON object.
 const MAX_CHECK_OUTPUT: u64 = 1024 * 1024;
 
-/// The result of `command` as `--output-format json` writes it, `None` when it cannot start, runs past `timeout` (then it is killed) or writes no result.
+/// The result of `command` as `--output-format json` writes it, `None` when it cannot start, runs past `timeout` (then it is killed) or writes no result. The exit status is not read: Claude Code exits with 1 after a result that is an error, and the result says why.
 fn run_bounded(command: &mut Command, timeout: Duration) -> Option<TokenCheckRun> {
     let mut child = command.spawn().ok()?;
     let stdout = child.stdout.take()?;
@@ -315,6 +315,10 @@ fn check_result(output: &str) -> Option<TokenCheckRun> {
             is_error: value["is_error"].as_bool().unwrap_or(true),
             text: value["result"].as_str().map(str::to_owned),
             reached_model: tokens > 0,
+            refused_login: fold_core::turn_waits::is_refused_login(
+                value["api_error_status"].as_u64(),
+                value["api_error_type"].as_str(),
+            ),
         })
     })
 }
@@ -482,8 +486,20 @@ mod tests {
                 is_error: true,
                 text: Some("Invalid API key · Please run /login".to_owned()),
                 reached_model: false,
+                refused_login: false,
             })
         );
+        let recorded = check_result(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fold-daemon/tests/fixtures/claude/login_refused_result.json"
+        )))
+        .unwrap();
+        assert!(recorded.refused_login && recorded.is_error && !recorded.reached_model);
+        assert_eq!(token_check(Some(&recorded)), TokenCheck::Rejected);
+        let unknown = check_result(
+            r#"{"type":"result","is_error":true,"result":"Some new wording","api_error_status":401,"usage":{"input_tokens":0}}"#,
+        );
+        assert_eq!(token_check(unknown.as_ref()), TokenCheck::Rejected);
         let answered = r#"{"type":"result","is_error":false,"result":"ok","usage":{"input_tokens":3,"output_tokens":1}}"#;
         assert_eq!(
             token_check(check_result(answered).as_ref()),
