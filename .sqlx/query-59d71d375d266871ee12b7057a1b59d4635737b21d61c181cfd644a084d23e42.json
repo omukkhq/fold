@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.number AS \"number!: i64\" FROM workspaces w\n           WHERE w.state IN ('archived', 'abandoned') AND w.directory_removed_at IS NOT NULL\n             AND w.path IN (SELECT value FROM json_each(?1))\n           ORDER BY w.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "59d71d375d266871ee12b7057a1b59d4635737b21d61c181cfd644a084d23e42"
+}

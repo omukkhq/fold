@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.tree_hash AS \"tree!: String\" FROM workspaces w\n             JOIN revisions r ON r.id = w.base_revision_id WHERE w.number = ?1\n           UNION SELECT c.tree_hash FROM workspaces w JOIN checkpoints c ON c.workspace_id = w.id\n             WHERE w.number = ?1 AND c.kind = 'explicit' AND c.pruned_at IS NULL\n           UNION SELECT c.tree_hash FROM workspaces w JOIN changesets c ON c.workspace_id = w.id\n             WHERE w.number = ?1\n           UNION SELECT v.tree_hash FROM workspaces w JOIN proposals p ON p.task_id = w.task_id\n             JOIN proposal_versions v ON v.proposal_id = p.id WHERE w.number = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "tree!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "tree_hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "550933a02f04bdb6cd606c1c801d8667a9e14831c0730b3f32553d9ecc7fd4f8"
+}

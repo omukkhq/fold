@@ -14,9 +14,12 @@ use fold_core::roles::Role;
 use fold_core::{Actor, AgentActor, EventActor, MAIN_TAG, NewEvent, Tag, Timestamp};
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::events::EventBuffer;
-use fold_daemon::services::projects::gc;
+use fold_daemon::services::projects::{GcReport, gc};
 use fold_daemon::services::reviews::{DirectChange, DirectOutcome, IntegrationOutcome};
-use fold_daemon::services::workspaces::{DirectoryRemoval, follow_closed_workspaces};
+use fold_daemon::services::workspaces::{
+    ClosedDecision, ClosedDirectory, DirectoryRemoval, KeepReason, RemovalReason,
+    follow_closed_workspaces,
+};
 use fold_store::StoreError;
 use fold_store::projects::ProjectRow;
 use fold_store::testing::eventually;
@@ -202,7 +205,7 @@ async fn a_closed_workspace_waits_until_the_worker_process_of_its_agent_ends() {
     frontend_leaves(&fx).await;
     assert_eq!(
         fx.workspaces.remove_closed_directory(ws(1)).await.unwrap(),
-        DirectoryRemoval::NotDue
+        DirectoryRemoval::Kept(KeepReason::OwnerProcess)
     );
     assert!(fx.task_dir().join("src/lib.rs").is_file());
     assert_eq!(final_checkpoints(&fx).await, 0);
@@ -445,7 +448,7 @@ async fn a_closed_workspace_of_a_session_opened_by_hand_waits_until_the_session_
     abandoned_with_changes(&fx).await;
     assert_eq!(
         fx.workspaces.remove_closed_directory(ws(1)).await.unwrap(),
-        DirectoryRemoval::NotDue,
+        DirectoryRemoval::Kept(KeepReason::OwnerSession),
         "frontend has no worker process, but its session is open"
     );
     assert_eq!(fx.workspaces.remove_closed_directories(&|| false).await, 0);
@@ -499,7 +502,7 @@ async fn an_integrated_main_workspace_waits_until_the_main_session_ends() {
             .remove_closed_directory(opened.workspace.id)
             .await
             .unwrap(),
-        DirectoryRemoval::NotDue,
+        DirectoryRemoval::Kept(KeepReason::OwnerSession),
         "the main session is connected"
     );
     assert!(main_dir.join("AGENTS.md").is_file());
@@ -512,4 +515,295 @@ async fn an_integrated_main_workspace_waits_until_the_main_session_ends() {
         "the integrated files are the changeset's"
     );
     assert!(fx.project.paths().root().join("README.md").is_file());
+}
+
+const DAY_MINUTES: u64 = 24 * 60;
+
+/// The row of `workspace` in `report`.
+fn reported(report: &GcReport, workspace: u32) -> &ClosedDirectory {
+    report
+        .workspaces
+        .iter()
+        .find(|closed| closed.workspace == ws(workspace))
+        .unwrap_or_else(|| panic!("ws-{workspace} in {:?}", report.workspaces))
+}
+
+/// The integrated `P-1` leaves a closed review checkout of `review`, whose process then runs on, as a review lead's long-lived process does.
+async fn checkout_of_a_running_lead(fx: &Fixture) -> (u32, std::path::PathBuf) {
+    fx.proposal().await;
+    let review = reviewer(fx).await;
+    fx.reviews
+        .submit_review(&review, p(1), 1, Verdict::Approve, "fine", Vec::new())
+        .await
+        .unwrap();
+    let checkout = fx
+        .reviews
+        .create_review_checkout(&review, p(1))
+        .await
+        .unwrap()
+        .workspace;
+    let outcome = fx
+        .reviews
+        .integrate_proposal(&review, p(1), None)
+        .await
+        .unwrap();
+    assert!(matches!(outcome, IntegrationOutcome::Succeeded { .. }));
+    fx.execute(&format!(
+        "UPDATE worker_processes SET state = 'working', stopped_at = NULL WHERE agent_id = {}",
+        fx.review.worker.agent_id
+    ))
+    .await;
+    let dir = fx.project.paths().root().join(&checkout.path);
+    (checkout.id.number(), dir)
+}
+
+#[tokio::test]
+async fn a_review_checkout_of_a_lead_that_never_stops_goes_once_the_window_has_passed() {
+    let fx = Fixture::new().await;
+    let (checkout, dir) = checkout_of_a_running_lead(&fx).await;
+    assert_eq!(
+        fx.workspaces
+            .remove_closed_directory(ws(checkout))
+            .await
+            .unwrap(),
+        DirectoryRemoval::Kept(KeepReason::OwnerProcess)
+    );
+    let handle = handle(&fx).await;
+    let planned = gc(&handle, true).await.unwrap();
+    let row = reported(&planned, checkout);
+    assert_eq!(row.owner.as_deref(), Some("review"));
+    assert_eq!(row.decision, ClosedDecision::Keep(KeepReason::OwnerProcess));
+
+    fx.advance(14 * DAY_MINUTES + 1);
+    let planned = gc(&handle, true).await.unwrap();
+    assert_eq!(
+        reported(&planned, checkout).decision,
+        ClosedDecision::Remove(RemovalReason::PastWindow)
+    );
+    assert!(
+        dir.join("src/new.rs").is_file(),
+        "a dry run removes nothing"
+    );
+    assert!(!removed(&fx, checkout).await);
+
+    assert!(fx.workspaces.remove_closed_directories(&|| false).await >= 1);
+    assert!(!dir.exists());
+    assert!(removed(&fx, checkout).await);
+    assert_eq!(
+        final_checkpoints(&fx).await,
+        0,
+        "a review checkout takes none"
+    );
+    assert!(fx.project.paths().root().join("README.md").is_file());
+}
+
+/// `closed_workspace_days = 0` never overrides an owner, as a workspace can close in the middle of its worker's turn: the configuration refuses it, gc stops on it, and the sweep keeps to the owner rule until it is fixed.
+#[tokio::test]
+async fn zero_days_keep_the_closed_directory_of_a_running_owner() {
+    let fx = Fixture::new().await;
+    let (checkout, dir) = checkout_of_a_running_lead(&fx).await;
+    let config = fx.project.paths().config();
+    let text = fs::read_to_string(&config).unwrap_or_default();
+    fs::write(&config, format!("closed_workspace_days = 0\n{text}")).unwrap();
+    fx.advance(14 * DAY_MINUTES + 1);
+    assert_eq!(
+        fx.workspaces
+            .remove_closed_directory(ws(checkout))
+            .await
+            .unwrap(),
+        DirectoryRemoval::Kept(KeepReason::OwnerProcess)
+    );
+    assert_eq!(fx.workspaces.remove_closed_directories(&|| false).await, 0);
+    let handle = handle(&fx).await;
+    let refused = gc(&handle, false).await.unwrap_err();
+    assert_eq!(refused.code(), Some("invalid_config"));
+    assert!(dir.is_dir());
+
+    fx.execute(&format!(
+        "UPDATE worker_processes SET state = 'stopped', stopped_at = 0 WHERE agent_id = {}",
+        fx.review.worker.agent_id
+    ))
+    .await;
+    fx.agents.end_session(&fx.review.ctx).await.unwrap();
+    let removal = fx
+        .workspaces
+        .remove_closed_directory(ws(checkout))
+        .await
+        .unwrap();
+    assert!(
+        matches!(removal, DirectoryRemoval::Removed { .. }),
+        "{removal:?}"
+    );
+    assert!(!dir.exists());
+}
+
+#[tokio::test]
+async fn gc_removes_a_closed_directory_past_the_window_and_names_why_it_keeps_the_others() {
+    let fx = Fixture::new().await;
+    let (checkout, dir) = checkout_of_a_running_lead(&fx).await;
+    let handle = handle(&fx).await;
+    let report = gc(&handle, false).await.unwrap();
+    assert_eq!(report.workspaces_removed, 0);
+    let kept: Vec<_> = report
+        .workspaces
+        .iter()
+        .map(|closed| (closed.workspace.number(), closed.decision))
+        .collect();
+    assert_eq!(
+        kept,
+        vec![
+            (1, ClosedDecision::Keep(KeepReason::OwnerSession)),
+            (checkout, ClosedDecision::Keep(KeepReason::OwnerProcess)),
+        ],
+        "frontend's session is open and the lead's process runs"
+    );
+
+    fx.advance(14 * DAY_MINUTES + 1);
+    let report = gc(&handle, false).await.unwrap();
+    assert_eq!(report.workspaces_removed, 2);
+    assert!(
+        report
+            .workspaces
+            .iter()
+            .all(|closed| closed.decision == ClosedDecision::Remove(RemovalReason::PastWindow))
+    );
+    assert!(!dir.exists());
+    assert!(!fx.task_dir().exists());
+    assert!(gc(&handle, true).await.unwrap().workspaces.is_empty());
+}
+
+#[tokio::test]
+async fn a_directory_that_comes_back_after_its_removal_gets_a_final_checkpoint_and_goes_again() {
+    let fx = Fixture::new().await;
+    abandoned_with_changes(&fx).await;
+    frontend_leaves(&fx).await;
+    let removal = fx.workspaces.remove_closed_directory(ws(1)).await.unwrap();
+    assert!(matches!(removal, DirectoryRemoval::Removed { .. }));
+    assert_eq!(final_checkpoints(&fx).await, 1);
+    // As an agent that still knows the path writes into it by its full path.
+    let back = fx.task_dir().join("notes/later.txt");
+    fs::create_dir_all(back.parent().unwrap()).unwrap();
+    fs::write(&back, "written after the removal\n").unwrap();
+
+    let handle = handle(&fx).await;
+    let planned = gc(&handle, true).await.unwrap();
+    let row = reported(&planned, 1);
+    assert!(row.returned);
+    assert_eq!(
+        row.decision,
+        ClosedDecision::Remove(RemovalReason::OwnerEnded)
+    );
+    assert_eq!(planned.workspaces_removed, 1);
+    assert!(back.is_file(), "a dry run removes nothing");
+    assert!(removed(&fx, 1).await, "a dry run keeps the mark");
+
+    let report = gc(&handle, false).await.unwrap();
+    assert_eq!(report.workspaces_removed, 1);
+    assert!(reported(&report, 1).returned);
+    assert!(!fx.task_dir().exists());
+    assert!(removed(&fx, 1).await);
+    assert_eq!(final_checkpoints(&fx).await, 2);
+    let last = list_checkpoints(fx.project.store().read(), ws(1), false)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(last.reason, CheckpointReason::BeforeRemoval);
+    let objects = ObjectStore::open(&fx.project.paths().fold_dir()).unwrap();
+    let files = load_flat(&objects, &last.tree).unwrap();
+    let kept = objects
+        .read(&files[b"notes/later.txt".as_slice()].hash)
+        .unwrap()
+        .payload;
+    assert_eq!(
+        kept, b"written after the removal\n",
+        "what came back is recorded before it goes"
+    );
+    assert!(gc(&handle, true).await.unwrap().workspaces.is_empty());
+}
+
+#[tokio::test]
+async fn the_sweep_removes_a_returned_directory_and_finishes_a_removal_an_older_fold_started() {
+    let fx = Fixture::new().await;
+    let _follower = follow(&fx);
+    abandoned_with_changes(&fx).await;
+    let author = by(&fx.backend.worker);
+    fx.workspaces.create_workspace(&author, t(2)).await.unwrap();
+    fx.workspaces
+        .abandon_workspace(&author, ws(2), "the plan changed")
+        .await
+        .unwrap();
+    let second = fx.project.paths().root().join(".fold/ws/t-2");
+    assert!(second.is_dir());
+    // ws-2's removal started without being recorded as done, and ws-1 is marked removed while its directory is there.
+    let now = fx.project.now().as_millis();
+    fx.execute(&format!(
+        "UPDATE workspaces SET removal_started_at = {now} WHERE number = 2;
+         UPDATE workspaces SET removal_started_at = {now}, directory_removed_at = {now} WHERE number = 1"
+    ))
+    .await;
+    frontend_leaves(&fx).await;
+    fx.agents.end_session(&fx.backend.ctx).await.unwrap();
+
+    until_removed(&fx, 2, &second).await;
+    until_removed(&fx, 1, &fx.task_dir()).await;
+    assert_eq!(
+        final_checkpoints(&fx).await,
+        1,
+        "only the returned directory's unrecorded files get one; a started removal only deletes"
+    );
+}
+
+#[tokio::test]
+async fn an_open_session_in_a_closed_directory_keeps_it_past_the_window() {
+    let fx = Fixture::new().await;
+    abandoned_with_changes(&fx).await;
+    let inside = fx.task_dir().join("src");
+    fx.execute(&format!(
+        "INSERT INTO sessions (pid, started_at, last_call_at, cwd) VALUES (4242, 0, 0, '{}')",
+        inside.display()
+    ))
+    .await;
+    fx.advance(14 * DAY_MINUTES + 1);
+    assert_eq!(
+        fx.workspaces.remove_closed_directory(ws(1)).await.unwrap(),
+        DirectoryRemoval::Kept(KeepReason::SessionInside)
+    );
+    let handle = handle(&fx).await;
+    let planned = gc(&handle, true).await.unwrap();
+    assert_eq!(
+        reported(&planned, 1).decision,
+        ClosedDecision::Keep(KeepReason::SessionInside)
+    );
+    assert!(fx.task_dir().join("src/lib.rs").is_file());
+
+    fx.execute("UPDATE sessions SET ended_at = 1 WHERE pid = 4242")
+        .await;
+    let removal = fx.workspaces.remove_closed_directory(ws(1)).await.unwrap();
+    assert!(
+        matches!(removal, DirectoryRemoval::Removed { .. }),
+        "{removal:?}"
+    );
+    assert!(!fx.task_dir().exists());
+}
+
+#[tokio::test]
+async fn a_session_in_a_closed_directory_named_by_its_canonical_path_keeps_it() {
+    let fx = Fixture::new().await;
+    abandoned_with_changes(&fx).await;
+    frontend_leaves(&fx).await;
+    let fold = fx.project.paths().fold_dir();
+    fs::rename(fold.join("ws"), fold.join("ws-real")).unwrap();
+    symlink("ws-real", fold.join("ws")).unwrap();
+    let inside = fold.join("ws-real/t-1/src");
+    fx.execute(&format!(
+        "INSERT INTO sessions (pid, started_at, last_call_at, cwd) VALUES (4243, 0, 0, '{}')",
+        inside.display()
+    ))
+    .await;
+    assert_eq!(
+        fx.workspaces.remove_closed_directory(ws(1)).await.unwrap(),
+        DirectoryRemoval::Kept(KeepReason::SessionInside)
+    );
+    assert!(inside.join("lib.rs").is_file());
 }
