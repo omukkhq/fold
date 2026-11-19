@@ -93,7 +93,7 @@ impl AgentService {
         ProjectAccount { account, accounts }
     }
 
-    /// The accounts whose login a worker's turn found refused, unless the account got a newer token since its newest refusal or a turn on it was answered: a switch to one of them is no fix. Claude Code's own login stays refused until a turn on it is answered, since fold cannot tell a new login of it from the old one here.
+    /// The accounts whose login a worker's turn found refused, unless the account got a token newer than its newest refusal: a switch to one of them is no fix. Claude Code's own login stays refused until a turn on it is answered, since fold cannot tell a new login of it from the old one here.
     pub(in crate::services::agents::workers) async fn refused_accounts(
         &self,
     ) -> BTreeSet<AccountName> {

@@ -57,7 +57,7 @@ UPDATE worker_processes SET failed_turns = 0 WHERE wait_reason IS NOT NULL;
 
 DROP TABLE worker_waits_copy;
 
--- Each account whose login a worker's turn found refused, with the newest refusal: a switch to it is no fix until the account gets a newer token or a turn on it is answered, which removes its row. A worker's wait keeps only its newest refused account, so this keeps the others.
+-- Each account whose login a worker's turn found refused, with the newest refusal, written at every refused turn: a switch to it is no fix until the account gets a token newer than that refusal. Claude Code's own login (`default`) has no token, so an answered turn on it removes its row. A worker's wait keeps only its newest refused account, so this keeps the others.
 CREATE TABLE refused_logins (
     account TEXT PRIMARY KEY CONSTRAINT refused_logins_account_name CHECK (length(account) BETWEEN 1 AND 32),
     refused_at INTEGER NOT NULL

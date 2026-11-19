@@ -979,7 +979,7 @@ pub async fn record_refused_login(
     Ok(())
 }
 
-/// Forgets the refusals of `account`, whose login a turn showed to work.
+/// Forgets the refusals of `account`, whose login a turn showed to work: only Claude Code's own login, which has no token whose date tells a new login from the refused one.
 pub async fn clear_refused_login(
     tx: &mut WriteTx,
     account: &AccountName,

@@ -731,3 +731,83 @@ async fn every_refused_account_stays_out_of_the_switches_until_it_gets_a_newer_t
             .contains("or switch the account")
     );
 }
+
+#[tokio::test]
+async fn a_new_token_refused_again_stays_out_of_the_switches_after_a_switch_and_an_answer() {
+    let clock = ManualClock::new();
+    let (_accounts, dir) = accounts_with_two(&clock);
+    let turns = TempDir::new().unwrap();
+    let (mut fake, _turn) = fake_with_turn(&turns, &read_fixture("result"));
+    // Every resumed session's turn is refused; a worker in a new session is answered.
+    let refused = turns.path().join("refused.jsonl");
+    std::fs::write(&refused, login_turn("Invalid API key · Please run /login")).unwrap();
+    fake.launcher.env.push((
+        "FOLD_FAKE_CLAUDE_RESUME_TURN".to_owned(),
+        refused.to_string_lossy().into_owned(),
+    ));
+    host_accounts(&mut fake, &dir, false);
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    assert_eq!(choose(&harness, Some("work-a")).await.0, StatusCode::OK);
+    until_started(&fake, LEAD, 2).await;
+    until_state(&harness, LEAD, WorkerState::Idle).await;
+    harness
+        .call(
+            MAIN,
+            "send_message",
+            json!({"to": [LEAD], "body": "look at T-1"}),
+        )
+        .await;
+    let tries = until_idle(&harness, LEAD, |row| row.wait.is_some())
+        .await
+        .wait
+        .unwrap()
+        .tries;
+
+    // work-a gets a new token, which is refused too, while the lead already waits.
+    advance(&harness, Duration::from_secs(2 * 24 * 60 * 60));
+    let token_c = format!("sk-ant-oat01-{}", "c".repeat(40));
+    let added = ManualClock::new();
+    added.advance(Duration::from_secs(24 * 60 * 60)).unwrap();
+    accounts::update(
+        &dir,
+        &AccountName::parse("work-a").unwrap(),
+        &check_token(&token_c).unwrap(),
+        fold_core::Clock::now(&added),
+    )
+    .unwrap();
+    until_idle(&harness, LEAD, |row| {
+        row.wait.as_ref().is_some_and(|wait| wait.tries > tries)
+            && fake
+                .runs_of(LEAD)
+                .last()
+                .is_some_and(|run| ran_with(run, Some(&token_c)))
+    })
+    .await;
+    // A worker in a new session is answered on work-a's new token; that shows nothing of the lead's refusal.
+    harness
+        .call(MAIN, "start_worker", json!({"role": "review_lead"}))
+        .await;
+    until_idle(&harness, "review-lead", |row| row.turns > 0).await;
+
+    // The switch to work-b is refused as well.
+    assert_eq!(choose(&harness, Some("work-b")).await.0, StatusCode::OK);
+    until_idle(&harness, LEAD, |row| {
+        row.wait
+            .as_ref()
+            .and_then(|wait| wait.account.as_ref())
+            .is_some_and(|account| account.as_str() == "work-b")
+    })
+    .await;
+    let items = needs_you(&harness).await;
+    let item = login_items(&items)[0].clone();
+    assert_eq!(item["account"], "work-b");
+    assert_eq!(
+        item["actions"],
+        json!([{"action": "pause"}]),
+        "work-a's new token was refused after it was added: {items:?}"
+    );
+    assert!(
+        !item["reason"].as_str().unwrap().contains("switch"),
+        "{item}"
+    );
+}

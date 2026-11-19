@@ -374,8 +374,10 @@ impl Supervisor {
                     }
                     (None, _) => agents::clear_turn_error(tx, id).await?,
                 }
-                if let (true, None, Some(account)) = (answered, wait, &ran_with) {
-                    // The account's login works: a switch to it is a fix again.
+                // An answer on Claude Code's own login shows that its login works, which no token's date can tell; an account's token stays refused until it has a newer one, since another process can answer with an older token of it.
+                if let (true, None, Some(account)) = (answered, wait, &ran_with)
+                    && account.is_default()
+                {
                     agents::clear_refused_login(tx, account).await?;
                 }
                 if wait.is_none() {
