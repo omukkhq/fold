@@ -4,11 +4,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::common::roles::{give_claim, give_role};
-use crate::reviews_support::{Fixture, t};
+use crate::common::roles::{give_claim, give_review_claim, give_role};
+use crate::reviews_support::{Fixture, p, t};
 use crate::worker_resume::{TASK_WORKER, proposed_by_a_task_worker, until_runs, until_state};
 use crate::workers_support::FakeClaude;
 use fold_core::WorkerState;
+use fold_core::reviews::Verdict;
 use fold_core::roles::Role;
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::agents::{FolderDecision, FolderKeep};
@@ -260,4 +261,111 @@ async fn a_finished_task_workers_folder_goes_after_the_window_and_a_later_start_
     assert!(folder.join("prompt.md").is_file());
     assert!(folder.join("mcp.json").is_file());
     until_state(&harness, TASK_WORKER, WorkerState::Idle).await;
+}
+
+/// The folder of `agent` once a gc run has decided about it.
+async fn decision_of(handle: &ProjectHandle, agent: &str, dry_run: bool) -> Option<FolderDecision> {
+    gc(handle, dry_run)
+        .await
+        .unwrap()
+        .workers
+        .iter()
+        .find(|folder| folder.agent.as_str() == agent)
+        .map(|folder| folder.decision)
+}
+
+#[tokio::test]
+async fn a_finished_task_workers_folder_stays_while_fold_owes_it_a_resume() {
+    let fx = Fixture::new().await;
+    fx.proposal().await;
+    let store = fx.project.store();
+    give_role(
+        store,
+        "web-worker-1",
+        Role::TaskWorker,
+        Some("frontend-work"),
+    )
+    .await;
+    let folder = folder_of(&fx, "web-worker-1");
+    // `web-worker-1` wrote `P-1` and is bound to its task, as a task worker that fold started.
+    fx.execute(
+        "UPDATE proposals SET author_worker_id = (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id WHERE a.name = 'web-worker-1');
+         INSERT INTO worker_tasks (worker_process_id, task_id)
+           SELECT p.id, (SELECT id FROM tasks WHERE number = 1) FROM worker_processes p JOIN agents a ON a.id = p.agent_id WHERE a.name = 'web-worker-1';",
+    )
+    .await;
+    give_role(store, "review", Role::Reviewer, None).await;
+    give_review_claim(store, "review", p(1), fx.project.now()).await;
+    let review = fx.agents.actor(&fx.review.ctx).await.unwrap();
+    fx.reviews
+        .submit_review(
+            &review,
+            p(1),
+            1,
+            Verdict::RequestChanges,
+            "Split it.",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let handle = handle(&fx).await;
+    assert_eq!(
+        decision_of(&handle, "web-worker-1", false).await,
+        Some(FolderDecision::Keep(FolderKeep::OwedResume))
+    );
+    assert!(folder.join("prompt.md").is_file());
+
+    // The resume that serves the requested changes moves the start; the worker stops again after it.
+    let served = fx.project.now().as_millis() + 1;
+    fx.execute(&format!(
+        "UPDATE worker_processes SET started_at = {served}, stopped_at = {}
+           WHERE agent_id = (SELECT id FROM agents WHERE name = 'web-worker-1')",
+        served + 1
+    ))
+    .await;
+    assert_eq!(
+        decision_of(&handle, "web-worker-1", true).await,
+        None,
+        "it stopped within the window"
+    );
+    fx.advance(14 * DAY_MINUTES + 1);
+    assert_eq!(
+        decision_of(&handle, "web-worker-1", false).await,
+        Some(FolderDecision::Remove)
+    );
+    assert!(!folder.exists());
+}
+
+#[tokio::test]
+async fn a_finished_reviewers_folder_stays_while_a_message_waits_for_it() {
+    let fx = Fixture::new().await;
+    give_role(fx.project.store(), "reviewer-1", Role::Reviewer, None).await;
+    let folder = folder_of(&fx, "reviewer-1");
+    fx.execute(
+        "INSERT INTO messages (number, thread_id, sender_kind, sender_human, body, created_at)
+           VALUES (1, 1, 'human', 'ana', 'One more look, please.', 2);
+         INSERT INTO message_recipients (message_id, worker_id, addressed_as)
+           SELECT m.id, w.id, 'agent' FROM messages m, workers w JOIN agents a ON a.id = w.agent_id
+           WHERE m.number = 1 AND a.name = 'reviewer-1';",
+    )
+    .await;
+    let handle = handle(&fx).await;
+    assert_eq!(
+        decision_of(&handle, "reviewer-1", true).await,
+        Some(FolderDecision::Keep(FolderKeep::OwedMessage))
+    );
+    assert_eq!(
+        decision_of(&handle, "reviewer-1", false).await,
+        Some(FolderDecision::Keep(FolderKeep::OwedMessage))
+    );
+    assert!(folder.join("prompt.md").is_file());
+
+    // The worker read the message, so nothing waits for it.
+    fx.execute("UPDATE message_recipients SET delivered_at = 3, acked_at = 3")
+        .await;
+    assert_eq!(
+        decision_of(&handle, "reviewer-1", false).await,
+        Some(FolderDecision::Remove)
+    );
+    assert!(!folder.exists());
 }
