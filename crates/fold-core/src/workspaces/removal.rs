@@ -31,6 +31,8 @@ pub enum KeepReason {
     SessionInside,
     /// The path names no directory directly below `.fold/ws/`.
     InvalidPath,
+    /// The directory, or one below it, is on another file system than `.fold/ws/`, such as a mount, whose files a delete would remove.
+    OtherFilesystem,
     /// The removal failed with this code, such as `unrecorded_changes`; the next run tries again.
     Failed(&'static str),
 }

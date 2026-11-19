@@ -183,6 +183,9 @@ fn workspace_line(workspace: &GcWorkspace, dry_run: bool) -> String {
         GcWorkspaceReason::InvalidPath => {
             "its path is no directory directly below .fold/ws".to_owned()
         }
+        GcWorkspaceReason::OtherFilesystem => {
+            "it holds another file system, such as a mount, which fold never deletes".to_owned()
+        }
         GcWorkspaceReason::Failed => format!(
             "the removal failed ({}); the next run tries again",
             workspace.code.as_deref().unwrap_or("internal_error")

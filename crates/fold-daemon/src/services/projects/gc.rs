@@ -184,10 +184,7 @@ async fn prune(
                 Ok(DirectoryRemoval::NotDue) => continue,
                 Err(error) => {
                     tracing::warn!(project = %project.slug, workspace = %closed.workspace, code = error.log_code(), "closed workspace directory was not removed");
-                    closed.decision = ClosedDecision::Keep(match error.log_code() {
-                        codes::INVALID_PATH => KeepReason::InvalidPath,
-                        code => KeepReason::Failed(code),
-                    });
+                    closed.decision = ClosedDecision::Keep(keep_reason(error.log_code()));
                 }
             }
         }
@@ -214,6 +211,15 @@ async fn prune(
         workspaces,
         roots,
     })
+}
+
+/// The reason a removal that failed with `code` gives for the directory it keeps.
+fn keep_reason(code: &'static str) -> KeepReason {
+    match code {
+        codes::INVALID_PATH => KeepReason::InvalidPath,
+        codes::DIRECTORY_OTHER_FILESYSTEM => KeepReason::OtherFilesystem,
+        code => KeepReason::Failed(code),
+    }
 }
 
 impl From<WorkspaceError> for ProjectError {
@@ -269,8 +275,8 @@ async fn plan_pruning(
                 let located = blocking(move || vcs_gc::locate_workspace_dir(&root, &path))
                     .await
                     .map_err(DryRun::Failed)?;
-                if located.is_err() {
-                    closed.decision = ClosedDecision::Keep(KeepReason::InvalidPath);
+                if let Err(error) = located {
+                    closed.decision = ClosedDecision::Keep(keep_reason(error.code()));
                     continue;
                 }
                 if mark_directory_removed(tx, closed.workspace, now).await? {

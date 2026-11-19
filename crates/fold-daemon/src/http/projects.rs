@@ -640,6 +640,8 @@ pub enum GcWorkspaceReason {
     SessionInside,
     /// The path names no directory directly below `.fold/ws/`.
     InvalidPath,
+    /// The directory, or one below it, is on another file system than `.fold/ws/`, such as a mount; fold never deletes across it.
+    OtherFilesystem,
     /// The removal failed with `code`; the next run tries again.
     Failed,
 }
@@ -713,6 +715,10 @@ impl From<&ClosedDirectory> for GcWorkspace {
                     KeepReason::OwnerSession => (GcWorkspaceReason::OwnerSession, None),
                     KeepReason::SessionInside => (GcWorkspaceReason::SessionInside, None),
                     KeepReason::InvalidPath => (GcWorkspaceReason::InvalidPath, None),
+                    KeepReason::OtherFilesystem => (
+                        GcWorkspaceReason::OtherFilesystem,
+                        Some(fold_core::codes::DIRECTORY_OTHER_FILESYSTEM.to_owned()),
+                    ),
                     KeepReason::Failed(code) => (GcWorkspaceReason::Failed, Some(code.to_owned())),
                 };
                 (GcAction::Keep, reason, code)

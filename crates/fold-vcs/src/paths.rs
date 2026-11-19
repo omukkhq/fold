@@ -33,6 +33,9 @@ pub enum WorkspaceError {
     /// The paths a sync would overwrite or remove that no longer match the checkpoint taken before it.
     #[error("{} workspace paths changed since the checkpoint", .0.len())]
     ChangedDuringSync(Vec<String>),
+    /// The directory, or one below it, is on another file system than `.fold/ws/`, such as a mount, whose files a delete would remove.
+    #[error("`{0}` holds another file system")]
+    OtherFilesystem(String),
 }
 
 impl WorkspaceError {
@@ -45,6 +48,7 @@ impl WorkspaceError {
             Self::Io(_) => codes::WORKSPACE_IO,
             Self::Unrecorded(_) => codes::UNRECORDED_CHANGES,
             Self::ChangedDuringSync(_) => codes::WORKSPACE_CHANGED_DURING_SYNC,
+            Self::OtherFilesystem(_) => codes::DIRECTORY_OTHER_FILESYSTEM,
         }
     }
 
@@ -57,9 +61,9 @@ impl From<WorkspaceError> for FoldError {
     fn from(error: WorkspaceError) -> Self {
         let folded = FoldError::new(error.code(), error.to_string());
         match &error {
-            WorkspaceError::InvalidPath(path) | WorkspaceError::TargetNotEmpty(path) => {
-                folded.with_details([("path", json!(path))])
-            }
+            WorkspaceError::InvalidPath(path)
+            | WorkspaceError::TargetNotEmpty(path)
+            | WorkspaceError::OtherFilesystem(path) => folded.with_details([("path", json!(path))]),
             WorkspaceError::Unrecorded(paths) | WorkspaceError::ChangedDuringSync(paths) => {
                 folded.with_details([("paths", json!(paths))])
             }

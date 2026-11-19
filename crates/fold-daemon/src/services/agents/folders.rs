@@ -272,10 +272,10 @@ fn remove_moved_folders(workers: &Path) -> Result<(), FoldError> {
 }
 
 fn folder_error(error: io::Error) -> FoldError {
-    let code = if error.kind() == io::ErrorKind::InvalidInput {
-        codes::INVALID_PATH
-    } else {
-        codes::INTERNAL_ERROR
+    let code = match error.kind() {
+        io::ErrorKind::InvalidInput => codes::INVALID_PATH,
+        io::ErrorKind::CrossesDevices => codes::DIRECTORY_OTHER_FILESYSTEM,
+        _ => codes::INTERNAL_ERROR,
     };
     FoldError::new(
         code,

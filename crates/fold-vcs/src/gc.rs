@@ -168,6 +168,11 @@ pub fn remove_workspace_dir(project_root: &Path, path: &Path) -> Result<bool, Wo
             ));
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
+            return Err(WorkspaceError::OtherFilesystem(
+                path.to_string_lossy().into_owned(),
+            ));
+        }
         Err(error) => return Err(error.into()),
     }
     match fs::remove_dir_all(&dir) {
@@ -177,7 +182,7 @@ pub fn remove_workspace_dir(project_root: &Path, path: &Path) -> Result<bool, Wo
     }
 }
 
-/// The canonical folder `name` directly below the project's `.fold/workers/`, or `None` when nothing is there. `.fold/workers` must be a real directory and `name` a plain folder name whose entry is a directory, never a symlink; anything else is `InvalidInput`, so a link a worker's shell planted is never followed.
+/// The canonical folder `name` directly below the project's `.fold/workers/`, or `None` when nothing is there. `.fold/workers` must be a real directory and `name` a plain folder name whose entry is a directory, never a symlink; anything else is `InvalidInput`, so a link a worker's shell planted is never followed; a folder on another file system than `.fold/workers` is `CrossesDevices`.
 pub fn locate_worker_dir(paths: &ProjectPaths, name: &str) -> io::Result<Option<PathBuf>> {
     let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "not a worker folder");
     let mut components = Path::new(name).components();
@@ -196,7 +201,12 @@ pub fn locate_worker_dir(paths: &ProjectPaths, name: &str) -> io::Result<Option<
     };
     let dir = workers.join(name);
     match fs::symlink_metadata(&dir) {
-        Ok(meta) if meta.is_dir() => Ok(Some(dir)),
+        Ok(meta) if meta.is_dir() => {
+            if device(&meta) != device(&fs::metadata(&workers)?) {
+                return Err(crosses_devices());
+            }
+            Ok(Some(dir))
+        }
         Ok(_) => Err(invalid()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
@@ -281,19 +291,47 @@ pub fn locate_workspace_dir(
     }
     let dir = canonical_ws.join(name);
     match fs::symlink_metadata(&dir) {
-        Ok(meta) if meta.is_dir() => Ok(Some(dir)),
+        Ok(meta) if meta.is_dir() => {
+            if device(&meta) != device(&fs::metadata(&canonical_ws)?) {
+                return Err(WorkspaceError::OtherFilesystem(
+                    path.to_string_lossy().into_owned(),
+                ));
+            }
+            Ok(Some(dir))
+        }
         Ok(_) => Err(invalid()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
 }
 
+/// The file system that holds an entry, so a delete never crosses into a mount.
+#[cfg(unix)]
+fn device(meta: &fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.dev()
+}
+
+#[cfg(not(unix))]
+fn device(_meta: &fs::Metadata) -> u64 {
+    0
+}
+
+/// The error of [`make_removable`] for a directory below the root on another file system.
+fn crosses_devices() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::CrossesDevices,
+        "a directory below is on another file system",
+    )
+}
+
 /// Gives the owner list, enter and write access to `root` and every directory below it, which is all an unlink needs, and returns false when `root` is not a directory. Each directory is opened without following a symlink and changed and listed through that descriptor, so an entry swapped for a symlink during the walk is never followed; files keep their modes. One descriptor pair is open per level, as `remove_dir_all` holds.
 #[cfg(target_os = "linux")]
 fn make_removable(root: &Path) -> io::Result<bool> {
-    let Some(top) = open_dir(root)? else {
+    let Some(top) = open_dir(root, None)? else {
         return Ok(false);
     };
+    let root_device = top.device;
     let mut stack = vec![top];
     while let Some(level) = stack.last_mut() {
         let Some(item) = level.entries.next() else {
@@ -304,7 +342,7 @@ fn make_removable(root: &Path) -> io::Result<bool> {
         if !item.file_type()?.is_dir() {
             continue;
         }
-        match open_dir(&level.at.join(item.file_name())) {
+        match open_dir(&level.at.join(item.file_name()), Some(root_device)) {
             Ok(Some(dir)) => stack.push(dir),
             Ok(None) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -320,11 +358,12 @@ struct OpenDir {
     _fd: fs::File,
     at: PathBuf,
     entries: fs::ReadDir,
+    device: u64,
 }
 
-/// Opens `path` without following a final symlink, gives the owner `rwx` on it, and lists it. `None` when it is not a directory. The `/proc/self/fd` link names the inode the descriptor holds, so the change and the listing reach that inode and nothing a path could be swapped to.
+/// Opens `path` without following a final symlink, gives the owner `rwx` on it, and lists it. `None` when it is not a directory; a directory on another file system than `root_device` is refused before it is changed. The `/proc/self/fd` link names the inode the descriptor holds, so the change and the listing reach that inode and nothing a path could be swapped to.
 #[cfg(target_os = "linux")]
-fn open_dir(path: &Path) -> io::Result<Option<OpenDir>> {
+fn open_dir(path: &Path, root_device: Option<u64>) -> io::Result<Option<OpenDir>> {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::PermissionsExt;
 
@@ -339,6 +378,10 @@ fn open_dir(path: &Path) -> io::Result<Option<OpenDir>> {
     if !meta.is_dir() {
         return Ok(None);
     }
+    let device = device(&meta);
+    if root_device.is_some_and(|root| root != device) {
+        return Err(crosses_devices());
+    }
     let at = PathBuf::from(format!("/proc/self/fd/{}", fd.as_raw_fd()));
     let mode = meta.permissions().mode();
     if mode & 0o700 != 0o700 {
@@ -349,19 +392,26 @@ fn open_dir(path: &Path) -> io::Result<Option<OpenDir>> {
         _fd: fd,
         at,
         entries,
+        device,
     }))
 }
 
 /// `remove_dir_all` refuses entries in a directory without write access, and other platforms refuse read-only files too. Returns false when `root` is not a directory.
 #[cfg(not(target_os = "linux"))]
 fn make_removable(root: &Path) -> io::Result<bool> {
-    if !fs::symlink_metadata(root)?.is_dir() {
+    let top = fs::symlink_metadata(root)?;
+    if !top.is_dir() {
         return Ok(false);
     }
+    let root_device = device(&top);
     let mut pending = vec![root.to_owned()];
     while let Some(dir) = pending.pop() {
-        if !fs::symlink_metadata(&dir)?.is_dir() {
+        let meta = fs::symlink_metadata(&dir)?;
+        if !meta.is_dir() {
             continue;
+        }
+        if device(&meta) != root_device {
+            return Err(crosses_devices());
         }
         clear_read_only(&dir)?;
         for item in fs::read_dir(&dir)? {
@@ -385,6 +435,20 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     use super::*;
+
+    /// No test may mount, so `.fold/ws` resolves to `/`, whose child `/dev` is a mount on most hosts; only the lookup runs, nothing is removed.
+    #[test]
+    fn a_workspace_directory_on_another_file_system_is_refused() {
+        let root_device = device(&fs::metadata("/").unwrap());
+        if device(&fs::metadata("/dev").unwrap()) == root_device {
+            return;
+        }
+        let project = tempfile::tempdir().unwrap();
+        fs::create_dir(project.path().join(".fold")).unwrap();
+        symlink("/", project.path().join(".fold/ws")).unwrap();
+        let error = locate_workspace_dir(project.path(), Path::new(".fold/ws/dev")).unwrap_err();
+        assert_eq!(error.code(), fold_core::codes::DIRECTORY_OTHER_FILESYSTEM);
+    }
 
     #[test]
     fn a_symlink_entry_below_the_root_is_not_followed() {

@@ -3428,7 +3428,7 @@ export interface components {
          * @description Why the run removes or keeps the directory of a closed workspace.
          * @enum {string}
          */
-        GcWorkspaceReason: "owner_ended" | "past_window" | "owner_process" | "owner_session" | "session_inside" | "invalid_path" | "failed";
+        GcWorkspaceReason: "owner_ended" | "past_window" | "owner_process" | "owner_session" | "session_inside" | "invalid_path" | "other_filesystem" | "failed";
         /** @description What turning Git on did. */
         GitEnabledView: {
             /** @description The commit the Git branch points to; null while main holds only the empty genesis. */
