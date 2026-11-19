@@ -221,7 +221,13 @@ pub enum Unchecked {
     Network,
     /// The account reached a usage limit, so the API took the token but the turn did not run.
     UsageLimit,
-    /// Claude Code did not run, did not end within [`TOKEN_CHECK_TIMEOUT`], or gave no result that fold reads.
+    /// No `claude` program was found to run.
+    NotFound,
+    /// The turn did not end within [`TOKEN_CHECK_TIMEOUT`].
+    Timeout,
+    /// Claude Code ended the turn without an answer of the model, with a message that is no refused login, no network and no usage limit, such as a 403 or an overloaded API.
+    Error,
+    /// `claude` ran but gave no result that fold reads.
     NoAnswer,
 }
 
@@ -231,7 +237,31 @@ impl Unchecked {
         match self {
             Self::Network => "Claude Code could not reach the model",
             Self::UsageLimit => "the account is at a usage limit",
-            Self::NoAnswer => "claude gave no answer that fold reads",
+            Self::NotFound => "fold found no `claude` program on the PATH",
+            Self::Timeout => "the turn did not end within 60 seconds",
+            Self::Error => {
+                "Claude Code ended the turn without an answer of the model, with an error that fold does not know"
+            }
+            Self::NoAnswer => "claude gave no result that fold reads",
+        }
+    }
+
+    /// What the person can do next about the stored token of `name`.
+    pub fn hint(self, name: &AccountName) -> String {
+        let again = format!("`fld account update {name}` with the same token checks it again");
+        match self {
+            Self::Network => format!("check the internet connection of this host; {again}"),
+            Self::UsageLimit => format!(
+                "a usage limit comes only for a token that the API takes, and a worker on {name} waits for the reset"
+            ),
+            Self::NotFound => {
+                format!("install Claude Code, or put the folder of `claude` on the PATH; {again}")
+            }
+            Self::Timeout => again,
+            Self::Error => format!(
+                "run `claude -p` with the token in CLAUDE_CODE_OAUTH_TOKEN to see Claude Code's message; {again}"
+            ),
+            Self::NoAnswer => format!("check that `claude --version` runs; {again}"),
         }
     }
 }
@@ -252,13 +282,14 @@ pub fn token_check(run: Option<&TokenCheckRun>) -> TokenCheck {
         .and_then(crate::turn_waits::turn_wait);
     match wait {
         _ if !run.is_error && run.reached_model => TokenCheck::Works,
-        Some(_) if run.reached_model => TokenCheck::Unchecked(Unchecked::NoAnswer),
+        Some(_) if run.reached_model => TokenCheck::Unchecked(Unchecked::Error),
         Some(crate::turn_waits::TurnWait::Login) => TokenCheck::Rejected,
         Some(crate::turn_waits::TurnWait::Network) => TokenCheck::Unchecked(Unchecked::Network),
         Some(crate::turn_waits::TurnWait::UsageLimit { .. }) => {
             TokenCheck::Unchecked(Unchecked::UsageLimit)
         }
-        None => TokenCheck::Unchecked(Unchecked::NoAnswer),
+        None if run.text.is_none() && !run.is_error => TokenCheck::Unchecked(Unchecked::NoAnswer),
+        None => TokenCheck::Unchecked(Unchecked::Error),
     }
 }
 
@@ -404,6 +435,7 @@ mod tests {
         );
         for unclear in [
             run(true, "API Error: 529 Overloaded", false),
+            run(true, "API Error: 403 forbidden", false),
             run(true, "Invalid API key", true),
             run(false, "ok", false),
             TokenCheckRun {
@@ -415,10 +447,20 @@ mod tests {
         ] {
             assert_eq!(
                 token_check(Some(&unclear)),
-                TokenCheck::Unchecked(Unchecked::NoAnswer),
+                TokenCheck::Unchecked(Unchecked::Error),
                 "{unclear:?}"
             );
         }
+        let silent = TokenCheckRun {
+            is_error: false,
+            text: None,
+            reached_model: false,
+            refused_login: false,
+        };
+        assert_eq!(
+            token_check(Some(&silent)),
+            TokenCheck::Unchecked(Unchecked::NoAnswer)
+        );
         assert_eq!(
             token_check(None),
             TokenCheck::Unchecked(Unchecked::NoAnswer)
@@ -428,13 +470,30 @@ mod tests {
             ..run(true, "a wording fold does not know", false)
         };
         assert_eq!(token_check(Some(&structured)), TokenCheck::Rejected);
+        let name = AccountName::parse("work-a").unwrap();
         for why in [
             Unchecked::Network,
             Unchecked::UsageLimit,
+            Unchecked::NotFound,
+            Unchecked::Timeout,
+            Unchecked::Error,
             Unchecked::NoAnswer,
         ] {
             assert!(!why.words().is_empty());
+            let hint = why.hint(&name);
+            assert!(hint.contains("work-a"), "{why:?}: {hint}");
+            if why != Unchecked::UsageLimit {
+                assert!(
+                    hint.contains("`fld account update work-a`"),
+                    "{why:?}: {hint}"
+                );
+            }
         }
+        assert!(
+            Unchecked::Timeout
+                .words()
+                .contains(&TOKEN_CHECK_TIMEOUT.as_secs().to_string())
+        );
     }
 
     #[test]

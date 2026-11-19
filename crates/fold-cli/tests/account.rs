@@ -33,7 +33,7 @@ impl Sandbox {
         sandbox
     }
 
-    /// A stand-in for `claude` first on the sandbox's `PATH`, so no test runs the real one. For the token check's turn it writes the result in `check-result.json`, or one the model answered, and appends one line per run to `check-runs`: which test token its environment held, whether a variable that outranks the token was left, whether it ran in a temporary folder outside the sandbox's home, and whether any argument holds a token.
+    /// A stand-in for `claude` first on the sandbox's `PATH`, so no test runs the real one. For the token check's turn it writes the result in `check-result.json`, or one the model answered, and appends one line per run to `check-runs`: which test token its environment held, whether a variable that outranks the token was left, whether it ran in a temporary folder outside the sandbox's home, whether any argument holds a token, and the MCP config it was given.
     fn fake_claude(&self) {
         fs::create_dir_all(self.path("bin")).unwrap();
         let script = format!(
@@ -50,10 +50,14 @@ case "$CLAUDE_CONFIG_DIR" in
   *) config=other ;;
 esac
 argument=no
+mcp=none
+previous=
 for arg in "$@"; do
   case "$arg" in *sk-ant-*) argument=yes ;; esac
+  [ "$previous" = "--mcp-config" ] && mcp=$(tr -d ' \n' < "$arg")
+  previous=$arg
 done
-echo "token=$token outranked=$outranked config=$config argument=$argument args=$*" >> '{runs}'
+echo "token=$token outranked=$outranked config=$config argument=$argument mcp=$mcp args=$*" >> '{runs}'
 if [ -f '{result}' ]; then
   cat '{result}'
   if [ -f '{exit}' ]; then exit "$(cat '{exit}')"; fi
@@ -477,13 +481,18 @@ fn add_and_update_check_the_token_with_one_turn_that_holds_it_only_in_its_enviro
     for flag in [
         "-p",
         "--model haiku",
-        "--strict-mcp-config",
+        "--tools  --strict-mcp-config --mcp-config ",
         "--no-session-persistence",
         "--max-turns 1",
         "--output-format json",
     ] {
         assert!(runs[0].contains(flag), "{flag}: {}", runs[0]);
     }
+    assert!(
+        runs[0].contains(r#" mcp={"mcpServers":{}} "#),
+        "no MCP server: {}",
+        runs[0]
+    );
     let updated = sandbox.fold_with_input(&["account", "update", "work-a"], TOKEN_B);
     assert!(updated.status.success(), "{}", stderr(&updated));
     assert!(sandbox.check_runs()[1].starts_with("token=B "));
@@ -568,7 +577,7 @@ fn a_token_fold_cannot_check_now_is_stored_with_a_warning() {
         (
             "work-c",
             "API Error: 529 Overloaded",
-            "claude gave no answer that fold reads",
+            "Claude Code ended the turn without an answer of the model, with an error that fold does not know",
         ),
     ] {
         sandbox.check_ends_in(text);
@@ -586,6 +595,8 @@ fn a_token_fold_cannot_check_now_is_stored_with_a_warning() {
                 "warning: fold could not check the token now: {why}. fold stored it; a worker whose login the API refuses waits for a working login, and Needs you names the account"
             )
         );
+        assert!(lines[2].starts_with("hint: "), "{lines:?}");
+        assert!(lines[2].contains(name), "{lines:?}");
     }
     fs::remove_file(sandbox.path("bin/claude")).unwrap();
     let without = sandbox
@@ -603,8 +614,13 @@ fn a_token_fold_cannot_check_now_is_stored_with_a_warning() {
     assert!(without.status.success(), "{}", stderr(&without));
     assert!(
         stdout(&without)
-            .contains("warning: fold could not check the token now: claude gave no answer"),
+            .contains("warning: fold could not check the token now: fold found no `claude` program on the PATH"),
         "a host without claude keeps the token"
+    );
+    assert!(
+        stdout(&without).contains("hint: install Claude Code"),
+        "{}",
+        stdout(&without)
     );
     let listed = sandbox.fold(&["account", "list"]);
     assert_eq!(stdout(&listed).lines().count(), 4, "{}", stdout(&listed));

@@ -114,7 +114,7 @@ pub fn run(
             let checked = checked_token(&name, &token, false, terminal)?;
             accounts::add(&dir, &name, &token, SystemClock.now())?;
             output::line(out, &added_line(&name))?;
-            warn_unchecked(out, checked)?;
+            warn_unchecked(out, &name, checked)?;
         }
         AccountCommand::Update(args) => {
             let name = AccountName::parse(&args.name)?;
@@ -125,7 +125,7 @@ pub fn run(
             let checked = checked_token(&name, &token, true, terminal)?;
             accounts::update(&dir, &name, &token, SystemClock.now())?;
             output::line(out, &updated_line(&name))?;
-            warn_unchecked(out, checked)?;
+            warn_unchecked(out, &name, checked)?;
         }
         AccountCommand::List => {
             let host = host_paths(dirs)?;
@@ -203,10 +203,15 @@ fn checked_token(
     }
 }
 
-/// The line after a change whose token fold could not check.
-fn warn_unchecked(out: &mut impl Write, checked: TokenCheck) -> Result<(), AccountError> {
+/// The lines after a change whose token fold could not check: why, and what the person can do.
+fn warn_unchecked(
+    out: &mut impl Write,
+    name: &AccountName,
+    checked: TokenCheck,
+) -> Result<(), AccountError> {
     if let TokenCheck::Unchecked(why) = checked {
         output::line(out, &unchecked_line(why))?;
+        output::line(out, &format!("hint: {}", why.hint(name)))?;
     }
     Ok(())
 }
@@ -226,6 +231,7 @@ fn check_with_claude(claude: &Path, token: &AccountToken) -> TokenCheck {
     else {
         return TokenCheck::Unchecked(Unchecked::NoAnswer);
     };
+    let output = dir.path().join("result.json");
     let mcp = dir.path().join("mcp.json");
     if std::fs::write(&mcp, b"{\"mcpServers\":{}}\n").is_err() {
         return TokenCheck::Unchecked(Unchecked::NoAnswer);
@@ -252,7 +258,6 @@ fn check_with_claude(claude: &Path, token: &AccountToken) -> TokenCheck {
         .arg(TOKEN_CHECK_PROMPT)
         .current_dir(dir.path())
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
         .stderr(Stdio::null());
     for name in OVERRIDING_ENV.iter().chain(CHECK_DROPPED_ENV.iter()) {
         command.env_remove(name);
@@ -260,22 +265,31 @@ fn check_with_claude(claude: &Path, token: &AccountToken) -> TokenCheck {
     command
         .env("CLAUDE_CONFIG_DIR", &config)
         .env(OAUTH_TOKEN_ENV, token.expose());
-    let run = run_bounded(&mut command, TOKEN_CHECK_TIMEOUT);
-    token_check(run.as_ref())
+    match run_bounded(&mut command, &output, TOKEN_CHECK_TIMEOUT) {
+        Ok(run) => token_check(run.as_ref()),
+        Err(why) => TokenCheck::Unchecked(why),
+    }
 }
 
 /// The most bytes fold reads of the check's output: its result is one short JSON object.
 const MAX_CHECK_OUTPUT: u64 = 1024 * 1024;
 
-/// The result of `command` as `--output-format json` writes it, `None` when it cannot start, runs past `timeout` (then it is killed) or writes no result. The exit status is not read: Claude Code exits with 1 after a result that is an error, and the result says why.
-fn run_bounded(command: &mut Command, timeout: Duration) -> Option<TokenCheckRun> {
-    let mut child = command.spawn().ok()?;
-    let stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stdout.take(MAX_CHECK_OUTPUT).read_to_end(&mut bytes);
-        bytes
-    });
+/// The result of `command` as `--output-format json` writes it into the file `output`, `None` when it wrote no result; an error when it cannot start or runs past `timeout`, which kills its process group. The output goes into a file, not a pipe, so a process that the turn left running cannot hold the read open. The exit status is not read: Claude Code exits with 1 after a result that is an error, and the result says why.
+fn run_bounded(
+    command: &mut Command,
+    output: &Path,
+    timeout: Duration,
+) -> Result<Option<TokenCheckRun>, Unchecked> {
+    use std::os::unix::process::CommandExt as _;
+    let file = std::fs::File::create(output).map_err(|_| Unchecked::NoAnswer)?;
+    let mut child = command
+        .stdout(file)
+        .process_group(0)
+        .spawn()
+        .map_err(|error| match error.kind() {
+            io::ErrorKind::NotFound => Unchecked::NotFound,
+            _ => Unchecked::NoAnswer,
+        })?;
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
@@ -283,15 +297,33 @@ fn run_bounded(command: &mut Command, timeout: Duration) -> Option<TokenCheckRun
             Ok(None) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(50));
             }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
+            Ok(None) => {
+                kill_group(&mut child);
+                return Err(Unchecked::Timeout);
+            }
+            Err(_) => {
+                kill_group(&mut child);
+                return Err(Unchecked::NoAnswer);
             }
         }
     }
-    let bytes = reader.join().ok()?;
-    check_result(&String::from_utf8_lossy(&bytes))
+    let mut bytes = Vec::new();
+    std::fs::File::open(output)
+        .and_then(|file| file.take(MAX_CHECK_OUTPUT).read_to_end(&mut bytes))
+        .map_err(|_| Unchecked::NoAnswer)?;
+    Ok(check_result(&String::from_utf8_lossy(&bytes)))
+}
+
+/// Kills the check's process and every process of its group, and reaps it. The group is the child's own (`process_group(0)`) and the child is not reaped yet, so its id still names that group.
+fn kill_group(child: &mut std::process::Child) {
+    if let Some(group) = i32::try_from(child.id())
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    {
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// The `result` object in Claude Code's output, the last one when it wrote several lines.
@@ -509,6 +541,19 @@ mod tests {
         assert!(unchecked_line(Unchecked::Network).starts_with(
             "warning: fold could not check the token now: Claude Code could not reach the model."
         ));
+        let mut out = Vec::new();
+        warn_unchecked(
+            &mut out,
+            &AccountName::parse("work-a").unwrap(),
+            TokenCheck::Unchecked(Unchecked::Timeout),
+        )
+        .unwrap();
+        let shown = String::from_utf8(out).unwrap();
+        assert!(
+            shown.contains("the turn did not end within 60 seconds")
+                && shown.contains("\nhint: `fld account update work-a`"),
+            "{shown}"
+        );
     }
 
     #[test]
@@ -516,15 +561,35 @@ mod tests {
         let token = check_token("sk-ant-oat01-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
         assert_eq!(
             check_with_claude(Path::new("/nonexistent/claude"), &token),
-            TokenCheck::Unchecked(Unchecked::NoAnswer)
+            TokenCheck::Unchecked(Unchecked::NotFound)
         );
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("result.json");
         let started = Instant::now();
-        let mut slow = Command::new("sleep");
-        slow.arg("30").stdout(Stdio::piped());
-        assert_eq!(run_bounded(&mut slow, Duration::from_millis(200)), None);
+        let mut slow = Command::new("sh");
+        slow.args(["-c", "sleep 30 & sleep 30"]);
+        assert_eq!(
+            run_bounded(&mut slow, &output, Duration::from_millis(200)),
+            Err(Unchecked::Timeout)
+        );
         assert!(
             started.elapsed() < Duration::from_secs(10),
             "the turn is killed at the timeout"
+        );
+
+        let started = Instant::now();
+        let mut left = Command::new("sh");
+        left.stderr(Stdio::null()).args([
+            "-c",
+            r#"sleep 15 </dev/null 2>/dev/null & echo '{"type":"result","is_error":false,"result":"ok","usage":{"input_tokens":3}}'"#,
+        ]);
+        let run = run_bounded(&mut left, &output, Duration::from_secs(20))
+            .unwrap()
+            .unwrap();
+        assert!(run.reached_model && !run.is_error, "{run:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "a process the turn left running does not hold the read"
         );
     }
 
