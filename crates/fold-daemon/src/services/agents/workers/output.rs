@@ -103,8 +103,7 @@ fn turn_error(result: &ResultMessage) -> TurnError {
         .saturating_add(usage.cache_creation_input_tokens)
         .saturating_add(usage.cache_read_input_tokens);
     let text = named.unwrap_or_else(|| NO_ERROR_TEXT.to_owned());
-    let refused =
-        tokens == 0 && is_refused_login(result.api_error_status, result.api_error_type.as_deref());
+    let refused = is_refused_login(result.api_error_status, result.api_error_type.as_deref());
     TurnError {
         wait: if refused {
             Some(TurnWait::Login)
@@ -514,6 +513,18 @@ mod tests {
             .unwrap(),
         );
         assert_eq!(turn_error_of(&[forbidden]).flatten().unwrap().wait, None);
+        let midway = effect_of(
+            &ClaudeMessage::parse(
+                r#"{"type":"result","subtype":"success","is_error":true,"session_id":"s","result":"Some new wording","api_error_status":401,"usage":{"input_tokens":120,"output_tokens":30}}"#,
+            )
+            .unwrap(),
+        );
+        let error = turn_error_of(&[midway]).flatten().unwrap();
+        assert_eq!(
+            (error.wait, error.reached_model),
+            (Some(TurnWait::Login), true),
+            "a login refused after the turn reached the model waits too"
+        );
     }
 
     fn turn_error_of(effects: &[LineEffect]) -> Option<Option<TurnError>> {
