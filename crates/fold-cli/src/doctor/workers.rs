@@ -10,14 +10,21 @@ use crate::output;
 const NAME: &str = "workers";
 
 /// The words in which Claude Code's own messages and the API's errors say that it is not signed in, such as `Not logged in · Please run /login` or `"type":"authentication_error"`, in lower case. Each is a phrase, so a path such as `src/routes/login.tsx` or another program's token in a process's stderr does not match.
-const SIGN_IN_WORDS: [&str; 6] = [
+const SIGN_IN_WORDS: [&str; 10] = [
     "run /login",
     "not logged in",
     "invalid api key",
     "oauth token has expired",
+    "oauth token revoked",
+    "oauth token has been revoked",
+    "oauth access token is invalid",
+    "failed to authenticate",
     "authentication_error",
     "invalid x-api-key",
 ];
+
+/// What a person does about a login that the API refuses.
+const LOGIN_FIX: &str = "give the project's account a working token with `fld account update <name>`, sign Claude Code in with `claude login` for the account default, or switch the account; fold then runs each waiting turn again in its session";
 
 /// Which workers of the project cannot work for a reason outside fold, as the running daemon knows them. `socket` is the socket of a daemon that answers, `slug` the project's registered slug and `started_at` the daemon's start, when it reports one.
 pub(super) fn workers_check(
@@ -60,11 +67,12 @@ impl Failures {
     }
 }
 
-/// `list` is the daemon's worker list, `None` when the daemon gave none. A stopped worker runs no turn, so it is left out. An error from before `started_at` is stated with that time and gives no fix, since a daemon start runs the worker again. Only the workers' names are shown, never Claude Code's error text.
+/// `list` is the daemon's worker list, `None` when the daemon gave none. A stopped worker runs no turn, so it is left out. A worker whose turn waits for a working login (`waits_for` is `login`) is named as waiting, whatever its error says. An error from before `started_at` is stated with that time and gives no fix, since a daemon start runs the worker again. Only the workers' names are shown, never Claude Code's error text.
 pub(crate) fn workers_verdict(list: Option<&Value>, started_at: Option<Timestamp>) -> Check {
     let Some(list) = list else {
         return Check::ok(NAME, "the daemon gave no worker list");
     };
+    let mut waiting = Vec::new();
     let mut signed_out = Failures::default();
     let mut unreachable = Failures::default();
     for worker in list["workers"].as_array().into_iter().flatten() {
@@ -79,7 +87,9 @@ pub(crate) fn workers_verdict(list: Option<&Value>, started_at: Option<Timestamp
                 .as_i64()
                 .is_some_and(|at| at < start.as_millis())
         });
-        if worker["last_error"].as_str().is_some_and(is_sign_in_error) {
+        if worker["waits_for"].as_str() == Some("login") {
+            waiting.push(name);
+        } else if worker["last_error"].as_str().is_some_and(is_sign_in_error) {
             signed_out.push(name, before_start);
         } else if worker["model_unreachable"].as_bool() == Some(true) {
             unreachable.push(name, before_start);
@@ -87,14 +97,21 @@ pub(crate) fn workers_verdict(list: Option<&Value>, started_at: Option<Timestamp
     }
     let mut parts = Vec::new();
     let mut fixes = Vec::new();
+    if !waiting.is_empty() {
+        parts.push(format!(
+            "the turns of {} wait for a working login, because the API refused it",
+            waiting.join(", ")
+        ));
+        fixes.push(LOGIN_FIX);
+    }
     if !signed_out.current.is_empty() {
         parts.push(format!(
             "the last turn of {} failed because Claude Code is not signed in",
             signed_out.current.join(", ")
         ));
-        fixes.push(
-            "give the project's account a working token with `fld account update <name>`, sign Claude Code in with `claude login` for the account default, or switch the account; fold then runs each waiting turn again in its session",
-        );
+        if fixes.is_empty() {
+            fixes.push(LOGIN_FIX);
+        }
     }
     if !unreachable.current.is_empty() {
         parts.push(format!(
@@ -152,6 +169,8 @@ mod tests {
             "Invalid API key · Please run /login",
             "OAuth token revoked · Please run /login",
             "OAuth token has expired. Please obtain a new token or refresh your existing token.",
+            "Failed to authenticate. API Error: 401 OAuth access token is invalid.",
+            "Failed to authenticate: OAuth token revoked",
             r#"API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#,
         ] {
             assert!(is_sign_in_error(text), "{text}");
@@ -233,5 +252,22 @@ mod tests {
             )
         );
         assert!(check.fix.unwrap().contains("runs each waiting turn again"));
+    }
+
+    #[test]
+    fn a_worker_that_waits_for_a_working_login_is_named_as_waiting() {
+        let start = at(1_790_000_000_000);
+        let list = json!({"workers": [
+            {"name": "web-lead", "state": "idle", "last_error": "Failed to authenticate. API Error: 401 OAuth access token is invalid.", "last_error_at": 1_789_999_999_000_i64, "model_unreachable": false, "waits_for": "login"},
+            {"name": "api-lead", "state": "idle", "last_error": "Some wording fold does not know", "last_error_at": 1_790_000_000_500_i64, "model_unreachable": false, "waits_for": "login"},
+            {"name": "web-worker", "state": "idle", "last_error": "Not logged in · Please run /login", "last_error_at": 1_790_000_000_500_i64, "model_unreachable": false, "waits_for": null},
+        ]});
+        let check = workers_verdict(Some(&list), Some(start));
+        assert_eq!(check.status, Status::Warn);
+        assert_eq!(
+            check.message,
+            "the turns of web-lead, api-lead wait for a working login, because the API refused it; the last turn of web-worker failed because Claude Code is not signed in"
+        );
+        assert_eq!(check.fix.as_deref(), Some(LOGIN_FIX), "one fix for both");
     }
 }
