@@ -707,3 +707,42 @@ async fn the_supervised_mains_own_shell_writes_never_wait_as_a_workers_change() 
     assert_eq!(recorded["outcome"], "recorded");
     assert_eq!(recorded["files"], json!(["notes.txt"]));
 }
+
+#[tokio::test]
+async fn the_supervised_main_waits_for_a_working_login_and_runs_its_turn_again_in_its_session() {
+    use crate::login_waits::login_turn;
+    use crate::turn_waits::{
+        advance, fake_with_turn, needs_you, read_fixture, set_turn, until_idle, until_turns,
+    };
+    use fold_core::turn_waits::{LOGIN_FIRST_WAIT, LOGIN_RERUN_TURN, WaitReason};
+    let dir = tempfile::TempDir::new().unwrap();
+    let (fake, turn) = fake_with_turn(&dir, &read_fixture("result"));
+    let mut harness = supervised(&fake).await;
+    let session = worker(&harness, MAIN).await.session_id;
+    let ask = ask_for_the_plan(&mut harness, &fake).await;
+    set_turn(&turn, &login_turn("Invalid API key · Please run /login"));
+    reply(&harness, &ask, "OK").await;
+    let waiting = until_idle(&harness, MAIN, |row| row.wait.is_some()).await;
+    assert_eq!(waiting.wait.unwrap().reason, WaitReason::Login);
+    assert_eq!(waiting.failed_turns, 0, "a refused login is no failed turn");
+    let items = needs_you(&harness).await;
+    let refused: Vec<&Value> = items
+        .iter()
+        .filter(|item| item["kind"] == "login_refused")
+        .collect();
+    assert_eq!(refused.len(), 1, "{items:?}");
+    assert_eq!(refused[0]["agents"], json!([MAIN]));
+    assert_eq!(refused[0]["account"], "default");
+
+    set_turn(&turn, &read_fixture("result"));
+    let before = fake.runs_of(MAIN).len();
+    advance(&harness, LOGIN_FIRST_WAIT);
+    let runs = until_turns(&fake, MAIN, LOGIN_RERUN_TURN, 1).await;
+    assert_eq!(
+        runs.len(),
+        before,
+        "the turn runs again in the main's own process"
+    );
+    let done = until_idle(&harness, MAIN, |row| row.wait.is_none()).await;
+    assert_eq!(done.session_id, session);
+}

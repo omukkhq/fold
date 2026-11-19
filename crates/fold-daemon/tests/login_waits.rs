@@ -14,7 +14,7 @@ use crate::accounts::{
     TOKEN_A, TOKEN_B, accounts_with_two, choose, host_accounts, ran_with, until_started,
 };
 use crate::common::acceptance::{HUMAN, Harness};
-use crate::project_pause::{LEAD, lead_running};
+use crate::project_pause::{LEAD, lead_running, until_not_running};
 use crate::turn_waits::{
     advance, areas, events_of, fake_with_turn, needs_you, read_fixture, reruns_of, set_turn,
     start_lead, until_idle, until_turns,
@@ -127,12 +127,28 @@ async fn a_refused_login_runs_again_only_after_its_long_backoff_when_nothing_cha
     areas(&harness).await;
     let lead = start_lead(&mut harness, "web").await;
     let first = until_idle(&harness, &lead, |row| row.wait.is_some()).await;
+    let since = first.wait.as_ref().unwrap().since;
     advance(&harness, LOGIN_FIRST_WAIT - Duration::from_secs(1));
-    assert_eq!(reruns_of(&fake, &lead, LOGIN_RERUN_TURN), 0);
-    set_turn(&turn, &read_fixture("result"));
     advance(&harness, Duration::from_secs(1));
-    let runs = until_turns(&fake, &lead, LOGIN_RERUN_TURN, 1).await;
+    // The refused re-run ends at the project's time; one that ran before the backoff ended would end a second early.
+    let again = until_idle(&harness, &lead, |row| {
+        row.wait.as_ref().is_some_and(|wait| wait.tries == 1)
+    })
+    .await;
+    assert_eq!(
+        again.wait.unwrap().tried_at,
+        since.checked_add(LOGIN_FIRST_WAIT).unwrap(),
+        "the first re-run comes after LOGIN_FIRST_WAIT, not before"
+    );
+    set_turn(&turn, &read_fixture("result"));
+    advance(&harness, 2 * LOGIN_FIRST_WAIT);
+    let runs = until_turns(&fake, &lead, LOGIN_RERUN_TURN, 2).await;
     assert_eq!(runs.len(), 1, "the turn runs again in the same process");
+    assert_eq!(
+        reruns_of(&fake, &lead, LOGIN_RERUN_TURN),
+        2,
+        "the backoff doubles"
+    );
     let done = until_idle(&harness, &lead, |row| row.wait.is_none()).await;
     assert_eq!(done.session_id, first.session_id);
     assert_eq!(done.last_error, None);
@@ -196,6 +212,51 @@ async fn the_item_of_a_named_account_names_its_token_its_update_and_the_other_ac
     );
     let text = serde_json::to_string(&items).unwrap();
     assert!(!text.contains(TOKEN_A) && !text.contains(TOKEN_B));
+}
+
+#[tokio::test]
+async fn the_item_keeps_naming_the_refused_account_through_a_pause_and_a_switch() {
+    let (_accounts, _dir, _turns, fake, harness, session) = lead_refused().await;
+    let paused = harness.call(MAIN, "pause_project", json!({})).await;
+    assert_eq!(paused["paused"], true, "{paused}");
+    until_not_running(&harness, LEAD).await;
+    let (status, body) = choose(&harness, Some("work-b")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let items = needs_you(&harness).await;
+    let refused = login_items(&items);
+    assert_eq!(refused.len(), 1, "{items:?}");
+    let item = refused[0];
+    assert_eq!(
+        item["account"], "work-a",
+        "the refused account, not the project's"
+    );
+    assert!(
+        item["reason"]
+            .as_str()
+            .unwrap()
+            .contains("`fld account update work-a`"),
+        "{item}"
+    );
+    assert_eq!(
+        item["actions"],
+        json!([
+            {"action": "pause"},
+            {"action": "switch_account", "account": "default"},
+            {"action": "switch_account", "account": "work-a"}
+        ]),
+        "the switches go to every account other than the project's"
+    );
+
+    let resumed = harness.call(MAIN, "resume_project", json!({})).await;
+    assert_eq!(resumed["paused"], false, "{resumed}");
+    until_idle(&harness, LEAD, |row| row.wait.is_none()).await;
+    let resumed = fake.runs_of(LEAD).pop().unwrap();
+    assert!(
+        ran_with(&resumed, Some(TOKEN_B)),
+        "the resume runs on work-b"
+    );
+    assert_eq!(resumed.flag("--resume"), Some(session.as_str()));
+    assert!(login_items(&needs_you(&harness).await).is_empty());
 }
 
 #[tokio::test]
@@ -318,4 +379,109 @@ async fn a_daemon_start_runs_a_refused_turn_again_once_its_process_is_up() {
     let rerun = the_rerun(&fake, 1).await;
     assert_eq!(rerun.flag("--resume"), Some(session.as_str()));
     until_idle(&harness, LEAD, |row| row.wait.is_none()).await;
+}
+
+#[tokio::test]
+async fn a_worker_that_waits_is_never_one_that_cannot_reach_the_model() {
+    let dir = TempDir::new().unwrap();
+    let (fake, turn) = fake_with_turn(&dir, &read_fixture("result"));
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    set_turn(&turn, &login_turn("API Error: 529 Overloaded"));
+    for count in 1..=3 {
+        harness
+            .call(
+                MAIN,
+                "send_message",
+                json!({"to": [LEAD], "body": format!("look at T-{count}")}),
+            )
+            .await;
+        until_idle(&harness, LEAD, |row| row.failed_turns == count).await;
+    }
+    let failing = |items: &[Value]| {
+        items
+            .iter()
+            .any(|item| item["kind"] == "worker_model_unreachable" && item["agent"] == LEAD)
+    };
+    assert!(failing(&needs_you(&harness).await));
+
+    set_turn(&turn, &login_turn(RECORDED));
+    harness
+        .call(
+            MAIN,
+            "send_message",
+            json!({"to": [LEAD], "body": "look at T-4"}),
+        )
+        .await;
+    let row = until_idle(&harness, LEAD, |row| row.wait.is_some()).await;
+    assert_eq!(row.failed_turns, 0, "a wait ends the run of failed turns");
+    let items = needs_you(&harness).await;
+    assert!(!failing(&items), "{items:?}");
+    assert_eq!(login_items(&items).len(), 1);
+    let (_, workers) = harness
+        .http(Method::GET, "/api/v1/projects/demo/workers", None, HUMAN)
+        .await;
+    let entry = workers["workers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == LEAD)
+        .unwrap();
+    assert_eq!(entry["model_unreachable"], false, "{entry}");
+    assert_eq!(entry["waits_for"], "login");
+    let (_, overview) = harness
+        .http(Method::GET, "/api/v1/projects/demo/agents", None, HUMAN)
+        .await;
+    assert!(
+        !serde_json::to_string(&overview)
+            .unwrap()
+            .contains("\"model_unreachable\":true"),
+        "{overview}"
+    );
+}
+
+#[tokio::test]
+async fn a_reviewer_whose_login_is_refused_waits_and_runs_its_turn_again_in_its_session() {
+    use crate::worker_resume::{REVIEWER, proposed_by_a_task_worker};
+    let dir = TempDir::new().unwrap();
+    let (fake, turn) = fake_with_turn(&dir, &read_fixture("result"));
+    let (mut harness, _work) =
+        proposed_by_a_task_worker(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    harness
+        .call(MAIN, "start_worker", json!({"role": "review_lead"}))
+        .await;
+    until_state(&harness, "review-lead", WorkerState::Idle).await;
+    harness.connect("review-lead").await;
+    set_turn(&turn, &login_turn("OAuth token has expired"));
+    let started = harness
+        .call(
+            "review-lead",
+            "start_worker",
+            json!({"role": "reviewer", "proposals": ["P-1"]}),
+        )
+        .await;
+    assert_eq!(started["worker"]["name"], REVIEWER, "{started}");
+    let row = until_idle(&harness, REVIEWER, |row| row.wait.is_some()).await;
+    assert_eq!(row.wait.unwrap().reason, WaitReason::Login);
+    assert_eq!(row.failed_turns, 0);
+    let items = needs_you(&harness).await;
+    let refused = login_items(&items);
+    assert_eq!(refused.len(), 1, "{items:?}");
+    assert!(
+        refused[0]["agents"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(REVIEWER)),
+        "{items:?}"
+    );
+
+    set_turn(&turn, &read_fixture("result"));
+    advance(&harness, LOGIN_FIRST_WAIT);
+    let runs = until_turns(&fake, REVIEWER, LOGIN_RERUN_TURN, 1).await;
+    assert_eq!(
+        runs.len(),
+        1,
+        "the reviewer's turn runs again in its process"
+    );
+    let done = until_idle(&harness, REVIEWER, |row| row.wait.is_none()).await;
+    assert_eq!(done.session_id, row.session_id);
 }
