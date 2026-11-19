@@ -650,6 +650,20 @@ pub enum GcWorkspaceReason {
     Failed,
 }
 
+impl GcWorkspaceReason {
+    /// Every reason, so the reference can be checked against the names `fld gc` answers with.
+    pub const ALL: [Self; 8] = [
+        Self::OwnerEnded,
+        Self::PastWindow,
+        Self::OwnerProcess,
+        Self::OwnerSession,
+        Self::SessionInside,
+        Self::InvalidPath,
+        Self::OtherFilesystem,
+        Self::Failed,
+    ];
+}
+
 /// One closed workspace not recorded as removed, or whose directory came back.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct GcWorkspace {
@@ -691,6 +705,21 @@ pub enum GcWorkerReason {
     InvalidPath,
     /// The removal failed; the next run tries again.
     Failed,
+}
+
+impl GcWorkerReason {
+    /// Every reason, so the reference can be checked against the names `fld gc` answers with.
+    pub const ALL: [Self; 9] = [
+        Self::Finished,
+        Self::Claim,
+        Self::Session,
+        Self::Parked,
+        Self::Waiting,
+        Self::OwedResume,
+        Self::OwedMessage,
+        Self::InvalidPath,
+        Self::Failed,
+    ];
 }
 
 /// One folder `.fold/workers/<name>` of a task worker or reviewer that stopped longer than `closed_workspace_days` ago.
