@@ -318,13 +318,13 @@ pub fn rerun_plan<K: Clone>(
     RerunPlan { due, next_at }
 }
 
-/// The groups whose waiting turns a finished turn releases. A turn that reached the model, or ended well, shows that the model answers and takes the project's login, which releases every turn that could not reach it and every turn whose login was refused, and, when that turn was itself a usage limit's wait, the other turns at that limit. A worker of another model can work through an Opus or Sonnet limit, so only a turn of the same wait releases a limit. A turn that reached no model releases nothing.
+/// The groups whose waiting turns a finished turn releases. A turn that reached the model, or ended well, shows that the model answers, which releases every turn that could not reach it, and, when that turn was itself the re-run of a usage limit's wait or of a refused login's wait, the other turns of that wait. A worker of another model can work through an Opus or Sonnet limit, and a worker that answers can run on another login than a refused one, such as a process that has not read a new login yet or a session that is not a worker's, so only a turn of the same wait releases a limit or a login; a change of the login releases the login waits itself (see [`LOGIN_RELEASES`]). A turn that reached no model releases nothing.
 pub fn released_by(answered: bool, cleared: Option<WaitGroup>) -> Vec<WaitGroup> {
     if !answered {
         return Vec::new();
     }
-    let mut groups = vec![WaitGroup::NETWORK, WaitGroup::LOGIN];
-    if let Some(group) = cleared.filter(|group| group.reason == WaitReason::UsageLimit) {
+    let mut groups = vec![WaitGroup::NETWORK];
+    if let Some(group) = cleared.filter(|group| group.reason != WaitReason::Network) {
         groups.push(group);
     }
     groups
@@ -668,15 +668,16 @@ mod tests {
         assert!(released_by(false, Some(WaitGroup::LOGIN)).is_empty());
         assert_eq!(
             released_by(true, None),
-            [WaitGroup::NETWORK, WaitGroup::LOGIN]
+            [WaitGroup::NETWORK],
+            "an answer of a worker that did not wait shows nothing of another's refused login"
         );
         assert_eq!(
             released_by(true, Some(WaitGroup::limit(LimitKind::Opus))),
-            [
-                WaitGroup::NETWORK,
-                WaitGroup::LOGIN,
-                WaitGroup::limit(LimitKind::Opus)
-            ]
+            [WaitGroup::NETWORK, WaitGroup::limit(LimitKind::Opus)]
+        );
+        assert_eq!(
+            released_by(true, Some(WaitGroup::NETWORK)),
+            [WaitGroup::NETWORK]
         );
         assert_eq!(
             released_by(true, Some(WaitGroup::LOGIN)),

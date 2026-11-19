@@ -594,3 +594,59 @@ async fn one_more_refused(harness: &Harness, agents: &[&str], before: &[(u32, us
     }
     more == 1
 }
+
+#[tokio::test]
+async fn another_workers_answer_after_a_resume_gives_a_refused_worker_no_extra_turn() {
+    use fold_core::turn_waits::LOGIN_LONGEST_WAIT;
+    use fold_daemon::services::agents::PAUSE_TURN;
+    let dir = TempDir::new().unwrap();
+    let (mut fake, _turn) = fake_with_turn(&dir, &read_fixture("result"));
+    // Every resumed session's turn is refused; a worker in a new session is answered.
+    let refused = dir.path().join("refused.jsonl");
+    std::fs::write(&refused, login_turn(RECORDED)).unwrap();
+    fake.launcher.env.push((
+        "FOLD_FAKE_CLAUDE_RESUME_TURN".to_owned(),
+        refused.to_string_lossy().into_owned(),
+    ));
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    let pause_and_resume = async || {
+        let paused = harness.call(MAIN, "pause_project", json!({})).await;
+        assert_eq!(paused["paused"], true, "{paused}");
+        until_not_running(&harness, LEAD).await;
+        let resumed = harness.call(MAIN, "resume_project", json!({})).await;
+        assert_eq!(resumed["paused"], false, "{resumed}");
+    };
+    pause_and_resume().await;
+    let tries = until_idle(&harness, LEAD, |row| row.wait.is_some())
+        .await
+        .wait
+        .unwrap()
+        .tries;
+    pause_and_resume().await;
+    let refused_at = until_idle(&harness, LEAD, |row| {
+        row.wait.as_ref().is_some_and(|wait| wait.tries > tries)
+    })
+    .await
+    .wait
+    .unwrap()
+    .tried_at;
+    assert_eq!(turns_with(&fake, LEAD, PAUSE_TURN), 2);
+
+    // A worker in its own new session is answered after the resume, while the lead's login stays refused.
+    harness
+        .call(MAIN, "start_worker", json!({"role": "review_lead"}))
+        .await;
+    until_idle(&harness, "review-lead", |row| row.turns > 0).await;
+    // The timed re-run ends at the moved clock; a re-run for the answer would have come before it.
+    advance(&harness, LOGIN_LONGEST_WAIT);
+    let timed = refused_at.checked_add(LOGIN_LONGEST_WAIT).unwrap();
+    until_idle(&harness, LEAD, |row| {
+        row.wait.as_ref().is_some_and(|wait| wait.tried_at == timed)
+    })
+    .await;
+    assert_eq!(
+        turns_with(&fake, LEAD, LOGIN_RERUN_TURN),
+        1,
+        "only the timed re-run: an answer of another worker shows nothing of the lead's refused login"
+    );
+}
