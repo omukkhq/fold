@@ -160,7 +160,7 @@ describe("a resume that waits for a free slot", () => {
   });
 });
 
-describe("a turn that waits for the network or a usage limit", () => {
+describe("a turn that waits for the network, a usage limit or a working login", () => {
   const network = seen({
     state: "waits_for_network",
     call: null,

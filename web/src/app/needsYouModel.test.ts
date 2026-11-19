@@ -707,7 +707,7 @@ describe("needsYouGroups", () => {
     );
   });
 
-  it("shows a usage limit as one project line with its reset and the pause action, opening the agents, last of its group", () => {
+  it("shows a usage limit as one project line with its reset and the pause action, opening the agents, after the workers that cannot reach fold", () => {
     const limit = needsItem({
       kind: "usage_limit",
       screen: "worker",

@@ -179,7 +179,7 @@ describe("agentStateText of a supervised agent", () => {
     expect(chipErrorTitle(agent({ presence: "active" }))).toBeUndefined();
   });
 
-  it("says that a process whose turn waits for the network or a usage limit waits, never that it fails", () => {
+  it("says that a process whose turn waits for the network, a usage limit or a working login waits, never that it fails", () => {
     const waiting = (waits: "network" | "usage_limit" | "login") => ({
       ...supervised("idle", { stalled: 1 }),
       process: {

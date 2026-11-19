@@ -382,7 +382,7 @@ describe("Inbox, Needs you", () => {
     expect(calls.some((call) => call.method === "PUT")).toBe(false);
   });
 
-  it("shows a refused login with the account, its whole fix, Pause and one Switch account control", async () => {
+  it("shows a refused login with the account, its whole fix, and one Switch account control outside its link", async () => {
     const { calls } = await renderInbox(
       [
         needsItem({
@@ -410,9 +410,11 @@ describe("Inbox, Needs you", () => {
     const title = command.closest(".basis-full");
     expect(title?.className).toContain("wrap-anywhere");
     expect(title?.className).not.toContain("truncate");
-    expect(
-      await within(project).findByRole("button", { name: "Switch account" }),
-    ).toBeTruthy();
+    const opener = await within(project).findByRole("button", {
+      name: "Switch account",
+    });
+    expect(opener.closest("a")).toBeNull();
+    expect(within(project).getByRole("link").contains(command)).toBe(true);
     expect(calls.some((call) => call.method === "PUT")).toBe(false);
   });
 

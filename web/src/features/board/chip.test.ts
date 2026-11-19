@@ -6,9 +6,9 @@ import {
   Clock,
   CloudOff,
   Gauge,
-  KeyRound,
   Hand,
   Hourglass,
+  KeyRound,
 } from "lucide-react";
 import type { BoardCard, BoardProposal } from "@/api/board";
 import { boardCard } from "@/test/payloads";
