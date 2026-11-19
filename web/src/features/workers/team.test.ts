@@ -308,6 +308,13 @@ describe("steps", () => {
         last_error: "API Error: Can't reach the API server",
         waits_for: "network",
       }),
+      workerProcess("auth-worker", {
+        state: "idle",
+        role: "task_worker",
+        last_error:
+          "Failed to authenticate. API Error: 401 OAuth access token is invalid.",
+        waits_for: "login",
+      }),
       workerProcess("db-worker", { state: "idle", role: "task_worker" }),
       workerProcess("ui-worker", {
         state: "idle",
@@ -327,6 +334,17 @@ describe("steps", () => {
       pill: { label: "waiting", tone: "idle" },
       errorInStep: true,
       error: { title: "waiting for the network", waits: true },
+    });
+    expect(row("auth-worker")).toMatchObject({
+      pill: { label: "waiting", tone: "idle" },
+      errorInStep: true,
+      error: {
+        title: "waits for a working login",
+        text: "Failed to authenticate. API Error: 401 OAuth access token is invalid.",
+        hint: null,
+        waits: true,
+      },
+      step: { tool: null, text: "waits for a working login" },
     });
     expect(row("db-worker")?.pill).toEqual(workerPill("idle"));
     expect(row("ui-worker")).toMatchObject({
