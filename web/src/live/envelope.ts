@@ -122,6 +122,7 @@ const ACTIVITY_STATES = everyValue<components["schemas"]["ActivityState"]>({
   waits_for_slot: true,
   waits_for_network: true,
   waits_for_usage_limit: true,
+  waits_for_login: true,
   parked: true,
 });
 

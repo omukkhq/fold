@@ -283,7 +283,7 @@ impl Supervisor {
             return Ok(false);
         };
         drop(conn);
-        // A worker whose turn waits for the network or a usage limit owes that turn, so it has not answered.
+        // A worker whose turn waits for the network, a usage limit or a working login owes that turn, so it has not answered.
         if row.state != WorkerState::Idle
             || row.wait.is_some()
             || messages::undelivered_count(read, agent).await? > 0

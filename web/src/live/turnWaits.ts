@@ -6,9 +6,10 @@ export type TurnWaitReason = components["schemas"]["TurnWaitReason"];
 const WAIT_WORDS: Readonly<Record<TurnWaitReason, string>> = {
   network: "waiting for the network",
   usage_limit: "waits for the usage limit reset",
+  login: "waits for a working login",
 };
 
-/** What a worker whose idle turn waits does, in the lower-case words of a chip or a row: `waiting for the network` or `waits for the usage limit reset`. */
+/** What a worker whose idle turn waits does, in the lower-case words of a chip or a row: `waiting for the network`, `waits for the usage limit reset` or `waits for a working login`. */
 export function waitWords(reason: TurnWaitReason): string {
   return WAIT_WORDS[reason];
 }

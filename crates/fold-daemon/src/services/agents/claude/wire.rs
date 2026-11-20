@@ -241,6 +241,12 @@ pub struct ResultMessage {
     pub permission_denials: Vec<PermissionDenial>,
     #[serde(default)]
     pub errors: Vec<String>,
+    /// The HTTP status of the API error the turn ended in, such as 401 for a refused login; absent when it names none.
+    #[serde(default)]
+    pub api_error_status: Option<u64>,
+    /// The type of that API error, such as `authentication_error`.
+    #[serde(default)]
+    pub api_error_type: Option<String>,
     /// Each model the process used, by name, with its context window.
     #[serde(default, rename = "modelUsage")]
     pub model_usage: std::collections::BTreeMap<String, ModelUsage>,

@@ -112,9 +112,14 @@ impl ProjectPaths {
         self.fold_dir().join("sessions").join("prompt.md")
     }
 
+    /// The folder that holds one folder per worker agent.
+    pub fn workers_dir(&self) -> PathBuf {
+        self.fold_dir().join("workers")
+    }
+
     /// The files fold writes for one worker agent's Claude Code process: its MCP configuration and its role prompt.
     pub fn worker_dir(&self, agent: &AgentName) -> PathBuf {
-        self.fold_dir().join("workers").join(agent.as_str())
+        self.workers_dir().join(agent.as_str())
     }
 
     /// The folder a supervised worker other than the main agent starts in and its shell returns to after each command, so a relative path of its commands without `..` never lands in the project folder; it lies inside the project folder, so a path with `..` can. It holds copies of the project's Claude Code files that a session reads from its folder; Claude Code names the worker's transcripts after it.

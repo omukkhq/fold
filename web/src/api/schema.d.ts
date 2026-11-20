@@ -596,7 +596,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Collects the project's garbage: prunes checkpoints, removes the closed workspace directories that are still there and deletes unreferenced objects. Socket only; used by `fld gc`. */
+        /** Collects the project's garbage: prunes checkpoints, removes the closed workspace directories that are due and the folders of finished task workers and reviewers, and deletes unreferenced objects. Socket only; used by `fld gc`. */
         post: operations["run_gc"];
         delete?: never;
         options?: never;
@@ -2054,10 +2054,10 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @description What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free, `waits_for_network` while its last turn could not reach the model, which fold runs again once the model answers, and `waits_for_usage_limit` while its last turn reached a usage limit, which fold runs again after the reset, and `parked` while it waits for the go of the agent that stopped it with `stop_worker`'s `wait_for`. `working`, `stopped`, `waits_for_slot`, `parked` and the waits are never stalls.
+         * @description What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free, `waits_for_network` while its last turn could not reach the model, which fold runs again once the model answers, `waits_for_usage_limit` while its last turn reached a usage limit, which fold runs again after the reset, `waits_for_login` while the API refused the login of its last turn, which fold runs again once the project's login changes or works, and `parked` while it waits for the go of the agent that stopped it with `stop_worker`'s `wait_for`. `working`, `stopped`, `waits_for_slot`, `parked` and the waits are never stalls.
          * @enum {string}
          */
-        ActivityState: "working" | "silent" | "long_call" | "stopped" | "failed" | "waits_for_slot" | "waits_for_network" | "waits_for_usage_limit" | "parked";
+        ActivityState: "working" | "silent" | "long_call" | "stopped" | "failed" | "waits_for_slot" | "waits_for_network" | "waits_for_usage_limit" | "waits_for_login" | "parked";
         /** @description One comment on the version the human read, as its own `comment` review. */
         AddCommentBody: components["schemas"]["CommentBody"] & {
             /**
@@ -3329,7 +3329,12 @@ export interface components {
         GateName: "open" | "version" | "caller" | "approval" | "human_review" | "prerequisites" | "merge";
         /** @enum {string} */
         GateStatusKind: "met" | "unmet" | "checked_at_integration";
-        /** @description The counts of one garbage collection run. */
+        /**
+         * @description Whether the run removed a directory or folder, or would in a dry run, or kept it.
+         * @enum {string}
+         */
+        GcAction: "remove" | "keep";
+        /** @description The counts of one garbage collection run, with each closed workspace directory and worker folder it looked at. */
         GcCounts: {
             /**
              * Format: int64
@@ -3365,6 +3370,20 @@ export interface components {
             tmp_removed: number;
             /**
              * Format: int64
+             * @description The bytes of the files in those folders.
+             */
+            worker_bytes_freed: number;
+            /** @description Every folder of a task worker or reviewer that stopped longer than `closed_workspace_days` ago, by agent. */
+            workers: components["schemas"]["GcWorker"][];
+            /**
+             * Format: int64
+             * @description Folders `.fold/workers/<name>` of finished task workers and reviewers that the run removed.
+             */
+            workers_removed: number;
+            /** @description Every closed workspace not recorded as removed, or whose directory came back after its removal, by id. */
+            workspaces: components["schemas"]["GcWorkspace"][];
+            /**
+             * Format: int64
              * @description Directories of archived or abandoned workspaces that the run removed.
              */
             workspaces_removed: number;
@@ -3373,6 +3392,43 @@ export interface components {
             /** @description Count what a run would remove and change nothing. */
             dry_run?: boolean;
         };
+        /** @description One folder `.fold/workers/<name>` of a task worker or reviewer that stopped longer than `closed_workspace_days` ago. */
+        GcWorker: {
+            action: components["schemas"]["GcAction"];
+            /** @description The worker's agent name. */
+            agent: string;
+            /**
+             * Format: int64
+             * @description The bytes of the files in the folder.
+             */
+            bytes: number;
+            reason: components["schemas"]["GcWorkerReason"];
+        };
+        /**
+         * @description Why the run removes or keeps the folder of a finished task worker or reviewer.
+         * @enum {string}
+         */
+        GcWorkerReason: "finished" | "claim" | "session" | "parked" | "waiting" | "owed_resume" | "owed_message" | "invalid_path" | "failed";
+        /** @description One closed workspace not recorded as removed, or whose directory came back. */
+        GcWorkspace: {
+            action: components["schemas"]["GcAction"];
+            /** @description The error code of a removal that failed. */
+            code: string | null;
+            /** @description The worker that owns the workspace. */
+            owner: string | null;
+            /** @description The directory relative to the project folder. */
+            path: string;
+            reason: components["schemas"]["GcWorkspaceReason"];
+            /** @description fold had removed the directory, and a directory was at its path again. */
+            returned: boolean;
+            /** @description The workspace id, such as `ws-9`. */
+            workspace: string;
+        };
+        /**
+         * @description Why the run removes or keeps the directory of a closed workspace.
+         * @enum {string}
+         */
+        GcWorkspaceReason: "owner_ended" | "past_window" | "owner_process" | "owner_session" | "session_inside" | "invalid_path" | "other_filesystem" | "failed";
         /** @description What turning Git on did. */
         GitEnabledView: {
             /** @description The commit the Git branch points to; null while main holds only the empty genesis. */
@@ -3594,7 +3650,7 @@ export interface components {
             parked_by: string | null;
             /**
              * Format: int64
-             * @description UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, the time the work came that fold owes a `waits_for_slot` worker, the end of the first turn of a wait for the network or a usage limit, or the time a `parked` worker was parked.
+             * @description UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, the time the work came that fold owes a `waits_for_slot` worker, the end of the first turn of a wait for the network, a usage limit or a working login, or the time a `parked` worker was parked.
              */
             since: number;
             slot: components["schemas"]["LiveSlot"] | null;
@@ -3825,12 +3881,12 @@ export interface components {
         /** @description One item that waits for a human. Only the ids its kind has are set. */
         NeedsYouEntry: {
             /**
-             * @description The project's account of a `usage_limit` when fold lists the item, `default` for Claude Code's own login; null for every other kind.
+             * @description The project's account of a `usage_limit` when fold lists the item, and the account whose login the API refused in the newest turn of a `login_refused`; `default` for Claude Code's own login; null for every other kind.
              * @example work-a
              */
             account: string | null;
             action: components["schemas"]["PersonAction"] | null;
-            /** @description What the human can do from the item, such as `pause` for a `usage_limit`; empty for most kinds. */
+            /** @description What the human can do from the item, such as `pause` for a `usage_limit` or a `login_refused`; empty for most kinds. */
             actions: components["schemas"]["NeedsYouActionEntry"][];
             activity: components["schemas"]["LiveActivity"] | null;
             /**
@@ -3839,7 +3895,7 @@ export interface components {
              */
             agent: string | null;
             /**
-             * @description The agents of an `agent_change`, in name order; empty for every other kind.
+             * @description The agents of an `agent_change`, and the workers whose turn waits of a `worker_model_unreachable` for the network, a `usage_limit` or a `login_refused`, in name order; empty for every other kind.
              * @example [
              *       "reviewer-35"
              *     ]
@@ -3889,7 +3945,7 @@ export interface components {
             /** @description How many questions a `question` asks as one set, which a human answers together in one reply; 0 for every other kind. */
             questions: number;
             /**
-             * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again; what to check for a `worker_model_unreachable`.
+             * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again; what to check for a `worker_model_unreachable`; what fold does about a `usage_limit`; the fix of the refused account of a `login_refused`, `fld account update <account>` with a new token or `claude login` for `default`.
              * @example Wait until the design is signed off
              */
             reason: string | null;
@@ -3924,7 +3980,7 @@ export interface components {
              */
             thread: string | null;
             /**
-             * @description The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`; Claude Code's error of a `worker_model_unreachable`; what fold saw of a `worker_stalled` at the read, such as `No activity from @web-worker for 12 min`, in the words of the board's chip.
+             * @description The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`; Claude Code's error of a `worker_model_unreachable`, and its newest message of the waits of a `usage_limit` or a `login_refused`; what fold saw of a `worker_stalled` at the read, such as `No activity from @web-worker for 12 min`, in the words of the board's chip.
              * @example Database schema for reports
              */
             title: string | null;
@@ -3938,7 +3994,7 @@ export interface components {
          * @description Why an item waits for a human.
          * @enum {string}
          */
-        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable" | "worker_model_unreachable" | "claude_not_found" | "notify_target_off" | "agent_change" | "shared_changed" | "worker_stalled" | "usage_limit" | "stale_claim";
+        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable" | "worker_model_unreachable" | "claude_not_found" | "notify_target_off" | "agent_change" | "shared_changed" | "worker_stalled" | "usage_limit" | "stale_claim" | "login_refused";
         /** @description Every item that waits for a human, oldest first. */
         NeedsYouList: {
             items: components["schemas"]["NeedsYouEntry"][];
@@ -5983,7 +6039,7 @@ export interface components {
          * @description The cause outside a worker that its last turn waits for.
          * @enum {string}
          */
-        TurnWaitReason: "network" | "usage_limit";
+        TurnWaitReason: "network" | "usage_limit" | "login";
         /** @description One path where the unstash conflicted with the project folder. */
         UnstashConflictView: {
             /** @description `both_modified_text`, `both_modified_binary`, `modify_delete`, `add_add` or `type_change`. */

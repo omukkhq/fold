@@ -16,6 +16,7 @@ import {
   GitPullRequest,
   Hand,
   Inbox as InboxIcon,
+  KeyRound,
   MessagesSquare,
   SearchX,
   ShieldAlert,
@@ -94,6 +95,7 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   worker_stalled: Hand,
   usage_limit: Gauge,
   stale_claim: Hand,
+  login_refused: KeyRound,
 };
 
 const MINUTE_MS = 60_000;

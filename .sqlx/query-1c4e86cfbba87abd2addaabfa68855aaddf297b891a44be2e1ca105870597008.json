@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT cwd AS \"cwd!: String\" FROM sessions\n           WHERE ended_at IS NULL AND cwd IS NOT NULL ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "cwd!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "cwd"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "1c4e86cfbba87abd2addaabfa68855aaddf297b891a44be2e1ca105870597008"
+}

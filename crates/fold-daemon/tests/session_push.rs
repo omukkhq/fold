@@ -1,3 +1,4 @@
+use crate::common::gated;
 use crate::common::roles::give_role;
 use fold_core::roles::Role;
 use std::io::Write;
@@ -980,20 +981,6 @@ async fn a_hung_socket_does_not_delay_another_target() {
     let waited = hung[1] - hung[0];
     assert!(waited >= CONNECT_TIMEOUT && waited < CONNECT_TIMEOUT + Duration::from_millis(10));
     assert_eq!(targets.sockets(&name("backend")).len(), 1);
-}
-
-/// A connector that holds every connect until the test opens the gate.
-#[cfg(test)]
-fn gated(started: mpsc::UnboundedSender<()>, gate: Arc<tokio::sync::Semaphore>) -> Connect {
-    Arc::new(move |path: PathBuf| {
-        let started = started.clone();
-        let gate = Arc::clone(&gate);
-        Box::pin(async move {
-            let _ = started.send(());
-            let _permit = gate.acquire().await;
-            UnixStream::connect(path).await
-        })
-    })
 }
 
 #[tokio::test]

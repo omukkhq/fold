@@ -27,6 +27,7 @@ mod context;
 mod cost;
 /// The environment of the workers: which variables of the login shell they take, and what the daemon found about it at its start.
 pub mod environment;
+mod folders;
 mod needs_you;
 mod overview;
 /// The kernel's view of a socket peer: whether a worker that fold started is the peer or one of its ancestors.
@@ -40,6 +41,8 @@ pub use context::{
     render as render_session_context,
 };
 pub use cost::{ProjectCost, cost_totals};
+pub use fold_core::worker_folders::{FolderDecision, FolderKeep};
+pub use folders::{WorkerFolder, collect_worker_folders};
 pub use needs_you::{
     NeedsYouAction, NeedsYouItem, NeedsYouKind, Screen, needs_you, with_folder_attention,
 };

@@ -75,7 +75,7 @@ function knownFailure(process: AgentProcess): boolean {
   );
 }
 
-/** A supervised agent runs Claude Code only during a turn, so its process tells its state; its presence would read offline between turns. A process whose turn waits for the network or a usage limit says so, a parked one names whose go it waits for, and one whose turns cannot reach the model says so, unless it failed for a reason the chip names. */
+/** A supervised agent runs Claude Code only during a turn, so its process tells its state; its presence would read offline between turns. A process whose turn waits for the network, a usage limit or a working login says so, a parked one names whose go it waits for, and one whose turns cannot reach the model says so, unless it failed for a reason the chip names. */
 function processText(agent: ProjectAgent, process: AgentProcess): string {
   if (process.waits_for !== null) {
     return withStalled(agent, waitWords(process.waits_for));

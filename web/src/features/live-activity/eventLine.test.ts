@@ -383,6 +383,9 @@ describe("eventLine", () => {
         limit: "weekly",
       }),
     ).toBe("the turn of web-lead reached the weekly limit; fold runs it again");
+    expect(line("worker.waiting", { agent: "web-lead", reason: "login" })).toBe(
+      "the turn of web-lead had its login refused; fold runs it again",
+    );
     expect(
       line("worker.wait_ended", { agent: "web-lead", reason: "network" }),
     ).toBe("the turn of web-lead waits no more");

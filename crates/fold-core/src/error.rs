@@ -214,6 +214,8 @@ define_codes! {
     ACCOUNTS_IO = "accounts_io",
     ACCOUNT_EXISTS = "account_exists",
     ACCOUNT_RESERVED = "account_reserved",
+    ACCOUNT_TOKEN_REJECTED = "account_token_rejected",
+    DIRECTORY_OTHER_FILESYSTEM = "directory_other_filesystem",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

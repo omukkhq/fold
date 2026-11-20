@@ -10,10 +10,12 @@ use super::agents::cost::time_param;
 use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use super::{Project, SocketOnly};
 use crate::daemon::{AppState, StartedBy};
+use crate::services::agents::{FolderDecision, FolderKeep, WorkerFolder};
 use crate::services::projects::{
     self, PullOutcome, PushOutcome, RecordOutcome, ResetOutcome, ResetScope, StashDrop, StashEntry,
     StashOutcome, UnstashOutcome,
 };
+use crate::services::workspaces::{ClosedDecision, ClosedDirectory, KeepReason, RemovalReason};
 use fold_core::{Presence, TaskStatus, Timestamp};
 use fold_vcs::git::Git;
 
@@ -581,7 +583,7 @@ pub struct GcRequest {
     pub dry_run: bool,
 }
 
-/// The counts of one garbage collection run.
+/// The counts of one garbage collection run, with each closed workspace directory and worker folder it looked at.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct GcCounts {
     /// True when nothing was changed and the counts are what a run would do.
@@ -600,9 +602,201 @@ pub struct GcCounts {
     pub workspaces_removed: u64,
     /// Automatic checkpoints beyond the kept number, and every checkpoint of a workspace closed for longer than `closed_workspace_days`.
     pub checkpoints_pruned: u64,
+    /// Folders `.fold/workers/<name>` of finished task workers and reviewers that the run removed.
+    #[serde(default)]
+    #[schema(required = true)]
+    pub workers_removed: u64,
+    /// The bytes of the files in those folders.
+    #[serde(default)]
+    #[schema(required = true)]
+    pub worker_bytes_freed: u64,
+    /// Every closed workspace not recorded as removed, or whose directory came back after its removal, by id.
+    #[serde(default)]
+    #[schema(required = true)]
+    pub workspaces: Vec<GcWorkspace>,
+    /// Every folder of a task worker or reviewer that stopped longer than `closed_workspace_days` ago, by agent.
+    #[serde(default)]
+    #[schema(required = true)]
+    pub workers: Vec<GcWorker>,
 }
 
-/// Collects the project's garbage: prunes checkpoints, removes the closed workspace directories that are still there and deletes unreferenced objects. Socket only; used by `fld gc`.
+/// Whether the run removed a directory or folder, or would in a dry run, or kept it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GcAction {
+    Remove,
+    Keep,
+}
+
+/// Why the run removes or keeps the directory of a closed workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GcWorkspaceReason {
+    /// Its owning agent has no worker process that has not ended and no open session.
+    OwnerEnded,
+    /// It closed longer than `closed_workspace_days` ago.
+    PastWindow,
+    /// A worker process of its owning agent has not ended, and the window has not passed.
+    OwnerProcess,
+    /// Its owning agent has an open session, and the window has not passed.
+    OwnerSession,
+    /// An open session works in the directory.
+    SessionInside,
+    /// The path names no directory directly below `.fold/ws/`.
+    InvalidPath,
+    /// The directory, or one below it, is on another file system than `.fold/ws/`, such as a mount; fold never deletes across it.
+    OtherFilesystem,
+    /// The removal failed with `code`; the next run tries again.
+    Failed,
+}
+
+impl GcWorkspaceReason {
+    /// Every reason, so the reference can be checked against the names `fld gc` answers with.
+    pub const ALL: [Self; 8] = [
+        Self::OwnerEnded,
+        Self::PastWindow,
+        Self::OwnerProcess,
+        Self::OwnerSession,
+        Self::SessionInside,
+        Self::InvalidPath,
+        Self::OtherFilesystem,
+        Self::Failed,
+    ];
+}
+
+/// One closed workspace not recorded as removed, or whose directory came back.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct GcWorkspace {
+    /// The workspace id, such as `ws-9`.
+    pub workspace: String,
+    /// The directory relative to the project folder.
+    pub path: String,
+    /// The worker that owns the workspace.
+    #[schema(required = true)]
+    pub owner: Option<String>,
+    /// fold had removed the directory, and a directory was at its path again.
+    pub returned: bool,
+    pub action: GcAction,
+    pub reason: GcWorkspaceReason,
+    /// The error code of a removal that failed.
+    #[schema(required = true)]
+    pub code: Option<String>,
+}
+
+/// Why the run removes or keeps the folder of a finished task worker or reviewer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GcWorkerReason {
+    /// The worker can never run again on its own.
+    Finished,
+    /// A worker row of the agent holds an unreleased claim.
+    Claim,
+    /// The agent has an open session, or an open session works in the folder.
+    Session,
+    /// An agent stopped the worker to wait for its go.
+    Parked,
+    /// Its last turn ended for a cause outside it, and fold owes it a re-run.
+    Waiting,
+    /// fold owes the worker a resume.
+    OwedResume,
+    /// A message waits for the worker.
+    OwedMessage,
+    /// The folder is no directory, or a symlink.
+    InvalidPath,
+    /// The removal failed; the next run tries again.
+    Failed,
+}
+
+impl GcWorkerReason {
+    /// Every reason, so the reference can be checked against the names `fld gc` answers with.
+    pub const ALL: [Self; 9] = [
+        Self::Finished,
+        Self::Claim,
+        Self::Session,
+        Self::Parked,
+        Self::Waiting,
+        Self::OwedResume,
+        Self::OwedMessage,
+        Self::InvalidPath,
+        Self::Failed,
+    ];
+}
+
+/// One folder `.fold/workers/<name>` of a task worker or reviewer that stopped longer than `closed_workspace_days` ago.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct GcWorker {
+    /// The worker's agent name.
+    pub agent: String,
+    /// The bytes of the files in the folder.
+    pub bytes: u64,
+    pub action: GcAction,
+    pub reason: GcWorkerReason,
+}
+
+impl From<&ClosedDirectory> for GcWorkspace {
+    fn from(closed: &ClosedDirectory) -> Self {
+        let (action, reason, code) = match closed.decision {
+            ClosedDecision::Remove(RemovalReason::OwnerEnded) => {
+                (GcAction::Remove, GcWorkspaceReason::OwnerEnded, None)
+            }
+            ClosedDecision::Remove(RemovalReason::PastWindow) => {
+                (GcAction::Remove, GcWorkspaceReason::PastWindow, None)
+            }
+            ClosedDecision::Keep(reason) => {
+                let (reason, code) = match reason {
+                    KeepReason::OwnerProcess => (GcWorkspaceReason::OwnerProcess, None),
+                    KeepReason::OwnerSession => (GcWorkspaceReason::OwnerSession, None),
+                    KeepReason::SessionInside => (GcWorkspaceReason::SessionInside, None),
+                    KeepReason::InvalidPath => (GcWorkspaceReason::InvalidPath, None),
+                    KeepReason::OtherFilesystem => (
+                        GcWorkspaceReason::OtherFilesystem,
+                        Some(fold_core::codes::DIRECTORY_OTHER_FILESYSTEM.to_owned()),
+                    ),
+                    KeepReason::Failed(code) => (GcWorkspaceReason::Failed, Some(code.to_owned())),
+                };
+                (GcAction::Keep, reason, code)
+            }
+        };
+        Self {
+            workspace: closed.workspace.to_string(),
+            path: closed.path.clone(),
+            owner: closed.owner.clone(),
+            returned: closed.returned,
+            action,
+            reason,
+            code,
+        }
+    }
+}
+
+impl From<&WorkerFolder> for GcWorker {
+    fn from(folder: &WorkerFolder) -> Self {
+        let (action, reason) = match folder.decision {
+            FolderDecision::Remove => (GcAction::Remove, GcWorkerReason::Finished),
+            FolderDecision::Keep(keep) => (
+                GcAction::Keep,
+                match keep {
+                    FolderKeep::Claim => GcWorkerReason::Claim,
+                    FolderKeep::Session => GcWorkerReason::Session,
+                    FolderKeep::Parked => GcWorkerReason::Parked,
+                    FolderKeep::Waiting => GcWorkerReason::Waiting,
+                    FolderKeep::OwedResume => GcWorkerReason::OwedResume,
+                    FolderKeep::OwedMessage => GcWorkerReason::OwedMessage,
+                    FolderKeep::InvalidPath => GcWorkerReason::InvalidPath,
+                    FolderKeep::Failed => GcWorkerReason::Failed,
+                },
+            ),
+        };
+        Self {
+            agent: folder.agent.to_string(),
+            bytes: folder.bytes,
+            action,
+            reason,
+        }
+    }
+}
+
+/// Collects the project's garbage: prunes checkpoints, removes the closed workspace directories that are due and the folders of finished task workers and reviewers, and deletes unreferenced objects. Socket only; used by `fld gc`.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/gc",
@@ -633,6 +827,10 @@ pub async fn collect_garbage(
         missing: u64::try_from(report.missing.len()).unwrap_or(u64::MAX),
         workspaces_removed: report.workspaces_removed,
         checkpoints_pruned: report.checkpoints_pruned,
+        workers_removed: report.workers_removed,
+        worker_bytes_freed: report.worker_bytes_freed,
+        workspaces: report.workspaces.iter().map(GcWorkspace::from).collect(),
+        workers: report.workers.iter().map(GcWorker::from).collect(),
     }))
 }
 

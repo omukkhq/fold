@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO refused_logins (account, refused_at) VALUES (?1, ?2)\n         ON CONFLICT (account) DO UPDATE SET refused_at = max(refused_at, excluded.refused_at)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "176ac58f28ec3c5f02254924434c7495967b652805a3fbc6e3140c7007f6df19"
+}

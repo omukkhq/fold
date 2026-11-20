@@ -1,3 +1,4 @@
+use fold_core::accounts::AccountName;
 use fold_core::roles::AreaProfile;
 use fold_core::{AgentName, ProposalId, Role, TaskId, Timestamp, WorkerState};
 use fold_store::Store;
@@ -985,7 +986,15 @@ async fn a_turn_that_waits_keeps_its_start_counts_its_tries_and_counts_no_failed
     let waited = async |wait: TurnWait, now: i64| {
         store
             .write(async |tx| {
-                agents::record_turn_wait(tx, lead, "API Error: no route", &wait, at(now)).await
+                agents::record_turn_wait(
+                    tx,
+                    lead,
+                    "API Error: no route",
+                    &wait,
+                    &AccountName::default_account(),
+                    at(now),
+                )
+                .await
             })
             .await
             .unwrap()
@@ -1009,6 +1018,7 @@ async fn a_turn_that_waits_keeps_its_start_counts_its_tries_and_counts_no_failed
         ),
         (WaitReason::Network, None, at(20), at(30), 1)
     );
+    assert_eq!(wait.account, None, "only a login wait names an account");
     assert_eq!(again.failed_turns, 0);
     assert_eq!(again.last_error_at, Some(at(30)));
     assert_eq!(
@@ -1071,6 +1081,107 @@ async fn a_turn_that_waits_keeps_its_start_counts_its_tries_and_counts_no_failed
         ),
         format!("UPDATE worker_processes SET wait_tries = 2 WHERE id = {lead}"),
         format!("UPDATE worker_processes SET wait_reset = 'Mon' WHERE id = {lead}"),
+    ] {
+        assert!(exec(&store, &change).await.is_err(), "{change}");
+    }
+}
+
+#[tokio::test]
+async fn a_refused_login_waits_without_a_limit_and_another_cause_starts_a_new_wait() {
+    use fold_core::turn_waits::{TurnWait, WaitGroup, WaitReason};
+    let (_dir, store) = seeded().await;
+    let lead = process(&store, 1, Role::ReviewLead, None, "s1").await;
+    let row = async || {
+        let mut conn = store.read().acquire().await.unwrap();
+        agents::find_worker_process(&mut conn, &AgentName::parse("web-lead").unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    let waited_on = async |wait: TurnWait, account: &str, now: i64| {
+        let account = AccountName::parse(account).unwrap();
+        store
+            .write(async |tx| {
+                agents::record_turn_wait(
+                    tx,
+                    lead,
+                    "Invalid API key · Please run /login",
+                    &wait,
+                    &account,
+                    at(now),
+                )
+                .await
+            })
+            .await
+            .unwrap()
+    };
+    let waited = async |wait: TurnWait, now: i64| waited_on(wait, "work-a", now).await;
+    for _ in 0..3 {
+        store
+            .write(async |tx| {
+                agents::record_turn_error(tx, lead, "API Error: 529", false, at(5)).await
+            })
+            .await
+            .unwrap();
+    }
+    assert_eq!(row().await.failed_turns, 3);
+    assert_eq!(waited(TurnWait::Login, 10).await, Some(true));
+    assert_eq!(
+        row().await.failed_turns,
+        0,
+        "a wait ends the run of failed turns, so the worker is not one that cannot reach the model"
+    );
+    assert_eq!(waited(TurnWait::Login, 20).await, Some(false));
+    let wait = row().await.wait.unwrap();
+    assert_eq!(
+        (wait.reason, wait.limit, wait.since, wait.tries, wait.reset),
+        (WaitReason::Login, None, at(10), 1, None)
+    );
+    assert_eq!(
+        wait.account.as_ref().map(AccountName::as_str),
+        Some("work-a")
+    );
+    assert_eq!(
+        waited_on(TurnWait::Login, "default", 25).await,
+        Some(false),
+        "a refusal on another account goes on with the same wait"
+    );
+    let wait = row().await.wait.unwrap();
+    assert_eq!(
+        (wait.since, wait.account.as_ref().map(AccountName::as_str)),
+        (at(10), Some("default")),
+        "and names the newest refused account"
+    );
+    assert_eq!(waited(TurnWait::Network, 30).await, Some(true));
+    let network = row().await.wait.unwrap();
+    assert_eq!(network.group(), WaitGroup::NETWORK);
+    assert_eq!(network.account, None);
+    assert_eq!(waited(TurnWait::Login, 40).await, Some(true));
+    assert_eq!(
+        store
+            .write(async |tx| agents::clear_turn_wait(tx, lead).await)
+            .await
+            .unwrap(),
+        Some(WaitGroup::LOGIN)
+    );
+    assert_eq!(row().await.wait, None);
+    for change in [
+        format!(
+            "UPDATE worker_processes SET wait_reason = 'login', wait_since = 1, wait_tried_at = 1, wait_limit = 'weekly' WHERE id = {lead}"
+        ),
+        format!(
+            "UPDATE worker_processes SET wait_reason = 'login', wait_since = 1, wait_tried_at = 1, wait_reset = 'Mon' WHERE id = {lead}"
+        ),
+        format!(
+            "UPDATE worker_processes SET wait_reason = 'login', wait_since = 1, wait_tried_at = 1, wait_account = NULL WHERE id = {lead}"
+        ),
+        format!(
+            "UPDATE worker_processes SET wait_reason = 'login', wait_since = 1, wait_tried_at = 1, wait_account = '{}' WHERE id = {lead}",
+            "a".repeat(33)
+        ),
+        format!(
+            "UPDATE worker_processes SET wait_reason = 'network', wait_since = 1, wait_tried_at = 1, wait_account = 'work-a' WHERE id = {lead}"
+        ),
     ] {
         assert!(exec(&store, &change).await.is_err(), "{change}");
     }
@@ -1361,4 +1472,106 @@ async fn the_supervised_main_has_no_area_and_a_project_has_one_and_old_rows_stay
     .await
     .unwrap_err();
     assert!(moved.to_string().contains("worker_processes_fixed"));
+}
+
+#[tokio::test]
+async fn a_wait_stored_before_the_login_waits_keeps_every_field() {
+    use fold_core::turn_waits::{LimitKind, WaitReason};
+    use sqlx::Connection;
+    let dir = tempfile::TempDir::new().unwrap();
+    let paths = fold_core::ProjectPaths::new(dir.path().join("project"));
+    std::fs::create_dir_all(paths.db().parent().unwrap()).unwrap();
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(paths.db())
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let mut conn = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap();
+    let mut before: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/project");
+    let login = before
+        .migrations
+        .iter()
+        .position(|migration| migration.description == "worker login waits")
+        .unwrap();
+    before.migrations = std::borrow::Cow::Owned(before.migrations[..login].to_vec());
+    before.run(&mut conn).await.unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO agents (id, name, created_at) VALUES (1, 'review-lead', 0), (2, 'web-lead', 0);
+         INSERT INTO worker_processes (id, agent_id, role, session_id, state, started_by, started_at, idle_since, last_error, last_error_at, wait_reason, wait_limit, wait_since, wait_tried_at, wait_tries, wait_reset, wait_resets_at)
+         VALUES (1, 1, 'review_lead', 's1', 'idle', 'main', 10, 10, 'You''ve hit your weekly limit', 20, 'usage_limit', 'weekly', 20, 30, 2, 'Mon 12:00am', 40),
+                (2, 2, 'main', 's2', 'idle', 'main', 10, 10, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL);",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    conn.close().await.unwrap();
+
+    let store = Store::open_project(&paths).await.unwrap();
+    let mut read = store.read().acquire().await.unwrap();
+    let lead = agents::find_worker_process(&mut read, &AgentName::parse("review-lead").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let wait = lead.wait.unwrap();
+    assert_eq!(
+        (
+            wait.reason,
+            wait.limit,
+            wait.since,
+            wait.tried_at,
+            wait.tries,
+            wait.reset.as_deref(),
+            wait.resets_at
+        ),
+        (
+            WaitReason::UsageLimit,
+            Some(LimitKind::Weekly),
+            at(20),
+            at(30),
+            2,
+            Some("Mon 12:00am"),
+            Some(at(40))
+        )
+    );
+    let other = agents::find_worker_process(&mut read, &AgentName::parse("web-lead").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(other.wait, None);
+}
+
+#[tokio::test]
+async fn a_refused_login_keeps_its_newest_refusal_until_it_is_cleared() {
+    let (_dir, store) = seeded().await;
+    let work_a = AccountName::parse("work-a").unwrap();
+    let default = AccountName::default_account();
+    for (account, now) in [(&work_a, 20), (&work_a, 10), (&default, 15)] {
+        store
+            .write(async |tx| agents::record_refused_login(tx, account, at(now)).await)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        agents::refused_logins(store.read()).await.unwrap(),
+        [(default.clone(), at(15)), (work_a.clone(), at(20))],
+        "the newest refusal of each account, even after an older one is recorded"
+    );
+    store
+        .write(async |tx| agents::clear_refused_login(tx, &work_a).await)
+        .await
+        .unwrap();
+    assert_eq!(
+        agents::refused_logins(store.read()).await.unwrap(),
+        [(default, at(15))]
+    );
+    let long = "a".repeat(33);
+    assert!(
+        exec(
+            &store,
+            &format!("INSERT INTO refused_logins (account, refused_at) VALUES ('{long}', 1)")
+        )
+        .await
+        .is_err()
+    );
 }

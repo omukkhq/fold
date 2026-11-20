@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM refused_logins WHERE account = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "5543dbaf9e800e3957e4a343ece941442a93481fb1e282b23c60f10929bd7279"
+}

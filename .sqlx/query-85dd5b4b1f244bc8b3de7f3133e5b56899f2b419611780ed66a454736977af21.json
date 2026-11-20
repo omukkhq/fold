@@ -1,0 +1,78 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT g.name AS \"agent!: String\", p.role AS \"role!: String\",\n                  p.stopped_at AS \"stopped_at!: i64\",\n                  EXISTS (SELECT 1 FROM claims c JOIN workers k ON k.id = c.worker_id\n                          WHERE k.agent_id = p.agent_id AND c.released_at IS NULL) AS \"claim!: bool\",\n                  EXISTS (SELECT 1 FROM sessions s\n                          WHERE s.agent_id = p.agent_id AND s.ended_at IS NULL) AS \"session!: bool\",\n                  p.parked_at IS NOT NULL AS \"parked!: bool\",\n                  p.wait_reason IS NOT NULL AS \"waiting!: bool\"\n           FROM worker_processes p JOIN agents g ON g.id = p.agent_id\n           WHERE p.role IN ('task_worker', 'reviewer') AND p.state IN ('stopped', 'failed')\n             AND p.stopped_at < ?1 AND (?2 IS NULL OR g.name = ?2)\n           ORDER BY g.name",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "role!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "name": "stopped_at!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "stopped_at"
+          }
+        }
+      },
+      {
+        "name": "claim!: bool",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "session!: bool",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "parked!: bool",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "waiting!: bool",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "85dd5b4b1f244bc8b3de7f3133e5b56899f2b419611780ed66a454736977af21"
+}
