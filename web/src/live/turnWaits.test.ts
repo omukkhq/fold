@@ -21,5 +21,6 @@ describe("waitWords", () => {
   it("says what a waiting worker does in a chip's words", () => {
     expect(waitWords("network")).toBe("waiting for the network");
     expect(waitWords("usage_limit")).toBe("waits for the usage limit reset");
+    expect(waitWords("login")).toBe("waits for a working login");
   });
 });

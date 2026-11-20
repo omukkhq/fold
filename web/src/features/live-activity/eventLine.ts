@@ -1130,7 +1130,9 @@ function waitingText(e: DurableEvent): string {
   const what =
     e.data.reason === "usage_limit"
       ? `reached the ${limitWords(e.data.limit)}`
-      : "could not reach the model";
+      : e.data.reason === "login"
+        ? "had its login refused"
+        : "could not reach the model";
   return `the turn of ${workerOf(e)} ${what}; fold runs it again`;
 }
 

@@ -174,7 +174,7 @@ const FOLD_TOOLS: [&str; 99] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 188] = [
+const FOLD_ERROR_CODES: [&str; 189] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -363,6 +363,7 @@ const FOLD_ERROR_CODES: [&str; 188] = [
     "account_reserved",
     "account_exists",
     "account_not_found",
+    "account_token_rejected",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.

@@ -231,8 +231,12 @@ describe("isEventEnvelope", () => {
     ).toBe(true);
   });
 
-  it("accepts a turn that waits for the network or a usage limit, alone and in a snapshot", () => {
-    for (const state of ["waits_for_network", "waits_for_usage_limit"]) {
+  it("accepts a turn that waits for the network, a usage limit or a working login, alone and in a snapshot", () => {
+    for (const state of [
+      "waits_for_network",
+      "waits_for_usage_limit",
+      "waits_for_login",
+    ]) {
       const waits = {
         state,
         call: null,

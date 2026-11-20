@@ -59,13 +59,43 @@ pub fn claude_login(var: impl Fn(&str) -> Option<OsString>) -> bool {
 
 /// Whether Claude Code's folder holds the file of its login.
 fn credentials_file(var: impl Fn(&str) -> Option<OsString>) -> bool {
+    credentials_path(var).is_some_and(|path| path.is_file())
+}
+
+/// The file of Claude Code's own login: in `CLAUDE_CONFIG_DIR`, else in `.claude` of the home directory.
+fn credentials_path(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     let dir = match var("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
         Some(dir) => Some(PathBuf::from(dir)),
         None => var("HOME")
             .filter(|home| !home.is_empty())
             .map(|home| PathBuf::from(home).join(".claude")),
     };
-    dir.is_some_and(|dir| dir.join(CREDENTIALS_FILE).is_file())
+    dir.map(|dir| dir.join(CREDENTIALS_FILE))
+}
+
+/// What tells one login of Claude Code from the next without reading it: the inode and time of change of its credentials file, and on macOS the time of change of the login keychain, which holds Claude Code's login there. A new `claude login` changes it; so can Claude Code's own renewal of its login.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginMark {
+    file: Option<(u64, std::time::SystemTime)>,
+    keychain: Option<std::time::SystemTime>,
+}
+
+/// The [`LoginMark`] of Claude Code's own login as `var` gives its folders. Only the files' metadata is read, never the secret. Blocking.
+pub fn login_mark(var: impl Fn(&str) -> Option<OsString>) -> LoginMark {
+    use std::os::unix::fs::MetadataExt as _;
+    let home = var("HOME").filter(|home| !home.is_empty());
+    let file = credentials_path(var)
+        .and_then(|path| std::fs::metadata(path).ok())
+        .and_then(|meta| Some((meta.ino(), meta.modified().ok()?)));
+    let keychain = if cfg!(target_os = "macos") {
+        home.and_then(|home| {
+            std::fs::metadata(PathBuf::from(home).join("Library/Keychains/login.keychain-db")).ok()
+        })
+        .and_then(|meta| meta.modified().ok())
+    } else {
+        None
+    };
+    LoginMark { file, keychain }
 }
 
 /// Whether the macOS keychain holds Claude Code's login, asked by the item's name only: `security` without `-w` or `-g` prints no secret, and its output is dropped.
@@ -323,6 +353,20 @@ pub fn update(
     put(dir, name, token, now, true)
 }
 
+/// Refuses a change of `name` that [`add`] (`replace` false) or [`update`] (`replace` true) would refuse for the accounts in `dir` now, without a write, so a check of the new token runs only for a change that can happen. Blocking.
+pub fn check_change(dir: &Path, name: &AccountName, replace: bool) -> Result<(), FoldError> {
+    name.check_not_reserved()?;
+    let known = read_index(dir)?
+        .accounts
+        .iter()
+        .any(|found| &found.name == name);
+    match (replace, known) {
+        (true, false) => Err(not_found(name)),
+        (false, true) => Err(exists(name)),
+        _ => Ok(()),
+    }
+}
+
 /// Writes the token into a new file first; the index's rename then makes the change, and only after it the old token file goes. A stop before the rename keeps the accounts as they were and leaves a token file that the next change removes; a stop after it leaves the old token file, which the next change removes too. `replace` says whether the account must exist or must not.
 fn put(
     dir: &Path,
@@ -536,6 +580,26 @@ mod tests {
         let unknown =
             update(&dir, &name("work-c"), &check_token(TOKEN_B).unwrap(), at(3)).unwrap_err();
         assert_eq!(unknown.code(), codes::ACCOUNT_NOT_FOUND);
+        assert_eq!(
+            check_change(&dir, &name("work-b"), false)
+                .unwrap_err()
+                .code(),
+            codes::ACCOUNT_EXISTS
+        );
+        assert_eq!(
+            check_change(&dir, &name("work-c"), true)
+                .unwrap_err()
+                .code(),
+            codes::ACCOUNT_NOT_FOUND
+        );
+        assert_eq!(
+            check_change(&dir, &AccountName::default_account(), false)
+                .unwrap_err()
+                .code(),
+            codes::ACCOUNT_RESERVED
+        );
+        check_change(&dir, &name("work-b"), true).unwrap();
+        check_change(&dir, &name("work-c"), false).unwrap();
         update(&dir, &name("work-b"), &check_token(TOKEN_B).unwrap(), at(3)).unwrap();
         for refused in [
             add(
@@ -631,9 +695,25 @@ mod tests {
             ])),
             "CLAUDE_CONFIG_DIR names the folder Claude Code reads"
         );
+        let before = login_mark(env(vec![("CLAUDE_CONFIG_DIR", config.clone())]));
+        assert_eq!(before.file, None);
         std::fs::write(config.join(CREDENTIALS_FILE), "{}").unwrap();
-        assert!(credentials_file(env(vec![("CLAUDE_CONFIG_DIR", config)])));
+        assert!(credentials_file(env(vec![(
+            "CLAUDE_CONFIG_DIR",
+            config.clone()
+        )])));
         assert!(!credentials_file(env(Vec::new())));
+        let written = login_mark(env(vec![("CLAUDE_CONFIG_DIR", config.clone())]));
+        assert!(written.file.is_some());
+        assert_ne!(written, before);
+        let fresh = config.join("fresh.json");
+        std::fs::write(&fresh, "{\"new\": true}").unwrap();
+        std::fs::rename(&fresh, config.join(CREDENTIALS_FILE)).unwrap();
+        assert_ne!(
+            login_mark(env(vec![("CLAUDE_CONFIG_DIR", config.clone())])),
+            written,
+            "a new login renamed into place is another mark"
+        );
     }
 
     #[test]

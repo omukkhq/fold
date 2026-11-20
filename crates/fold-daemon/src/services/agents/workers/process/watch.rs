@@ -2,11 +2,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use fold_core::accounts::AccountName;
 use fold_core::agent_changes::may_write_files;
 use fold_core::events::types;
 use fold_core::roles::MCP_UNAVAILABLE;
 use fold_core::turn_errors::MODEL_UNREACHABLE_TURNS;
-use fold_core::turn_waits::{LimitKind, WaitGroup, released_by};
+use fold_core::turn_waits::{LimitKind, TurnWait, WaitGroup, released_by};
 use fold_core::{AgentName, EventActor, LiveEvent, NewEvent, WorkerState, codes};
 use fold_store::StoreError;
 use fold_store::agents::{self, ProcessEnd, TurnTotals};
@@ -244,7 +245,7 @@ impl Supervisor {
         }
     }
 
-    /// Records the context size of a request the model answered. A model that answers ends the worker's wait for the network or a usage limit at once, with the wait's error and with `worker.wait_ended`, and releases the turns that wait for the same cause, so the turn that runs again shows as work while it works.
+    /// Records the context size of a request the model answered. A model that answers ends the worker's wait for the network, a usage limit or a working login at once, with the wait's error and with `worker.wait_ended`, and releases the turns that wait for the same cause, so the turn that runs again shows as work while it works.
     async fn record_context(
         &self,
         process: &Process,
@@ -279,7 +280,7 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Counts a finished turn. A turn that ended in an error leaves Claude Code's text on the row; the turn that makes [`MODEL_UNREACHABLE_TURNS`] in a row that reached no model appends `worker.model_unreachable`, once per run of such turns, so the main agent and the worker's starter hear of it. A turn that ended for a cause outside the worker, the network or a usage limit, is no failed turn: the row holds the wait, the start of a wait appends `worker.waiting`, and fold runs the turn again once the cause has passed (see [`Supervisor::owed_turns_changed`]). Any other end of a turn ends the row's wait with `worker.wait_ended`, and a turn that reached the model or ended well releases the turns that wait for it. A turn that ended well clears the error. Returns whether the turn waits.
+    /// Counts a finished turn. A turn that ended in an error leaves Claude Code's text on the row; the turn that makes [`MODEL_UNREACHABLE_TURNS`] in a row that reached no model appends `worker.model_unreachable`, once per run of such turns, so the main agent and the worker's starter hear of it. A turn that ended for a cause outside the worker, the network, a usage limit or a working login, is no failed turn: the row holds the wait, the start of a wait appends `worker.waiting`, and fold runs the turn again once the cause has passed (see [`Supervisor::owed_turns_changed`]). Any other end of a turn ends the row's wait with `worker.wait_ended`, and a turn that reached the model or ended well releases the turns that wait for it. A turn that ended well clears the error. Returns whether the turn waits.
     async fn end_turn(
         &self,
         process: &Process,
@@ -291,6 +292,26 @@ impl Supervisor {
         let agent = &process.agent;
         let mut buffer = EventBuffer::new();
         let wait = error.and_then(|error| error.wait.as_ref());
+        // The account the process ran with is the one whose login a refused turn names; a project's own account can have changed since the start.
+        let ran_with = lock(&self.inner.running)
+            .get(agent)
+            .filter(|run| run.generation == process.generation)
+            .map(|run| {
+                run.account
+                    .as_ref()
+                    .map_or_else(AccountName::default_account, |stamp| stamp.name.clone())
+            });
+        let answered = error.is_none_or(|error| error.reached_model);
+        let account = match ran_with.clone() {
+            Some(account) => account,
+            None if wait.is_none() => AccountName::default_account(),
+            None => self
+                .current_account()
+                .await
+                .ok()
+                .flatten()
+                .map_or_else(AccountName::default_account, |stamp| stamp.name),
+        };
         let cleared = self
             .inner
             .store
@@ -298,7 +319,12 @@ impl Supervisor {
                 let mut cleared = None;
                 match (error, wait) {
                     (Some(error), Some(wait)) => {
-                        let new = agents::record_turn_wait(tx, id, &error.text, wait, now).await?;
+                        let new =
+                            agents::record_turn_wait(tx, id, &error.text, wait, &account, now)
+                                .await?;
+                        if matches!(wait, TurnWait::Login) {
+                            agents::record_refused_login(tx, &account, now).await?;
+                        }
                         if new == Some(true) {
                             // A full lease from the start of the wait, which the sweeper keeps while it lasts.
                             if let Some(row) = agents::find_worker_process(tx.conn(), agent).await?
@@ -348,6 +374,12 @@ impl Supervisor {
                     }
                     (None, _) => agents::clear_turn_error(tx, id).await?,
                 }
+                // An answer on Claude Code's own login shows that its login works, which no token's date can tell; an account's token stays refused until it has a newer one, since another process can answer with an older token of it.
+                if let (true, None, Some(account)) = (answered, wait, &ran_with)
+                    && account.is_default()
+                {
+                    agents::clear_refused_login(tx, account).await?;
+                }
                 if wait.is_none() {
                     cleared = agents::clear_turn_wait(tx, id).await?;
                     if let Some(group) = cleared {
@@ -363,7 +395,6 @@ impl Supervisor {
             tracing::info!(%agent, reason = wait.group().reason.as_str(), "a worker's turn waits for a cause outside it");
             self.owed_turns_changed(Vec::new());
         } else {
-            let answered = error.is_none_or(|error| error.reached_model);
             let released = released_by(answered, cleared);
             if cleared.is_some() || self.has_owed_turns() {
                 self.owed_turns_changed(released);

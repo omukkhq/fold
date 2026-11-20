@@ -164,6 +164,8 @@ pub enum NeedsYouItemKind {
     UsageLimit,
     /// The claim of the worker `agent` on `task`, or its review claim on `proposal`, went stale: it made no fold call for the lease, fold told its lead, or else the main agent, and one more stall window passed without a renewal, or no agent can act on it. `action` and `reason` say what the human does. The item ends when the worker renews the claim with any fold call, or when the claim is released or taken over.
     StaleClaim,
+    /// The API refused the login of turns of the project's workers: the token of the account `account`, or Claude Code's own login when `account` is `default`. One item for the project: `agents` names the workers whose turn waits, `title` holds Claude Code's newest message, `account` the account of that newest refusal (the one the process ran with, also after a pause or a switch), `reason` what the human does (`fld account update <account>` with a new token, or `claude login` for `default`) and `actions` a pause and a `switch_account` to each account other than the project's and other than an account whose login a turn found refused, until it gets a token newer than its newest refusal (for `default`, until a turn on it is answered); `reason` names a switch only when `actions` offers one. A new token of the account, a switch of the account or a new login of Claude Code runs each waiting turn again at once in its session, which ends the item.
+    LoginRefused,
 }
 
 /// A usage limit of Claude Code: `session`, `weekly`, `opus`, `sonnet`, or `usage` for the older message that names no kind.
@@ -280,10 +282,10 @@ pub struct NeedsYouEntry {
     pub header: Option<String>,
     /// How many questions a `question` asks as one set, which a human answers together in one reply; 0 for every other kind.
     pub questions: usize,
-    /// The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`; Claude Code's error of a `worker_model_unreachable`; what fold saw of a `worker_stalled` at the read, such as `No activity from @web-worker for 12 min`, in the words of the board's chip.
+    /// The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`; Claude Code's error of a `worker_model_unreachable`, and its newest message of the waits of a `usage_limit` or a `login_refused`; what fold saw of a `worker_stalled` at the read, such as `No activity from @web-worker for 12 min`, in the words of the board's chip.
     #[schema(required = true, example = "Database schema for reports")]
     pub title: Option<String>,
-    /// The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again; what to check for a `worker_model_unreachable`.
+    /// The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again; what to check for a `worker_model_unreachable`; what fold does about a `usage_limit`; the fix of the refused account of a `login_refused`, `fld account update <account>` with a new token or `claude login` for `default`.
     #[schema(required = true, example = "Wait until the design is signed off")]
     pub reason: Option<String>,
     /// The human's Git commit of a `human_change`.
@@ -294,7 +296,7 @@ pub struct NeedsYouEntry {
     /// The notice target of a `notify_target_off`.
     #[schema(required = true, example = "nt-3")]
     pub target: Option<String>,
-    /// The agents of an `agent_change`, in name order; empty for every other kind.
+    /// The agents of an `agent_change`, and the workers whose turn waits of a `worker_model_unreachable` for the network, a `usage_limit` or a `login_refused`, in name order; empty for every other kind.
     #[schema(example = json!(["reviewer-35"]))]
     pub agents: Vec<String>,
     /// What fold saw of the worker of a `worker_stalled`; null for every other kind.
@@ -309,12 +311,12 @@ pub struct NeedsYouEntry {
     /// UTC milliseconds of the reset of a `usage_limit`, when Claude Code's message gives the instant; null otherwise.
     #[schema(value_type = Option<i64>, required = true)]
     pub resets_at: Option<fold_core::Timestamp>,
-    /// What the human can do from the item, such as `pause` for a `usage_limit`; empty for most kinds.
+    /// What the human can do from the item, such as `pause` for a `usage_limit` or a `login_refused`; empty for most kinds.
     pub actions: Vec<NeedsYouActionEntry>,
     /// What the human does about the worker of a `worker_stalled` or a `stale_claim`; null for every other kind.
     #[schema(required = true)]
     pub action: Option<crate::http::tasks::PersonAction>,
-    /// The project's account of a `usage_limit` when fold lists the item, `default` for Claude Code's own login; null for every other kind.
+    /// The project's account of a `usage_limit` when fold lists the item, and the account whose login the API refused in the newest turn of a `login_refused`; `default` for Claude Code's own login; null for every other kind.
     #[schema(required = true, example = "work-a")]
     pub account: Option<String>,
 }
@@ -342,6 +344,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::WorkerStalled => NeedsYouItemKind::WorkerStalled,
             NeedsYouKind::UsageLimit => NeedsYouItemKind::UsageLimit,
             NeedsYouKind::StaleClaim => NeedsYouItemKind::StaleClaim,
+            NeedsYouKind::LoginRefused => NeedsYouItemKind::LoginRefused,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,

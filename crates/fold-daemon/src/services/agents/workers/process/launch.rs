@@ -443,6 +443,7 @@ impl Supervisor {
             }
             if let Some(noted) = turn {
                 process.open_turns.fetch_add(1, Ordering::SeqCst);
+                self.turn_written(&process.agent);
                 let marked = self
                     .inner
                     .store

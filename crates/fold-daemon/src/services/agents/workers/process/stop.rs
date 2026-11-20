@@ -349,7 +349,7 @@ impl Supervisor {
         Ok(done)
     }
 
-    /// Stops every short-lived worker that has been idle for its role's `idle_minutes` at `now`, except one whose turn waits for the network or a usage limit, and except while the project's agents are paused: a resume gives each worker a new idle time. A worker is stopped only while it is still idle since the same moment, so one that took a turn after the rows were read keeps running. A worker that cannot be stopped is logged and the sweep goes on. Returns the agents it stopped.
+    /// Stops every short-lived worker that has been idle for its role's `idle_minutes` at `now`, except one whose turn waits for the network, a usage limit or a working login, and except while the project's agents are paused: a resume gives each worker a new idle time. A worker is stopped only while it is still idle since the same moment, so one that took a turn after the rows were read keeps running. A worker that cannot be stopped is logged and the sweep goes on. Returns the agents it stopped.
     pub async fn sweep_idle(
         &self,
         now: fold_core::Timestamp,

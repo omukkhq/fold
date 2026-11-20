@@ -146,7 +146,7 @@ pub struct LiveActivity {
     /// The role whose free place a `waits_for_slot` worker waits for; null for the other states.
     #[schema(required = true)]
     pub slot: Option<LiveSlot>,
-    /// UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, the time the work came that fold owes a `waits_for_slot` worker, the end of the first turn of a wait for the network or a usage limit, or the time a `parked` worker was parked.
+    /// UTC milliseconds: the start of the open call, the last activity of a silent worker, the end of a stopped or failed worker's process, the time the work came that fold owes a `waits_for_slot` worker, the end of the first turn of a wait for the network, a usage limit or a working login, or the time a `parked` worker was parked.
     #[schema(value_type = i64)]
     pub since: Timestamp,
     /// fold runs the worker's process, so `restart_worker` can start it again in a new session.
@@ -161,7 +161,7 @@ pub struct LiveActivity {
     pub wait_for: Option<String>,
 }
 
-/// What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free, `waits_for_network` while its last turn could not reach the model, which fold runs again once the model answers, and `waits_for_usage_limit` while its last turn reached a usage limit, which fold runs again after the reset, and `parked` while it waits for the go of the agent that stopped it with `stop_worker`'s `wait_for`. `working`, `stopped`, `waits_for_slot`, `parked` and the waits are never stalls.
+/// What the worker does: `working` while a call has been open for a minute or more, `silent` after `stall_minutes` with no call open and no output, `long_call` once a command has been open for twice Claude Code's ten-minute limit (or a subagent or another tool wrote nothing for that time), `stopped` once its process ended because a person, an agent or fold asked for the stop, `failed` once its process ended without anyone asking, by a crash or a failure, and without a report, `waits_for_slot` while fold owes it a resume that the worker limits hold, which fold starts once a place is free, `waits_for_network` while its last turn could not reach the model, which fold runs again once the model answers, `waits_for_usage_limit` while its last turn reached a usage limit, which fold runs again after the reset, `waits_for_login` while the API refused the login of its last turn, which fold runs again once the project's login changes or works, and `parked` while it waits for the go of the agent that stopped it with `stop_worker`'s `wait_for`. `working`, `stopped`, `waits_for_slot`, `parked` and the waits are never stalls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityState {
@@ -173,6 +173,7 @@ pub enum ActivityState {
     WaitsForSlot,
     WaitsForNetwork,
     WaitsForUsageLimit,
+    WaitsForLogin,
     Parked,
 }
 
@@ -235,6 +236,7 @@ impl LiveActivity {
             Activity::WaitsForUsageLimit { since } => {
                 (ActivityState::WaitsForUsageLimit, None, since)
             }
+            Activity::WaitsForLogin { since } => (ActivityState::WaitsForLogin, None, since),
             Activity::Parked { since } => (ActivityState::Parked, None, since),
         };
         Some(Self {
@@ -291,6 +293,7 @@ impl LiveActivity {
             },
             ActivityState::WaitsForNetwork => Activity::WaitsForNetwork { since },
             ActivityState::WaitsForUsageLimit => Activity::WaitsForUsageLimit { since },
+            ActivityState::WaitsForLogin => Activity::WaitsForLogin { since },
             ActivityState::Parked => Activity::Parked { since },
         }
     }

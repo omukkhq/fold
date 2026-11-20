@@ -51,7 +51,10 @@ pub use workers::{
     OwedReview, OwedStart, PendingResume, owed_starts, pending_resumes,
     reviews_owed_to_ended_reviewers, unreviewed_claims_of_ended_reviewer,
 };
-pub use workers::{StoredWait, clear_turn_wait, record_turn_wait};
+pub use workers::{
+    StoredWait, clear_refused_login, clear_turn_wait, record_refused_login, record_turn_wait,
+    refused_logins,
+};
 pub use workers::{
     clear_turn_error, forget_made_up_model, process_starts, record_turn_error, set_exit_error,
     set_fold_fingerprint,

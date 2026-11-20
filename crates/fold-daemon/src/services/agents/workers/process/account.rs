@@ -40,10 +40,19 @@ impl Supervisor {
 
     /// [`Supervisor::switch_account`] on a task of its own, because a switch waits for the reader of the worker's output to see the process exit.
     pub(super) fn switch_soon(&self, agent: &AgentName) {
+        self.switch_task(agent, None);
+    }
+
+    /// [`Supervisor::switch_soon`] for an idle process that runs with the project's account already and whose turn waits for a working login: Claude Code's own login changed, the `login`th change the loop of the owed turns saw, and the process starts again in its session so it reads the new one.
+    pub(super) fn restart_soon(&self, agent: &AgentName, login: u64) {
+        self.switch_task(agent, Some(login));
+    }
+
+    fn switch_task(&self, agent: &AgentName, relogin: Option<u64>) {
         let supervisor = self.clone();
         let agent = agent.clone();
         tokio::spawn(async move {
-            if let Err(error) = supervisor.switch_account(&agent).await {
+            if let Err(error) = supervisor.switch_account(&agent, relogin).await {
                 tracing::warn!(%agent, code = code_of(&error), "could not give a worker the project's account");
             }
         });
@@ -93,17 +102,27 @@ impl Supervisor {
     }
 
     /// Ends the idle process of `agent` that started with another account than the project's, without changing its row, and runs Claude Code again in the same session with `--resume` and the project's account, as a daemon start resumes an idle worker. Its first turn holds the turns that waited for the switch (see [`Supervisor::holds_for_switch`]) and the notices that came while the process changed; without them it runs no turn, unless work waits for a lead. A working worker, one with a turn still queued, one that waits for a person's answer, one that fold started to answer a message and one under another restart keep their process, which takes the turns that waited, and the end of their next turn looks again. A worker that was stopped meanwhile ends `stopped`; in a paused project the row stays for the resume, which reads the account again.
-    async fn switch_account(&self, agent: &AgentName) -> Result<(), AgentError> {
-        let (ran, held, result) = match self.switch_process(agent).await {
+    async fn switch_account(
+        &self,
+        agent: &AgentName,
+        relogin: Option<u64>,
+    ) -> Result<(), AgentError> {
+        let (ran, held, result) = match self.switch_process(agent, relogin.is_some()).await {
             // Another restart of the worker is under way: the turns that wait stay for it.
             Ok(None) => return Ok(()),
             Ok(Some((ran, held))) => (ran, held, Ok(())),
             Err(error) => (false, Vec::new(), Err(error)),
         };
         if ran {
-            // The waiting turns run at once on the new process: a turn that reached a usage limit runs again on the new account, and a re-run sent to the old process, which ended, is sent again.
+            // The waiting turns run at once on the new process: a turn that reached a usage limit or whose login was refused runs again on the new account, and a re-run sent to the old process, which ended, is sent again. A restart for a new login of Claude Code runs only this worker's turn again: the others have their own restart.
             self.forget_rerun(agent);
-            self.run_limit_turns_now();
+            match relogin {
+                Some(login) => {
+                    self.relogin_ran(agent, login);
+                    self.release_for(agent, fold_core::turn_waits::WaitGroup::LOGIN);
+                }
+                None => self.run_login_turns_now(),
+            }
         }
         let mut texts = lock(&self.inner.switch_turns)
             .remove(agent)
@@ -120,10 +139,11 @@ impl Supervisor {
         result
     }
 
-    /// [`Supervisor::switch_account`] up to the turn: whether a new process runs, and the notices held while the process changed; `None` when another restart of the worker is under way, which the turns that wait for a switch go to.
+    /// [`Supervisor::switch_account`] up to the turn: whether a new process runs, and the notices held while the process changed; `None` when another restart of the worker is under way, which the turns that wait for a switch go to. `relogin` restarts a process that runs with the project's account already, while its turn waits for a working login.
     async fn switch_process(
         &self,
         agent: &AgentName,
+        relogin: bool,
     ) -> Result<Option<(bool, Vec<String>)>, AgentError> {
         let none = || Ok(Some((false, Vec::new())));
         let Some(run) = lock(&self.inner.running).get(agent).cloned() else {
@@ -132,7 +152,7 @@ impl Supervisor {
         let Ok(current) = self.current_account().await else {
             return none();
         };
-        if run.account == current
+        if (run.account == current && !relogin)
             || run.open_turns.load(Ordering::SeqCst) > 0
             || lock(&self.inner.answering).contains(agent)
         {
@@ -150,7 +170,14 @@ impl Supervisor {
         let Some(row) = found else {
             return none();
         };
-        if row.state != WorkerState::Idle || self.waits_for_answer(&row).await? {
+        let waits_for_login = row
+            .wait
+            .as_ref()
+            .is_some_and(|wait| wait.reason == fold_core::turn_waits::WaitReason::Login);
+        if row.state != WorkerState::Idle
+            || (relogin && !waits_for_login)
+            || self.waits_for_answer(&row).await?
+        {
             return none();
         }
         if row.role == fold_core::Role::Main {
