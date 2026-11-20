@@ -323,6 +323,24 @@ impl Supervisor {
         .unwrap_or(false)
     }
 
+    /// The mark of Claude Code's own login as the workers' environment finds it (see [`crate::services::agents::accounts::login_mark`]); `None` for a launcher without an accounts folder, which knows no account, as [`Supervisor::claude_login`] says no login for it.
+    pub(super) async fn login_mark(&self) -> Option<crate::services::agents::accounts::LoginMark> {
+        let (env, known) = {
+            let launcher = lock(&self.inner.launcher);
+            (launcher.env.clone(), launcher.accounts.is_some())
+        };
+        if !known {
+            return None;
+        }
+        tokio::task::spawn_blocking(move || {
+            crate::services::agents::accounts::login_mark(|name| {
+                env_value(&env, name).or_else(|| std::env::var_os(name))
+            })
+        })
+        .await
+        .ok()
+    }
+
     /// The folder of the host's accounts that the launcher names.
     pub fn accounts_dir(&self) -> Option<PathBuf> {
         lock(&self.inner.launcher).accounts.clone()

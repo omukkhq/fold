@@ -81,7 +81,7 @@ export function isPausedWorker(state: WorkerState, paused: boolean): boolean {
 
 const PAUSED_PILL: StatePill = { label: "paused", tone: "paused" };
 
-/** An idle worker whose turn waits for the network or a usage limit, which fold runs again itself: neutral, as idle. */
+/** An idle worker whose turn waits for the network, a usage limit or a working login, which fold runs again itself: neutral, as idle. */
 const WAITING_PILL: StatePill = { label: "waiting", tone: "idle" };
 
 /** A parked worker waits for its lead's go in the neutral tone of a stop: nobody else needs to act. */
@@ -165,7 +165,7 @@ export interface RowError {
   text: string;
   /** The daemon's hint, with its commands between backticks; null when the worker still reaches the model. */
   hint: string | null;
-  /** The turn waits for the network or a usage limit, which fold runs again itself: no failure, so the row draws it in the neutral tone. */
+  /** The turn waits for the network, a usage limit or a working login, which fold runs again itself: no failure, so the row draws it in the neutral tone. */
   waits: boolean;
 }
 
@@ -180,7 +180,7 @@ export function errorHoverText(error: RowError): string {
   return `${error.title}: ${error.text}`;
 }
 
-/** The row's error line; null for a worker whose last turn ended without an error. A turn that waits for the network or a usage limit names the wait, which fold ends itself. */
+/** The row's error line; null for a worker whose last turn ended without an error. A turn that waits for the network, a usage limit or a working login names the wait, which fold ends itself. */
 export function rowError(worker: WorkerProcess): RowError | null {
   if (worker.last_error === null) return null;
   if (worker.waits_for !== null) {

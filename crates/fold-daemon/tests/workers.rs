@@ -2461,13 +2461,17 @@ async fn a_synthetic_error_message_never_becomes_the_workers_model() {
     let lead = start_lead(&mut harness, "web").await;
     let failed = eventually(WAIT, async || {
         let row = worker(&harness, &lead).await;
-        if row.failed_turns == 1 && row.state == WorkerState::Idle {
+        if row.wait.is_some() && row.state == WorkerState::Idle {
             Ok(row)
         } else {
-            Err((row.failed_turns, row.state))
+            Err((row.wait, row.state))
         }
     })
     .await;
+    assert_eq!(
+        failed.failed_turns, 0,
+        "a refused login waits, it never fails"
+    );
     assert_eq!(failed.model.as_deref(), Some("claude-haiku-5-5"));
     assert_eq!(
         failed.last_error.as_deref(),

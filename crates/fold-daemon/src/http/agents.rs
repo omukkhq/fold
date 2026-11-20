@@ -104,7 +104,7 @@ pub struct AgentProcess {
     pub last_error: Option<String>,
     /// The process's turns failed often enough in a row without reaching the model that it cannot work until a human fixes Claude Code; the daemon decides it, and it is false for a stopped process.
     pub model_unreachable: bool,
-    /// What the idle process's last turn waits for, `network` or `usage_limit`, which fold runs again once it has passed; null when it waits for nothing.
+    /// What the idle process's last turn waits for, `network`, `usage_limit` or `login`, which fold runs again once it has passed; null when it waits for nothing.
     #[schema(required = true)]
     pub waits_for: Option<workers::TurnWaitReason>,
     /// The agent that stopped the process with `stop_worker`'s `wait_for` and whose go it waits for; null for a process nobody parked. Every start ends the park.

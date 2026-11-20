@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { needsItem } from "@/test/workers";
+import { codeData } from "@/format/codeText";
 import {
   GROUP_OF,
   limitText,
+  loginRefusedText,
   waitersText,
   fullTitle,
   wrapsWhole,
@@ -135,7 +137,7 @@ describe("needsYouGroups", () => {
     expect(new Set(Object.values(GROUP_OF))).toEqual(
       new Set(["ask", "wait", "project"]),
     );
-    expect(Object.keys(GROUP_OF)).toHaveLength(20);
+    expect(Object.keys(GROUP_OF)).toHaveLength(21);
   });
 
   it("drops an empty group and words a missing tool", () => {
@@ -661,7 +663,51 @@ describe("needsYouGroups", () => {
     });
   });
 
-  it("shows a usage limit as one project line with its reset and the pause action, opening the agents, last of its group", () => {
+  it("shows a refused login as one project line that names the account, its fix, the pause and the switches", () => {
+    const refused = needsItem({
+      kind: "login_refused",
+      screen: "worker",
+      agents: ["api-lead", "web-lead"],
+      account: "work-a",
+      title: "Invalid API key · Please run /login",
+      reason:
+        "run `claude setup-token` for a new token and `fld account update work-a` with it on stdin, or switch the account; fold then runs each waiting turn again at once",
+      actions: [
+        { action: "pause" },
+        { action: "switch_account", account: "default" },
+        { action: "switch_account", account: "work-b" },
+      ],
+    });
+    const groups = needsYouGroups("demo", [
+      refused,
+      needsItem({ kind: "worker_unreachable", agent: "api-lead" }),
+    ]);
+    expect(lineKinds(groups)).toEqual(["worker_unreachable", "login_refused"]);
+    expect(allLines(groups)[1]).toMatchObject({
+      person: null,
+      chip: null,
+      task: null,
+      text: "The token of work-a was refused",
+      title:
+        "@api-lead and @web-lead wait; run `claude setup-token` for a new token and `fld account update work-a` with it on stdin, or switch the account; fold then runs each waiting turn again at once",
+      href: "/p/demo/agents",
+      wholeTitle: true,
+      actions: ["pause", "switch_account", "switch_account"],
+      switchTo: ["default", "work-b"],
+    });
+    expect(GROUP_OF.login_refused).toBe("project");
+  });
+
+  it("names Claude Code's own login for default and for an item without an account", () => {
+    expect(loginRefusedText("default")).toBe("Claude Code's login was refused");
+    expect(loginRefusedText(null)).toBe("Claude Code's login was refused");
+    expect(loginRefusedText(undefined)).toBe("Claude Code's login was refused");
+    expect(loginRefusedText("work`b")).toBe(
+      `The token of ${codeData("work`b")} was refused`,
+    );
+  });
+
+  it("shows a usage limit as one project line with its reset and the pause action, opening the agents, after the workers that cannot reach fold", () => {
     const limit = needsItem({
       kind: "usage_limit",
       screen: "worker",

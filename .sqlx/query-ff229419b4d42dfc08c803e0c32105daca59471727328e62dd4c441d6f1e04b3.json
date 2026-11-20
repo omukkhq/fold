@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT account AS \"account!: String\", refused_at AS \"refused_at!: i64\" FROM refused_logins ORDER BY account",
+  "describe": {
+    "columns": [
+      {
+        "name": "account!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "refused_logins",
+            "name": "account"
+          }
+        }
+      },
+      {
+        "name": "refused_at!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "refused_logins",
+            "name": "refused_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "ff229419b4d42dfc08c803e0c32105daca59471727328e62dd4c441d6f1e04b3"
+}

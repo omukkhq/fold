@@ -27,7 +27,8 @@ pub fn item_key(item: &NeedsYouItem) -> String {
         | NeedsYouKind::ChecksFileInvalidOnMain
         | NeedsYouKind::AgentChange
         | NeedsYouKind::SharedChanged
-        | NeedsYouKind::UsageLimit => item.about.clone(),
+        | NeedsYouKind::UsageLimit
+        | NeedsYouKind::LoginRefused => item.about.clone(),
         NeedsYouKind::FolderHeld => None,
     };
     match about {
@@ -46,7 +47,8 @@ fn public_id(item: &NeedsYouItem) -> Option<String> {
         | NeedsYouKind::ChecksFileInvalidOnMain
         | NeedsYouKind::AgentChange
         | NeedsYouKind::SharedChanged
-        | NeedsYouKind::UsageLimit => None,
+        | NeedsYouKind::UsageLimit
+        | NeedsYouKind::LoginRefused => None,
         _ => item_key(item).split_once(':').map(|(_, id)| id.to_owned()),
     }
 }
@@ -111,6 +113,9 @@ fn title(item: &NeedsYouItem) -> String {
             item.limit.map_or("usage limit", |limit| limit.words())
         ),
         NeedsYouKind::StaleClaim => format!("The claim of {agent}{on_task} went stale"),
+        NeedsYouKind::LoginRefused => {
+            fold_core::turn_waits::login_refused_title(item.account.as_ref())
+        }
     }
 }
 
@@ -148,7 +153,8 @@ fn path(item: &NeedsYouItem) -> String {
         NeedsYouKind::WorkerUnreachable
         | NeedsYouKind::WorkerModelUnreachable
         | NeedsYouKind::ClaudeNotFound
-        | NeedsYouKind::UsageLimit => "agents".to_owned(),
+        | NeedsYouKind::UsageLimit
+        | NeedsYouKind::LoginRefused => "agents".to_owned(),
         NeedsYouKind::NotifyTargetOff => "settings".to_owned(),
     }
 }

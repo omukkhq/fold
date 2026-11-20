@@ -1,6 +1,6 @@
 use fold_core::layout::MCP_SERVER_NAME;
 use fold_core::turn_errors;
-use fold_core::turn_waits::{TurnWait, turn_wait};
+use fold_core::turn_waits::{TurnWait, is_refused_login, turn_wait};
 use serde_json::{Value, json};
 
 use crate::services::agents::claude::{
@@ -89,7 +89,7 @@ pub(super) struct TurnError {
 /// The last error of a turn whose result names none.
 const NO_ERROR_TEXT: &str = "Claude Code ended the turn in an error without a message";
 
-/// The result's final text when it has one, else its `errors`. `usage` is the turn's own, so a turn that made no model call has 0 in every count; the running cost and `modelUsage` count the whole process.
+/// The result's final text when it has one, else its `errors`. A result whose structured fields name a refused login waits for a working login whatever its text says. `usage` is the turn's own, so a turn that made no model call has 0 in every count; the running cost and `modelUsage` count the whole process.
 fn turn_error(result: &ResultMessage) -> TurnError {
     let named = result
         .result
@@ -103,14 +103,19 @@ fn turn_error(result: &ResultMessage) -> TurnError {
         .saturating_add(usage.cache_creation_input_tokens)
         .saturating_add(usage.cache_read_input_tokens);
     let text = named.unwrap_or_else(|| NO_ERROR_TEXT.to_owned());
+    let refused = is_refused_login(result.api_error_status, result.api_error_type.as_deref());
     TurnError {
-        wait: turn_wait(&text),
+        wait: if refused {
+            Some(TurnWait::Login)
+        } else {
+            turn_wait(&text)
+        },
         text,
         reached_model: tokens > 0,
     }
 }
 
-/// The error of a result: every result marked as an error, and one that is not but reached no model and names the network or a usage limit, which Claude Code's documentation leaves open.
+/// The error of a result: every result marked as an error, and one that is not but reached no model and names the network, a usage limit or a working login, which Claude Code's documentation leaves open.
 fn result_error(result: &ResultMessage) -> Option<TurnError> {
     let error = turn_error(result);
     (result.is_error || (!error.reached_model && error.wait.is_some())).then_some(error)
@@ -459,6 +464,69 @@ mod tests {
         assert_eq!(other_block.step.kind, "other");
     }
 
+    /// The result Claude Code 2.1.3xx printed for a check turn with an invalid token, with fixed ids.
+    fn refused_result() -> String {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/claude/login_refused_result.json"),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_result_whose_fields_name_a_refused_login_waits_for_a_working_login() {
+        let recorded = effect_of(&ClaudeMessage::parse(refused_result().trim()).unwrap());
+        assert_eq!(
+            turn_error_of(&[recorded]),
+            Some(Some(TurnError {
+                text: "Failed to authenticate. API Error: 401 OAuth access token is invalid."
+                    .to_owned(),
+                reached_model: false,
+                wait: Some(TurnWait::Login),
+            }))
+        );
+        let unknown_words = effect_of(
+            &ClaudeMessage::parse(
+                r#"{"type":"result","subtype":"success","is_error":true,"session_id":"s","result":"Some new wording","api_error_status":401,"usage":{"input_tokens":0,"output_tokens":0}}"#,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            turn_error_of(&[unknown_words]).flatten().unwrap().wait,
+            Some(TurnWait::Login),
+            "the fields outrank the text"
+        );
+        let typed = effect_of(
+            &ClaudeMessage::parse(
+                r#"{"type":"result","subtype":"success","is_error":true,"session_id":"s","result":"x","api_error_type":"authentication_error","usage":{"input_tokens":0,"output_tokens":0}}"#,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            turn_error_of(&[typed]).flatten().unwrap().wait,
+            Some(TurnWait::Login)
+        );
+        let forbidden = effect_of(
+            &ClaudeMessage::parse(
+                r#"{"type":"result","subtype":"success","is_error":true,"session_id":"s","result":"API Error: 403 forbidden","api_error_status":403,"api_error_type":"permission_error","usage":{"input_tokens":0,"output_tokens":0}}"#,
+            )
+            .unwrap(),
+        );
+        assert_eq!(turn_error_of(&[forbidden]).flatten().unwrap().wait, None);
+        let midway = effect_of(
+            &ClaudeMessage::parse(
+                r#"{"type":"result","subtype":"success","is_error":true,"session_id":"s","result":"Some new wording","api_error_status":401,"usage":{"input_tokens":120,"output_tokens":30}}"#,
+            )
+            .unwrap(),
+        );
+        let error = turn_error_of(&[midway]).flatten().unwrap();
+        assert_eq!(
+            (error.wait, error.reached_model),
+            (Some(TurnWait::Login), true),
+            "a login refused after the turn reached the model waits too"
+        );
+    }
+
     fn turn_error_of(effects: &[LineEffect]) -> Option<Option<TurnError>> {
         effects.iter().find_map(|effect| match &effect.change {
             RowChange::TurnEnded { error, .. } => Some(error.clone()),
@@ -582,7 +650,7 @@ mod tests {
             Some(Some(TurnError {
                 text: "Not logged in · Please run /login".to_owned(),
                 reached_model: false,
-                wait: None,
+                wait: Some(TurnWait::Login),
             }))
         );
         let init = effect_of(

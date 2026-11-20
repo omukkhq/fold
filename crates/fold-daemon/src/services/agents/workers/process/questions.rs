@@ -745,27 +745,35 @@ impl AgentService {
         ))
     }
 
-    /// Gives each usage-limit item the project's account and one switch to every account other than the project's, by name, after its pause: `default` first when the project runs on another account and Claude Code has its own login on the host.
+    /// Gives each usage-limit item and the refused-login item one switch to every account other than the project's, by name, after its pause: `default` first when the project runs on another account and Claude Code has its own login on the host. An account whose login a turn found refused is never offered, and the refused-login fix names a switch only when there is one (see [`AgentService::refused_accounts`]). A usage-limit item also gets the project's account; the refused-login item keeps the refused account it names, which a pause or a switch does not change.
     async fn offer_account_switches(&self, items: &mut [crate::services::agents::NeedsYouItem]) {
         use crate::services::agents::{NeedsYouAction, NeedsYouKind};
-        if !items
-            .iter()
-            .any(|item| item.kind == NeedsYouKind::UsageLimit)
-        {
+        let switched = |kind: NeedsYouKind| {
+            matches!(kind, NeedsYouKind::UsageLimit | NeedsYouKind::LoginRefused)
+        };
+        if !items.iter().any(|item| switched(item.kind)) {
             return;
         }
         let view = self.project_account().await;
+        let refused = self.refused_accounts().await;
         let others: Vec<NeedsYouAction> = view
             .accounts
             .into_iter()
-            .filter(|name| name != &view.account)
+            .filter(|name| name != &view.account && !refused.contains(name))
             .map(NeedsYouAction::SwitchAccount)
             .collect();
-        for item in items
-            .iter_mut()
-            .filter(|item| item.kind == NeedsYouKind::UsageLimit)
-        {
-            item.account = Some(view.account.clone());
+        for item in items.iter_mut().filter(|item| switched(item.kind)) {
+            match item.kind {
+                NeedsYouKind::UsageLimit => item.account = Some(view.account.clone()),
+                // The fix names a switch only when the item offers one.
+                NeedsYouKind::LoginRefused => {
+                    item.reason = Some(fold_core::turn_waits::login_wait_hint(
+                        item.account.as_ref(),
+                        !others.is_empty(),
+                    ));
+                }
+                _ => {}
+            }
             item.actions.extend(others.iter().cloned());
         }
     }
