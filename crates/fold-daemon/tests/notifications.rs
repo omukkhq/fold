@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use crate::reviews_support::{Fixture, LIB, README, agent, by, human, p, t};
 use fold_core::object::ObjectKind;
+use fold_core::push::Notice;
 use fold_core::reviews::Verdict;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{
@@ -141,7 +142,12 @@ impl Notified {
     }
 
     fn inbox(&self, agent: &str) -> Inbox {
-        let path = self.sockets.path().join(format!("{agent}.sock"));
+        self.inbox_at(agent, &format!("{agent}.sock"))
+    }
+
+    /// A further session inbox of `agent`, at the socket `file`.
+    fn inbox_at(&self, agent: &str, file: &str) -> Inbox {
+        let path = self.sockets.path().join(file);
         let inbox = Inbox::bind(&path);
         self.register(agent, path);
         inbox
@@ -341,6 +347,52 @@ async fn a_message_that_an_earlier_notice_carried_sends_no_notice_even_when_newe
     assert_eq!(
         frontend.next().await,
         "fold: message m-2 arrived. [m-2 from backend] \"sentinel\""
+    );
+}
+
+#[tokio::test]
+async fn two_sessions_of_one_agent_never_both_carry_one_message() {
+    let (started, mut connects) = mpsc::unbounded_channel();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let n = Notified::on(PushTargets::with_connector(gated(
+        started,
+        Arc::clone(&gate),
+    )))
+    .await;
+    let mut first = n.inbox_at("frontend", "first.sock");
+    let mut second = n.inbox_at("frontend", "second.sock");
+
+    n.send(&agent("backend"), &["frontend"]).await;
+    tokio::time::timeout(WAIT, connects.recv())
+        .await
+        .expect("a session's connect within the wait")
+        .unwrap();
+    // One session's notice holds m-1 in its connect. A second connect would mean the other session read m-1 before the first post was recorded, so the test gives it time to show up.
+    let _ = tokio::time::timeout(Duration::from_millis(500), connects.recv()).await;
+    gate.add_permits(1000);
+    let closing = "fold: P-1 approved by a human. Call integrate_proposal.";
+    n.targets.deliver(
+        &[Notice {
+            agent: name("frontend"),
+            text: closing.to_owned(),
+            next_tool: "integrate_proposal",
+        }],
+        0,
+    );
+
+    let mut carried = Vec::new();
+    for inbox in [&mut first, &mut second] {
+        loop {
+            let text = inbox.next().await;
+            if text == closing {
+                break;
+            }
+            carried.push(text);
+        }
+    }
+    assert_eq!(
+        carried,
+        ["fold: message m-1 arrived. [m-1 from backend] \"sentinel\""]
     );
 }
 

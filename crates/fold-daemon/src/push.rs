@@ -116,7 +116,7 @@ impl PushReach {
     }
 }
 
-/// The inbox sockets of one project's agents and the stdin of each worker process fold supervises. They are keyed by agent rather than by session because the session-start hook runs before the adapter connects. Each socket has its own queue and sender task, so a slow socket never holds up another one or the bus. A socket reported for an agent the project does not know yet waits in memory until a session's adapter registers that agent. With a folder from [`PushTargets::keep_files_in`], the newest socket and token of each registered agent are also kept there, so the daemon reaches the session again after it restarts.
+/// The inbox sockets of one project's agents and the stdin of each worker process fold supervises. They are keyed by agent rather than by session because the session-start hook runs before the adapter connects. Each socket has its own queue and sender task, so a slow socket never holds up another agent's socket or the bus; the sockets of one agent take turns only for a notice that carries messages. A socket reported for an agent the project does not know yet waits in memory until a session's adapter registers that agent. With a folder from [`PushTargets::keep_files_in`], the newest socket and token of each registered agent are also kept there, so the daemon reaches the session again after it restarts.
 #[derive(Clone)]
 pub struct PushTargets {
     inner: Arc<Inner>,
@@ -141,6 +141,8 @@ struct Inner {
     connect: Connect,
     /// The inbox reported for each agent the project does not know yet, by the session-start hook or the adapter's handshake.
     pending: Mutex<HashMap<AgentName, Pending>>,
+    /// One turn per agent that its socket senders hold from reading the messages a notice carries until its post is recorded, so two sessions of one agent never carry the same message.
+    turns: Mutex<HashMap<AgentName, Arc<tokio::sync::Mutex<()>>>>,
     /// Unset keeps the targets in memory only.
     files: OnceLock<TargetFiles>,
     /// Unset records no push time.
@@ -214,6 +216,7 @@ impl PushTargets {
                 stdin: Mutex::new(HashMap::new()),
                 connect,
                 pending: Mutex::new(HashMap::new()),
+                turns: Mutex::new(HashMap::new()),
                 files: OnceLock::new(),
                 recorder: OnceLock::new(),
             }),
@@ -366,11 +369,13 @@ impl PushTargets {
             registered_at,
         });
         drop(agents);
+        let turn = Arc::clone(lock(&self.inner.turns).entry(agent.clone()).or_default());
         let sender = Sender {
             agent: agent.clone(),
             socket,
             token,
             queue,
+            turn,
             targets: Arc::downgrade(&self.inner),
             connect: Arc::clone(&self.inner.connect),
         };
@@ -764,24 +769,36 @@ struct Sender {
     socket: PathBuf,
     token: PushToken,
     queue: Arc<Queue>,
+    /// The agent's turn, shared with its other sockets' senders.
+    turn: Arc<tokio::sync::Mutex<()>>,
     targets: Weak<Inner>,
     connect: Connect,
 }
 
 impl Sender {
-    /// Posts one notice at a time until the target is dropped. Every failure drops only the notice and marks the target failing until a post succeeds, except a missing socket or one with no listener: the session has ended, so the socket and its kept file are dropped too. A notice that another target of the agent has already carried posts nothing here, but the sender still checks its socket with [`Sender::probe`], so the socket of an ended session goes with the agent's next notice whichever target takes that notice first.
+    /// Posts one notice at a time until the target is dropped. Every failure drops only the notice and marks the target failing until a post succeeds, except a missing socket or one with no listener: the session has ended, so the socket and its kept file are dropped too. A notice that carries messages waits for the agent's turn, so it reads them only after another target's post of them is recorded or has failed. A notice that another target of the agent has already carried posts nothing here, but the sender still checks its socket with [`Sender::probe`], so the socket of an ended session goes with the agent's next notice whichever target takes that notice first.
     async fn run(self) {
         while let Some(notice) = self.queue.next().await {
+            let turn = if notice.head.is_some() {
+                Some(self.turn.lock().await)
+            } else {
+                None
+            };
             let Some(prepared) = prepare(&self.targets, &self.agent, &notice).await else {
+                drop(turn);
                 if self.probe().await.is_err_and(|error| session_gone(&error)) {
                     self.drop_gone(notice.seq).await;
                     return;
                 }
                 continue;
             };
-            let Err(error) = self.post(&prepared.text).await else {
+            let posted = self.post(&prepared.text).await;
+            if posted.is_ok() {
                 self.queue.failing.store(false, Ordering::Relaxed);
                 record(&self.targets, &self.agent, &notice, &prepared).await;
+            }
+            drop(turn);
+            let Err(error) = posted else {
                 continue;
             };
             if session_gone(&error) {
