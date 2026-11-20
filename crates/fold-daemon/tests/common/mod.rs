@@ -4,6 +4,22 @@ pub mod invariants;
 pub mod roles;
 pub mod sse;
 
+/// A push connector that reports each connect on `started` and holds it until the test adds a permit to `gate`.
+pub fn gated(
+    started: tokio::sync::mpsc::UnboundedSender<()>,
+    gate: std::sync::Arc<tokio::sync::Semaphore>,
+) -> fold_daemon::push::Connect {
+    std::sync::Arc::new(move |path: std::path::PathBuf| {
+        let started = started.clone();
+        let gate = std::sync::Arc::clone(&gate);
+        Box::pin(async move {
+            let _ = started.send(());
+            let _permit = gate.acquire().await;
+            tokio::net::UnixStream::connect(path).await
+        })
+    })
+}
+
 /// The questions to humans that no human has answered in their thread yet, in number order, each with its task, as the needs-you list reads them.
 pub async fn awaiting_human(store: &fold_store::Store) -> Vec<fold_store::messages::MessageRow> {
     let mut conn = store.read().acquire().await.unwrap();
