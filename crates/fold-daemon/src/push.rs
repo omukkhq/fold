@@ -536,7 +536,7 @@ struct Prepared {
     messages: Vec<(MessageId, MessageId)>,
 }
 
-/// The text to post for `notice`. A notice whose next tool is `get_inbox` carries the messages that nothing has shown the agent's worker yet, read just before the post, so a notice posted after an earlier one has got through never carries the same message again. `None` skips a notice about a message that nothing new is left to carry for. Without a store, or when the messages cannot be read, the notice keeps its call to `get_inbox`.
+/// The text to post for `notice`. A notice whose next tool is `get_inbox` carries the messages that nothing has shown the agent's worker yet, read just before the post, so a notice posted after an earlier one has got through never carries the same message again. `None` skips a notice about a message that something has shown already, even when newer messages wait: each of those has its own notice behind this one. Without a store, or when the messages cannot be read, the notice keeps its call to `get_inbox`.
 async fn prepare(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued) -> Option<Prepared> {
     let about: Vec<(MessageId, MessageId)> = notice
         .about
@@ -559,9 +559,10 @@ async fn prepare(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued) -> O
     else {
         return plain();
     };
-    match crate::services::messages::carry_for_push(&recorder.store, agent, head).await {
-        Ok(carried) if carried.rows.is_empty() && notice.about.is_some() => None,
-        Ok(carried) if postable(&carried.text, MAX_CARRIED_LEN) => {
+    let shown = notice.about.map(|about| about.message);
+    match crate::services::messages::carry_for_push(&recorder.store, agent, head, shown).await {
+        Ok(None) => None,
+        Ok(Some(carried)) if postable(&carried.text, MAX_CARRIED_LEN) => {
             let mut messages = carried.messages;
             for pair in about {
                 if !messages.contains(&pair) {

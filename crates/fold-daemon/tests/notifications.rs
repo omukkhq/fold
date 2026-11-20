@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::gated;
 use crate::common::intents::Covering as _;
 use crate::common::roles::{give_main_tag, give_review_claim, give_role};
 use crate::reviews_support;
@@ -97,8 +98,12 @@ struct Notified {
 
 impl Notified {
     async fn new() -> Self {
+        Self::on(PushTargets::new()).await
+    }
+
+    /// [`Notified::new`] that posts through `targets`, such as targets with a gated connector.
+    async fn on(targets: PushTargets) -> Self {
         let fx = Fixture::new().await;
-        let targets = PushTargets::new();
         let push = push::run(
             fx.project.store().clone(),
             Arc::new(fx.project.clock().clone()),
@@ -289,7 +294,7 @@ async fn integration_messages_go_to_author_reviewer_and_owners_of_newly_todo_tas
             .await,
         1
     );
-    // The integration notice carries the message, so the message's own notice has nothing new and is skipped.
+    // The integration notice carries the message, so the message's own notice is skipped.
     assert_eq!(
         frontend.next().await,
         format!("fold: P-1 integrated as r2. [m-{number} from fold on T-1, P-1] \"{body}\"")
@@ -299,6 +304,43 @@ async fn integration_messages_go_to_author_reviewer_and_owners_of_newly_todo_tas
     assert_eq!(
         frontend.next().await,
         format!("fold: message m-{sentinel} arrived. [m-{sentinel} from backend] \"sentinel\"")
+    );
+}
+
+#[tokio::test]
+async fn a_message_that_an_earlier_notice_carried_sends_no_notice_even_when_newer_messages_wait() {
+    let (started, mut connects) = mpsc::unbounded_channel();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let n = Notified::on(PushTargets::with_connector(gated(
+        started,
+        Arc::clone(&gate),
+    )))
+    .await;
+    let ready = n.dependent_task(&by(&n.fx.backend.worker)).await;
+    n.fx.proposal().await;
+    let review = n.actor(&n.fx.review).await;
+    n.give_claim("review").await;
+    n.approve(&human()).await;
+    let mut frontend = n.inbox("frontend");
+
+    assert_eq!(n.integrate(&review).await, r(2));
+    // The integration notice holds m-1 and waits in its connect, so m-1's own notice is read only after m-2 is in the inbox.
+    tokio::time::timeout(WAIT, connects.recv())
+        .await
+        .expect("the integration notice's connect within the wait")
+        .unwrap();
+    n.send(&agent("backend"), &["frontend"]).await;
+    gate.add_permits(1000);
+
+    assert_eq!(
+        frontend.next().await,
+        format!(
+            "fold: P-1 integrated as r2. [m-1 from fold on T-1, P-1] \"P-1 for T-1 is integrated into main as r2. Now ready: {ready}.\""
+        )
+    );
+    assert_eq!(
+        frontend.next().await,
+        "fold: message m-2 arrived. [m-2 from backend] \"sentinel\""
     );
 }
 

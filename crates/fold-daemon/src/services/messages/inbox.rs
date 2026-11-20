@@ -265,21 +265,25 @@ pub(crate) struct CarriedInbox {
     pub messages: Vec<(MessageId, MessageId)>,
 }
 
-/// The push notice `head` with the messages to the worker of `agent` that nothing has shown yet, as many as fit after it, read from the read pool. Nothing is marked: the push marks the rows once the notice gets through. An unknown agent has none.
+/// The push notice `head` with the messages to the worker of `agent` that nothing has shown yet, as many as fit after it, read from the read pool. Nothing is marked: the push marks the rows once the notice gets through. An unknown agent has none. For a notice about the message `about`, `None` when nothing has that message left to show: an earlier notice, wait or inbox read showed it, and a head that names it must never carry only newer messages, whose own notices then find nothing to carry.
 pub(crate) async fn carry_for_push(
     store: &Store,
     agent: &AgentName,
     head: &str,
-) -> Result<CarriedInbox, MessageError> {
+    about: Option<MessageId>,
+) -> Result<Option<CarriedInbox>, MessageError> {
     let mut conn = store.read().acquire().await.map_err(StoreError::from)?;
     let Some(worker) = agent_worker(&mut conn, agent).await? else {
-        return Ok(carry_rows(head, &[]));
+        return Ok(about.is_none().then(|| carry_rows(head, &[])));
     };
     let rows = undelivered(
         messages::inbox(&mut conn, &[worker.id]).await?,
         &worker.name,
     );
-    Ok(carry_rows(head, &rows))
+    if about.is_some_and(|about| !rows.iter().any(|row| row.message.id == about)) {
+        return Ok(None);
+    }
+    Ok(Some(carry_rows(head, &rows)))
 }
 
 /// The one worker of `agent`, or `None` for an agent the project does not know.
