@@ -54,6 +54,7 @@ mod acceptance_41_a_parked_worker_waits_for_its_leads_go;
 mod acceptance_42_turn_waits;
 mod acceptance_43_accounts;
 mod acceptance_44_login_waits;
+mod acceptance_45_request_attachments;
 mod acceptance_4_live_diff;
 mod acceptance_5_review_and_integrate;
 mod acceptance_6_dependency_unblocks;

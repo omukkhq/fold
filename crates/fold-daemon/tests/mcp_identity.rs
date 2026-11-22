@@ -346,6 +346,7 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
             "create_request",
             "list_requests",
             "get_request",
+            "get_request_attachment",
             "claim_request",
             "release_request",
             "submit_request_draft",
