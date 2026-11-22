@@ -65,6 +65,7 @@ fn config(degraded_interval: Duration) -> WatchConfig {
         debounce: Duration::from_millis(100),
         max_wait: Duration::from_millis(1_000),
         degraded_interval,
+        ..WatchConfig::default()
     }
 }
 

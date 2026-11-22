@@ -64,6 +64,7 @@ impl LiveConfig {
                 debounce,
                 max_wait: defaults.max_wait.max(debounce),
                 degraded_interval: defaults.degraded_interval,
+                ..defaults
             },
             rescan: Duration::from_secs(config.rescan_seconds),
             max_file_bytes: config.max_file_bytes,
@@ -555,6 +556,7 @@ fn route(routes: &Routes, event: WatchEvent) {
         WatchEvent::RescanRequested { workspace } => (workspace, Command::Rescan),
         WatchEvent::Degraded { workspace, reason } => (workspace, Command::Degraded(reason)),
         WatchEvent::RootMissing { workspace } => (workspace, Command::RootMissing),
+        WatchEvent::Restored { .. } => return,
     };
     let routes = lock(routes);
     if let Some(route) = routes.get(&workspace)

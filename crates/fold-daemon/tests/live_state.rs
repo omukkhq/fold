@@ -75,6 +75,7 @@ fn config() -> LiveConfig {
             debounce: Duration::from_millis(200),
             max_wait: Duration::from_millis(800),
             degraded_interval: Duration::from_secs(10),
+            ..WatchConfig::default()
         },
         rescan: Duration::from_secs(60),
         max_file_bytes: 1 << 26,

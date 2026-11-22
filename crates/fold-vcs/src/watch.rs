@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, Metadata};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,11 @@ pub struct WatchConfig {
     pub max_wait: Duration,
     /// Time between two `RescanRequested` events of a workspace in timer mode.
     pub degraded_interval: Duration,
+    /// Lost notifications of one workspace within `overflow_window` that put it in timer mode; 0 never does.
+    pub overflow_limit: u32,
+    pub overflow_window: Duration,
+    /// Time a workspace stays in timer mode after `overflow_limit` losses before the hub watches it again.
+    pub overflow_pause: Duration,
 }
 
 impl Default for WatchConfig {
@@ -31,6 +37,9 @@ impl Default for WatchConfig {
             debounce: Duration::from_millis(500),
             max_wait: Duration::from_secs(2),
             degraded_interval: Duration::from_secs(10),
+            overflow_limit: 3,
+            overflow_window: Duration::from_secs(60),
+            overflow_pause: Duration::from_secs(600),
         }
     }
 }
@@ -77,6 +86,8 @@ pub enum DegradedReason {
     WatchLimit,
     NoNativeWatcher,
     InstanceLimit,
+    /// The workspace lost notifications again and again; the hub watches it again after `overflow_pause`.
+    Overflow,
 }
 
 impl DegradedReason {
@@ -88,6 +99,7 @@ impl DegradedReason {
             Self::WatchLimit => "watch_limit",
             Self::NoNativeWatcher => "no_native_watcher",
             Self::InstanceLimit => "instance_limit",
+            Self::Overflow => "overflow",
         }
     }
 }
@@ -108,6 +120,10 @@ pub enum WatchEvent {
         reason: DegradedReason,
     },
     RootMissing {
+        workspace: WorkspaceId,
+    },
+    /// The workspace has its watches again after the timer mode of [`DegradedReason::Overflow`].
+    Restored {
         workspace: WorkspaceId,
     },
 }
@@ -139,6 +155,7 @@ enum Msg {
         id: WorkspaceId,
         reply: Sender<Vec<PathBuf>>,
     },
+    Scanned(Scanned),
     Shutdown,
 }
 
@@ -688,7 +705,7 @@ impl WatchBackend for NoBackend {
     fn unwatch_dir(&mut self, _dir: &Path) {}
 }
 
-/// One per project: one backend and one thread that owns every watch, batch and timer, so the order of commands and notifications is the order they were sent. Events leave through the sink on that thread, which keeps this crate free of an async runtime. The sink must return quickly, because every debounce deadline waits for it, and must never call the hub, whose commands wait for that same thread.
+/// One per project: one backend and one thread that owns every watch, batch and timer, so the order of commands and notifications is the order they were sent. Only the whole-workspace walk after lost notifications runs on a scan thread of its own, so the hub keeps reading while it runs. Events leave through the sink on that thread, which keeps this crate free of an async runtime. The sink must return quickly, because every debounce deadline waits for it, and must never call the hub, whose commands wait for that same thread.
 pub struct WatchHub {
     tx: Sender<Msg>,
     thread: Option<JoinHandle<()>>,
@@ -737,6 +754,33 @@ impl WatchHub {
         config: WatchConfig,
         sink: Box<dyn Fn(WatchEvent) + Send>,
     ) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (scans, jobs) = mpsc::channel();
+        let scanner = {
+            let done = tx.clone();
+            let stop = Arc::clone(&stop);
+            thread::Builder::new()
+                .name("fold-watch-scan".to_owned())
+                .spawn(move || scan_loop(&jobs, &done, &stop))
+                .ok()
+        };
+        Self::spawn_parts(tx, rx, backend, config, sink, scans, scanner, stop)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the parts of a hub, which tests assemble with a scanner of their own"
+    )]
+    fn spawn_parts(
+        tx: Sender<Msg>,
+        rx: Receiver<Msg>,
+        backend: Box<dyn WatchBackend>,
+        config: WatchConfig,
+        sink: Box<dyn Fn(WatchEvent) + Send>,
+        scans: Sender<ScanJob>,
+        scanner: Option<JoinHandle<()>>,
+        stop: Arc<AtomicBool>,
+    ) -> Self {
         let hub = Hub {
             backslash: backend.backslash_separates(),
             backend,
@@ -744,6 +788,10 @@ impl WatchHub {
             sink,
             workspaces: BTreeMap::new(),
             outbox: Vec::new(),
+            scans,
+            scanner,
+            stop,
+            generation: 0,
         };
         let thread = thread::spawn(move || hub.run(&rx));
         Self {
@@ -828,26 +876,42 @@ struct Hub {
     sink: Box<dyn Fn(WatchEvent) + Send>,
     workspaces: BTreeMap<WorkspaceId, Workspace>,
     outbox: Vec<WatchEvent>,
+    /// Whole-workspace walks go to the scan thread, so the hub keeps reading notifications while one runs.
+    scans: Sender<ScanJob>,
+    scanner: Option<JoinHandle<()>>,
+    stop: Arc<AtomicBool>,
+    /// Tells a workspace from an earlier one added under the same id, so a late scan result never lands on it.
+    generation: u64,
 }
 
 impl Hub {
-    /// The hub reads the clock only in this loop; every decision below takes the instant read here as an input.
+    /// The hub reads the clock only in this loop; every decision below takes the instant read here as an input. A pending rescan starts once the hub has read everything sent so far, which holds the rest of the overflowed queue, or at the latest `debounce` after the loss.
     fn run(mut self, rx: &Receiver<Msg>) {
         loop {
-            self.fire(Instant::now());
+            let now = Instant::now();
+            self.fire(now);
+            self.dispatch(now, false);
             self.send_out();
-            let next = match self.next_deadline() {
-                Some(deadline) => {
-                    match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-                        Ok(msg) => msg,
-                        Err(RecvTimeoutError::Timeout) => continue,
-                        Err(RecvTimeoutError::Disconnected) => break,
+            let next = match rx.try_recv() {
+                Ok(msg) => msg,
+                Err(TryRecvError::Disconnected) => break,
+                Err(TryRecvError::Empty) => {
+                    self.dispatch(Instant::now(), true);
+                    self.send_out();
+                    match self.next_deadline() {
+                        Some(deadline) => match rx
+                            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                        {
+                            Ok(msg) => msg,
+                            Err(RecvTimeoutError::Timeout) => continue,
+                            Err(RecvTimeoutError::Disconnected) => break,
+                        },
+                        None => match rx.recv() {
+                            Ok(msg) => msg,
+                            Err(_) => break,
+                        },
                     }
                 }
-                None => match rx.recv() {
-                    Ok(msg) => msg,
-                    Err(_) => break,
-                },
             };
             let now = Instant::now();
             match next {
@@ -895,7 +959,7 @@ impl Hub {
                             let mut dirs: Vec<PathBuf> = workspace
                                 .watched
                                 .values()
-                                .map(|(dir, _)| dir.clone())
+                                .map(|(dir, _, _)| dir.clone())
                                 .collect();
                             dirs.sort();
                             dirs
@@ -903,8 +967,15 @@ impl Hub {
                         .unwrap_or_default();
                     let _ = reply.send(dirs);
                 }
+                Msg::Scanned(scanned) => self.scanned(scanned, now),
                 Msg::Shutdown => break,
             }
+        }
+        self.stop.store(true, Ordering::Relaxed);
+        let Self { scans, scanner, .. } = self;
+        drop(scans);
+        if let Some(scanner) = scanner {
+            let _ = scanner.join();
         }
     }
 
@@ -917,7 +988,17 @@ impl Hub {
     fn next_deadline(&self) -> Option<Instant> {
         self.workspaces
             .values()
-            .flat_map(|workspace| [workspace.batch.flush_at(&self.config), workspace.next_tick])
+            .flat_map(|workspace| {
+                [
+                    workspace.batch.flush_at(&self.config),
+                    workspace.next_tick,
+                    workspace.retry_at,
+                    workspace
+                        .pending
+                        .filter(|_| !workspace.scanning)
+                        .and_then(|since| since.checked_add(self.config.debounce)),
+                ]
+            })
             .flatten()
             .min()
     }
@@ -941,7 +1022,111 @@ impl Hub {
                     workspace.root_missing(self.backend.as_mut(), &mut self.outbox);
                 }
             }
+            if workspace.retry_at.is_some_and(|retry| retry <= now) {
+                workspace.retry_at = None;
+                if workspace.degraded == Some(DegradedReason::Overflow) && !workspace.missing {
+                    workspace.degraded = None;
+                    workspace.next_tick = None;
+                    workspace.overflows = Overflows::default();
+                    workspace.restoring = true;
+                    workspace.pending = Some(now);
+                    tracing::info!(workspace = %workspace.id, "watching the workspace again after overflows");
+                }
+            }
         }
+    }
+
+    /// Sends each pending rescan to the scan thread: with `all` every one, else those waiting `debounce` or longer. A workspace has at most one scan running; a loss meanwhile waits as its next pending rescan.
+    fn dispatch(&mut self, now: Instant, all: bool) {
+        let debounce = self.config.debounce;
+        let due: Vec<WorkspaceId> = self
+            .workspaces
+            .values()
+            .filter(|workspace| !workspace.scanning)
+            .filter(|workspace| {
+                workspace.pending.is_some_and(|since| {
+                    all || since.checked_add(debounce).is_some_and(|at| at <= now)
+                })
+            })
+            .map(|workspace| workspace.id)
+            .collect();
+        for id in due {
+            self.start_scan(id, now);
+        }
+    }
+
+    fn start_scan(&mut self, id: WorkspaceId, now: Instant) {
+        let Some(workspace) = self.workspaces.get_mut(&id) else {
+            return;
+        };
+        workspace.pending = None;
+        if workspace.missing {
+            return;
+        }
+        if !workspace.root_exists() {
+            workspace.root_missing(self.backend.as_mut(), &mut self.outbox);
+            return;
+        }
+        // The whole-workspace scan covers whatever the batch held.
+        workspace.batch.clear();
+        if workspace.degraded.is_some() {
+            self.outbox
+                .push(WatchEvent::RescanRequested { workspace: id });
+            return;
+        }
+        let job = ScanJob {
+            id,
+            generation: workspace.generation,
+            since: workspace.stamp,
+            root: workspace.root.clone(),
+            rules: Arc::clone(&workspace.rules),
+            tracked: Arc::clone(&workspace.tracked),
+        };
+        match self.scans.send(job) {
+            Ok(()) => workspace.scanning = true,
+            Err(mpsc::SendError(job)) => {
+                // Without a scan thread the walk runs here, as it must still run somewhere.
+                let scanned = job.run(&self.stop);
+                workspace.scanning = true;
+                self.scanned(scanned, now);
+            }
+        }
+    }
+
+    /// The result of a whole-workspace walk: the watches follow the tree as it was walked, except where a notification read during the walk already moved them.
+    fn scanned(&mut self, scanned: Scanned, now: Instant) {
+        let Some(workspace) = self
+            .workspaces
+            .get_mut(&scanned.id)
+            .filter(|workspace| workspace.generation == scanned.generation)
+        else {
+            return;
+        };
+        workspace.scanning = false;
+        if workspace.missing {
+            return;
+        }
+        if !workspace.root_exists() {
+            workspace.root_missing(self.backend.as_mut(), &mut self.outbox);
+            return;
+        }
+        workspace.batch.clear();
+        let mut ctx = Ctx {
+            backend: self.backend.as_mut(),
+            config: &self.config,
+            out: &mut self.outbox,
+            now,
+        };
+        workspace.apply(&mut ctx, scanned.walk, Some(scanned.since));
+        if std::mem::take(&mut workspace.restoring) && workspace.degraded.is_none() {
+            self.outbox.push(WatchEvent::Restored {
+                workspace: scanned.id,
+            });
+        }
+        tracing::info!(workspace = %scanned.id, "workspace rescanned after lost notifications");
+        self.outbox.push(WatchEvent::RescanRequested {
+            workspace: scanned.id,
+        });
     }
 
     fn add(
@@ -957,7 +1142,15 @@ impl Hub {
         }
         rules.reload();
         let real_root = fs::canonicalize(&root).ok().filter(|real| *real != root);
+        self.generation += 1;
         let mut workspace = Workspace {
+            generation: self.generation,
+            stamp: 0,
+            pending: None,
+            scanning: false,
+            overflows: Overflows::default(),
+            retry_at: None,
+            restoring: false,
             id,
             root,
             real_root,
@@ -1016,7 +1209,7 @@ impl Hub {
         owners.into_iter().collect()
     }
 
-    /// The lost notifications may have named new or removed directories, so the watches are brought in line with the tree as well.
+    /// The lost notifications may have named new or removed directories, so the workspace gets a rescan that brings the watches in line with the tree as well. Losses before that rescan starts join it. A workspace that loses notifications `overflow_limit` times within `overflow_window` drops its watches and goes to timer mode for `overflow_pause`.
     fn rescan(&mut self, ids: Vec<WorkspaceId>, now: Instant) {
         for id in ids {
             let Some(workspace) = self.workspaces.get_mut(&id) else {
@@ -1029,18 +1222,32 @@ impl Hub {
                 workspace.root_missing(self.backend.as_mut(), &mut self.outbox);
                 continue;
             }
-            // The whole-workspace scan covers whatever the batch held.
-            workspace.batch.clear();
-            let mut ctx = Ctx {
-                backend: self.backend.as_mut(),
-                config: &self.config,
-                out: &mut self.outbox,
-                now,
-            };
-            workspace.sync_tree(&mut ctx, None, false);
-            tracing::info!(workspace = %id, "notifications lost, rescan requested");
-            self.outbox
-                .push(WatchEvent::RescanRequested { workspace: id });
+            if workspace.degraded.is_some() {
+                workspace.batch.clear();
+                self.outbox
+                    .push(WatchEvent::RescanRequested { workspace: id });
+                continue;
+            }
+            if workspace.overflows.record(now, &self.config) {
+                let mut ctx = Ctx {
+                    backend: self.backend.as_mut(),
+                    config: &self.config,
+                    out: &mut self.outbox,
+                    now,
+                };
+                workspace.degrade(&mut ctx, DegradedReason::Overflow);
+                workspace.unwatch_below(ctx.backend, b"");
+                workspace.retry_at = now.checked_add(self.config.overflow_pause);
+                workspace.pending = None;
+                workspace.batch.clear();
+                self.outbox
+                    .push(WatchEvent::RescanRequested { workspace: id });
+                continue;
+            }
+            if workspace.pending.is_none() {
+                workspace.pending = Some(now);
+                tracing::info!(workspace = %id, "notifications lost, rescan pending");
+            }
         }
     }
 
@@ -1146,13 +1353,24 @@ fn dir_identity(meta: &Metadata) -> DirIdentity {
 
 struct Workspace {
     id: WorkspaceId,
+    generation: u64,
+    /// Counts the watches this workspace has added; a scan result never drops a watch added after its walk began.
+    stamp: u64,
+    /// Since when a rescan waits to start.
+    pending: Option<Instant>,
+    scanning: bool,
+    overflows: Overflows,
+    /// When a workspace in timer mode for [`DegradedReason::Overflow`] gets its watches again.
+    retry_at: Option<Instant>,
+    /// The rescan that runs is the one that brings the watches back, so its end sends `Restored`.
+    restoring: bool,
     root: PathBuf,
     /// The canonical root when it differs; some platforms report canonical paths whatever path was watched.
     real_root: Option<PathBuf>,
     rules: Arc<IgnoreRules>,
     tracked: Arc<TrackedSet>,
-    /// Keyed by the workspace-relative directory bytes, empty for the root. The path is the exact one given to the backend, which keys its watches by it.
-    watched: BTreeMap<Vec<u8>, (PathBuf, DirIdentity)>,
+    /// Keyed by the workspace-relative directory bytes, empty for the root. The path is the exact one given to the backend, which keys its watches by it; the number is the workspace's `stamp` when the watch was added.
+    watched: BTreeMap<Vec<u8>, (PathBuf, DirIdentity, u64)>,
     batch: Batch,
     degraded: Option<DegradedReason>,
     next_tick: Option<Instant>,
@@ -1209,7 +1427,10 @@ impl Workspace {
             .ok()
             .filter(Metadata::is_dir)
             .map(|meta| dir_identity(&meta));
-        let known = self.watched.get(path.as_bytes()).map(|(_, known)| *known);
+        let known = self
+            .watched
+            .get(path.as_bytes())
+            .map(|(_, known, _)| *known);
         let tracked = self.tracked.get();
         let ignored =
             self.rules
@@ -1259,99 +1480,60 @@ impl Workspace {
         }
     }
 
-    /// Watches `dir` and every tracked directory below it that has no live watch, and drops the watches of directories below it that are gone or now ignored. A directory an ignore rule covers counts only as far as tracked paths are below it, and only their names are looked at there. With `report`, every tracked path found goes into the batch, so files made before the watch existed are not missed. A workspace in timer mode adds no watch, so without `report` the walk stops there.
+    /// Watches `dir` and every tracked directory below it that has no live watch, and drops the watches of directories below it that are gone or now ignored. With `report`, every tracked path found goes into the batch, so files made before the watch existed are not missed. A workspace in timer mode adds no watch, so without `report` there is nothing to walk for.
     fn sync_tree(&mut self, ctx: &mut Ctx<'_>, dir: Option<RepoPath>, report: bool) {
-        let tracked = self.tracked.get();
-        let covered = dir
-            .as_ref()
-            .is_some_and(|dir| self.rules.is_ignored(dir, true));
-        let mut stack = vec![(dir, covered)];
-        while let Some((dir, covered)) = stack.pop() {
-            if self.degraded.is_some() && !report {
-                return;
-            }
-            let key: Vec<u8> = dir
-                .as_ref()
-                .map_or_else(Vec::new, |dir| dir.as_bytes().to_vec());
-            let full = match &dir {
-                Some(dir) => self.full(dir),
-                None => self.root.clone(),
-            };
-            let meta = match fs::symlink_metadata(&full) {
-                Ok(meta) if meta.is_dir() => meta,
-                _ => {
-                    self.unwatch_below(ctx.backend, &key);
-                    continue;
-                }
-            };
-            self.watch(ctx, key.clone(), full.clone(), dir_identity(&meta));
-            let children: Vec<(RepoPath, bool, Cover)> = if covered {
-                tracked_names(Some(&tracked), dir.as_ref())
-                    .into_iter()
-                    .filter_map(|name| {
-                        let child = RepoPath::child(dir.as_ref(), &name).ok()?;
-                        let is_dir = fs::symlink_metadata(self.full(&child)).ok()?.is_dir();
-                        let cover = Cover::of(true, Some(&tracked), &child, is_dir);
-                        Some((child, is_dir, cover))
-                    })
-                    .collect()
-            } else {
-                let Ok(reader) = fs::read_dir(&full) else {
-                    continue;
-                };
-                let rules = self.rules.dir_rules(dir.as_ref());
-                reader
-                    .flatten()
-                    .filter_map(|entry| {
-                        let name = os_bytes(&entry.file_name())?;
-                        if is_reserved_name(&name) {
-                            return None;
-                        }
-                        let child = RepoPath::child(dir.as_ref(), &name).ok()?;
-                        let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
-                        let cover = rules.cover(Some(&tracked), &child, is_dir);
-                        Some((child, is_dir, cover))
-                    })
-                    .collect()
-            };
-            let mut listed: BTreeSet<Vec<u8>> = BTreeSet::new();
-            for (child, is_dir, cover) in children {
-                if cover == Cover::Ignored {
-                    if is_dir {
-                        self.unwatch_below(ctx.backend, child.as_bytes());
-                    }
-                    continue;
-                }
-                if report {
-                    self.batch.record(child.clone(), ctx.now);
-                }
-                if is_dir {
-                    listed.insert(child.as_bytes().to_vec());
-                    stack.push((Some(child), cover.is_covered()));
-                }
-            }
-            // A watched directory the listing no longer shows as a tracked directory went while no notification said so.
-            for child in self.children(&key) {
-                if !listed.contains(&child) {
-                    self.unwatch_below(ctx.backend, &child);
-                }
-            }
+        if self.degraded.is_some() && !report {
+            return;
         }
+        let walk = walk(
+            &self.root,
+            &self.rules,
+            &self.tracked.get(),
+            dir,
+            report,
+            &AtomicBool::new(false),
+        );
+        self.apply(ctx, walk, None);
     }
 
-    /// The watched directories directly inside the directory `key`.
-    fn children(&self, key: &[u8]) -> Vec<Vec<u8>> {
-        let start = if key.is_empty() { 0 } else { key.len() + 1 };
-        entries_at_or_below(&self.watched, key)
-            .map(|(dir, _)| dir)
-            .filter(|dir| dir.len() > start && !dir[start..].contains(&b'/'))
-            .cloned()
-            .collect()
+    /// Brings the watches at and below the walk's start in line with what it found. With `since`, a watch added after the stamp `since`, while the walk ran on the scan thread, comes from a newer notification and stays as it is.
+    fn apply(&mut self, ctx: &mut Ctx<'_>, walk: Walk, since: Option<u64>) {
+        for path in walk.found {
+            self.batch.record(path, ctx.now);
+        }
+        let newer = |stamp: u64| since.is_some_and(|since| stamp > since);
+        let wanted: BTreeSet<&[u8]> = walk.dirs.iter().map(|(key, _, _)| key.as_slice()).collect();
+        let stale: Vec<Vec<u8>> = entries_at_or_below(&self.watched, &walk.start)
+            .filter(|(key, (_, _, stamp))| {
+                !wanted.contains(key.as_slice())
+                    && !newer(*stamp)
+                    && !walk.unread.iter().any(|dir| strictly_below(key, dir))
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        let subtrees = ctx.backend.watches_subtrees();
+        for key in stale {
+            if let Some((full, _, _)) = self.watched.remove(&key)
+                && (key.is_empty() || !subtrees)
+            {
+                ctx.backend.unwatch_in(self.id, &full);
+            }
+        }
+        for (key, full, identity) in walk.dirs {
+            if self
+                .watched
+                .get(&key)
+                .is_some_and(|(_, _, stamp)| newer(*stamp))
+            {
+                continue;
+            }
+            self.watch(ctx, key, full, identity);
+        }
     }
 
     fn watch(&mut self, ctx: &mut Ctx<'_>, key: Vec<u8>, full: PathBuf, identity: DirIdentity) {
         match self.watched.get(&key) {
-            Some((_, known)) if *known == identity => return,
+            Some((_, known, _)) if *known == identity => return,
             Some(_) => self.unwatch_below(ctx.backend, &key),
             None => {}
         }
@@ -1359,12 +1541,14 @@ impl Workspace {
             return;
         }
         if !key.is_empty() && ctx.backend.watches_subtrees() {
-            self.watched.insert(key, (full, identity));
+            self.stamp += 1;
+            self.watched.insert(key, (full, identity, self.stamp));
             return;
         }
         match ctx.backend.watch_in(self.id, &full) {
             Ok(()) => {
-                self.watched.insert(key, (full, identity));
+                self.stamp += 1;
+                self.watched.insert(key, (full, identity, self.stamp));
             }
             Err(WatchRefused::LimitReached) => self.degrade(ctx, DegradedReason::WatchLimit),
             Err(WatchRefused::Unsupported) => self.degrade(ctx, DegradedReason::NoNativeWatcher),
@@ -1375,7 +1559,7 @@ impl Workspace {
         }
     }
 
-    /// Timer mode: the watches that exist stay, no new one is tried, and a rescan is requested every `degraded_interval`.
+    /// Timer mode: no new watch is tried and a rescan is requested every `degraded_interval`. The watches that exist stay, unless the hub drops them for [`DegradedReason::Overflow`].
     fn degrade(&mut self, ctx: &mut Ctx<'_>, reason: DegradedReason) {
         if self.degraded.is_some() {
             return;
@@ -1401,7 +1585,7 @@ impl Workspace {
             .collect();
         let subtrees = backend.watches_subtrees();
         for dir in below {
-            if let Some((full, _)) = self.watched.remove(&dir)
+            if let Some((full, _, _)) = self.watched.remove(&dir)
                 && (dir.is_empty() || !subtrees)
             {
                 backend.unwatch_in(self.id, &full);
@@ -1419,6 +1603,176 @@ impl Workspace {
         self.unwatch_below(backend, b"");
         tracing::info!(workspace = %self.id, "workspace root missing");
         out.push(WatchEvent::RootMissing { workspace: self.id });
+    }
+}
+
+/// The directories a walk found, in the order it met them, so a parent gets its watch before its children.
+#[derive(Debug, Default)]
+struct Walk {
+    /// The key of the directory the walk started at, empty for the root.
+    start: Vec<u8>,
+    dirs: Vec<(Vec<u8>, PathBuf, DirIdentity)>,
+    /// Directories that could not be listed; the watches below them stay as they are.
+    unread: Vec<Vec<u8>>,
+    /// Every tracked path found, when the walk reports them.
+    found: Vec<RepoPath>,
+}
+
+/// True when the directory `key` lies below the directory `dir`, not at it.
+fn strictly_below(key: &[u8], dir: &[u8]) -> bool {
+    if dir.is_empty() {
+        return !key.is_empty();
+    }
+    key.len() > dir.len() && key.starts_with(dir) && key[dir.len()] == b'/'
+}
+
+/// The tracked directories at and below `dir`. A directory an ignore rule covers counts only as far as tracked paths are below it, and only their names are looked at there. Reads the files only, so it runs on any thread; `stop` ends it early.
+fn walk(
+    root: &Path,
+    rules: &IgnoreRules,
+    tracked: &FlatTree,
+    dir: Option<RepoPath>,
+    report: bool,
+    stop: &AtomicBool,
+) -> Walk {
+    let full_of = |path: &RepoPath| root.join(os_path(path));
+    let mut out = Walk {
+        start: dir
+            .as_ref()
+            .map_or_else(Vec::new, |dir| dir.as_bytes().to_vec()),
+        ..Walk::default()
+    };
+    let covered = dir.as_ref().is_some_and(|dir| rules.is_ignored(dir, true));
+    let mut stack = vec![(dir, covered)];
+    while let Some((dir, covered)) = stack.pop() {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        let key: Vec<u8> = dir
+            .as_ref()
+            .map_or_else(Vec::new, |dir| dir.as_bytes().to_vec());
+        let full = match &dir {
+            Some(dir) => full_of(dir),
+            None => root.to_path_buf(),
+        };
+        let meta = match fs::symlink_metadata(&full) {
+            Ok(meta) if meta.is_dir() => meta,
+            _ => continue,
+        };
+        out.dirs
+            .push((key.clone(), full.clone(), dir_identity(&meta)));
+        let children: Vec<(RepoPath, bool, Cover)> = if covered {
+            tracked_names(Some(tracked), dir.as_ref())
+                .into_iter()
+                .filter_map(|name| {
+                    let child = RepoPath::child(dir.as_ref(), &name).ok()?;
+                    let is_dir = fs::symlink_metadata(full_of(&child)).ok()?.is_dir();
+                    let cover = Cover::of(true, Some(tracked), &child, is_dir);
+                    Some((child, is_dir, cover))
+                })
+                .collect()
+        } else {
+            let Ok(reader) = fs::read_dir(&full) else {
+                out.unread.push(key);
+                continue;
+            };
+            let rules = rules.dir_rules(dir.as_ref());
+            reader
+                .flatten()
+                .filter_map(|entry| {
+                    let name = os_bytes(&entry.file_name())?;
+                    if is_reserved_name(&name) {
+                        return None;
+                    }
+                    let child = RepoPath::child(dir.as_ref(), &name).ok()?;
+                    let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+                    let cover = rules.cover(Some(tracked), &child, is_dir);
+                    Some((child, is_dir, cover))
+                })
+                .collect()
+        };
+        for (child, is_dir, cover) in children {
+            if cover == Cover::Ignored {
+                continue;
+            }
+            if report {
+                out.found.push(child.clone());
+            }
+            if is_dir {
+                stack.push((Some(child), cover.is_covered()));
+            }
+        }
+    }
+    out
+}
+
+/// One whole-workspace walk for the scan thread, with what it needs to run without the hub.
+struct ScanJob {
+    id: WorkspaceId,
+    generation: u64,
+    since: u64,
+    root: PathBuf,
+    rules: Arc<IgnoreRules>,
+    tracked: Arc<TrackedSet>,
+}
+
+impl ScanJob {
+    fn run(self, stop: &AtomicBool) -> Scanned {
+        // Lost notifications may have named a changed ignore file.
+        self.rules.reload();
+        let walk = walk(
+            &self.root,
+            &self.rules,
+            &self.tracked.get(),
+            None,
+            false,
+            stop,
+        );
+        Scanned {
+            id: self.id,
+            generation: self.generation,
+            since: self.since,
+            walk,
+        }
+    }
+}
+
+struct Scanned {
+    id: WorkspaceId,
+    generation: u64,
+    since: u64,
+    walk: Walk,
+}
+
+/// Runs each job and hands its result back to the hub until the hub stops.
+fn scan_loop(jobs: &Receiver<ScanJob>, done: &Sender<Msg>, stop: &AtomicBool) {
+    while let Ok(job) = jobs.recv() {
+        if stop.load(Ordering::Relaxed) || done.send(Msg::Scanned(job.run(stop))).is_err() {
+            return;
+        }
+    }
+}
+
+/// The recent losses of notifications of one workspace. The instants come from the hub's monotonic clock and only measure the window.
+#[derive(Debug, Default)]
+struct Overflows {
+    recent: Vec<Instant>,
+}
+
+impl Overflows {
+    /// Records a loss at `now`. True when it is the `overflow_limit`-th within `overflow_window`; the record then starts empty again.
+    fn record(&mut self, now: Instant, config: &WatchConfig) -> bool {
+        if config.overflow_limit == 0 {
+            return false;
+        }
+        self.recent
+            .retain(|at| now.saturating_duration_since(*at) < config.overflow_window);
+        self.recent.push(now);
+        if self.recent.len() >= config.overflow_limit as usize {
+            self.recent.clear();
+            return true;
+        }
+        false
     }
 }
 
@@ -1612,6 +1966,7 @@ mod tests {
             debounce: Duration::from_millis(100),
             max_wait: Duration::from_millis(1_000),
             degraded_interval: Duration::from_millis(500),
+            ..WatchConfig::default()
         }
     }
 
@@ -1658,6 +2013,7 @@ mod tests {
             debounce: Duration::MAX,
             max_wait: Duration::MAX,
             degraded_interval: Duration::MAX,
+            ..WatchConfig::default()
         };
         let mut batch = Batch::default();
         batch.record(repo("a"), start);
@@ -1723,6 +2079,7 @@ mod tests {
                 debounce: ms(debounce),
                 max_wait: ms(max_wait),
                 degraded_interval: ms(1),
+                ..WatchConfig::default()
             };
             let names: Vec<RepoPath> = (0..8).map(|n| repo(&format!("f{n}"))).collect();
             let mut now = Instant::now();
@@ -1737,6 +2094,254 @@ mod tests {
             drain(&mut batch, &mut open, &config, None)?;
             proptest::prop_assert!(open.is_empty());
         }
+    }
+
+    #[test]
+    fn three_losses_within_the_window_trip_the_limit() {
+        let config = WatchConfig::default();
+        let start = Instant::now();
+        let mut overflows = Overflows::default();
+        assert!(!overflows.record(start, &config));
+        assert!(!overflows.record(start + ms(1_000), &config));
+        assert!(overflows.record(start + ms(59_999), &config));
+        // The record starts empty again after it tripped.
+        assert!(!overflows.record(start + ms(60_000), &config));
+
+        // Losses spread wider than the window never add up.
+        let mut spread = Overflows::default();
+        for step in 0..10 {
+            assert!(!spread.record(start + ms(step * 30_000), &config));
+        }
+
+        let never = WatchConfig {
+            overflow_limit: 0,
+            ..config
+        };
+        let mut off = Overflows::default();
+        for _ in 0..10 {
+            assert!(!off.record(start, &never));
+        }
+        assert_eq!(DegradedReason::Overflow.as_str(), "overflow");
+        assert_eq!(config.overflow_limit, 3);
+        assert_eq!(config.overflow_window, Duration::from_secs(60));
+        assert_eq!(config.overflow_pause, Duration::from_secs(600));
+    }
+
+    #[test]
+    fn a_walk_is_below_only_strictly() {
+        assert!(strictly_below(b"a", b""));
+        assert!(!strictly_below(b"", b""));
+        assert!(strictly_below(b"a/b", b"a"));
+        assert!(!strictly_below(b"a", b"a"));
+        assert!(!strictly_below(b"ab", b"a"));
+    }
+
+    /// Accepts every watch.
+    struct Accept;
+
+    impl WatchBackend for Accept {
+        fn watch_dir(&mut self, _dir: &Path) -> Result<(), WatchRefused> {
+            Ok(())
+        }
+
+        fn unwatch_dir(&mut self, _dir: &Path) {}
+    }
+
+    const WAIT: Duration = Duration::from_secs(10);
+
+    fn ws(number: u32) -> WorkspaceId {
+        WorkspaceId::from_number(number).unwrap()
+    }
+
+    fn overflow() -> notify::Result<notify::Event> {
+        Ok(notify::Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan))
+    }
+
+    fn add(tx: &Sender<Msg>, id: WorkspaceId, root: &Path) {
+        let (done, _) = mpsc::channel();
+        tx.send(Msg::Add {
+            id,
+            root: root.to_path_buf(),
+            rules: Arc::new(IgnoreRules::new(root)),
+            tracked: Arc::default(),
+            done,
+        })
+        .unwrap();
+    }
+
+    /// A hub whose whole-workspace scans wait in `jobs` until the test runs them, over the messages already sent to `tx`.
+    fn held_hub(
+        tx: Sender<Msg>,
+        rx: Receiver<Msg>,
+    ) -> (WatchHub, Receiver<ScanJob>, Receiver<WatchEvent>) {
+        let (scans, jobs) = mpsc::channel();
+        let (sink, events) = mpsc::channel();
+        let hub = WatchHub::spawn_parts(
+            tx,
+            rx,
+            Box::new(Accept),
+            WatchConfig {
+                overflow_limit: 0,
+                ..config()
+            },
+            Box::new(move |event| {
+                let _ = sink.send(event);
+            }),
+            scans,
+            None,
+            Arc::new(AtomicBool::new(false)),
+        );
+        (hub, jobs, events)
+    }
+
+    fn finish(hub: &WatchHub, job: ScanJob) {
+        hub.tx
+            .send(Msg::Scanned(job.run(&AtomicBool::new(false))))
+            .unwrap();
+    }
+
+    #[test]
+    fn an_overflow_rescans_only_its_workspace_once() {
+        let parent = tempfile::tempdir().unwrap();
+        let one = parent.path().join("one");
+        let two = parent.path().join("two");
+        fs::create_dir_all(one.join("old")).unwrap();
+        fs::create_dir(&two).unwrap();
+        let (tx, rx) = mpsc::channel();
+        add(&tx, ws(1), &one);
+        add(&tx, ws(2), &two);
+        // Both losses are read before the rescan starts, so they join it.
+        tx.send(Msg::Attributed {
+            workspace: ws(1),
+            event: overflow(),
+        })
+        .unwrap();
+        tx.send(Msg::Attributed {
+            workspace: ws(1),
+            event: overflow(),
+        })
+        .unwrap();
+        let (hub, jobs, events) = held_hub(tx, rx);
+
+        let job = jobs.recv_timeout(WAIT).unwrap();
+        assert_eq!(job.id, ws(1));
+        fs::remove_dir(one.join("old")).unwrap();
+        fs::create_dir(one.join("new")).unwrap();
+        finish(&hub, job);
+        assert_eq!(
+            events.recv_timeout(WAIT).unwrap(),
+            WatchEvent::RescanRequested { workspace: ws(1) }
+        );
+        assert_eq!(hub.watched_dirs(ws(1)), vec![one.clone(), one.join("new")]);
+        assert_eq!(hub.watched_dirs(ws(2)), vec![two.clone()]);
+        assert!(jobs.try_recv().is_err());
+
+        // Losses while a rescan runs wait as one more rescan, which starts when the first ends.
+        hub.notifier().send_for(ws(1), overflow());
+        let running = jobs.recv_timeout(WAIT).unwrap();
+        hub.notifier().send_for(ws(1), overflow());
+        hub.notifier().send_for(ws(1), overflow());
+        assert_eq!(hub.watched_dirs(ws(1)).len(), 2);
+        assert!(jobs.try_recv().is_err());
+        finish(&hub, running);
+        assert_eq!(
+            events.recv_timeout(WAIT).unwrap(),
+            WatchEvent::RescanRequested { workspace: ws(1) }
+        );
+        let again = jobs.recv_timeout(WAIT).unwrap();
+        assert_eq!(again.id, ws(1));
+        finish(&hub, again);
+        assert_eq!(
+            events.recv_timeout(WAIT).unwrap(),
+            WatchEvent::RescanRequested { workspace: ws(1) }
+        );
+        assert_eq!(hub.watched_dirs(ws(1)).len(), 2);
+        assert!(jobs.try_recv().is_err());
+    }
+
+    #[test]
+    fn the_hub_reads_other_workspaces_while_a_rescan_runs() {
+        let parent = tempfile::tempdir().unwrap();
+        let one = parent.path().join("one");
+        let two = parent.path().join("two");
+        fs::create_dir(&one).unwrap();
+        fs::create_dir(&two).unwrap();
+        let (tx, rx) = mpsc::channel();
+        add(&tx, ws(1), &one);
+        add(&tx, ws(2), &two);
+        let (hub, jobs, events) = held_hub(tx, rx);
+        let notifier = hub.notifier();
+        notifier.send_for(ws(1), overflow());
+        // The walk is done, but the hub has not heard of it yet.
+        let stale = jobs
+            .recv_timeout(WAIT)
+            .unwrap()
+            .run(&AtomicBool::new(false));
+
+        // The scan of the first workspace has not ended, and the second still reports its changes.
+        let created = notify::Event::new(EventKind::Create(notify::event::CreateKind::File))
+            .add_path(two.join("b"));
+        notifier.send_for(ws(2), Ok(created));
+        assert_eq!(
+            events.recv_timeout(WAIT).unwrap(),
+            WatchEvent::Changed {
+                workspace: ws(2),
+                paths: vec![repo("b")],
+            }
+        );
+        // A directory made during the scan gets its watch from its own notification, and the older scan result keeps it.
+        fs::create_dir(one.join("late")).unwrap();
+        let made = notify::Event::new(EventKind::Create(notify::event::CreateKind::Folder))
+            .add_path(one.join("late"));
+        notifier.send_for(ws(1), Ok(made));
+        assert_eq!(hub.watched_dirs(ws(1)), vec![one.clone(), one.join("late")]);
+
+        hub.tx.send(Msg::Scanned(stale)).unwrap();
+        assert_eq!(
+            events.recv_timeout(WAIT).unwrap(),
+            WatchEvent::RescanRequested { workspace: ws(1) }
+        );
+        assert_eq!(hub.watched_dirs(ws(1)), vec![one.clone(), one.join("late")]);
+    }
+
+    #[test]
+    fn a_scan_result_for_a_removed_workspace_does_nothing() {
+        let parent = tempfile::tempdir().unwrap();
+        let one = parent.path().join("one");
+        let other = parent.path().join("other");
+        fs::create_dir_all(one.join("sub")).unwrap();
+        fs::create_dir(&other).unwrap();
+        let (tx, rx) = mpsc::channel();
+        add(&tx, ws(1), &one);
+        let (hub, jobs, events) = held_hub(tx, rx);
+
+        // Removed during the walk: the late result finds no workspace.
+        hub.notifier().send_for(ws(1), overflow());
+        let gone = jobs.recv_timeout(WAIT).unwrap();
+        hub.remove_workspace(ws(1));
+        finish(&hub, gone);
+        assert!(hub.watched_dirs(ws(1)).is_empty());
+
+        // Removed and added again under the same id: the late result of the earlier workspace leaves the new one alone.
+        hub.add_workspace(
+            ws(1),
+            &other,
+            Arc::new(IgnoreRules::new(&other)),
+            Arc::default(),
+        );
+        hub.notifier().send_for(ws(1), overflow());
+        let stale = jobs.recv_timeout(WAIT).unwrap();
+        hub.remove_workspace(ws(1));
+        hub.add_workspace(
+            ws(1),
+            &one,
+            Arc::new(IgnoreRules::new(&one)),
+            Arc::default(),
+        );
+        finish(&hub, stale);
+        assert_eq!(hub.watched_dirs(ws(1)), vec![one.clone(), one.join("sub")]);
+        assert!(events.try_recv().is_err());
+        assert!(jobs.try_recv().is_err());
     }
 
     #[test]
