@@ -108,6 +108,8 @@ impl Host {
             .env_remove("CLAUDE_CONFIG_DIR")
             .env_remove("FOLD_AGENT")
             .env_remove("FOLD_HUMAN")
+            // The service files set this marker, and a daemon run as a service passes it to every process it starts, check commands too. A daemon started here would then report itself as the service.
+            .env_remove("FOLD_SERVICE")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
