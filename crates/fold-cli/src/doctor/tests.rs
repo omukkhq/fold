@@ -209,8 +209,16 @@ fn find<'a>(checks: &'a [Check], name: &str) -> &'a Check {
     checks.iter().find(|check| check.name == name).unwrap()
 }
 
+fn no_daemon() -> WatchState {
+    WatchState {
+        degraded: None,
+        started_at: None,
+        recommended: inotify::RECOMMENDED_INSTANCES,
+    }
+}
+
 fn project_report(host: &Host, root: &Path, now: Timestamp) -> Vec<Check> {
-    project_checks(root, host, now, &rt())
+    project_checks(root, host, now, &rt(), &no_daemon())
 }
 
 fn snapshot(dir: &Path) -> Vec<(PathBuf, u64)> {
@@ -626,6 +634,256 @@ fn the_watch_limit_warns_below_65536_with_the_sysctl_fix() {
     assert_eq!(watch_limit_verdict(true, Some(524_288)), WatchLimit::Enough);
 }
 
+fn inotify_files(fixture: &Fixture, queued: u64, instances: u64) {
+    let dir = fixture.path("root/proc/sys/fs/inotify");
+    std::fs::write(dir.join("max_queued_events"), format!("{queued}\n")).unwrap();
+    std::fs::write(dir.join("max_user_instances"), format!("{instances}\n")).unwrap();
+}
+
+#[test]
+fn the_queue_limit_warns_below_16384_with_the_sysctl_fix() {
+    let fixture = Fixture::new();
+    let host = fixture.linux_host(524_288);
+    assert_eq!(
+        inotify::queue_check(true, host.probe.inotify_max_queued_events()).message,
+        NOT_APPLICABLE
+    );
+    inotify_files(&fixture, 8192, 1024);
+    let low = inotify::queue_check(true, host.probe.inotify_max_queued_events());
+    assert_eq!(low.status, Status::Warn);
+    assert!(low.message.contains("8192, below 16384"), "{}", low.message);
+    let fix = low.fix.unwrap();
+    assert!(fix.contains("sudo sysctl fs.inotify.max_queued_events=65536"));
+    assert!(fix.contains(
+        "echo fs.inotify.max_queued_events=65536 | sudo tee -a /etc/sysctl.d/99-fold.conf"
+    ));
+    let good = inotify::queue_check(true, Some(16_384));
+    assert_eq!(good.status, Status::Ok);
+    assert!(good.message.contains("16384"));
+    assert_eq!(
+        inotify::queue_verdict(false, Some(1)),
+        inotify::QueueLimit::NotApplicable
+    );
+    assert_eq!(
+        inotify::queue_verdict(true, None),
+        inotify::QueueLimit::NotApplicable
+    );
+}
+
+#[test]
+fn the_instance_limit_counts_the_watched_workspaces_and_a_margin() {
+    assert_eq!(inotify::instances_needed(None), 64);
+    assert_eq!(inotify::instances_needed(Some(100)), 164);
+    assert_eq!(
+        inotify::instance_verdict(true, Some(128), Some(64)),
+        inotify::InstanceLimit::Enough {
+            limit: 128,
+            needed: 128
+        }
+    );
+    assert_eq!(
+        inotify::instance_verdict(true, Some(128), Some(65)),
+        inotify::InstanceLimit::Low {
+            limit: 128,
+            needed: 129
+        }
+    );
+    assert_eq!(
+        inotify::instance_verdict(false, Some(1), Some(65)),
+        inotify::InstanceLimit::NotApplicable
+    );
+    assert_eq!(
+        inotify::instance_verdict(true, None, Some(65)),
+        inotify::InstanceLimit::NotApplicable
+    );
+
+    let good = inotify::instances_check(true, Some(8192), Some(3));
+    assert_eq!(good.status, Status::Ok);
+    assert!(
+        good.message.contains("watches 3 workspaces"),
+        "{}",
+        good.message
+    );
+    let one = inotify::instances_check(true, Some(8192), Some(1));
+    assert!(
+        one.message.contains("watches 1 workspace with"),
+        "{}",
+        one.message
+    );
+    let alone = inotify::instances_check(true, Some(128), None);
+    assert_eq!(alone.status, Status::Ok);
+    assert!(
+        alone.message.contains("does not answer"),
+        "{}",
+        alone.message
+    );
+
+    let low = inotify::instances_check(true, Some(128), Some(100));
+    assert_eq!(low.status, Status::Warn);
+    assert!(low.message.contains("128, below 164"), "{}", low.message);
+    assert!(low.message.contains("64 stay free"), "{}", low.message);
+    let fix = low.fix.unwrap();
+    assert!(fix.contains("sudo sysctl fs.inotify.max_user_instances=1024"));
+    assert!(fix.contains("sudo tee -a /etc/sysctl.d/99-fold.conf"));
+    assert_eq!(inotify::recommended_instances(Some(2000)), 4096);
+    assert_eq!(inotify::recommended_instances(None), 1024);
+    assert_eq!(
+        inotify::instances_check(false, Some(1), Some(100)).message,
+        NOT_APPLICABLE
+    );
+}
+
+#[test]
+fn the_daemons_workspace_list_gives_the_watched_and_the_degraded_workspaces() {
+    let list = serde_json::json!({"workspaces": [
+        {"id": "ws-1", "watch": "watching"},
+        {"id": "ws-2", "watch": "degraded"},
+        {"id": "ws-3", "watch": null},
+        {"id": "ws-4", "watch": "degraded"},
+        {"id": "ws-5"},
+    ]});
+    assert_eq!(inotify::watched_workspaces(&list), 3);
+    assert_eq!(inotify::degraded_workspaces(&list), ["ws-2", "ws-4"]);
+    assert_eq!(inotify::watched_workspaces(&serde_json::json!({})), 0);
+    assert!(inotify::degraded_workspaces(&serde_json::json!({"workspaces": 1})).is_empty());
+}
+
+fn degraded_event(workspace: &str, reason: Option<&str>, millis: i64) -> inotify::DegradedEvent {
+    inotify::DegradedEvent {
+        workspace: workspace.to_owned(),
+        reason: reason.map(str::to_owned),
+        at: at(millis),
+    }
+}
+
+#[test]
+fn the_workspaces_without_an_instance_are_degraded_now_with_instance_limit_since_the_start() {
+    let degraded = [
+        "ws-2".to_owned(),
+        "ws-4".to_owned(),
+        "ws-6".to_owned(),
+        "ws-8".to_owned(),
+    ];
+    let events = [
+        degraded_event("ws-2", Some("instance_limit"), 10),
+        degraded_event("ws-4", Some("instance_limit"), 1),
+        degraded_event("ws-4", Some("watch_limit"), 20),
+        degraded_event("ws-6", Some("watch_limit"), 10),
+        degraded_event("ws-6", Some("instance_limit"), 30),
+        degraded_event("ws-7", Some("instance_limit"), 30),
+        degraded_event("ws-8", Some("instance_limit"), 1),
+        degraded_event("ws-9", None, 30),
+    ];
+    assert_eq!(
+        inotify::without_instance(&degraded, &events, Some(at(5))),
+        ["ws-2", "ws-6"]
+    );
+    assert_eq!(
+        inotify::without_instance(&degraded, &events, None),
+        ["ws-2", "ws-6", "ws-8"]
+    );
+
+    let check = inotify::without_instance_check(Some(&degraded), &events, Some(at(5)), 2048);
+    assert_eq!(check.status, Status::Warn);
+    assert!(
+        check
+            .message
+            .starts_with("the system gave these workspaces no inotify instance, so they use the timer scan (instance_limit): ws-2, ws-6;"),
+        "{}",
+        check.message
+    );
+    let fix = check.fix.unwrap();
+    assert!(
+        fix.contains("sudo sysctl fs.inotify.max_user_instances=2048"),
+        "{fix}"
+    );
+    assert!(fix.contains("when the daemon starts again"), "{fix}");
+
+    let none = inotify::without_instance_check(Some(&degraded[..0]), &events, None, 1024);
+    assert_eq!(none.status, Status::Ok);
+    let alone = inotify::without_instance_check(None, &events, None, 1024);
+    assert_eq!(alone.status, Status::Ok);
+    assert!(alone.message.contains("no workspace list"));
+}
+
+fn seed_workspace_event(root: &Path, workspace: u32, reason: &str, created: Timestamp) {
+    rt().block_on(async {
+        let store = Store::open_project(&ProjectPaths::new(root)).await.unwrap();
+        let mut event =
+            NewEvent::new(WORKSPACE_WATCH_DEGRADED, EventActor::parse("fold").unwrap()).unwrap();
+        event = event.reason(reason);
+        event = event.workspace(fold_core::WorkspaceId::from_number(workspace).unwrap());
+        store
+            .write::<_, StoreError>(async |tx| {
+                events::append(tx, &event, created).await?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        store.close().await.unwrap();
+    });
+}
+
+#[test]
+fn the_project_check_lists_the_workspaces_the_daemon_gave_no_instance() {
+    let fixture = Fixture::new();
+    let host = fixture.linux_host(524_288);
+    let root = fixture.project("demo");
+    seed_workspace_event(&root, 7, "instance_limit", at(2 * HOUR_MS));
+    seed_workspace_event(&root, 8, "watch_limit", at(2 * HOUR_MS));
+    let watch = WatchState {
+        degraded: Some(vec!["ws-7".to_owned(), "ws-8".to_owned()]),
+        started_at: Some(at(HOUR_MS)),
+        recommended: 1024,
+    };
+    let checks = project_checks(&root, &host, at(3 * HOUR_MS), &rt(), &watch);
+    let check = find(&checks, "watch instances");
+    assert_eq!(check.status, Status::Warn);
+    assert!(
+        check.message.contains("(instance_limit): ws-7;"),
+        "{}",
+        check.message
+    );
+    assert!(checks.iter().all(|check| check.status != Status::Fail));
+    let checks = project_report(&host, &root, at(3 * HOUR_MS));
+    assert_eq!(find(&checks, "watch instances").status, Status::Ok);
+}
+
+#[test]
+fn low_inotify_limits_warn_and_never_fail_the_report() {
+    let fixture = Fixture::new();
+    let host = fixture.linux_host(8192);
+    inotify_files(&fixture, 1024, 16);
+    let sections = vec![Section {
+        title: "host".to_owned(),
+        checks: vec![
+            inotify_limit_check(&host),
+            inotify::queue_check(true, host.probe.inotify_max_queued_events()),
+            inotify::instances_check(true, host.probe.inotify_max_instances(), Some(20)),
+            inotify::without_instance_check(
+                Some(&["ws-3".to_owned()]),
+                &[degraded_event("ws-3", Some("instance_limit"), 1)],
+                None,
+                1024,
+            ),
+        ],
+    }];
+    assert!(
+        sections[0]
+            .checks
+            .iter()
+            .all(|check| check.status == Status::Warn)
+    );
+    assert_eq!(failed(&sections), 0);
+    let mut out = Vec::new();
+    write_report(&sections, &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(
+        text.contains("max_user_instances is 16, below 84"),
+        "{text}"
+    );
+}
+
 #[test]
 fn linger_warns_only_for_an_installed_service() {
     let fixture = Fixture::new();
@@ -664,6 +922,7 @@ fn a_healthy_project_is_all_ok_and_nothing_changes_on_disk() {
             "project folder",
             "exclude file",
             "inotify watches",
+            "watch instances",
             "claude files",
             "role prompts",
             "models",
@@ -690,6 +949,7 @@ fn a_project_without_git_sync_gets_no_git_check() {
             "objects",
             "git sync",
             "inotify watches",
+            "watch instances",
             "claude files",
             "role prompts",
             "models",
@@ -948,6 +1208,7 @@ fn the_database_facts_map_to_issues() {
         quick_check_problems: Some(0),
         quick_check_errored: false,
         degraded: Vec::new(),
+        degraded_watches: Vec::new(),
         git_sync: Some(true),
         area_models: Vec::new(),
     };
