@@ -172,7 +172,7 @@ const FOLD_TOOLS: [&str; 100] = [
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
-const PENDING_TOOLS: [&str; 1] = ["get_request_attachment"];
+const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
 const FOLD_ERROR_CODES: [&str; 189] = [
@@ -389,7 +389,8 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 71] = [
+const NON_TOOL_NAMES: [&str; 72] = [
+    "next_offset",
     "file_count",
     "human_review",
     "fold_failed",
