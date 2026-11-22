@@ -1535,6 +1535,94 @@ fn the_reference_names_every_checks_key_and_run_state() {
     }
 }
 
+/// The reasons of `workspace.watch_degraded`, and the kernel keys the watcher and `fld doctor` name.
+fn watch_names() -> Vec<String> {
+    use fold_vcs::watch::DegradedReason;
+    [
+        DegradedReason::WatchLimit,
+        DegradedReason::NoNativeWatcher,
+        DegradedReason::InstanceLimit,
+        DegradedReason::Overflow,
+    ]
+    .into_iter()
+    .map(|reason| reason.as_str().to_owned())
+    .chain(
+        [
+            "max_queued_events",
+            "max_user_instances",
+            "watch_degraded",
+            "watch_restored",
+        ]
+        .map(str::to_owned),
+    )
+    .collect()
+}
+
+#[test]
+fn the_reference_and_the_readme_describe_how_fold_follows_workspace_changes() {
+    use fold_core::events::types;
+    let readme = include_str!("../../../README.md");
+    let mut needles = vec![
+        "rescan_seconds".to_owned(),
+        "debounce_ms".to_owned(),
+        types::WORKSPACE_WATCH_DEGRADED.to_string(),
+        types::WORKSPACE_WATCH_RESTORED.to_string(),
+        "fs.inotify.max_queued_events".to_owned(),
+        "fs.inotify.max_user_instances".to_owned(),
+    ];
+    needles.extend(watch_names().into_iter().take(4));
+    for needle in &needles {
+        assert!(
+            REFERENCE.contains(needle.as_str()),
+            "REFERENCE.md lacks {needle}"
+        );
+    }
+    for needle in [
+        "rescan_seconds",
+        "workspace.watch_degraded",
+        "overflow",
+        "instance_limit",
+        "fs.inotify.max_queued_events",
+        "fs.inotify.max_user_instances",
+    ] {
+        assert!(readme.contains(needle), "README.md lacks {needle}");
+    }
+}
+
+#[test]
+fn the_watch_numbers_of_the_reference_and_the_readme_are_the_code_defaults() {
+    use fold_daemon::live::{DEFAULT_WATCH_GAP, DEFAULT_WATCH_GROUP};
+    let readme = include_str!("../../../README.md");
+    let watch = fold_vcs::watch::WatchConfig::default();
+    let rescan = fold_core::config::ProjectConfig::default().rescan_seconds;
+    let limit = watch.overflow_limit;
+    let window = watch.overflow_window.as_secs();
+    let pause = watch.overflow_pause.as_secs() / 60;
+    let timer = watch.degraded_interval.as_secs();
+    for needle in [
+        format!(
+            "{DEFAULT_WATCH_GROUP} at a time, {} seconds apart",
+            DEFAULT_WATCH_GAP.as_secs()
+        ),
+        format!(
+            "at {limit} losses within {window} seconds it goes to timer mode for {pause} minutes"
+        ),
+        format!("In timer mode fold scans the workspace every {timer} seconds"),
+        format!("After the {pause} minutes of an overflow"),
+        format!("rescan_seconds = {rescan} "),
+    ] {
+        assert!(REFERENCE.contains(&needle), "REFERENCE.md lacks {needle}");
+    }
+    for needle in [
+        format!("every `rescan_seconds` ({rescan} by default)"),
+        format!("loses notifications {limit} times within {window} seconds"),
+        format!("fold scans it every {timer} seconds"),
+        format!("watches the workspace again {pause} minutes later"),
+    ] {
+        assert!(readme.contains(&needle), "README.md lacks {needle}");
+    }
+}
+
 #[test]
 fn every_backticked_identifier_of_the_reference_is_known() {
     let mut known: BTreeSet<String> = known_names().into_iter().map(str::to_owned).collect();
@@ -1542,6 +1630,7 @@ fn every_backticked_identifier_of_the_reference_is_known() {
     known.extend(run_state_names().into_iter().map(str::to_owned));
     known.extend(gc_reason_names());
     known.extend(REFERENCE_NAMES.map(str::to_owned));
+    known.extend(watch_names());
     for identifier in backticked_identifiers(REFERENCE) {
         assert!(
             known.contains(&identifier),
