@@ -78,6 +78,7 @@ define_event_types! {
     WORKSPACE_MISSING = "workspace.missing",
     WORKSPACE_RECOVERED = "workspace.recovered",
     WORKSPACE_WATCH_DEGRADED = "workspace.watch_degraded",
+    WORKSPACE_WATCH_RESTORED = "workspace.watch_restored",
     WORKSPACE_CHANGED = "workspace.changed",
     CHECKPOINT_RECORDED = "checkpoint.recorded",
     CHECKPOINT_RESTORED = "checkpoint.restored",

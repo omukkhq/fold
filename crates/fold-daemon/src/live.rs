@@ -10,8 +10,8 @@ use fold_core::reviews::checks::Purpose;
 use fold_core::stall::{self, Activity, CallKind, ProposalTurn, Slot, WorkspaceFact};
 use fold_core::tree::{ChangeKind as FileChangeKind, ChangeTally, FlatTree};
 use fold_core::{
-    AgentName, CheckRunId, CheckpointId, Clock, EventActor, FoldError, LiveEvent, NewEvent,
-    ProjectConfig, ProjectPaths, ProposalId, RevisionId, TaskId, Timestamp, WorkerName,
+    AgentName, CheckRunId, CheckpointId, Clock, EventActor, EventError, FoldError, LiveEvent,
+    NewEvent, ProjectConfig, ProjectPaths, ProposalId, RevisionId, TaskId, Timestamp, WorkerName,
     WorkspaceId, codes,
 };
 use fold_store::workspaces::{self, Checkpoint, CheckpointKind, WorkspaceKind, WorkspaceState};
@@ -449,29 +449,74 @@ struct Route {
     overflow: Arc<Overflow>,
 }
 
-/// What the watcher could not queue for a pipeline whose queue was full. Changed paths, rescans and a missing root are covered by a full scan; a degraded watch is not, so its reason is kept for the next round.
+/// What the watcher could not queue for a pipeline whose queue was full. Changed paths, rescans and a missing root are covered by a full scan; a change of the watch mode is not, so it is kept for the next round.
 #[derive(Default)]
 struct Overflow {
     full_scan: AtomicBool,
-    degraded: Mutex<Option<DegradedReason>>,
+    watch: Mutex<WatchChanges>,
 }
 
 impl Overflow {
-    fn keep(&self, command: Command) {
-        if let Command::Degraded(reason) = command {
-            *lock(&self.degraded) = Some(reason);
+    /// Queues `command`, or keeps it when the queue is full. While a watch change is kept, a later one is kept behind it and never queued, so every watch change in the queue is older than every kept one and a round applies the kept ones last. Only the watcher thread sends, so the kept changes stay in send order.
+    fn send(&self, sender: &mpsc::Sender<Command>, command: Command) {
+        let mut watch = lock(&self.watch);
+        if *watch != WatchChanges::default() {
+            match command {
+                Command::Degraded(reason) => return watch.degraded(reason),
+                Command::Restored => return watch.restored(),
+                _ => {}
+            }
         }
+        if let Err(TrySendError::Full(command)) = sender.try_send(command) {
+            Self::keep_watch(&mut watch, command);
+            self.full_scan.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn keep_watch(watch: &mut WatchChanges, command: Command) {
+        match command {
+            Command::Degraded(reason) => watch.degraded(reason),
+            Command::Restored => watch.restored(),
+            _ => {}
+        }
+    }
+
+    #[cfg(test)]
+    fn keep(&self, command: Command) {
+        Self::keep_watch(&mut lock(&self.watch), command);
         self.full_scan.store(true, Ordering::Relaxed);
     }
 
     /// Adds what was kept to `round` and forgets it.
     fn take_into(&self, round: &mut Round) {
-        if let Some(reason) = lock(&self.degraded).take() {
-            round.degraded = Some(reason);
+        let kept = std::mem::take(&mut *lock(&self.watch));
+        if let Some(reason) = kept.degraded {
+            round.watch.degraded(reason);
+        }
+        if kept.restored {
+            round.watch.restored();
         }
         if self.full_scan.swap(false, Ordering::Relaxed) {
             round.full = true;
         }
+    }
+}
+
+/// The watch mode changes of one round, applied as the degrade first and the restore after it. A restore that comes before a degrade is lost to it, so the round ends in the mode of its last change.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct WatchChanges {
+    degraded: Option<DegradedReason>,
+    restored: bool,
+}
+
+impl WatchChanges {
+    fn degraded(&mut self, reason: DegradedReason) {
+        self.degraded = Some(reason);
+        self.restored = false;
+    }
+
+    fn restored(&mut self) {
+        self.restored = true;
     }
 }
 type Answer = oneshot::Sender<Result<Arc<WorkspaceLive>, FoldError>>;
@@ -556,13 +601,11 @@ fn route(routes: &Routes, event: WatchEvent) {
         WatchEvent::RescanRequested { workspace } => (workspace, Command::Rescan),
         WatchEvent::Degraded { workspace, reason } => (workspace, Command::Degraded(reason)),
         WatchEvent::RootMissing { workspace } => (workspace, Command::RootMissing),
-        WatchEvent::Restored { .. } => return,
+        WatchEvent::Restored { workspace } => (workspace, Command::Restored),
     };
     let routes = lock(routes);
-    if let Some(route) = routes.get(&workspace)
-        && let Err(TrySendError::Full(command)) = route.sender.try_send(command)
-    {
-        route.overflow.keep(command);
+    if let Some(route) = routes.get(&workspace) {
+        route.overflow.send(&route.sender, command);
     }
 }
 
@@ -786,6 +829,7 @@ impl LiveState {
             persisted: (row.changed_files, row.last_activity_at),
             touched_at: None,
             watch: WatchMode::Watching,
+            degraded: None,
             missing: false,
         };
         let handle = tokio::spawn(pipeline.run(commands, overflow));
@@ -1118,6 +1162,7 @@ enum Command {
     Paths(Vec<RepoPath>),
     Rescan,
     Degraded(DegradedReason),
+    Restored,
     RootMissing,
     Now(Answer),
     Rebase {
@@ -1139,7 +1184,7 @@ struct Round {
     full: bool,
     paths: BTreeSet<RepoPath>,
     tick: bool,
-    degraded: Option<DegradedReason>,
+    watch: WatchChanges,
     missing: bool,
     /// The newest base a sync or restore moved the workspace to.
     rebase: Option<(RevisionId, ObjectHash)>,
@@ -1154,7 +1199,8 @@ impl Round {
         match command {
             Command::Paths(paths) => self.paths.extend(paths),
             Command::Rescan => self.full = true,
-            Command::Degraded(reason) => self.degraded = Some(reason),
+            Command::Degraded(reason) => self.watch.degraded(reason),
+            Command::Restored => self.watch.restored(),
             Command::RootMissing => self.missing = true,
             Command::Now(answer) => {
                 self.full = true;
@@ -1218,6 +1264,8 @@ struct Pipeline {
     persisted: (u32, Option<Timestamp>),
     touched_at: Option<Timestamp>,
     watch: WatchMode,
+    /// Why the watch is degraded; only [`DegradedReason::Overflow`] comes back with `Restored`.
+    degraded: Option<DegradedReason>,
     missing: bool,
 }
 
@@ -1260,8 +1308,11 @@ impl Pipeline {
 
     async fn handle(&mut self, mut round: Round) {
         let now = self.clock.now();
-        if let Some(reason) = round.degraded {
+        if let Some(reason) = round.watch.degraded {
             self.degrade(reason, now).await;
+        }
+        if round.watch.restored {
+            self.restore(now).await;
         }
         if round.missing && !self.missing {
             self.missing = true;
@@ -1461,18 +1512,12 @@ impl Pipeline {
     }
 
     async fn degrade(&mut self, reason: DegradedReason, now: Timestamp) {
+        // A watch refused while the hub brings an overflowed workspace back keeps it in timer mode for the new reason, so only the newest reason decides a later restore.
+        self.degraded = Some(reason);
         if self.watch == WatchMode::Degraded {
             return;
         }
-        self.watch = WatchMode::Degraded;
-        {
-            let mut map = self.states.write();
-            if let Some(current) = map.get(&self.workspace) {
-                let mut next = WorkspaceLive::clone(current);
-                next.watch = WatchMode::Degraded;
-                map.insert(self.workspace, Arc::new(next));
-            }
-        }
+        self.set_watch(WatchMode::Degraded);
         tracing::warn!(workspace = %self.workspace, reason = reason.as_str(), "the watch fell back to timer scans");
         let event = NewEvent::new(types::WORKSPACE_WATCH_DEGRADED, EventActor::fold())
             .map(|event| {
@@ -1482,6 +1527,33 @@ impl Pipeline {
                     .reason(reason.as_str())
             })
             .and_then(|event| event.data(json!({(DegradedReason::DATA_KEY): reason.as_str()})));
+        self.record_watch(event, now).await;
+    }
+
+    /// The hub watches a workspace again only after the timer mode of [`DegradedReason::Overflow`]; the other reasons are limits of the platform that stay for the life of the watch.
+    async fn restore(&mut self, now: Timestamp) {
+        if self.watch != WatchMode::Degraded || self.degraded != Some(DegradedReason::Overflow) {
+            return;
+        }
+        self.degraded = None;
+        self.set_watch(WatchMode::Watching);
+        tracing::info!(workspace = %self.workspace, "the watch is back after timer scans");
+        let event = NewEvent::new(types::WORKSPACE_WATCH_RESTORED, EventActor::fold())
+            .map(|event| event.task(self.task).workspace(self.workspace));
+        self.record_watch(event, now).await;
+    }
+
+    fn set_watch(&mut self, watch: WatchMode) {
+        self.watch = watch;
+        let mut map = self.states.write();
+        if let Some(current) = map.get(&self.workspace) {
+            let mut next = WorkspaceLive::clone(current);
+            next.watch = watch;
+            map.insert(self.workspace, Arc::new(next));
+        }
+    }
+
+    async fn record_watch(&self, event: Result<NewEvent, EventError>, now: Timestamp) {
         let Ok(event) = event else {
             return;
         };
@@ -1493,7 +1565,7 @@ impl Pipeline {
         match written {
             Ok(()) => self.bus.publish(buffer),
             Err(error) => {
-                tracing::warn!(workspace = %self.workspace, code = error.log_code(), "the degraded watch was not recorded");
+                tracing::warn!(workspace = %self.workspace, code = error.log_code(), "the change of the watch mode was not recorded");
             }
         }
     }
@@ -1731,6 +1803,12 @@ fn same_content(before: &FlatTree, after: &FlatTree) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::events::BusMessage;
+    use fold_store::agents;
+    use fold_store::testing::{TestProject, eventually};
+    use fold_store::workspaces::NewMainWorkspace;
+    use fold_vcs::revision_store::{write_initial_tree, write_revision};
+    use tokio::sync::broadcast::Receiver;
 
     fn path(text: &str) -> RepoPath {
         RepoPath::parse(text.as_bytes()).unwrap()
@@ -1776,7 +1854,7 @@ mod tests {
         );
         let mut round = Round::default();
         overflow.take_into(&mut round);
-        assert!(!round.full && round.degraded.is_none());
+        assert!(!round.full && round.watch == WatchChanges::default());
         route(&routes, WatchEvent::RescanRequested { workspace });
         route(
             &routes,
@@ -1793,10 +1871,269 @@ mod tests {
         let mut round = Round::default();
         overflow.take_into(&mut round);
         assert!(round.full, "the next round scans in full");
-        assert_eq!(round.degraded, Some(DegradedReason::WatchLimit));
+        assert_eq!(round.watch.degraded, Some(DegradedReason::WatchLimit));
         let mut again = Round::default();
         overflow.take_into(&mut again);
-        assert!(!again.full && again.degraded.is_none(), "taken once");
+        assert!(
+            !again.full && again.watch == WatchChanges::default(),
+            "taken once"
+        );
+    }
+
+    const WAIT: Duration = Duration::from_secs(10);
+
+    /// A watcher whose notifications never arrive, so the tests give the pipeline each watch event through [`route`].
+    struct Silent;
+
+    impl WatchBackend for Silent {
+        fn watch_dir(&mut self, _dir: &Path) -> Result<(), WatchRefused> {
+            Ok(())
+        }
+
+        fn unwatch_dir(&mut self, _dir: &Path) {}
+    }
+
+    /// A project whose live state has the attached main workspace `ws-1`, on an empty `r1`.
+    async fn attached() -> (TestProject, LiveState, WorkspaceId) {
+        let project = TestProject::new().await;
+        let objects = ObjectStore::open(&project.paths().fold_dir()).unwrap();
+        let tree = write_initial_tree(&objects, FlatTree::new()).unwrap();
+        let revision = workspaces::initial_revision(tree, project.now()).unwrap();
+        let stored = write_revision(&objects, &revision).unwrap();
+        workspaces::create_initial_revision(project.store(), &stored, None)
+            .await
+            .unwrap();
+        let workspace: WorkspaceId = "ws-1".parse().unwrap();
+        let now = project.now();
+        project
+            .store()
+            .write(async |tx| {
+                let name = AgentName::parse("main").unwrap();
+                let agent = agents::insert_agent(tx, &name, now).await?;
+                let worker =
+                    agents::insert_worker(tx, agent, &WorkerName::main(&name), now).await?;
+                let new = NewMainWorkspace {
+                    id: workspace,
+                    worker_id: worker,
+                    path: "main-ws",
+                    base: RevisionId::from_number(1).unwrap(),
+                    now,
+                };
+                workspaces::insert_main_workspace(tx, &new).await
+            })
+            .await
+            .unwrap();
+        std::fs::create_dir_all(project.paths().root().join("main-ws")).unwrap();
+        let live = LiveState::with_backend(
+            project.store().clone(),
+            EventBus::new(),
+            Arc::new(project.clock().clone()),
+            project.paths().clone(),
+            LiveConfig::from_project(&ProjectConfig::default()),
+            Arc::default(),
+            Silent,
+        );
+        live.attach(workspace).await.unwrap();
+        (project, live, workspace)
+    }
+
+    fn send(live: &LiveState, event: WatchEvent) {
+        route(&live.shared.routes, event);
+    }
+
+    async fn wait_for_watch(live: &LiveState, workspace: WorkspaceId, watch: WatchMode) {
+        eventually(WAIT, async || match live.get(workspace) {
+            Some(state) if state.watch == watch => Ok(()),
+            other => Err(other.map(|state| state.watch)),
+        })
+        .await;
+    }
+
+    /// The watch events of the bus so far, as their types and reasons.
+    fn watch_events(bus: &mut Receiver<BusMessage>) -> Vec<(String, Option<String>)> {
+        let mut seen = Vec::new();
+        while let Ok(message) = bus.try_recv() {
+            if let BusMessage::Durable(event) = message
+                && event.event_type.as_str().starts_with("workspace.watch_")
+            {
+                assert_eq!(event.workspace, Some("ws-1".parse().unwrap()));
+                seen.push((
+                    event.event_type.as_str().to_owned(),
+                    event.data[DegradedReason::DATA_KEY]
+                        .as_str()
+                        .map(str::to_owned),
+                ));
+            }
+        }
+        seen
+    }
+
+    /// A rescan queues behind the watch events sent before it, so once it answers the pipeline has handled them.
+    async fn settle(live: &LiveState, workspace: WorkspaceId) {
+        live.rescan(workspace).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn restored_after_an_overflow_watches_the_workspace_again() {
+        let (_project, live, workspace) = attached().await;
+        let mut bus = live.bus().subscribe();
+        send(
+            &live,
+            WatchEvent::Degraded {
+                workspace,
+                reason: DegradedReason::Overflow,
+            },
+        );
+        wait_for_watch(&live, workspace, WatchMode::Degraded).await;
+        send(&live, WatchEvent::Restored { workspace });
+        wait_for_watch(&live, workspace, WatchMode::Watching).await;
+        settle(&live, workspace).await;
+        assert_eq!(
+            watch_events(&mut bus),
+            [
+                (
+                    "workspace.watch_degraded".to_owned(),
+                    Some("overflow".to_owned())
+                ),
+                ("workspace.watch_restored".to_owned(), None),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn restored_leaves_a_watch_degraded_for_another_reason() {
+        let (_project, live, workspace) = attached().await;
+        let mut bus = live.bus().subscribe();
+        send(
+            &live,
+            WatchEvent::Degraded {
+                workspace,
+                reason: DegradedReason::WatchLimit,
+            },
+        );
+        wait_for_watch(&live, workspace, WatchMode::Degraded).await;
+        send(&live, WatchEvent::Restored { workspace });
+        settle(&live, workspace).await;
+        assert_eq!(live.get(workspace).unwrap().watch, WatchMode::Degraded);
+        assert_eq!(
+            watch_events(&mut bus),
+            [(
+                "workspace.watch_degraded".to_owned(),
+                Some("watch_limit".to_owned())
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_newer_reason_keeps_an_overflowed_watch_degraded_after_restored() {
+        let (_project, live, workspace) = attached().await;
+        let mut bus = live.bus().subscribe();
+        // Each event in its own round, as the hub sends them seconds apart.
+        for reason in [DegradedReason::Overflow, DegradedReason::WatchLimit] {
+            send(&live, WatchEvent::Degraded { workspace, reason });
+            settle(&live, workspace).await;
+        }
+        send(&live, WatchEvent::Restored { workspace });
+        settle(&live, workspace).await;
+        assert_eq!(live.get(workspace).unwrap().watch, WatchMode::Degraded);
+        assert_eq!(
+            watch_events(&mut bus),
+            [(
+                "workspace.watch_degraded".to_owned(),
+                Some("overflow".to_owned())
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn restored_for_a_watched_or_unknown_workspace_changes_nothing() {
+        let (_project, live, workspace) = attached().await;
+        let mut bus = live.bus().subscribe();
+        send(
+            &live,
+            WatchEvent::Restored {
+                workspace: "ws-99".parse().unwrap(),
+            },
+        );
+        send(&live, WatchEvent::Restored { workspace });
+        settle(&live, workspace).await;
+        assert_eq!(live.get(workspace).unwrap().watch, WatchMode::Watching);
+        assert!(live.get("ws-99".parse().unwrap()).is_none());
+        assert_eq!(watch_events(&mut bus), []);
+    }
+
+    #[test]
+    fn a_watch_change_after_a_kept_one_is_kept_behind_it() {
+        let (sender, mut commands) = mpsc::channel(1);
+        let overflow = Arc::new(Overflow::default());
+        let workspace: WorkspaceId = "ws-1".parse().unwrap();
+        let routes: Routes = Mutex::new(HashMap::from([(
+            workspace,
+            Route {
+                sender,
+                overflow: Arc::clone(&overflow),
+            },
+        )]));
+        route(&routes, WatchEvent::RescanRequested { workspace });
+        route(
+            &routes,
+            WatchEvent::Degraded {
+                workspace,
+                reason: DegradedReason::Overflow,
+            },
+        );
+        // The pipeline takes the queued command and frees the slot, as a round starts.
+        let mut round = Round::default();
+        round.take(commands.try_recv().unwrap());
+        route(&routes, WatchEvent::Restored { workspace });
+        route(&routes, WatchEvent::RescanRequested { workspace });
+        assert!(matches!(commands.try_recv(), Ok(Command::Rescan)));
+        assert!(
+            commands.try_recv().is_err(),
+            "the restore waits behind the kept degrade"
+        );
+        overflow.take_into(&mut round);
+        assert_eq!(
+            round.watch,
+            WatchChanges {
+                degraded: Some(DegradedReason::Overflow),
+                restored: true
+            }
+        );
+        route(&routes, WatchEvent::Restored { workspace });
+        assert!(
+            matches!(commands.try_recv(), Ok(Command::Restored)),
+            "with nothing kept a restore queues"
+        );
+    }
+
+    #[test]
+    fn a_restore_before_a_degrade_in_one_round_is_lost_to_it() {
+        let mut round = Round::default();
+        round.take(Command::Restored);
+        round.take(Command::Degraded(DegradedReason::Overflow));
+        assert_eq!(
+            round.watch,
+            WatchChanges {
+                degraded: Some(DegradedReason::Overflow),
+                restored: false
+            }
+        );
+        round.take(Command::Restored);
+        assert!(round.watch.restored, "a restore after the degrade stays");
+        let overflow = Overflow::default();
+        overflow.keep(Command::Degraded(DegradedReason::Overflow));
+        overflow.keep(Command::Restored);
+        let mut kept = Round::default();
+        overflow.take_into(&mut kept);
+        assert_eq!(
+            kept.watch,
+            WatchChanges {
+                degraded: Some(DegradedReason::Overflow),
+                restored: true
+            }
+        );
+        assert!(kept.full);
     }
 
     #[test]
