@@ -3,16 +3,19 @@
 use crate::daemon_support;
 
 use std::fs::{self, File};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::daemon_support::{Opened, t};
 use axum::http::StatusCode;
-use fold_core::TaskStatus;
 use fold_core::events::types;
+use fold_core::{TaskStatus, WorkspaceId};
 use fold_daemon::http::events::ChangeKind;
 use fold_daemon::jobs::reconcile_workspaces;
+use fold_daemon::live::WorkspaceLive;
 use fold_daemon::services::workspaces::{Reconciled, Reconciliation};
 use fold_store::tasks;
+use fold_store::testing::eventually;
 use fold_store::workspaces::{self, WorkspaceState};
 
 #[cfg(test)]
@@ -23,6 +26,15 @@ impl Opened {
             .unwrap()
             .unwrap()
             .state
+    }
+
+    /// The live state of `workspace` once its group got its watch and first scan, as the live job's ticks give it after a reopen.
+    async fn live_of(&self, workspace: WorkspaceId) -> Arc<WorkspaceLive> {
+        eventually(Duration::from_secs(10), async || {
+            self.handle.live.tick();
+            self.handle.live.get(workspace).ok_or(())
+        })
+        .await
     }
 
     async fn status_of(&self, task: u32) -> TaskStatus {
@@ -68,7 +80,7 @@ async fn a_gone_directory_marks_the_workspace_missing_and_its_return_recovers_it
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0].workspace, Some(id));
     assert_eq!(fx.status_of(1).await, TaskStatus::InProgress);
-    assert!(fx.handle.live.get(id).is_some());
+    fx.live_of(id).await;
 
     fx.restart(|| {}).await;
     assert_eq!(
@@ -84,7 +96,7 @@ async fn an_edit_made_while_the_daemon_was_closed_is_in_the_reopened_live_state(
     let (id, dir) = fx.create(1).await;
     fx.restart(|| fs::write(dir.join("src/lib.rs"), "pub fn x() {}\npub fn z() {}\n").unwrap())
         .await;
-    let state = fx.handle.live.get(id).unwrap();
+    let state = fx.live_of(id).await;
     let files: Vec<(&str, ChangeKind, u32)> = state
         .view
         .files
@@ -124,7 +136,7 @@ async fn a_corrupt_stat_index_is_rebuilt_by_hashing() {
         fs::write(&index, b"not an index").unwrap();
     })
     .await;
-    let state = fx.handle.live.get(id).unwrap();
+    let state = fx.live_of(id).await;
     let paths: Vec<&str> = state
         .view
         .files

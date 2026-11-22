@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -45,6 +45,12 @@ const LINE_CACHE_PAIRS: usize = 4096;
 /// The persisted summary columns of a workspace change at most this often.
 pub const TOUCH_INTERVAL: Duration = Duration::from_secs(10);
 
+/// How many workspaces get their watch and first scan in one group when a project opens.
+pub const DEFAULT_WATCH_GROUP: usize = 4;
+
+/// Time on the project's clock between two groups of workspaces that get their watch when a project opens.
+pub const DEFAULT_WATCH_GAP: Duration = Duration::from_secs(2);
+
 /// How the live state of a project is fed. Built from the project's configuration; tests shorten the intervals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LiveConfig {
@@ -53,6 +59,10 @@ pub struct LiveConfig {
     pub rescan: Duration,
     /// A larger file keeps its base entry and gives a warning (`max_file_bytes`).
     pub max_file_bytes: u64,
+    /// How many waiting workspaces one live tick gives their watch at project open; at least one.
+    pub watch_group: usize,
+    /// Time on the project's clock between two such groups.
+    pub watch_gap: Duration,
 }
 
 impl LiveConfig {
@@ -68,7 +78,41 @@ impl LiveConfig {
             },
             rescan: Duration::from_secs(config.rescan_seconds),
             max_file_bytes: config.max_file_bytes,
+            watch_group: DEFAULT_WATCH_GROUP,
+            watch_gap: DEFAULT_WATCH_GAP,
         }
+    }
+}
+
+/// The function that starts a project's watch hub from its config and its sink.
+type StartHub = dyn Fn(WatchConfig, Box<dyn Fn(WatchEvent) + Send>) -> WatchHub + Send + Sync;
+
+/// How a project's live state starts its watcher. The default starts the hub on the platform's native notifications; another start can wrap that hub, such as to keep its notifier or to see the events it sends.
+#[derive(Clone, Default)]
+pub struct WatchStart(Option<Arc<StartHub>>);
+
+impl WatchStart {
+    pub fn custom(
+        start: impl Fn(WatchConfig, Box<dyn Fn(WatchEvent) + Send>) -> WatchHub + Send + Sync + 'static,
+    ) -> Self {
+        Self(Some(Arc::new(start)))
+    }
+
+    fn start(&self, config: WatchConfig, sink: Box<dyn Fn(WatchEvent) + Send>) -> WatchHub {
+        match &self.0 {
+            Some(start) => start(config, sink),
+            None => WatchHub::start(config, sink),
+        }
+    }
+}
+
+impl std::fmt::Debug for WatchStart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "WatchStart::Custom"
+        } else {
+            "WatchStart::Native"
+        })
     }
 }
 
@@ -549,6 +593,10 @@ struct Shared {
     hub: OnceLock<Arc<WatchHub>>,
     /// The backend the hub starts with; `None` takes the platform's native one.
     backend: Mutex<Option<Box<dyn WatchBackend>>>,
+    /// How the hub starts when no backend is given.
+    watch_start: OnceLock<WatchStart>,
+    /// The workspaces whose pipeline runs but whose watch and first scan wait for their group.
+    waiting: Mutex<Waiting>,
     /// The project's capabilities probe (`ProjectHandle::capabilities`), shared with its workspace services.
     caps: Arc<OnceLock<Capabilities>>,
     /// Attach and detach of the project run one at a time.
@@ -582,7 +630,12 @@ impl Shared {
             let backend = lock(&self.backend).take();
             Arc::new(match backend {
                 Some(backend) => WatchHub::start_with(Boxed(backend), self.config.watch, sink),
-                None => WatchHub::start(self.config.watch, sink),
+                None => self
+                    .watch_start
+                    .get()
+                    .cloned()
+                    .unwrap_or_default()
+                    .start(self.config.watch, Box::new(sink)),
             })
         }))
     }
@@ -592,6 +645,58 @@ impl Shared {
             .get(&workspace)
             .map(|route| route.sender.clone())
     }
+}
+
+/// What the hub needs to watch a workspace that waits for its group.
+struct Queued {
+    workspace: WorkspaceId,
+    root: PathBuf,
+    rules: Arc<IgnoreRules>,
+    tracked: Arc<TrackedSet>,
+    worker: Option<WorkerName>,
+}
+
+/// The workspaces that wait for their watch, in the order they were attached, and when the next group is due.
+#[derive(Default)]
+struct Waiting {
+    queue: VecDeque<Queued>,
+    next_at: Option<Timestamp>,
+}
+
+impl Waiting {
+    /// The next group when it is due at `now`; the group after it is due `gap` later.
+    fn due(&mut self, now: Timestamp, group: usize, gap: Duration) -> Vec<Queued> {
+        if self.queue.is_empty() || self.next_at.is_some_and(|at| now < at) {
+            return Vec::new();
+        }
+        self.next_at = now.checked_add(gap);
+        let size = group.clamp(1, self.queue.len());
+        self.queue.drain(..size).collect()
+    }
+
+    fn take(&mut self, workspace: WorkspaceId) -> Option<Queued> {
+        let at = self
+            .queue
+            .iter()
+            .position(|queued| queued.workspace == workspace)?;
+        self.queue.remove(at)
+    }
+
+    fn of_worker(&mut self, worker: &WorkerName) -> Vec<Queued> {
+        let (theirs, others): (VecDeque<Queued>, VecDeque<Queued>) =
+            std::mem::take(&mut self.queue)
+                .into_iter()
+                .partition(|queued| queued.worker.as_ref() == Some(worker));
+        self.queue = others;
+        theirs.into()
+    }
+}
+
+/// Whether a workspace that starts its pipeline gets its watch at once or waits for its group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Turn {
+    Now,
+    InGroup,
 }
 
 /// Runs on the watcher thread, so it only hands the event on.
@@ -682,6 +787,8 @@ impl LiveState {
                 pipelines: Mutex::default(),
                 hub: OnceLock::new(),
                 backend: Mutex::new(backend),
+                watch_start: OnceLock::new(),
+                waiting: Mutex::default(),
                 caps,
                 lifecycle: tokio::sync::Mutex::new(()),
                 stalls: tokio::sync::Mutex::new(()),
@@ -701,13 +808,130 @@ impl LiveState {
         {
             let _serial = self.shared.lifecycle.lock().await;
             if self.shared.sender(workspace).is_none() {
-                self.start(workspace).await?;
+                self.start(workspace, Turn::Now).await?;
             }
         }
         self.rescan(workspace).await
     }
 
-    async fn start(&self, workspace: WorkspaceId) -> Result<(), WorkspaceError> {
+    /// Starts the hub with `start` instead of the platform's native notifications. Only a call before the first attach counts.
+    pub fn start_watch_with(&self, start: WatchStart) {
+        let _ = self.shared.watch_start.set(start);
+    }
+
+    /// Starts the pipeline of an active task workspace, or of the main workspace, as a project opens. Its watch and its first scan wait for their group in [`LiveState::tick`], so the workspaces of a project do not all walk their trees at the same moment; until then the rescan tick covers it. A read of the workspace, a command on it or a tool call of its worker gives it its watch at once. An attached workspace is left as it is.
+    pub async fn attach_in_group(&self, workspace: WorkspaceId) -> Result<(), WorkspaceError> {
+        let _serial = self.shared.lifecycle.lock().await;
+        if self.shared.sender(workspace).is_none() {
+            self.start(workspace, Turn::InGroup).await?;
+        }
+        Ok(())
+    }
+
+    /// Gives a workspace that waits for its group its watch now. True when it waited.
+    async fn watch_now(&self, workspace: WorkspaceId) -> bool {
+        if !lock(&self.shared.waiting)
+            .queue
+            .iter()
+            .any(|queued| queued.workspace == workspace)
+        {
+            return false;
+        }
+        let _serial = self.shared.lifecycle.lock().await;
+        let Some(queued) = lock(&self.shared.waiting).take(workspace) else {
+            return false;
+        };
+        self.watch(queued).await;
+        true
+    }
+
+    /// Adds the watch of a workspace that left the queue, unless it was detached since. The caller holds the lifecycle lock.
+    async fn watch(&self, queued: Queued) {
+        if self.shared.sender(queued.workspace).is_none() {
+            return;
+        }
+        let shared = Arc::clone(&self.shared);
+        let workspace = queued.workspace;
+        let added = tokio::task::spawn_blocking(move || {
+            shared.hub().add_workspace(
+                queued.workspace,
+                &queued.root,
+                queued.rules,
+                queued.tracked,
+            );
+        })
+        .await;
+        if added.is_err() {
+            tracing::warn!(workspace = %workspace, "the watcher did not take the workspace; the rescan tick still covers it");
+        }
+    }
+
+    /// Gives the waiting workspaces of `worker` their watch and first scan now, because their worker acts, and returns after the scan.
+    pub async fn watch_worker(&self, worker: &WorkerName) {
+        if !lock(&self.shared.waiting)
+            .queue
+            .iter()
+            .any(|queued| queued.worker.as_ref() == Some(worker))
+        {
+            return;
+        }
+        let watched = {
+            let _serial = self.shared.lifecycle.lock().await;
+            let theirs = lock(&self.shared.waiting).of_worker(worker);
+            let mut watched = Vec::with_capacity(theirs.len());
+            for queued in theirs {
+                watched.push(queued.workspace);
+                self.watch(queued).await;
+            }
+            watched
+        };
+        // The first scan finishes before the call returns, so what the worker reads next has the workspace's state.
+        for workspace in watched {
+            if let Err(error) = self.rescan(workspace).await {
+                tracing::warn!(workspace = %workspace, code = error.log_code(), "the first scan after the watch failed; the rescan tick covers it");
+            }
+        }
+    }
+
+    /// Asks for a full scan without waiting for it.
+    async fn scan_soon(&self, workspace: WorkspaceId) {
+        if let Some(sender) = self.shared.sender(workspace) {
+            let _ = sender.send(Command::Rescan).await;
+        }
+    }
+
+    /// How many workspaces wait for their watch.
+    pub fn waiting(&self) -> usize {
+        lock(&self.shared.waiting).queue.len()
+    }
+
+    /// Takes the group that is due and gives it its watch and first scan in a task of its own, so the tick returns at once.
+    fn watch_due_group(&self) {
+        let config = self.shared.config;
+        let group = lock(&self.shared.waiting).due(
+            self.shared.clock.now(),
+            config.watch_group,
+            config.watch_gap,
+        );
+        if group.is_empty() {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            lock(&self.shared.waiting).queue.extend(group);
+            return;
+        };
+        let live = self.clone();
+        runtime.spawn(async move {
+            let _serial = live.shared.lifecycle.lock().await;
+            for queued in group {
+                let workspace = queued.workspace;
+                live.watch(queued).await;
+                live.scan_soon(workspace).await;
+            }
+        });
+    }
+
+    async fn start(&self, workspace: WorkspaceId, turn: Turn) -> Result<(), WorkspaceError> {
         let shared = &self.shared;
         let read = shared.store.read();
         let row = workspaces::get_workspace(read, workspace)
@@ -779,13 +1003,25 @@ impl LiveState {
         );
         let watching = {
             let shared = Arc::clone(shared);
+            let (root, rules, tracked) = (root.clone(), Arc::clone(&rules), Arc::clone(&tracked));
             tokio::task::spawn_blocking(move || {
                 let hub = shared.hub();
-                hub.add_workspace(workspace, &root, rules, tracked);
+                if turn == Turn::Now {
+                    hub.add_workspace(workspace, &root, rules, tracked);
+                }
                 hub
             })
             .await
         };
+        if turn == Turn::InGroup {
+            lock(&shared.waiting).queue.push_back(Queued {
+                workspace,
+                root,
+                rules,
+                tracked,
+                worker: row.worker.clone(),
+            });
+        }
         if watching.is_err() {
             tracing::warn!(workspace = %workspace, "the watcher did not take the workspace; the rescan tick still covers it");
         }
@@ -841,6 +1077,7 @@ impl LiveState {
     pub async fn detach(&self, workspace: WorkspaceId) {
         let shared = &self.shared;
         let _serial = shared.lifecycle.lock().await;
+        lock(&shared.waiting).take(workspace);
         let sender = lock(&shared.routes).remove(&workspace);
         if let Some(route) = sender {
             let _ = route.sender.send(Command::Stop).await;
@@ -880,6 +1117,7 @@ impl LiveState {
         workspace: WorkspaceId,
         command: impl FnOnce(Answer) -> Command,
     ) -> Result<Arc<WorkspaceLive>, WorkspaceError> {
+        self.watch_now(workspace).await;
         let (answer, answered) = oneshot::channel();
         let sent = match self.shared.sender(workspace) {
             Some(sender) => sender.send(command(answer)).await.is_ok(),
@@ -933,6 +1171,7 @@ impl LiveState {
             view.proposal = proposal;
             view.edits_after_version = None;
         });
+        self.watch_now(workspace).await;
         if let Some(sender) = self.shared.sender(workspace) {
             let (answer, _unread) = oneshot::channel();
             let _ = sender.send(Command::Version { tree, answer }).await;
@@ -1093,8 +1332,9 @@ impl LiveState {
         );
     }
 
-    /// Lets every pipeline look at the clock: a workspace whose full rescan is due (`rescan_seconds` after the last) scans, and a held summary write goes out once its interval has passed. The live job calls it every [`crate::jobs::LIVE_TICK`]. Returns how many workspaces it reached.
+    /// Lets every pipeline look at the clock: a workspace whose full rescan is due (`rescan_seconds` after the last) scans, and a held summary write goes out once its interval has passed. The next group of the workspaces that wait for their watch gets it once `watch_gap` has passed since the last group. The live job calls it every [`crate::jobs::LIVE_TICK`]. Returns how many workspaces it reached.
     pub fn tick(&self) -> usize {
+        self.watch_due_group();
         let routes = lock(&self.shared.routes);
         routes
             .values()

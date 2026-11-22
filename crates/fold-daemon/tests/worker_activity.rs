@@ -425,6 +425,13 @@ async fn a_stall_told_before_a_daemon_start_is_not_told_again() {
 
     advance(&harness, MINUTE);
     harness.restart().await;
+    // A reopened workspace gets its first scan with its watch group, which the live job's tick starts.
+    let workspace = work.workspace.parse().unwrap();
+    eventually(WAIT, async || {
+        harness.handle.live.tick();
+        harness.handle.live.get(workspace).ok_or(())
+    })
+    .await;
     let again = state(&harness, &work).await.view;
     assert!(harness.handle.live.stalls_decided());
     let seen = again.activity.expect("still silent");

@@ -443,6 +443,10 @@ impl AgentService {
             })
             .await?;
         self.bus.publish(buffer);
+        // A worker that acts gets the watch of its workspaces before their group comes, so its edits show at once.
+        if let Some(live) = &self.live {
+            live.watch_worker(&worker.name).await;
+        }
         self.seen
             .after_call(&self.bus, &worker.name.agent(), before, after)
             .await?;

@@ -12,7 +12,7 @@ use fold_vcs::platform::Capabilities;
 
 use crate::daemon::{DRAIN_TIMEOUT, DaemonStart};
 use crate::jobs::{self, AutoCommit, ProjectTask};
-use crate::live::{LiveConfig, LiveState};
+use crate::live::{LiveConfig, LiveState, WatchStart};
 use crate::push::{self, PushTargets, PushTask};
 use crate::services::agents::environment::WorkerEnvironment;
 use crate::services::agents::{AgentService, Launcher, SeenPresence, Supervisor, code_of};
@@ -122,7 +122,7 @@ async fn refuse_old_layout(slug: &str, paths: &ProjectPaths) -> Result<(), FoldE
 impl ProjectHandle {
     /// Opens the project database, which applies its pending migrations. A missing database is not created: the registry only lists projects that `fld init` set up. The live state takes its intervals from the configuration read here; an invalid configuration gives it the defaults, and the commands that read the configuration report the error.
     pub async fn open(row: &ProjectRow, clock: Arc<dyn Clock>) -> Result<Self, FoldError> {
-        Self::open_with(row, clock, Launcher::default()).await
+        Self::open_with(row, clock, Launcher::default(), WatchStart::default()).await
     }
 
     /// The handle as the `Arc` every request shares, made known to its own jobs.
@@ -132,11 +132,12 @@ impl ProjectHandle {
         handle
     }
 
-    /// [`ProjectHandle::open`] with the programs its worker processes run.
+    /// [`ProjectHandle::open`] with the programs its worker processes run and the start of its watcher.
     pub async fn open_with(
         row: &ProjectRow,
         clock: Arc<dyn Clock>,
         launcher: Launcher,
+        watch: WatchStart,
     ) -> Result<Self, FoldError> {
         let paths = ProjectPaths::new(&row.root);
         let present = tokio::fs::try_exists(paths.db()).await.unwrap_or(false);
@@ -167,6 +168,7 @@ impl ProjectHandle {
             LiveConfig::from_project(&config),
             Arc::clone(&capabilities),
         );
+        live.start_watch_with(watch);
         let workspace_locks = Arc::new(WorkspaceLocks::default());
         let objects = Arc::new(tokio::sync::RwLock::new(()));
         let tasks = TaskService::new(
@@ -560,6 +562,8 @@ pub struct Projects {
     opening: tokio::sync::Mutex<()>,
     /// The programs every project's worker processes run.
     launcher: Launcher,
+    /// How every project's live state starts its watcher.
+    watch: WatchStart,
     /// What the daemon found at its start about the environment of the workers.
     environment: WorkerEnvironment,
     /// When and how the daemon process started.
@@ -583,6 +587,12 @@ impl Projects {
     #[must_use]
     pub fn with_launcher(mut self, launcher: Launcher) -> Self {
         self.launcher = launcher;
+        self
+    }
+
+    #[must_use]
+    pub fn with_watch_start(mut self, watch: WatchStart) -> Self {
+        self.watch = watch;
         self
     }
 
@@ -709,10 +719,11 @@ impl Projects {
         }
         // An open of a folder that is there settles it, so a project that fails to open is not tried again on every tick.
         self.mark_away(&row.slug, false);
-        let outcome = ProjectHandle::open_with(row, clock, self.launcher.clone())
-            .await
-            .map(|handle| handle.with_check_permits(self.check_permits.clone()))
-            .map(ProjectHandle::share);
+        let outcome =
+            ProjectHandle::open_with(row, clock, self.launcher.clone(), self.watch.clone())
+                .await
+                .map(|handle| handle.with_check_permits(self.check_permits.clone()))
+                .map(ProjectHandle::share);
         if let Ok(handle) = &outcome {
             self.folder_files.write(root).await;
             unpoisoned(self.removed.write()).remove(&row.slug);

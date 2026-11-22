@@ -750,6 +750,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "mime_guess",
+ "notify",
  "percent-encoding",
  "rmcp",
  "rust-embed",

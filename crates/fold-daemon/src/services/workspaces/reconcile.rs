@@ -30,7 +30,7 @@ pub struct Reconciliation {
 }
 
 impl WorkspaceService {
-    /// Brings the row and live state of one task workspace, or of the main workspace, in line with its directory when the project opens. A missing directory moves an `active` row to `missing` and a present one moves a `missing` row back to `active`, each in one write transaction with its `workspace.missing` or `workspace.recovered` event; a present directory is then attached to the live state, which rescans it. Both states keep a task workspace its task's live one, so the task keeps its column, and the main workspace the project's live main workspace; nothing is recomputed.
+    /// Brings the row and live state of one task workspace, or of the main workspace, in line with its directory when the project opens. A missing directory moves an `active` row to `missing` and a present one moves a `missing` row back to `active`, each in one write transaction with its `workspace.missing` or `workspace.recovered` event; a present directory is then attached to the live state, whose watch and first scan wait for their group ([`crate::live::LiveState::attach_in_group`]). Both states keep a task workspace its task's live one, so the task keeps its column, and the main workspace the project's live main workspace; nothing is recomputed.
     ///
     /// A sync or restore mark left on the row is reported with a warning and returned; finishing the write is the agent's next `sync_workspace` or `restore_checkpoint`, because fold writes into a workspace only on create, sync and restore.
     pub async fn reconcile_workspace(
@@ -117,7 +117,7 @@ impl WorkspaceService {
 
     async fn attach_live(&self, workspace: WorkspaceId) {
         if let Some(live) = &self.live
-            && let Err(error) = live.attach(workspace).await
+            && let Err(error) = live.attach_in_group(workspace).await
         {
             tracing::warn!(workspace = %workspace, code = error.log_code(), "the live state did not start; the next read of its changes starts it");
         }
