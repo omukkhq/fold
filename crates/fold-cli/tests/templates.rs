@@ -1310,10 +1310,11 @@ fn no_text_calls_a_plain_fold_binary() {
     assert!(offenders.is_empty(), "plain `fold` command: {offenders:?}");
 }
 
-const REFERENCE_SECTIONS: [&str; 7] = [
+const REFERENCE_SECTIONS: [&str; 8] = [
     "Checks",
     "Project config",
     "Areas",
+    "Task descriptions",
     "Ignore files",
     "Commands",
     "Web app",

@@ -134,6 +134,20 @@ define_area(name: "design", label: "design",
 
 The built-in area `main` with the label `main` holds the tasks only the main agent builds, such as `fold-checks.toml`, the root `.gitignore` or the notes in `AGENTS.md` before code lands. It has no lead and no profile: `define_area` refuses its name and label with `area_exists`, and `start_worker` and `update_area` refuse it with `main_area`. Each of its tasks gets the human review mark unless the approved plan gives it `main_approves`. When a task leaves `main`, fold takes off the mark it set there, and a mark a person set stays.
 
+## Task descriptions
+
+A task description has a summary paragraph, then **Refs**, **Scope**, **Out of scope** and **Acceptance**, as the task template of the planning steps says. The optional **Decisions** section always comes last. It holds the decisions that a person gave after the task was written, such as in the main agent's conversation, in a reply to an ask or in a request thread. The agent that gets a decision calls `update_task` at once: it changes the affected Scope or Acceptance text, so the description never says the old value, and appends one entry, newest last:
+
+```markdown
+**Decisions**:
+- 2026-11-22 (UTC): the cache holds 80k entries. By: @ana. Source: #m-210. Replaces: 40k entries.
+- 2026-11-23 (UTC): the export also writes CSV. By: @ana. Source: the main agent's conversation. Replaces: JSON only.
+```
+
+Each entry gives the date (UTC), the decision, who gave it, the source (`#m-<id>`, or "the main agent's conversation") and what it replaces. A decision inside a request that is still drafting goes into the cards of the next draft version instead. A decision that changes Done work is recorded on the Done task, which stays Done, and a new task for the change names the decision and the Done task with `#T-<id>`.
+
+Every agent reads the `Decisions` section before the older description text and before the request text, and a newer decision before an older one. When the code, the description or the request disagree and no decision settles it, the agent asks the humans and never picks the older value.
+
 ## Ignore files
 
 - `.gitignore` and `.foldignore` are files of the tree, in any folder, in the format of Git's ignore files. As in Git, they apply only to paths the tree does not track yet: fold never starts to track, record or propose a path they ignore, but a tracked file stays tracked when a rule matches it, so its changes and its deletion are recorded. A tracked file leaves main only when a change deletes it, or when the user runs `fld untrack <path>`, which removes it from main and leaves it on disk. Each applies below its own folder; a `.foldignore` rule wins over a `.gitignore` rule, so a `.foldignore` can ignore more for fold alone or bring a path back with `!`. `fld init` writes an empty `.foldignore` when the folder has none.

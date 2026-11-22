@@ -22,6 +22,7 @@ Write the description of every task in this form:
 - **Scope**: what to build, with the files or modules.
 - **Out of scope**: what belongs to other tasks.
 - **Acceptance**: the checks that show the task is done, each one testable.
+- **Decisions** (optional, always last): one entry for each decision a person gave after the task was written, in the form that the `fold` skill's `REFERENCE.md` gives. The Scope and Acceptance text already says the decided value.
 
 Write dependencies as edges with `add_dependency`, never as text in the description.
 
