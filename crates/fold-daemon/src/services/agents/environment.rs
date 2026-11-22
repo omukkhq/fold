@@ -9,7 +9,7 @@ use tokio::process::Command;
 
 use super::Launcher;
 use super::claude::{AuthStatus, ClaudeVersion};
-use crate::support::SESSION_ENV;
+use crate::support::{SERVICE_ENV, SESSION_ENV, remove_daemon_context};
 
 /// Where the environment that the daemon gives its workers came from.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -108,6 +108,7 @@ pub fn worker_variables(
                 && !DAEMON_ROUTE.contains(&name)
                 && !SHELL_STATE.contains(&name)
                 && !SESSION_ENV.contains(&name)
+                && !SERVICE_ENV.contains(&name)
         })
         .collect();
     kept.sort();
@@ -174,9 +175,7 @@ pub async fn ask_claude(launcher: &Launcher) -> ClaudeAnswers {
 async fn claude_output(launcher: &Launcher, args: &[&str]) -> Option<String> {
     let mut command = Command::new(&launcher.claude);
     command.args(args);
-    for name in SESSION_ENV {
-        command.env_remove(name);
-    }
+    remove_daemon_context(&mut command);
     command
         .envs(launcher.env.iter().map(|(key, value)| (key, value)))
         .env_remove(AGENT_TAGS_ENV)
@@ -229,6 +228,23 @@ mod tests {
             ["ANTHROPIC_API_KEY", "NVM_DIR", "PATH", "XDG_CACHE_HOME"]
         );
         assert_eq!(kept[2].1, "/home/ana/.local/bin:/usr/bin");
+    }
+
+    #[test]
+    fn the_login_shells_service_manager_variables_stay_out_of_a_workers_environment() {
+        let shell = [
+            ("FOLD_SERVICE", "1"),
+            ("INVOCATION_ID", "x"),
+            ("JOURNAL_STREAM", "1:2"),
+            ("MANAGERPID", "1"),
+            ("SYSTEMD_EXEC_PID", "9"),
+            ("HOME", "/h"),
+        ]
+        .map(|(name, value)| (OsString::from(name), OsString::from(value)));
+        assert_eq!(
+            worker_variables(shell),
+            [("HOME".to_owned(), "/h".to_owned())]
+        );
     }
 
     #[test]

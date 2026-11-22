@@ -109,6 +109,23 @@ async fn a_passing_run_is_stored_and_told_to_the_worker() {
 }
 
 #[tokio::test]
+async fn a_check_command_sees_no_service_manager_variable_and_keeps_path_and_home() {
+    let fx = Fixture::new().await;
+    workspace_with_checks(
+        &fx,
+        "[[check]]\nname = \"env\"\nrun = \"env | grep -E '^(FOLD_SERVICE|INVOCATION_ID|JOURNAL_STREAM|MANAGERPID|SYSTEMD_EXEC_PID)=' && exit 1; test -n \\\"$PATH\\\" && test -n \\\"$HOME\\\"\"\n",
+    )
+    .await;
+    let run = running(
+        fx.reviews
+            .run_checks(&by(&fx.frontend.worker), t(1))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(ended(&fx.reviews, run).await.run.state, RunState::Passed);
+}
+
+#[tokio::test]
 async fn a_failing_check_fails_the_run_with_its_log() {
     let fx = Fixture::new().await;
     workspace_with_checks(
