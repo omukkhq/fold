@@ -34,7 +34,9 @@ pub use projects::{
 pub use questions::{
     can_answer_ask, can_answer_worker_permission, can_close_ask, can_list_open_asks,
 };
-pub use requests::{can_claim_request, can_create_request, is_drafter, is_requester};
+pub use requests::{
+    can_claim_request, can_create_request, can_read_request, is_drafter, is_requester,
+};
 pub use sessions::{SessionPeer, can_bind_agent, can_name_human};
 pub use tasks::{
     TaskHolder, TaskStart, can_archive_task, can_change_checklist, can_delete_task, can_hold_task,
