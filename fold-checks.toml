@@ -1,0 +1,38 @@
+# Every command goes through scripts/build-gate.sh, which shares the machine between the check runs and the agents' own builds and gives each tree its own target/.
+# A proposal runs the fast checks once for each version; the integration runs the full suite on the merged tree, because main can move while a proposal waits for review.
+
+[setup]
+run = "cd web && bun install --frozen-lockfile"
+
+[[check]]
+name = "rust-lint"
+run = "scripts/build-gate.sh make fmt-check-rust sqlx-check clippy"
+files = '^crates/|\.rs$|(^|/)Cargo\.(toml|lock)$|^\.sqlx/|^\.cargo/|^\.config/|^rust-toolchain\.toml$|^clippy\.toml$|^Makefile$|^fold-checks\.toml$|^scripts/build-gate\.sh$'
+timeout = "30m"
+
+[[check]]
+name = "rust-test"
+run = "scripts/build-gate.sh make test-fast test-default-features"
+files = '^crates/|\.rs$|(^|/)Cargo\.(toml|lock)$|^\.sqlx/|^\.cargo/|^\.config/|^rust-toolchain\.toml$|^clippy\.toml$|^Makefile$|^fold-checks\.toml$|^scripts/build-gate\.sh$'
+timeout = "45m"
+
+[[check]]
+name = "api"
+run = "scripts/build-gate.sh make check-api"
+files = '^crates/|(^|/)Cargo\.(toml|lock)$|^web/src/api/|^web/(package\.json|bun\.lock)$|^Makefile$|^fold-checks\.toml$|^scripts/build-gate\.sh$'
+stage = ["proposal", "integration"]
+timeout = "20m"
+
+[[check]]
+name = "web"
+run = "scripts/build-gate.sh make check-web WEB_INSTALLED=1"
+files = '^web/|^Makefile$|^fold-checks\.toml$|^scripts/build-gate\.sh$'
+stage = ["proposal", "integration"]
+timeout = "20m"
+
+[[check]]
+name = "rust-full"
+run = "scripts/build-gate.sh make clippy test"
+files = '^crates/|\.rs$|(^|/)Cargo\.(toml|lock)$|^\.sqlx/|^\.cargo/|^\.config/|^rust-toolchain\.toml$|^clippy\.toml$|^Makefile$|^fold-checks\.toml$|^scripts/build-gate\.sh$'
+stage = "integration"
+timeout = "60m"
