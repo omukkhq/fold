@@ -180,6 +180,16 @@ async fn an_area_lead_starts_task_workers_only_for_tasks_of_its_own_area() {
     for (run, ttl) in [(&lead_run, "1h"), (&task_worker_run, "5m")] {
         assert_eq!(run.env["CLAUDE_CODE_PROMPT_CACHE_TTL"], ttl);
         assert_eq!(run.env["CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL"], ttl);
+        for name in [
+            "FOLD_SERVICE",
+            "INVOCATION_ID",
+            "JOURNAL_STREAM",
+            "MANAGERPID",
+            "SYSTEMD_EXEC_PID",
+        ] {
+            assert!(!run.env.contains_key(name), "{name}");
+        }
+        assert!(run.env.contains_key("PATH") && run.env.contains_key("HOME"));
         assert_eq!(run.flag("--permission-mode"), Some("auto"));
         assert_eq!(run.flag("--permission-prompt-tool"), Some("stdio"));
         assert_eq!(run.flag("--input-format"), Some("stream-json"));
@@ -2869,7 +2879,7 @@ async fn a_catch_up_names_in_ready_order_only_the_ready_tasks_of_the_area_that_n
     harness
         .call(
             MAIN,
-            "set_blocker",
+            "set_hold",
             json!({"id": "T-4", "reason": "Wait for the brand colours"}),
         )
         .await;

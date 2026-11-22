@@ -2,12 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { TaskEdge } from "@/api/tasks";
 import { segmentsText } from "@/people/segments";
 import { taskView } from "@/test/payloads";
-import {
-  blockerControls,
-  blockerView,
-  humanWork,
-  KIND_OPTIONS,
-} from "./humanTask";
+import { holdControls, holdView, humanWork, KIND_OPTIONS } from "./humanTask";
 
 function edge(task: string, over: Partial<TaskEdge> = {}): TaskEdge {
   return {
@@ -85,10 +80,10 @@ describe("humanWork", () => {
   });
 });
 
-describe("blockerView", () => {
+describe("holdView", () => {
   it("shows the reason and who set it", () => {
-    expect(blockerView(taskView("T-1"), 0)).toBeNull();
-    const view = blockerView(taskView("T-1", { blocker: HOLD }), 61_000);
+    expect(holdView(taskView("T-1"), 0)).toBeNull();
+    const view = holdView(taskView("T-1", { hold: HOLD }), 61_000);
     expect(view?.reason).toBe("Wait for the logo");
     expect(segmentsText(view?.setBy ?? [])).toBe(
       "Set by @web-lead · 1 min ago",
@@ -96,15 +91,15 @@ describe("blockerView", () => {
   });
 });
 
-describe("blockerControls", () => {
+describe("holdControls", () => {
   it("offers what the daemon allows", () => {
     const task = taskView("T-1");
-    expect(blockerControls(task)).toEqual({ canSet: false, canClear: false });
+    expect(holdControls(task)).toEqual({ canSet: false, canClear: false });
     expect(
-      blockerControls({
+      holdControls({
         ...task,
-        can_set_blocker: true,
-        can_clear_blocker: true,
+        can_set_hold: true,
+        can_clear_hold: true,
       }),
     ).toEqual({ canSet: true, canClear: true });
   });

@@ -32,7 +32,7 @@ export type TaskIntegration = Schemas["TaskIntegration"];
 export type TaskEvent = Schemas["TaskEvent"];
 export type TaskKind = Schemas["TaskKind"];
 export type TaskReport = Schemas["TaskReport"];
-export type Blocker = Schemas["BlockerMark"];
+export type Hold = Schemas["HoldMark"];
 
 export type TaskDetail = Schemas["TaskView"];
 
@@ -128,23 +128,23 @@ export async function sendBackTask(
   );
 }
 
-/** Puts a blocker on the task with `reason`, or changes the reason: no agent takes the task until a human clears it. */
-export async function setBlocker(
+/** Puts the task on hold with `reason`, or changes the reason: no agent takes the task until a human takes it off hold. */
+export async function putOnHold(
   slug: string,
   task: string,
   reason: string,
 ): Promise<void> {
   await unwrap(
-    api.PUT("/api/v1/projects/{slug}/tasks/{id}/blocker", {
+    api.PUT("/api/v1/projects/{slug}/tasks/{id}/hold", {
       params: { path: { slug, id: task } },
       body: { reason },
     }),
   );
 }
 
-export async function clearBlocker(slug: string, task: string): Promise<void> {
+export async function takeOffHold(slug: string, task: string): Promise<void> {
   await unwrap(
-    api.DELETE("/api/v1/projects/{slug}/tasks/{id}/blocker", {
+    api.DELETE("/api/v1/projects/{slug}/tasks/{id}/hold", {
       params: { path: { slug, id: task } },
     }),
   );

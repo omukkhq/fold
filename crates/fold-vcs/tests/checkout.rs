@@ -47,6 +47,17 @@ fn a_folder_stamp_changes_with_what_the_paths_hold_and_with_nothing_else() {
     write(root, "other.txt", b"two\n");
     assert_eq!(folder_stamp(root, &paths), first);
     write(root, "a.txt", b"two\n");
+    // The kernel stamps a write with a coarse clock, so a rewrite of the same size in the same tick changes no metadata the stamp reads; a later modification time is what a later write in another tick gives.
+    let modified = fs::metadata(root.join("a.txt"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    fs::File::options()
+        .write(true)
+        .open(root.join("a.txt"))
+        .unwrap()
+        .set_modified(modified + std::time::Duration::from_secs(1))
+        .unwrap();
     let written = folder_stamp(root, &paths);
     assert_ne!(written, first);
     write(root, "gone/b.txt", b"new\n");

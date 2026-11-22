@@ -51,8 +51,8 @@ pub struct PlannedTask {
     pub needs: Vec<PlanRef>,
     pub parent: Option<PlanRef>,
     pub human_review: Option<PlannedReview>,
-    /// The reason of a blocker the task carries from its creation, so no agent sees it ready before the blocker exists.
-    pub blocker: Option<String>,
+    /// The reason of a hold the task carries from its creation, so no agent sees it ready before the hold exists.
+    pub hold: Option<String>,
     /// Plain steps created with the task, in order, before any worker sees it.
     pub checklist: Vec<PlannedChecklistItem>,
     /// The user's word, agreed with the plan, that the main agent approves the proposal of this task of Main itself, so fold leaves the task's human review mark off. Only a task with the label of Main and without `human_review` takes it.
@@ -90,10 +90,10 @@ pub fn check_task_plan(tasks: &[PlannedTask]) -> Result<(), FoldError> {
             .with_details([("reason", json!("main_approves")), ("position", json!(position + 1))])
             .with_hint("give main_approves only to a task with the label main and without human_review, and only when the user said that you approve it yourself, then call create_task_plan again"));
         }
-        if let Some(reason) = &task.blocker {
+        if let Some(reason) = &task.hold {
             HoldReason::parse(reason).map_err(|error| {
                 FoldError::from(error)
-                    .with_details([("field", json!("blocker.reason")), ("position", json!(position + 1))])
+                    .with_details([("field", json!("hold.reason")), ("position", json!(position + 1))])
                     .with_hint("say in a line or two why the task must wait for a person, then call create_task_plan again")
             })?;
         }
@@ -145,7 +145,7 @@ mod tests {
             needs: Vec::new(),
             parent: None,
             human_review: None,
-            blocker: None,
+            hold: None,
             checklist: Vec::new(),
             main_approves: false,
         }
@@ -180,7 +180,7 @@ mod tests {
             reviewer: None,
             reason: " Check UI ".to_owned(),
         });
-        child.blocker = Some(" Wait for the Meta review ".to_owned());
+        child.hold = Some(" Wait for the Meta review ".to_owned());
         assert!(check_task_plan(&[child.clone(), task("root"), task("base")]).is_ok());
         assert_eq!(
             child.needs[0],
@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(human_review_reason(" Check ").unwrap(), "Check");
         bad.human_review = None;
         for reason in [" ".to_owned(), "a".repeat(501)] {
-            bad.blocker = Some(reason);
+            bad.hold = Some(reason);
             let error = check_task_plan(&[task("ok"), bad.clone()]).unwrap_err();
             assert_eq!(error.code(), codes::INVALID_HOLD_REASON);
             assert_eq!(error.details().unwrap()["position"], 2);

@@ -25,8 +25,8 @@ vi.mock("@/api/tasks", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/api/tasks")>();
   return {
     ...real,
-    setBlocker: vi.fn(() => Promise.resolve()),
-    clearBlocker: vi.fn(() => Promise.resolve()),
+    putOnHold: vi.fn(() => Promise.resolve()),
+    takeOffHold: vi.fn(() => Promise.resolve()),
     completeTask: vi.fn(() => Promise.resolve()),
   };
 });
@@ -63,27 +63,27 @@ function holdNext(write: (...args: never[]) => Promise<unknown>) {
 
 const HOLD = { reason: "Wait for the logo", set_by: "web-lead", set_at: 0 };
 
-describe("the blocker group", () => {
-  it("sets a blocker with a reason", async () => {
-    const task = taskView("T-2", { can_set_blocker: true });
+describe("the hold group", () => {
+  it("puts a task on hold with a reason", async () => {
+    const task = taskView("T-2", { can_set_hold: true });
     mount(<TaskSide slug="demo" task={task} live={null} now={0} />);
-    // Without a blocker the Links group offers Set blocker, which opens the Blocker row's form.
+    // Without a hold the Links group offers Put on hold, which opens the On hold row's form.
     const links = await screen.findByRole("region", { name: "Links" });
-    expect(within(links).getByText(/no blocker/)).toBeTruthy();
+    expect(within(links).getByText(/not on hold/)).toBeTruthy();
     await userEvent.click(
-      within(links).getByRole("button", { name: "Set blocker" }),
+      within(links).getByRole("button", { name: "Put on hold" }),
     );
-    const group = screen.getByRole("region", { name: "Blocker" });
+    const group = screen.getByRole("region", { name: "On hold" });
     await userEvent.type(
       within(group).getByRole("textbox", { name: "Reason" }),
       "Wait for the logo",
     );
-    const release = holdNext(seam.setBlocker);
+    const release = holdNext(seam.putOnHold);
     await userEvent.click(
-      within(group).getByRole("button", { name: "Set blocker" }),
+      within(group).getByRole("button", { name: "Put on hold" }),
     );
     await waitFor(() => {
-      expect(seam.setBlocker).toHaveBeenCalledWith(
+      expect(seam.putOnHold).toHaveBeenCalledWith(
         "demo",
         "T-2",
         "Wait for the logo",
@@ -91,40 +91,40 @@ describe("the blocker group", () => {
     });
     expect(
       within(group)
-        .getByRole("button", { name: "Setting blocker…" })
+        .getByRole("button", { name: "Putting on hold…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     release();
   });
 
-  it("shows the reason and clears the blocker", async () => {
+  it("shows the reason and takes the task off hold", async () => {
     const task = taskView("T-2", {
-      can_set_blocker: true,
-      can_clear_blocker: true,
-      blocker: HOLD,
+      can_set_hold: true,
+      can_clear_hold: true,
+      hold: HOLD,
     });
     mount(<TaskSide slug="demo" task={task} live={null} now={0} />);
-    const group = await screen.findByRole("region", { name: "Blocker" });
+    const group = await screen.findByRole("region", { name: "On hold" });
     expect(within(group).getByText("Wait for the logo")).toBeTruthy();
-    const release = holdNext(seam.clearBlocker);
+    const release = holdNext(seam.takeOffHold);
     await userEvent.click(
-      within(group).getByRole("button", { name: "Clear blocker" }),
+      within(group).getByRole("button", { name: "Take off hold" }),
     );
     await waitFor(() => {
-      expect(seam.clearBlocker).toHaveBeenCalledWith("demo", "T-2");
+      expect(seam.takeOffHold).toHaveBeenCalledWith("demo", "T-2");
     });
     expect(
       within(group)
-        .getByRole("button", { name: "Clearing blocker…" })
+        .getByRole("button", { name: "Taking off hold…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
     release();
   });
 
   it("offers no control without a named human", async () => {
-    const task = taskView("T-2", { blocker: HOLD });
+    const task = taskView("T-2", { hold: HOLD });
     mount(<TaskSide slug="demo" task={task} live={null} now={0} />);
-    const group = await screen.findByRole("region", { name: "Blocker" });
+    const group = await screen.findByRole("region", { name: "On hold" });
     expect(within(group).queryByRole("button")).toBeNull();
   });
 });

@@ -126,7 +126,7 @@ async fn the_review_lead_hears_which_related_tasks_a_plan_can_wait_for() {
     h.start_work("frontend", &screen).await;
     h.call(
         "frontend",
-        "set_blocker",
+        "set_hold",
         json!({"id": tests, "reason": "Wait for the test data"}),
     )
     .await;

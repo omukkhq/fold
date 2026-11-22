@@ -538,7 +538,7 @@ pub struct RelatedTaskRow {
     pub status: TaskStatus,
     pub kind: TaskKind,
     pub human_review: bool,
-    pub blocker: bool,
+    pub hold: bool,
     pub labels: Vec<LabelName>,
     /// The task's open proposal and its facts.
     pub open_proposal: Option<RelatedProposal>,
@@ -584,7 +584,7 @@ pub async fn related_tasks(
                   t.status AS "status!: String",
                   t.kind AS "kind!: String",
                   t.human_review AS "human_review!: bool",
-                  t.hold_reason IS NOT NULL AS "blocker!: bool",
+                  t.hold_reason IS NOT NULL AS "hold!: bool",
                   (SELECT json_group_array(l.name)
                    FROM task_labels tl JOIN labels l ON l.id = tl.label_id
                    WHERE tl.task_id = t.id) AS "labels!: String",
@@ -642,7 +642,7 @@ pub async fn related_tasks(
                     .parse()
                     .map_err(|_| StoreError::Corrupt("tasks.kind"))?,
                 human_review: row.human_review,
-                blocker: row.blocker,
+                hold: row.hold,
                 labels: labels
                     .iter()
                     .map(|name| {

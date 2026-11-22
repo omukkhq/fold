@@ -157,7 +157,7 @@ impl FoldServer {
         &self,
         request: &CallToolRequestParams,
         context: &RequestContext<RoleServer>,
-    ) -> Result<Option<Value>, FoldError> {
+    ) -> Result<Option<Reply>, FoldError> {
         let tool = request.name.as_ref();
         let arguments = request.arguments.clone().unwrap_or_default();
         let before = self.session().await;
@@ -177,7 +177,7 @@ impl FoldServer {
                 self.dispatch(tool, resolved.as_ref(), &arguments, context),
             )
             .await?;
-        let Some(value) = value else {
+        let Some(reply) = value else {
             return Ok(None);
         };
         let after = self.session().await;
@@ -194,7 +194,7 @@ impl FoldServer {
                 );
             }
         }
-        Ok(Some(value))
+        Ok(Some(reply))
     }
 
     async fn dispatch(
@@ -203,7 +203,7 @@ impl FoldServer {
         resolved: Option<&WorkerRow>,
         arguments: &JsonObject,
         context: &RequestContext<RoleServer>,
-    ) -> Result<Option<Value>, FoldError> {
+    ) -> Result<Option<Reply>, FoldError> {
         let value = match (tool, resolved) {
             (identity::REGISTER_AGENT, _) => identity::register_agent(self, arguments).await?,
             (agents::LIST_AGENTS, _) => agents::list_agents(self, arguments).await?,
@@ -245,6 +245,12 @@ impl FoldServer {
             (workspaces::COMPARE_REVISIONS, Some(_)) => {
                 workspaces::compare_revisions(self, arguments).await?
             }
+            (tasks::requests::GET_REQUEST_ATTACHMENT, Some(_)) => {
+                let actor = self.actor().await?;
+                return Ok(Some(
+                    tasks::requests::get_request_attachment(self, &actor, arguments).await?,
+                ));
+            }
             (_, Some(_)) => {
                 let value = match domain_of(tool) {
                     Some(Domain::Workspaces) => workspaces::call(self, tool, arguments).await?,
@@ -259,7 +265,7 @@ impl FoldServer {
             }
             _ => return Ok(None),
         };
-        Ok(Some(value))
+        Ok(Some(value.into()))
     }
 
     /// The acting agent of the current call. The call resolved its worker before the tool ran, so only the agent's tags are read here, once per call.
@@ -303,6 +309,30 @@ impl FoldServer {
             counts = counts.with(part, counts.get(part) + count);
         }
         counts
+    }
+}
+
+/// What a tool answers: its compact JSON result, then any content that JSON cannot carry, such as an image. The footer follows both.
+pub(crate) struct Reply {
+    value: Value,
+    content: Vec<ContentBlock>,
+}
+
+impl Reply {
+    pub(crate) fn with_content(value: Value, content: Vec<ContentBlock>) -> Self {
+        Self { value, content }
+    }
+
+    fn into_content(self) -> Vec<ContentBlock> {
+        let mut blocks = vec![ContentBlock::text(self.value.to_string())];
+        blocks.extend(self.content);
+        blocks
+    }
+}
+
+impl From<Value> for Reply {
+    fn from(value: Value) -> Self {
+        Self::with_content(value, Vec::new())
     }
 }
 
@@ -417,7 +447,7 @@ impl ServerHandler for FoldServer {
     ) -> Result<CallToolResponse, ErrorData> {
         let arrived = self.counts(true, FooterCounts::default()).await;
         let mut result = match self.run(&request, &context).await {
-            Ok(Some(value)) => CallToolResult::success(vec![ContentBlock::text(value.to_string())]),
+            Ok(Some(reply)) => CallToolResult::success(reply.into_content()),
             // The specification answers an unknown tool with a JSON-RPC error; its data carries the hint a tool error would.
             Ok(None) => {
                 return Err(ErrorData::invalid_params(

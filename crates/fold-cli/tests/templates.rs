@@ -68,7 +68,7 @@ fn skill_identifiers() -> BTreeSet<String> {
         .collect()
 }
 
-const FOLD_TOOLS: [&str; 99] = [
+const FOLD_TOOLS: [&str; 100] = [
     "register_agent",
     "list_agents",
     "define_area",
@@ -107,8 +107,8 @@ const FOLD_TOOLS: [&str; 99] = [
     "report_task",
     "complete_task",
     "send_back_task",
-    "set_blocker",
-    "clear_blocker",
+    "set_hold",
+    "clear_hold",
     "get_repository_state",
     "get_revision",
     "compare_revisions",
@@ -143,6 +143,7 @@ const FOLD_TOOLS: [&str; 99] = [
     "create_request",
     "list_requests",
     "get_request",
+    "get_request_attachment",
     "claim_request",
     "release_request",
     "submit_request_draft",
@@ -388,7 +389,8 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 71] = [
+const NON_TOOL_NAMES: [&str; 72] = [
+    "next_offset",
     "file_count",
     "human_review",
     "fold_failed",
@@ -531,7 +533,7 @@ fn role_steps(role: Role) -> &'static [&'static str] {
             "create_label",
             "create_task_plan",
             "require_human_review",
-            "clear_blocker",
+            "clear_hold",
             "complete_task",
             "start_worker",
             "stop_worker",
@@ -572,7 +574,7 @@ fn role_steps(role: Role) -> &'static [&'static str] {
             "stop_worker",
             "complete_task",
             "send_back_task",
-            "set_blocker",
+            "set_hold",
             "takeover_claim",
             "write_handoff",
             "claim_request",
@@ -747,7 +749,7 @@ fn every_tool_the_main_prompt_names_is_a_fold_tool() {
         "pause_project",
         "resume_project",
         "restart_worker",
-        "clear_blocker",
+        "clear_hold",
         "complete_task",
     ] {
         assert!(named.contains(tool), "main.md does not name `{tool}`");

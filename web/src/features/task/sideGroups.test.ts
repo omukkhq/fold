@@ -18,8 +18,8 @@ const checkpoint = {
 describe("nothingText", () => {
   it("joins the empty items into one line and adds the note", () => {
     expect(nothingText({ items: [], note: "Never shown." })).toBeNull();
-    expect(nothingText({ items: ["no blocker"], note: null })).toBe(
-      "no blocker.",
+    expect(nothingText({ items: ["not on hold"], note: null })).toBe(
+      "not on hold.",
     );
     expect(
       nothingText({ items: ["no changesets", "no proposal"], note: "Soon." }),
@@ -87,16 +87,16 @@ describe("workGaps", () => {
 });
 
 describe("linkGaps", () => {
-  it("names the blocker and each side of the dependencies that is empty", () => {
+  it("names the hold and each side of the dependencies that is empty", () => {
     expect(linkGaps(taskView("T-1", { dependencies: [] })).items).toEqual([
-      "no blocker",
+      "not on hold",
       "no prerequisites",
       "no task waits for this one",
     ]);
     expect(
       linkGaps(
         taskView("T-1", {
-          blocker: { reason: "Wait", set_by: "tanim", set_at: 0 },
+          hold: { reason: "Wait", set_by: "tanim", set_at: 0 },
           dependencies: [
             {
               task: "T-2",

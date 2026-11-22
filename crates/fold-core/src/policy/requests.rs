@@ -15,6 +15,18 @@ pub fn can_create_request(actor: &Actor) -> Result<Requester, PolicyDenied> {
     })
 }
 
+/// Every agent and every named human reads any request and its attachments; the system never does.
+pub fn can_read_request(actor: &Actor) -> Result<(), PolicyDenied> {
+    match actor {
+        Actor::Agent(_) | Actor::Human { .. } => Ok(()),
+        Actor::System => Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only an agent or a human can read a request",
+            hint: "ask an agent or a human to call get_request",
+        }),
+    }
+}
+
 /// Turning a request into cards is an orchestrator's job, so the main agent claims one, or an area lead that judges the request relevant to its area; fold does not check the request against the area. A human answers the drafter instead. `role` is the role of the agent's worker process, `None` when fold does not supervise it. It returns the admitted agent, whose worker becomes the drafter.
 pub fn can_claim_request(actor: &Actor, role: Option<Role>) -> Result<&AgentActor, PolicyDenied> {
     match actor {
@@ -107,6 +119,17 @@ mod tests {
         );
         assert_eq!(
             code(can_create_request(&Actor::System)),
+            Some(codes::HUMAN_REQUIRED)
+        );
+    }
+
+    #[test]
+    fn agents_and_humans_read_a_request_and_the_system_does_not() {
+        for actor in [agent("backend"), tagged("lead", MAIN_TAG), human("tanim")] {
+            assert_eq!(code(can_read_request(&actor)), None, "{actor:?}");
+        }
+        assert_eq!(
+            code(can_read_request(&Actor::System)),
             Some(codes::HUMAN_REQUIRED)
         );
     }

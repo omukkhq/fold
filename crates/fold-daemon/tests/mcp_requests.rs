@@ -461,7 +461,7 @@ async fn a_clarification_joins_the_request_thread_and_a_reply_keeps_it() {
 #[test]
 fn every_input_field_has_a_description() {
     let mut tools = fold_daemon::mcp::tasks::requests::tools();
-    assert_eq!(tools.len(), 10);
+    assert_eq!(tools.len(), 11);
     tools.extend(fold_daemon::mcp::messages::tools());
     for tool in &tools {
         assert!(tool.description.is_some(), "{}", tool.name);

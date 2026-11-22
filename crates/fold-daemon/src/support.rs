@@ -11,6 +11,22 @@ pub(crate) const SESSION_ENV: [&str; 5] = [
     "CLAUDE_CODE_SSE_PORT",
 ];
 
+/// The variables a service manager (systemd or launchd) sets for the daemon's unit. A process the daemon starts is not part of the unit, and a `fld serve` it starts would record the service as its starter.
+pub(crate) const SERVICE_ENV: [&str; 5] = [
+    "FOLD_SERVICE",
+    "INVOCATION_ID",
+    "JOURNAL_STREAM",
+    "MANAGERPID",
+    "SYSTEMD_EXEC_PID",
+];
+
+/// Takes the variables of the Claude Code session and of the service manager that started the daemon out of what `command` inherits.
+pub(crate) fn remove_daemon_context(command: &mut tokio::process::Command) {
+    for name in SESSION_ENV.iter().chain(&SERVICE_ENV) {
+        command.env_remove(name);
+    }
+}
+
 /// What a lock call gives, also when an earlier holder panicked. The state behind every lock of the daemon stays valid after a panic, so the next holder continues instead of the daemon failing for good.
 pub(crate) fn unpoisoned<T>(result: LockResult<T>) -> T {
     result.unwrap_or_else(PoisonError::into_inner)
@@ -61,6 +77,27 @@ mod tests {
         .join();
         assert!(rw.is_poisoned());
         assert_eq!(*unpoisoned(rw.read()), 6);
+    }
+
+    #[tokio::test]
+    async fn a_child_inherits_neither_session_nor_service_variables_but_keeps_the_rest() {
+        let mut command = tokio::process::Command::new("/usr/bin/env");
+        for name in SESSION_ENV.iter().chain(&SERVICE_ENV) {
+            command.env(name, "set");
+        }
+        command.env("HOME", "/home/kept");
+        remove_daemon_context(&mut command);
+        let output = command.output().await.unwrap();
+        let seen = String::from_utf8(output.stdout).unwrap();
+        let names: Vec<&str> = seen
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(name, _)| name))
+            .collect();
+        for name in SESSION_ENV.iter().chain(&SERVICE_ENV) {
+            assert!(!names.contains(name), "{name}");
+        }
+        assert!(names.contains(&"PATH"));
+        assert!(seen.contains("HOME=/home/kept"));
     }
 
     #[tokio::test]

@@ -35,7 +35,7 @@ use crate::services::agents::workers::code_of;
 use crate::services::agents::{AgentError, accounts};
 use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
-use crate::support::SESSION_ENV;
+use crate::support::remove_daemon_context;
 
 impl Supervisor {
     /// Runs Claude Code for the row, which a committed command left in state `starting`: a new session, or `--resume` of the row's session. `turn` is the first user turn; without one a resumed worker waits idle for its next notice. A new session records the installed fld's fingerprint of the role's skill text, also when a pause ends its start; a resumed one whose recorded fingerprint differs gets the update note before its first turn, whichever turn that is, and records the new fingerprint once that turn is written. A process that cannot start, for an unreadable configuration, files that cannot be written, a failed spawn or a process that cannot be recorded, leaves the row `failed` with `worker.failed` and gives no [`StartWatch`], so no `starting` row holds a place under the limits.
@@ -172,9 +172,7 @@ impl Supervisor {
                 .arg("--add-dir")
                 .arg(self.inner.paths.root().join(WS_DIR));
         }
-        for name in SESSION_ENV {
-            command.env_remove(name);
-        }
+        remove_daemon_context(&mut command);
         let ttl = settings.cache_ttl.as_str();
         command
             .env(AGENT_ENV, row.agent.as_str())

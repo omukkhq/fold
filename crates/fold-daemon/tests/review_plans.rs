@@ -84,7 +84,7 @@ async fn a_plan_refuses_what_could_never_be_one_batch() {
 
     h.call(
         "frontend",
-        "set_blocker",
+        "set_hold",
         json!({"id": others[0], "reason": "Wait for the provider"}),
     )
     .await;
@@ -430,7 +430,7 @@ async fn the_deadline_job_ends_a_wait_by_the_projects_clock() {
     assert_eq!(plan(&h, "rp-1").await["wait_ended"], true);
 }
 
-/// An awaited task that gets a blocker or is archived leaves the plan with that reason, a proposal whose task gets the human review mark leaves too, and a plan with no member left ends.
+/// An awaited task that is put on hold or is archived leaves the plan with that reason, a proposal whose task gets the human review mark leaves too, and a plan with no member left ends.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_task_that_stops_being_eligible_leaves_and_an_empty_plan_ends() {
     let (h, _fake) = with_review_lead().await;
@@ -446,7 +446,7 @@ async fn a_task_that_stops_being_eligible_leaves_and_an_empty_plan_ends() {
     .await;
     h.call(
         "frontend",
-        "set_blocker",
+        "set_hold",
         json!({"id": blocked, "reason": "Wait for the provider"}),
     )
     .await;

@@ -222,8 +222,8 @@ async fn the_plan_commands_read_back_what_they_wrote() {
             plans::insert_member(tx, rp(1), t(3), None, at(10)).await?;
             assert!(plans::join_member(tx, rp(1), t(2), p2, 1, at(20)).await?);
             assert!(!plans::join_member(tx, rp(1), t(2), p2, 1, at(21)).await?);
-            assert!(plans::release_member(tx, rp(1), t(3), PlanRelease::Blocker, at(30)).await?);
-            assert!(!plans::release_member(tx, rp(1), t(3), PlanRelease::Blocker, at(31)).await?);
+            assert!(plans::release_member(tx, rp(1), t(3), PlanRelease::Hold, at(30)).await?);
+            assert!(!plans::release_member(tx, rp(1), t(3), PlanRelease::Hold, at(31)).await?);
             Ok::<_, StoreError>(())
         })
         .await
@@ -251,7 +251,7 @@ async fn the_plan_commands_read_back_what_they_wrote() {
     assert_eq!(members.len(), 3);
     assert_eq!(members[1].version, Some(1));
     assert_eq!(members[1].joined_at, Some(at(20)));
-    assert_eq!(members[2].release, Some(PlanRelease::Blocker));
+    assert_eq!(members[2].release, Some(PlanRelease::Hold));
     assert!(!members[2].is_live() && !members[2].is_awaited());
     store
         .write(async |tx| {

@@ -35,8 +35,8 @@ pub enum NeedsYouKind {
     RequestDraft,
     /// A human task in Todo: every prerequisite is Done and a person does the work.
     HumanTask,
-    /// A task with a blocker, which waits until a human clears it.
-    Blocker,
+    /// A task on hold, which waits until a human takes the hold off.
+    Hold,
     /// A human change from the project folder that conflicts with main. Main did not move; the main agent explains the conflict in its conversation and prepares the merge for the human's OK.
     HumanChange,
     /// The project folder's Git branch or `HEAD` shows a change fold did not make, so fold does not update the folder until the human brings the branch back; `reason` holds the command that does it.
@@ -99,7 +99,8 @@ impl NeedsYouKind {
             NeedsYouKind::HumanReview => "human_review",
             NeedsYouKind::RequestDraft => "request_draft",
             NeedsYouKind::HumanTask => "human_task",
-            NeedsYouKind::Blocker => "blocker",
+            // A stored value (notify_needs_you.kind and its keys) and a wire value of the HTTP API, so it stays "blocker".
+            NeedsYouKind::Hold => "blocker",
             NeedsYouKind::HumanChange => "human_change",
             NeedsYouKind::HeadMoved => "head_moved",
             NeedsYouKind::FolderHeld => "folder_held",
@@ -125,7 +126,7 @@ impl NeedsYouKind {
             NeedsYouKind::HumanReview => Screen::Proposal,
             NeedsYouKind::RequestDraft => Screen::Request,
             NeedsYouKind::HumanTask
-            | NeedsYouKind::Blocker
+            | NeedsYouKind::Hold
             | NeedsYouKind::WorkerStalled
             | NeedsYouKind::StaleClaim => Screen::Task,
             NeedsYouKind::HumanChange
@@ -173,9 +174,9 @@ pub struct NeedsYouItem {
     pub header: Option<String>,
     /// How many questions a `Question` asks as one set; 0 for every other kind.
     pub questions: usize,
-    /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft; the task title of a `HumanTask` or a `Blocker`; Claude Code's error of a `WorkerModelUnreachable`; what fold saw of a `WorkerStalled` at the read, in the words of the board's chip.
+    /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft; the task title of a `HumanTask` or a `Hold`; Claude Code's error of a `WorkerModelUnreachable`; what fold saw of a `WorkerStalled` at the read, in the words of the board's chip.
     pub title: Option<String>,
-    /// The reason of a `Blocker`; the command that brings the branch back for `HeadMoved`, records the folder's changes for `FolderHeld`, ends the conflict for `UnstashConflicted`, or lets a `WorkerUnreachable` worker reach fold again; what to check for a `WorkerModelUnreachable`.
+    /// The reason of a `Hold`; the command that brings the branch back for `HeadMoved`, records the folder's changes for `FolderHeld`, ends the conflict for `UnstashConflicted`, or lets a `WorkerUnreachable` worker reach fold again; what to check for a `WorkerModelUnreachable`.
     pub reason: Option<String>,
     /// The human's Git commit of a `HumanChange`.
     pub commit: Option<String>,
@@ -542,7 +543,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
     for (kind, waiting) in human_tasks
         .into_iter()
         .map(|task| (NeedsYouKind::HumanTask, task))
-        .chain(held.into_iter().map(|task| (NeedsYouKind::Blocker, task)))
+        .chain(held.into_iter().map(|task| (NeedsYouKind::Hold, task)))
     {
         let mut item = NeedsYouItem::new(kind, waiting.since);
         item.task = Some(waiting.id);

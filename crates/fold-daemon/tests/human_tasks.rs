@@ -138,7 +138,7 @@ async fn a_human_task_blocks_its_dependents_until_a_human_marks_it_done_and_no_a
     let graph = harness.call(LEAD, "get_task_graph", json!({})).await;
     assert_eq!(graph["tasks"][0]["id"], "T-1");
     assert_eq!(graph["tasks"][0]["kind"], "human");
-    assert!(graph["tasks"][0].get("blocker").is_none(), "{graph}");
+    assert!(graph["tasks"][0].get("hold").is_none(), "{graph}");
 
     for (agent, tool, arguments) in [
         (LEAD, "claim_task", json!({"id": "T-1"})),
@@ -219,7 +219,7 @@ async fn a_human_task_blocks_its_dependents_until_a_human_marks_it_done_and_no_a
 }
 
 #[tokio::test]
-async fn a_task_with_a_blocker_is_not_ready_and_is_neither_claimed_nor_given_to_a_task_worker_until_cleared()
+async fn a_task_on_hold_is_not_ready_and_is_neither_claimed_nor_given_to_a_task_worker_until_cleared()
  {
     let fake = FakeClaude::new("result");
     let harness = planned(&fake).await;
@@ -227,18 +227,18 @@ async fn a_task_with_a_blocker_is_not_ready_and_is_neither_claimed_nor_given_to_
     let set = harness
         .call(
             LEAD,
-            "set_blocker",
+            "set_hold",
             json!({"id": "T-3", "reason": "  Wait until the design is signed off  "}),
         )
         .await;
-    assert_eq!(set, json!({"id": "T-3", "blocker": true}));
+    assert_eq!(set, json!({"id": "T-3", "hold": true}));
     let held = task(&harness, "T-3").await;
     assert_eq!(held["status"], "todo");
     assert_eq!(
-        held["blocker"]["reason"],
+        held["hold"]["reason"],
         "Wait until the design is signed off"
     );
-    assert_eq!(held["blocker"]["set_by"], LEAD);
+    assert_eq!(held["hold"]["set_by"], LEAD);
     assert!(ready(&harness).await.is_empty());
     let graph = harness.call(LEAD, "get_task_graph", json!({})).await;
     assert_eq!(
@@ -250,7 +250,7 @@ async fn a_task_with_a_blocker_is_not_ready_and_is_neither_claimed_nor_given_to_
             "blocked": false,
             "kind": "proposal",
             "labels": ["ui"],
-            "blocker": {"reason": "Wait until the design is signed off"},
+            "hold": {"reason": "Wait until the design is signed off"},
         })
     );
 
@@ -267,7 +267,7 @@ async fn a_task_with_a_blocker_is_not_ready_and_is_neither_claimed_nor_given_to_
         let refused = harness.refused(agent, tool, arguments).await;
         assert_eq!(refused["code"], codes::TASK_ON_HOLD, "{tool}: {refused}");
         assert!(
-            refused["hint"].as_str().unwrap().contains("clear_blocker"),
+            refused["hint"].as_str().unwrap().contains("clear_hold"),
             "{tool}: {refused}"
         );
         assert_eq!(refused["details"]["set_by"], LEAD, "{tool}");
@@ -281,15 +281,15 @@ async fn a_task_with_a_blocker_is_not_ready_and_is_neither_claimed_nor_given_to_
         .unwrap()
         .clone();
     assert_eq!(
-        card["blocker"]["reason"],
+        card["hold"]["reason"],
         "Wait until the design is signed off"
     );
-    assert_eq!(card["blocker"]["set_by"], LEAD);
+    assert_eq!(card["hold"]["set_by"], LEAD);
 
-    let (status, cleared) = http(&harness, Method::DELETE, "tasks/T-3/blocker", None).await;
+    let (status, cleared) = http(&harness, Method::DELETE, "tasks/T-3/hold", None).await;
     assert_eq!(status, StatusCode::OK, "{cleared}");
-    assert_eq!(cleared["blocker"], Value::Null);
-    assert_eq!(cleared["can_set_blocker"], true);
+    assert_eq!(cleared["hold"], Value::Null);
+    assert_eq!(cleared["can_set_hold"], true);
     until_stdin(&fake, LEAD, "fold: T-3 is ready in your area").await;
     assert_eq!(ready(&harness).await, ["T-3"]);
     let started = harness
@@ -317,7 +317,7 @@ async fn a_task_with_a_blocker_is_not_ready_and_is_neither_claimed_nor_given_to_
 }
 
 #[tokio::test]
-async fn a_planned_blocker_is_set_before_the_lead_hears_of_the_task() {
+async fn a_planned_hold_is_set_before_the_lead_hears_of_the_task() {
     let fake = FakeClaude::new("result");
     let harness = planned(&fake).await;
     let created = harness
@@ -326,7 +326,7 @@ async fn a_planned_blocker_is_set_before_the_lead_hears_of_the_task() {
             "create_task_plan",
             json!({"tasks": [
                 {"key": "icons", "title": "Draw the icons", "description": "Check the icons", "labels": ["ui"]},
-                {"key": "push", "title": "Wire the Meta push", "description": "Check the push", "labels": ["ui"], "blocker": {"reason": " Wait for the Meta review "}}
+                {"key": "push", "title": "Wire the Meta push", "description": "Check the push", "labels": ["ui"], "hold": {"reason": " Wait for the Meta review "}}
             ]}),
         )
         .await;
@@ -338,8 +338,8 @@ async fn a_planned_blocker_is_set_before_the_lead_hears_of_the_task() {
         ])
     );
     let held = task(&harness, "T-5").await;
-    assert_eq!(held["blocker"]["reason"], "Wait for the Meta review");
-    assert_eq!(held["blocker"]["set_by"], MAIN);
+    assert_eq!(held["hold"]["reason"], "Wait for the Meta review");
+    assert_eq!(held["hold"]["set_by"], MAIN);
     until_stdin(&fake, LEAD, "fold: T-4 is ready in your area").await;
     assert!(!ready(&harness).await.contains(&"T-5".to_owned()));
     let refused = harness
@@ -347,7 +347,7 @@ async fn a_planned_blocker_is_set_before_the_lead_hears_of_the_task() {
         .await;
     assert_eq!(refused["code"], codes::TASK_ON_HOLD, "{refused}");
 
-    let (status, cleared) = http(&harness, Method::DELETE, "tasks/T-5/blocker", None).await;
+    let (status, cleared) = http(&harness, Method::DELETE, "tasks/T-5/hold", None).await;
     assert_eq!(status, StatusCode::OK, "{cleared}");
     let lines = until_stdin(&fake, LEAD, "fold: T-5 is ready in your area").await;
     let notices: usize = lines
@@ -356,7 +356,7 @@ async fn a_planned_blocker_is_set_before_the_lead_hears_of_the_task() {
         .sum();
     assert_eq!(
         notices, 1,
-        "only the cleared blocker makes T-5 ready for the lead"
+        "only the cleared hold makes T-5 ready for the lead"
     );
     assert!(ready(&harness).await.contains(&"T-5".to_owned()));
     let holds: Vec<String> = harness
@@ -376,7 +376,7 @@ async fn a_planned_blocker_is_set_before_the_lead_hears_of_the_task() {
 }
 
 #[tokio::test]
-async fn only_a_human_or_the_main_agent_clears_a_blocker_and_completes_a_human_task() {
+async fn only_a_human_or_the_main_agent_clears_a_hold_and_completes_a_human_task() {
     let fake = FakeClaude::new("result");
     let mut harness = planned(&fake).await;
     harness
@@ -395,7 +395,7 @@ async fn only_a_human_or_the_main_agent_clears_a_blocker_and_completes_a_human_t
     let claimed = harness
         .refused(
             LEAD,
-            "set_blocker",
+            "set_hold",
             json!({"id": "T-3", "reason": "Wait for the copy"}),
         )
         .await;
@@ -411,7 +411,7 @@ async fn only_a_human_or_the_main_agent_clears_a_blocker_and_completes_a_human_t
     let (status, with_workspace) = http(
         &harness,
         Method::PUT,
-        "tasks/T-3/blocker",
+        "tasks/T-3/hold",
         Some(&json!({"reason": "Wait for the copy"})),
     )
     .await;
@@ -419,33 +419,33 @@ async fn only_a_human_or_the_main_agent_clears_a_blocker_and_completes_a_human_t
     assert_eq!(with_workspace["error"]["code"], codes::TASK_HOLD_DENIED);
     assert_eq!(with_workspace["error"]["details"]["reason"], "started");
     let (_, view) = http(&harness, Method::GET, "tasks/T-3", None).await;
-    assert_eq!(view["can_set_blocker"], false, "{view}");
-    assert_eq!(view["blocker"], Value::Null);
+    assert_eq!(view["can_set_hold"], false, "{view}");
+    assert_eq!(view["hold"], Value::Null);
 
     let by_task_worker = harness
         .refused(
             TASK_WORKER,
-            "set_blocker",
+            "set_hold",
             json!({"id": "T-2", "reason": "Wait."}),
         )
         .await;
     assert_eq!(by_task_worker["code"], codes::TASK_HOLD_DENIED);
     let by_solo = harness
-        .refused(SOLO, "set_blocker", json!({"id": "T-2", "reason": "Wait."}))
+        .refused(SOLO, "set_hold", json!({"id": "T-2", "reason": "Wait."}))
         .await;
     assert_eq!(by_solo["code"], codes::ORCHESTRATOR_REQUIRED);
     let blank = harness
-        .refused(MAIN, "set_blocker", json!({"id": "T-2", "reason": " "}))
+        .refused(MAIN, "set_hold", json!({"id": "T-2", "reason": " "}))
         .await;
     assert_eq!(blank["code"], codes::INVALID_HOLD_REASON);
     harness
         .call(
             MAIN,
-            "set_blocker",
+            "set_hold",
             json!({"id": "T-2", "reason": "Wait for the app id"}),
         )
         .await;
-    let set_at = task(&harness, "T-2").await["blocker"]["set_at"].clone();
+    let set_at = task(&harness, "T-2").await["hold"]["set_at"].clone();
     harness
         .project
         .clock()
@@ -454,16 +454,16 @@ async fn only_a_human_or_the_main_agent_clears_a_blocker_and_completes_a_human_t
     harness
         .call(
             LEAD,
-            "set_blocker",
+            "set_hold",
             json!({"id": "T-2", "reason": "Wait for the app id"}),
         )
         .await;
     let same = task(&harness, "T-2").await;
     assert_eq!(
-        same["blocker"]["set_by"], MAIN,
+        same["hold"]["set_by"], MAIN,
         "the same reason changes nothing"
     );
-    assert_eq!(same["blocker"]["set_at"], set_at);
+    assert_eq!(same["hold"]["set_at"], set_at);
 
     for (agent, code) in [
         (LEAD, codes::MAIN_AGENT_REQUIRED),
@@ -471,7 +471,7 @@ async fn only_a_human_or_the_main_agent_clears_a_blocker_and_completes_a_human_t
         (SOLO, codes::ORCHESTRATOR_REQUIRED),
     ] {
         let clear = harness
-            .refused(agent, "clear_blocker", json!({"id": "T-2"}))
+            .refused(agent, "clear_hold", json!({"id": "T-2"}))
             .await;
         assert_eq!(clear["code"], code, "{agent} clears");
         let complete = harness
@@ -480,19 +480,15 @@ async fn only_a_human_or_the_main_agent_clears_a_blocker_and_completes_a_human_t
         assert_eq!(complete["code"], code, "{agent} completes");
     }
     assert_eq!(
-        task(&harness, "T-2").await["blocker"]["reason"],
+        task(&harness, "T-2").await["hold"]["reason"],
         "Wait for the app id"
     );
     assert_eq!(task(&harness, "T-1").await["status"], "todo");
 
-    let cleared = harness
-        .call(MAIN, "clear_blocker", json!({"id": "T-2"}))
-        .await;
-    assert_eq!(cleared, json!({"id": "T-2", "blocker": false}));
-    let again = harness
-        .call(MAIN, "clear_blocker", json!({"id": "T-2"}))
-        .await;
-    assert_eq!(again, json!({"id": "T-2", "blocker": false}));
+    let cleared = harness.call(MAIN, "clear_hold", json!({"id": "T-2"})).await;
+    assert_eq!(cleared, json!({"id": "T-2", "hold": false}));
+    let again = harness.call(MAIN, "clear_hold", json!({"id": "T-2"})).await;
+    assert_eq!(again, json!({"id": "T-2", "hold": false}));
 
     harness
         .call(
@@ -524,13 +520,13 @@ async fn only_a_human_or_the_main_agent_clears_a_blocker_and_completes_a_human_t
         .await;
     assert_eq!(completed, json!({"id": "T-1", "status": "done"}));
     let closed = harness
-        .refused(MAIN, "set_blocker", json!({"id": "T-1", "reason": "Late."}))
+        .refused(MAIN, "set_hold", json!({"id": "T-1", "reason": "Late."}))
         .await;
     assert_eq!(closed["code"], codes::TASK_CLOSED);
 }
 
 #[tokio::test]
-async fn a_human_task_is_created_by_whoever_plans_the_work_and_the_web_sets_its_blocker() {
+async fn a_human_task_is_created_by_whoever_plans_the_work_and_the_web_sets_its_hold() {
     let fake = FakeClaude::new("result");
     let mut harness = planned(&fake).await;
     harness
@@ -568,7 +564,7 @@ async fn a_human_task_is_created_by_whoever_plans_the_work_and_the_web_sets_its_
     .await;
     assert_eq!(status, StatusCode::CREATED, "{made}");
     assert_eq!(made["kind"], "human");
-    assert_eq!(made["blocker"], Value::Null);
+    assert_eq!(made["hold"], Value::Null);
     let created = harness
         .events()
         .await
@@ -580,7 +576,7 @@ async fn a_human_task_is_created_by_whoever_plans_the_work_and_the_web_sets_its_
     let (status, blank) = http(
         &harness,
         Method::PUT,
-        "tasks/T-5/blocker",
+        "tasks/T-5/hold",
         Some(&json!({"reason": ""})),
     )
     .await;
@@ -589,13 +585,13 @@ async fn a_human_task_is_created_by_whoever_plans_the_work_and_the_web_sets_its_
     let (status, held) = http(
         &harness,
         Method::PUT,
-        "tasks/T-2/blocker",
+        "tasks/T-2/hold",
         Some(&json!({"reason": "Wait for the legal review"})),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{held}");
-    assert_eq!(held["blocker"]["reason"], "Wait for the legal review");
-    assert_eq!(held["blocker"]["set_by"], "human:ana");
+    assert_eq!(held["hold"]["reason"], "Wait for the legal review");
+    assert_eq!(held["hold"]["set_by"], "human:ana");
     let (_, board) = http(&harness, Method::GET, "board", None).await;
     let cards: Vec<Value> = board["columns"]
         .as_array()
@@ -611,21 +607,18 @@ async fn a_human_task_is_created_by_whoever_plans_the_work_and_the_web_sets_its_
             .clone()
     };
     assert_eq!(card("T-5")["kind"], "human");
-    assert_eq!(
-        card("T-2")["blocker"]["reason"],
-        "Wait for the legal review"
-    );
-    assert_eq!(card("T-3")["blocker"], Value::Null);
+    assert_eq!(card("T-2")["hold"]["reason"], "Wait for the legal review");
+    assert_eq!(card("T-3")["hold"], Value::Null);
 }
 
 #[tokio::test]
-async fn needs_you_lists_each_ready_human_task_and_each_blocker_with_its_reason() {
+async fn needs_you_lists_each_ready_human_task_and_each_hold_with_its_reason() {
     let fake = FakeClaude::new("result");
     let harness = planned(&fake).await;
     harness
         .call(
             MAIN,
-            "set_blocker",
+            "set_hold",
             json!({"id": "T-2", "reason": "Wait for the app id"}),
         )
         .await;
@@ -665,9 +658,7 @@ async fn needs_you_lists_each_ready_human_task_and_each_blocker_with_its_reason(
         ]
     );
 
-    harness
-        .call(MAIN, "clear_blocker", json!({"id": "T-2"}))
-        .await;
+    harness.call(MAIN, "clear_hold", json!({"id": "T-2"})).await;
     let (status, done) = http(&harness, Method::POST, "tasks/T-1/complete", None).await;
     assert_eq!(status, StatusCode::OK, "{done}");
     let (_, list) = http(&harness, Method::GET, "needs-you", None).await;

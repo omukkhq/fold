@@ -97,7 +97,7 @@ export const humanReviewSchema = z.object({
 export type HumanReviewInput = z.input<typeof humanReviewSchema>;
 export type HumanReviewForm = z.output<typeof humanReviewSchema>;
 
-export const blockerSchema = z.object({
+export const holdSchema = z.object({
   reason: z
     .string()
     .trim()
@@ -107,7 +107,7 @@ export const blockerSchema = z.object({
       "Keep the reason to 500 characters.",
     ),
 });
-export type BlockerForm = z.infer<typeof blockerSchema>;
+export type HoldForm = z.infer<typeof holdSchema>;
 
 export const sendBackSchema = z.object({
   note: z

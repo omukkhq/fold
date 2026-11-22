@@ -134,8 +134,9 @@ pub enum NeedsYouItemKind {
     RequestDraft,
     /// A human task in Todo: every prerequisite is Done and a person does the work, then marks it Done.
     HumanTask,
-    /// A task with a blocker, which waits until a human clears it; `reason` says why.
-    Blocker,
+    /// A task on hold, which waits until a human takes the hold off; `reason` says why. The wire value stays `blocker`, which the web app and stored notices read.
+    #[serde(rename = "blocker")]
+    Hold,
     /// A human change from the project folder that conflicts with main: main did not move, and the main agent explains the conflict in its conversation and prepares the merge for the human's OK. `commit` is the human's Git commit, null for a change `fld record` read from the folder, and `paths` the conflicting files.
     HumanChange,
     /// The project folder's Git branch or HEAD shows a change fold did not make, such as another branch checked out, a reset or a stash, so fold does not update the folder; `reason` is the command that brings the branch back.
@@ -329,7 +330,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::HumanReview => NeedsYouItemKind::HumanReview,
             NeedsYouKind::RequestDraft => NeedsYouItemKind::RequestDraft,
             NeedsYouKind::HumanTask => NeedsYouItemKind::HumanTask,
-            NeedsYouKind::Blocker => NeedsYouItemKind::Blocker,
+            NeedsYouKind::Hold => NeedsYouItemKind::Hold,
             NeedsYouKind::HumanChange => NeedsYouItemKind::HumanChange,
             NeedsYouKind::HeadMoved => NeedsYouItemKind::HeadMoved,
             NeedsYouKind::FolderHeld => NeedsYouItemKind::FolderHeld,

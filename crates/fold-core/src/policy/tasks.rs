@@ -70,7 +70,7 @@ pub fn can_change_checklist(
     })
 }
 
-/// How far an agent has taken a task, which decides whether it can still get a blocker.
+/// How far an agent has taken a task, which decides whether it can still be put on hold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TaskStart {
     pub status: TaskStatus,
@@ -81,7 +81,7 @@ pub struct TaskStart {
     pub open_proposal: bool,
 }
 
-/// A blocker keeps agents from starting a task, so it is set while the task waits in Backlog or Todo and no agent has started it: no claim, no live task workspace and no open proposal. Work that an agent has started is never put on hold.
+/// A hold keeps agents from starting a task, so it is set while the task waits in Backlog or Todo and no agent has started it: no claim, no live task workspace and no open proposal. Work that an agent has started is never put on hold.
 pub fn can_hold_task(start: &TaskStart) -> Result<(), PolicyDenied> {
     let waiting = matches!(start.status, TaskStatus::Backlog | TaskStatus::Todo);
     if waiting && !start.claimed && !start.workspace && !start.open_proposal {
@@ -89,8 +89,8 @@ pub fn can_hold_task(start: &TaskStart) -> Result<(), PolicyDenied> {
     }
     Err(PolicyDenied {
         code: codes::TASK_HOLD_DENIED,
-        message: "a blocker is set only on a task in Backlog or Todo that no agent has started",
-        hint: "set the blocker before an agent claims the task; call get_task to see its claim, workspace and proposal",
+        message: "a hold is set only on a task in Backlog or Todo that no agent has started",
+        hint: "set the hold before an agent claims the task; call get_task to see its claim, workspace and proposal",
     })
 }
 
@@ -219,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_task_no_agent_has_started_gets_a_blocker() {
+    fn only_a_task_no_agent_has_started_gets_a_hold() {
         let waiting = TaskStart {
             status: TaskStatus::Todo,
             claimed: false,

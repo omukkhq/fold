@@ -48,13 +48,13 @@ export function workGaps(
   return { items, note: task.proposal === null ? PROPOSAL_NOTE : null };
 }
 
-/** The Links group's empty items: the blocker and both sides of the dependencies. */
+/** The Links group's empty items: the hold and both sides of the dependencies. */
 export function linkGaps(
-  task: Pick<TaskDetail, "blocker" | "dependencies">,
+  task: Pick<TaskDetail, "hold" | "dependencies">,
 ): Gaps {
   const groups = groupDependencies(task.dependencies);
   const items: string[] = [];
-  if (task.blocker === null) items.push("no blocker");
+  if (task.hold === null) items.push("not on hold");
   if (groups.needs.length === 0) items.push("no prerequisites");
   if (groups.neededBy.length === 0) items.push("no task waits for this one");
   return { items, note: null };

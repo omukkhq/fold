@@ -40,7 +40,7 @@ type ChipCard = Pick<
   | "attention"
   | "blocked"
   | "blocked_by"
-  | "blocker"
+  | "hold"
   | "kind"
   | "proposal"
   | "report"
@@ -78,7 +78,7 @@ function activityChip(activity: WorkerActivity): CardChip {
 
 /**
  * The one chip a card shows, or null. The first state that holds wins: a person must answer or approve, a human
- * blocker, an unfinished prerequisite (before the stall, which it causes), a check run that goes, which no person
+ * hold, an unfinished prerequisite (before the stall, which it causes), a check run that goes, which no person
  * waits for, which the daemon never counts as a stall and during which the worker's claim never runs out, what fold saw
  * of the worker (work in progress and a wait for a lead's go in the neutral tone, a stall in gold only once it waits for
  * a person; a stale claim, which waits for a person, shows over the neutral states), a stall and then a stale claim that
@@ -100,8 +100,8 @@ export function cardChip(
   if (hasKind(card.attention, "human_review")) {
     return { tone: "warn", icon: UserCheck, text: "Your review" };
   }
-  if (card.blocker !== null) {
-    return { tone: "warn", icon: Hand, text: "Blocker" };
+  if (card.hold !== null) {
+    return { tone: "warn", icon: Hand, text: "On hold" };
   }
   const blocked = blockedText(card);
   if (blocked !== null) {

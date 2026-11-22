@@ -12,7 +12,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::services::agents::peers::{self, PeerWorker};
-use crate::support::{SESSION_ENV, lock};
+use crate::support::{lock, remove_daemon_context};
 
 /// The end of a command's output that a result keeps. The end is where a failure shows.
 pub const LOG_LIMIT: usize = 64 * 1024;
@@ -532,7 +532,8 @@ fn shell(dir: &Path, run: &str) -> Command {
         // The command leads a process group of its own, so a timeout or the end of the command reaches every process it started.
         .process_group(0)
         .kill_on_drop(true);
-    for name in SESSION_ENV.iter().chain(&IDENTITY_ENV) {
+    remove_daemon_context(&mut command);
+    for name in IDENTITY_ENV {
         command.env_remove(name);
     }
     command
@@ -553,6 +554,8 @@ fn finish(tail: Arc<Mutex<Tail>>) -> (Vec<u8>, u64) {
 #[cfg(test)]
 mod tests {
     use fold_core::ManualClock;
+
+    use crate::support::{SERVICE_ENV, SESSION_ENV};
 
     use super::*;
 
@@ -609,7 +612,7 @@ mod tests {
             .filter(|(_, value)| value.is_none())
             .map(|(name, _)| name.to_string_lossy().into_owned())
             .collect();
-        for name in SESSION_ENV.iter().chain(&IDENTITY_ENV) {
+        for name in SESSION_ENV.iter().chain(&SERVICE_ENV).chain(&IDENTITY_ENV) {
             assert!(removed.iter().any(|gone| gone == name), "{name}");
         }
         assert!(removed.iter().any(|gone| gone == "FOLD_AGENT_TAGS"));

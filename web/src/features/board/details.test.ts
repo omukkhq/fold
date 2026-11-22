@@ -29,7 +29,7 @@ describe("cardDetails", () => {
       worker: "api-audit",
       kind: "no_proposal",
       report: "Drew the icons.",
-      blocker: { reason: "Wait for the logo", set_by: "tanim", set_at: 0 },
+      hold: { reason: "Wait for the logo", set_by: "tanim", set_at: 0 },
       blocked_by: ["T-2", "T-9"],
       blocks: 1,
       messages: 2,
@@ -75,7 +75,7 @@ describe("cardDetails", () => {
     expect(details.rows.map((row) => row.name)).toEqual([
       "Worker",
       "Kind",
-      "Blocker",
+      "On hold",
       "Needs",
       "Blocks",
       "Proposal",
@@ -164,12 +164,12 @@ describe("cardDetails", () => {
     expect(details.rows).toEqual([]);
   });
 
-  it("shows a short report and blocker whole", () => {
+  it("shows a short report and hold whole", () => {
     const details = cardDetails(
       boardCard("T-3", {
         kind: "no_proposal",
         report: "Drew the `icons`.",
-        blocker: { reason: "Wait for the logo", set_by: "tanim", set_at: 0 },
+        hold: { reason: "Wait for the logo", set_by: "tanim", set_at: 0 },
       }),
       null,
       0,
@@ -177,7 +177,7 @@ describe("cardDetails", () => {
     expect(details.rows.filter((row) => row.kind === "prose")).toEqual([
       {
         kind: "prose",
-        name: "Blocker",
+        name: "On hold",
         text: "Wait for the logo",
         clamp: null,
         more: null,
@@ -209,7 +209,7 @@ describe("proseRow", () => {
 
   it("clamps one long paragraph, and counts neither blank lines nor the spaces around the text", () => {
     expect(
-      proseRow("Blocker", "x".repeat(PREVIEW_CHARS + 1), "reason").more,
+      proseRow("On hold", "x".repeat(PREVIEW_CHARS + 1), "reason").more,
     ).toBe("Open the task to read the full reason");
     const four = Array.from({ length: PREVIEW_LINES }, (_, i) =>
       String(i),

@@ -232,6 +232,50 @@ async fn a_human_creates_a_request_with_an_attachment_and_a_mention() {
 }
 
 #[tokio::test]
+async fn agents_and_humans_read_a_request_and_its_attachments_and_the_system_does_not() {
+    let fx = Fixture::new().await;
+    fx.tasks
+        .create_request(
+            &human("tanim"),
+            "See the log.",
+            vec![attachment("export.log", b"line one\n")],
+        )
+        .await
+        .unwrap();
+    for reader in [agent("backend"), human("ana")] {
+        let detail = fx.tasks.read_request(&reader, rq(1)).await.unwrap();
+        assert_eq!(detail.attachments.len(), 1);
+        let (stored, bytes) = fx
+            .tasks
+            .read_request_attachment(&reader, rq(1), 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            (stored.name.as_str(), bytes.as_slice()),
+            ("export.log", &b"line one\n"[..])
+        );
+    }
+    let refused = fx
+        .tasks
+        .read_request(&Actor::System, rq(1))
+        .await
+        .unwrap_err();
+    assert_eq!(code(&refused), codes::HUMAN_REQUIRED);
+    let refused = fx
+        .tasks
+        .read_request_attachment(&Actor::System, rq(1), 1)
+        .await
+        .unwrap_err();
+    assert_eq!(code(&refused), codes::HUMAN_REQUIRED);
+    let missing = fx
+        .tasks
+        .read_request_attachment(&agent("backend"), rq(1), 2)
+        .await
+        .unwrap_err();
+    assert_eq!(code(&missing), codes::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn creation_checks_the_message_and_the_attachments() {
     let fx = Fixture::new().await;
     let refusal = async |body: &str, attachments: Vec<NewRequestAttachment>| {

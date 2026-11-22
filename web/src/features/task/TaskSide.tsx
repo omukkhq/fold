@@ -17,12 +17,12 @@ import { useForm } from "react-hook-form";
 import { sessionQuery } from "@/api/queries";
 import {
   addDependency,
-  clearBlocker,
+  takeOffHold,
   clearHumanReview,
   completeTask,
   removeDependency,
   sendBackTask,
-  setBlocker,
+  putOnHold,
   setHumanReview,
   type LiveWorkspace,
   type TaskDetail,
@@ -55,7 +55,7 @@ import {
   resolvedText,
 } from "./leadCheck";
 import { inMainArea, mainReviewNote } from "./areas";
-import { blockerControls, blockerView } from "./humanTask";
+import { holdControls, holdView } from "./humanTask";
 import { useAreas } from "./LabelFields";
 import { LabelsSide } from "./LabelsSide";
 import { recordedCheckpoints } from "./liveStrip";
@@ -70,11 +70,11 @@ import {
   WriteError,
 } from "./parts";
 import {
-  blockerSchema,
+  holdSchema,
   dependencySchema,
   humanReviewSchema,
   sendBackSchema,
-  type BlockerForm as BlockerValues,
+  type HoldForm as HoldValues,
   type DependencyForm,
   type HumanReviewForm,
   type HumanReviewInput,
@@ -429,7 +429,7 @@ function HumanReviewForm({
   );
 }
 
-function BlockerForm({
+function HoldForm({
   slug,
   task,
   reason,
@@ -440,16 +440,16 @@ function BlockerForm({
   reason: string;
   onDone: () => void;
 }) {
-  const write = useTaskWrite(slug, task, (values: BlockerValues) =>
-    setBlocker(slug, task, values.reason),
+  const write = useTaskWrite(slug, task, (values: HoldValues) =>
+    putOnHold(slug, task, values.reason),
   );
-  const form = useForm<BlockerValues>({
-    resolver: zodResolver(blockerSchema),
+  const form = useForm<HoldValues>({
+    resolver: zodResolver(holdSchema),
     defaultValues: { reason },
   });
   return (
     <form
-      aria-label="Set a blocker"
+      aria-label="Put on hold"
       className="flex flex-col gap-8"
       onSubmit={submit(
         form.handleSubmit((values) => {
@@ -459,7 +459,7 @@ function BlockerForm({
     >
       <Textarea
         label="Reason"
-        hint="Agents cannot claim the task or start a task worker for it until a human clears the blocker."
+        hint="Agents cannot claim the task or start a task worker for it until a human takes it off hold."
         rows={3}
         disabled={write.isPending}
         error={form.formState.errors.reason?.message}
@@ -472,9 +472,9 @@ function BlockerForm({
           variant="primary"
           size="sm"
           pending={write.isPending}
-          pendingLabel="Setting blocker…"
+          pendingLabel="Putting on hold…"
         >
-          Set blocker
+          Put on hold
         </Button>
         <Button
           variant="ghost"
@@ -719,8 +719,8 @@ function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
   );
 }
 
-/** The blocker while it is set or being set: while it is set, no agent claims the task and no lead starts a task worker for it. */
-function Blocker({
+/** The hold while it is set or being set: while it is set, no agent claims the task and no lead starts a task worker for it. */
+function Hold({
   slug,
   task,
   now,
@@ -734,14 +734,14 @@ function Blocker({
   onEditing: (editing: boolean) => void;
 }) {
   const clear = useTaskWrite(slug, task.task, () =>
-    clearBlocker(slug, task.task),
+    takeOffHold(slug, task.task),
   );
-  const view = blockerView(task, now);
-  const controls = blockerControls(task);
+  const view = holdView(task, now);
+  const controls = holdControls(task);
   if (editing && controls.canSet) {
     return (
-      <SideGroup title="Blocker">
-        <BlockerForm
+      <SideGroup title="On hold">
+        <HoldForm
           slug={slug}
           task={task.task}
           reason={view?.reason ?? ""}
@@ -756,7 +756,7 @@ function Blocker({
     return null;
   }
   return (
-    <SideGroup title="Blocker">
+    <SideGroup title="On hold">
       <p className="flex items-center gap-6 font-semibold text-warn">
         <Hand aria-hidden="true" size={14} />
         No agent takes this task
@@ -773,12 +773,12 @@ function Blocker({
             <SmallAction
               icon={X}
               pending={clear.isPending}
-              pendingLabel="Clearing blocker…"
+              pendingLabel="Taking off hold…"
               onClick={() => {
                 clear.mutate(undefined);
               }}
             >
-              Clear blocker
+              Take off hold
             </SmallAction>
           ) : null}
           {controls.canSet ? (
@@ -927,19 +927,19 @@ function Links({
   task: TaskDetail;
   now: number;
 }) {
-  const [blocking, setBlocking] = useState(false);
+  const [holding, setHolding] = useState(false);
   const [adding, setAdding] = useState(false);
-  const controls = blockerControls(task);
-  const canSet = controls.canSet && task.blocker === null && !blocking;
+  const controls = holdControls(task);
+  const canSet = controls.canSet && task.hold === null && !holding;
   const canAdd = canEditDependencies(task.status) && !adding;
   return (
     <SideCard title="Links">
-      <Blocker
+      <Hold
         slug={slug}
         task={task}
         now={now}
-        editing={blocking}
-        onEditing={setBlocking}
+        editing={holding}
+        onEditing={setHolding}
       />
       <Dependencies
         slug={slug}
@@ -954,10 +954,10 @@ function Links({
             <SmallAction
               icon={Hand}
               onClick={() => {
-                setBlocking(true);
+                setHolding(true);
               }}
             >
-              Set blocker
+              Put on hold
             </SmallAction>
           ) : null}
           {canAdd ? (

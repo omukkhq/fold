@@ -749,6 +749,27 @@ impl TaskService {
         })
     }
 
+    /// [`Self::get_request`] for an `actor` that the read gate admits. The HTTP routes read without one, because the session or the socket admits them.
+    pub async fn read_request(
+        &self,
+        actor: &Actor,
+        request: RequestId,
+    ) -> Result<RequestDetail, TaskError> {
+        policy::can_read_request(actor).map_err(FoldError::from)?;
+        self.get_request(request).await
+    }
+
+    /// [`Self::request_attachment`] for an `actor` that the read gate admits.
+    pub async fn read_request_attachment(
+        &self,
+        actor: &Actor,
+        request: RequestId,
+        position: u32,
+    ) -> Result<(RequestAttachment, Vec<u8>), TaskError> {
+        policy::can_read_request(actor).map_err(FoldError::from)?;
+        self.request_attachment(request, position).await
+    }
+
     /// One attachment's metadata and bytes, by its 1-based position. A position the request does not have is `not_found`.
     pub async fn request_attachment(
         &self,
