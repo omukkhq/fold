@@ -12,7 +12,7 @@ use fold_core::tree::{ChangeKind as FileChangeKind, ChangeTally, FlatTree};
 use fold_core::{
     AgentName, CheckRunId, CheckpointId, Clock, EventActor, EventError, FoldError, LiveEvent,
     NewEvent, ProjectConfig, ProjectPaths, ProposalId, RevisionId, TaskId, Timestamp, WorkerName,
-    WorkspaceId, codes,
+    WorkerState, WorkspaceId, codes,
 };
 use fold_store::workspaces::{self, Checkpoint, CheckpointKind, WorkspaceKind, WorkspaceState};
 use fold_store::{Store, reviews};
@@ -35,7 +35,7 @@ use tokio::task::JoinHandle;
 use utoipa::ToSchema;
 
 use crate::services::agents::WorkerStreams;
-use crate::services::events::{EventBuffer, EventBus};
+use crate::services::events::{BusMessage, EventBuffer, EventBus};
 use crate::services::workspaces::{WorkspaceError, capabilities};
 use crate::support::{blocking, lock, unpoisoned};
 
@@ -647,7 +647,8 @@ impl Shared {
     }
 }
 
-/// What the hub needs to watch a workspace that waits for its group.
+/// What the hub needs to watch a workspace, kept while the workspace waits for its group, holds its watch or rests on the timer scan, so its watch can come back.
+#[derive(Clone)]
 struct Queued {
     workspace: WorkspaceId,
     root: PathBuf,
@@ -656,11 +657,13 @@ struct Queued {
     worker: Option<WorkerName>,
 }
 
-/// The workspaces that wait for their watch, in the order they were attached, and when the next group is due.
+/// Where each attached workspace stands with the hub: waiting for its group in the order they were attached, watched, or resting on the timer scan because nobody works in it. A workspace is in one of the three at most.
 #[derive(Default)]
 struct Waiting {
     queue: VecDeque<Queued>,
     next_at: Option<Timestamp>,
+    watched: HashMap<WorkspaceId, Queued>,
+    resting: HashMap<WorkspaceId, Queued>,
 }
 
 impl Waiting {
@@ -682,13 +685,155 @@ impl Waiting {
         self.queue.remove(at)
     }
 
+    /// Takes the workspaces of `worker` that wait for their group or rest, the waiting ones first.
     fn of_worker(&mut self, worker: &WorkerName) -> Vec<Queued> {
         let (theirs, others): (VecDeque<Queued>, VecDeque<Queued>) =
             std::mem::take(&mut self.queue)
                 .into_iter()
                 .partition(|queued| queued.worker.as_ref() == Some(worker));
         self.queue = others;
-        theirs.into()
+        let mut theirs: Vec<Queued> = theirs.into();
+        let resting: Vec<WorkspaceId> = self
+            .resting
+            .iter()
+            .filter(|(_, queued)| queued.worker.as_ref() == Some(worker))
+            .map(|(workspace, _)| *workspace)
+            .collect();
+        theirs.extend(
+            resting
+                .into_iter()
+                .filter_map(|workspace| self.resting.remove(&workspace)),
+        );
+        theirs
+    }
+
+    fn has_worker(&self, worker: &WorkerName) -> bool {
+        self.queue
+            .iter()
+            .chain(self.resting.values())
+            .any(|queued| queued.worker.as_ref() == Some(worker))
+    }
+
+    fn forget(&mut self, workspace: WorkspaceId) {
+        self.take(workspace);
+        self.watched.remove(&workspace);
+        self.resting.remove(&workspace);
+    }
+
+    fn set_worker(&mut self, workspace: WorkspaceId, worker: &WorkerName) {
+        let found = self
+            .queue
+            .iter_mut()
+            .find(|queued| queued.workspace == workspace)
+            .or_else(|| self.watched.get_mut(&workspace))
+            .or_else(|| self.resting.get_mut(&workspace));
+        if let Some(queued) = found {
+            queued.worker = Some(worker.clone());
+        }
+    }
+
+    /// What [`LiveState::follow_owners`] changes: the watched workspaces whose owner is not active go to rest, and the resting ones whose owner is active get their watch back. A waiting workspace keeps its place in the queue, so the gradual start holds; its group decides its watch.
+    fn moves(&self, active: &HashSet<AgentName>) -> (Vec<WorkspaceId>, Vec<WorkspaceId>) {
+        let wanted = |queued: &Queued| {
+            queued
+                .worker
+                .as_ref()
+                .is_some_and(|worker| active.contains(&worker.agent()))
+        };
+        let rest = self
+            .watched
+            .values()
+            .filter(|queued| !wanted(queued))
+            .map(|queued| queued.workspace)
+            .collect();
+        let wake = self
+            .resting
+            .values()
+            .filter(|queued| wanted(queued))
+            .map(|queued| queued.workspace)
+            .collect();
+        (rest, wake)
+    }
+}
+
+/// Whether a workspace holds a live watch, from what fold knows of its owner: the state of the owner's supervised worker process, `None` for an agent fold does not supervise, and whether the owner has an open session. A process that starts or works always gets the watch; an idle one, or an agent without a process, only while a session of it is open. A process that stops or fails ends its session with it, so its workspace rests on the timer scan from then on, as a parked worker's does.
+pub fn watch_wanted(worker: Option<WorkerState>, session_open: bool) -> bool {
+    session_open || matches!(worker, Some(WorkerState::Starting | WorkerState::Working))
+}
+
+/// The agents whose workspaces hold a watch now, as [`watch_wanted`] decides it from the store.
+async fn active_owners(store: &Store) -> Result<HashSet<AgentName>, fold_store::StoreError> {
+    let mut conn = store.read().acquire().await?;
+    let processes = fold_store::agents::list_worker_processes(&mut conn).await?;
+    let sessions: HashSet<AgentName> = fold_store::agents::open_session_calls_by_agent(&mut *conn)
+        .await?
+        .into_iter()
+        .map(|(agent, _)| agent)
+        .collect();
+    let states: HashMap<AgentName, WorkerState> = processes
+        .into_iter()
+        .map(|row| (row.agent, row.state))
+        .collect();
+    Ok(states
+        .keys()
+        .chain(sessions.iter())
+        .filter(|agent| watch_wanted(states.get(*agent).copied(), sessions.contains(*agent)))
+        .cloned()
+        .collect())
+}
+
+/// Whether the owner of a workspace that leaves the queue is in `active`; a failed read of the owners (`None`) gives the watch, and the next worker or session event looks again.
+fn owner_active(active: Option<&HashSet<AgentName>>, queued: &Queued) -> bool {
+    active.is_none_or(|active| {
+        queued
+            .worker
+            .as_ref()
+            .is_some_and(|worker| active.contains(&worker.agent()))
+    })
+}
+
+/// The stored events after which an owner's worker process or session may have started or ended.
+fn moves_owners(event: &fold_core::Event) -> bool {
+    [
+        types::WORKER_STARTED,
+        types::WORKER_RESUMED,
+        types::WORKER_REFRESHED,
+        types::WORKER_STOPPED,
+        types::WORKER_FAILED,
+        types::WORKER_PARKED,
+        types::SESSION_STARTED,
+        types::SESSION_ENDED,
+    ]
+    .contains(&event.event_type)
+}
+
+/// Gives the project's workspaces their watch or their rest again after each commit that starts, resumes, stops, parks or ends a worker process or a session, through [`LiveState::follow_owners`]. It ends when the project closes.
+pub async fn follow_watch_owners(
+    live: LiveState,
+    mut events: tokio::sync::broadcast::Receiver<BusMessage>,
+) {
+    use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+    let mut closing = live.shared.bus.closing();
+    loop {
+        let due = tokio::select! {
+            biased;
+            _ = closing.wait_for(|closed| *closed) => return,
+            received = events.recv() => match received {
+                Ok(BusMessage::Durable(event)) => moves_owners(&event),
+                Ok(BusMessage::Live(_)) => false,
+                Err(RecvError::Lagged(_)) => true,
+                Err(RecvError::Closed) => return,
+            },
+        };
+        if !due {
+            continue;
+        }
+        // Everything queued so far was committed before it was sent, so one look at the store covers it.
+        while !matches!(
+            events.try_recv(),
+            Err(TryRecvError::Empty | TryRecvError::Closed)
+        ) {}
+        live.follow_owners().await;
     }
 }
 
@@ -828,7 +973,7 @@ impl LiveState {
         Ok(())
     }
 
-    /// Gives a workspace that waits for its group its watch now. True when it waited.
+    /// Takes a workspace that waits for its group out of the queue now: it gets its watch when its owner is active, and rests on the timer scan otherwise. True when it waited.
     async fn watch_now(&self, workspace: WorkspaceId) -> bool {
         if !lock(&self.shared.waiting)
             .queue
@@ -841,7 +986,13 @@ impl LiveState {
         let Some(queued) = lock(&self.shared.waiting).take(workspace) else {
             return false;
         };
-        self.watch(queued).await;
+        // Read under the lifecycle lock, so a worker or session event committed before the read is in it, and one committed after it reaches the follower, which waits for this lock.
+        let active = active_owners(&self.shared.store).await.ok();
+        if owner_active(active.as_ref(), &queued) {
+            self.watch(queued).await;
+        } else {
+            lock(&self.shared.waiting).resting.insert(workspace, queued);
+        }
         true
     }
 
@@ -852,6 +1003,7 @@ impl LiveState {
         }
         let shared = Arc::clone(&self.shared);
         let workspace = queued.workspace;
+        let kept = queued.clone();
         let added = tokio::task::spawn_blocking(move || {
             shared.hub().add_workspace(
                 queued.workspace,
@@ -861,18 +1013,91 @@ impl LiveState {
             );
         })
         .await;
-        if added.is_err() {
-            tracing::warn!(workspace = %workspace, "the watcher did not take the workspace; the rescan tick still covers it");
+        match added {
+            Ok(()) => {
+                lock(&self.shared.waiting).watched.insert(workspace, kept);
+            }
+            Err(_) => {
+                tracing::warn!(workspace = %workspace, "the watcher did not take the workspace; the rescan tick still covers it");
+            }
         }
     }
 
-    /// Gives the waiting workspaces of `worker` their watch and first scan now, because their worker acts, and returns after the scan.
+    /// Takes the watch of a watched workspace away, so only the rescan tick and reads scan it, and asks for a full scan, which covers the changes whose notifications the hub dropped with the watch. The caller holds the lifecycle lock.
+    async fn rest(&self, workspace: WorkspaceId) {
+        let Some(queued) = lock(&self.shared.waiting).watched.remove(&workspace) else {
+            return;
+        };
+        self.rest_queued(queued, true).await;
+    }
+
+    async fn rest_queued(&self, queued: Queued, watched: bool) {
+        let workspace = queued.workspace;
+        if self.shared.sender(workspace).is_none() {
+            return;
+        }
+        if watched && let Some(hub) = self.shared.hub.get() {
+            let hub = Arc::clone(hub);
+            let _ = tokio::task::spawn_blocking(move || hub.remove_workspace(workspace)).await;
+        }
+        lock(&self.shared.waiting).resting.insert(workspace, queued);
+        self.scan_soon(workspace).await;
+    }
+
+    /// Gives a resting workspace its watch back, ends a timer mode that an overflow left, since the watch is new, and asks for a full scan of what changed while it rested. The caller holds the lifecycle lock.
+    async fn wake(&self, queued: Queued) {
+        let workspace = queued.workspace;
+        self.watch(queued).await;
+        if let Some(sender) = self.shared.sender(workspace) {
+            let _ = sender.send(Command::Restored).await;
+            let _ = sender.send(Command::Rescan).await;
+        }
+    }
+
+    /// Gives each workspace the watch or the rest that [`watch_wanted`] decides for its owner now: one look at the store, then the moves of [`Waiting::moves`]. A failed read changes nothing; the next worker or session event looks again.
+    pub async fn follow_owners(&self) {
+        let _serial = self.shared.lifecycle.lock().await;
+        let active = match active_owners(&self.shared.store).await {
+            Ok(active) => active,
+            Err(error) => {
+                tracing::warn!(
+                    code = error.log_code(),
+                    "the owners of the workspaces were not read; their watches stay as they are"
+                );
+                return;
+            }
+        };
+        let (rest, wake) = lock(&self.shared.waiting).moves(&active);
+        for workspace in rest {
+            self.rest(workspace).await;
+        }
+        for workspace in wake {
+            let queued = lock(&self.shared.waiting).resting.remove(&workspace);
+            if let Some(queued) = queued {
+                self.wake(queued).await;
+            }
+        }
+    }
+
+    /// Whether the hub watches a directory of `workspace` now.
+    pub async fn has_watch(&self, workspace: WorkspaceId) -> bool {
+        let Some(hub) = self.shared.hub.get() else {
+            return false;
+        };
+        let hub = Arc::clone(hub);
+        tokio::task::spawn_blocking(move || !hub.watched_dirs(workspace).is_empty())
+            .await
+            .unwrap_or(false)
+    }
+
+    /// How many workspaces rest on the timer scan without a watch.
+    pub fn resting(&self) -> usize {
+        lock(&self.shared.waiting).resting.len()
+    }
+
+    /// Gives the waiting and resting workspaces of `worker` their watch and a scan now, because their worker acts, and returns after the scan.
     pub async fn watch_worker(&self, worker: &WorkerName) {
-        if !lock(&self.shared.waiting)
-            .queue
-            .iter()
-            .any(|queued| queued.worker.as_ref() == Some(worker))
-        {
+        if !lock(&self.shared.waiting).has_worker(worker) {
             return;
         }
         let watched = {
@@ -881,7 +1106,7 @@ impl LiveState {
             let mut watched = Vec::with_capacity(theirs.len());
             for queued in theirs {
                 watched.push(queued.workspace);
-                self.watch(queued).await;
+                self.wake(queued).await;
             }
             watched
         };
@@ -923,10 +1148,16 @@ impl LiveState {
         let live = self.clone();
         runtime.spawn(async move {
             let _serial = live.shared.lifecycle.lock().await;
+            // Read under the lifecycle lock, so no owner event falls between the read and the moves.
+            let active = active_owners(&live.shared.store).await.ok();
             for queued in group {
                 let workspace = queued.workspace;
-                live.watch(queued).await;
-                live.scan_soon(workspace).await;
+                if owner_active(active.as_ref(), &queued) {
+                    live.watch(queued).await;
+                    live.scan_soon(workspace).await;
+                } else {
+                    live.rest_queued(queued, false).await;
+                }
             }
         });
     }
@@ -1013,14 +1244,19 @@ impl LiveState {
             })
             .await
         };
-        if turn == Turn::InGroup {
-            lock(&shared.waiting).queue.push_back(Queued {
-                workspace,
-                root,
-                rules,
-                tracked,
-                worker: row.worker.clone(),
-            });
+        let queued = Queued {
+            workspace,
+            root,
+            rules,
+            tracked,
+            worker: row.worker.clone(),
+        };
+        match turn {
+            Turn::InGroup => lock(&shared.waiting).queue.push_back(queued),
+            Turn::Now if watching.is_ok() => {
+                lock(&shared.waiting).watched.insert(workspace, queued);
+            }
+            Turn::Now => {}
         }
         if watching.is_err() {
             tracing::warn!(workspace = %workspace, "the watcher did not take the workspace; the rescan tick still covers it");
@@ -1077,7 +1313,7 @@ impl LiveState {
     pub async fn detach(&self, workspace: WorkspaceId) {
         let shared = &self.shared;
         let _serial = shared.lifecycle.lock().await;
-        lock(&shared.waiting).take(workspace);
+        lock(&shared.waiting).forget(workspace);
         let sender = lock(&shared.routes).remove(&workspace);
         if let Some(route) = sender {
             let _ = route.sender.send(Command::Stop).await;
@@ -1157,6 +1393,7 @@ impl LiveState {
 
     /// Names the new owner after the commit that adopted the workspace. The pipeline keeps running: the directory, the base and the changes are the same.
     pub fn set_worker(&self, workspace: WorkspaceId, worker: &WorkerName) {
+        lock(&self.shared.waiting).set_worker(workspace, worker);
         self.update(workspace, |view| view.worker = worker.to_string());
     }
 
@@ -2052,6 +2289,30 @@ mod tests {
 
     fn path(text: &str) -> RepoPath {
         RepoPath::parse(text.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn a_workspace_is_watched_while_its_owner_works_or_has_an_open_session() {
+        let states = [
+            None,
+            Some(WorkerState::Starting),
+            Some(WorkerState::Working),
+            Some(WorkerState::Idle),
+            Some(WorkerState::Stopping),
+            Some(WorkerState::Stopped),
+            Some(WorkerState::Failed),
+        ];
+        for state in states {
+            assert!(watch_wanted(state, true), "{state:?} in an open session");
+        }
+        let alone: Vec<Option<WorkerState>> = states
+            .into_iter()
+            .filter(|state| watch_wanted(*state, false))
+            .collect();
+        assert_eq!(
+            alone,
+            [Some(WorkerState::Starting), Some(WorkerState::Working)]
+        );
     }
 
     #[test]

@@ -55,7 +55,7 @@ impl Recorder {
     }
 }
 
-/// Acceptance 46, many workspaces at a daemon start: `frontend` and `backend` each work in four workspaces when the daemon stops. The daemon opens the project again and gives the workspaces their watch and first scan four at a time, two seconds of the project's clock apart, not all at once. Then every workspace reports an edit through its watch with no rescan tick, the watcher asks for no rescan by itself, one lost queue of one workspace rescans that workspace once and no other, and two losses before the rescan runs still give one rescan.
+/// Acceptance 46, many workspaces at a daemon start: `frontend` and `backend` each work in four workspaces when the daemon stops. The daemon opens the project again, their sessions connect without a tool call, and the daemon gives the workspaces their watch and first scan four at a time, two seconds of the project's clock apart, not all at once. Then every workspace reports an edit through its watch with no rescan tick, the watcher asks for no rescan by itself, one lost queue of one workspace rescans that workspace once and no other, and two losses before the rescan runs still give one rescan.
 #[tokio::test]
 async fn acceptance_46_workspaces_get_their_watch_in_groups_and_an_overflow_rescans_one_workspace_once()
  {
@@ -70,11 +70,14 @@ async fn acceptance_46_workspaces_get_their_watch_in_groups_and_an_overflow_resc
     }
     assert_eq!(work.len(), 2 * DEFAULT_WATCH_GROUP);
 
-    // The daemon stops and starts again with no session connected, so no worker acts yet.
+    // The daemon stops and starts again. The sessions connect again but call no tool yet, so no worker acts; an open session keeps the workspaces of its agent under watch.
     h.stop().await;
     let recorder = Recorder::default();
     h.watch = recorder.start();
     h.start_again().await;
+    for agent in ["frontend", "backend"] {
+        h.connect(agent).await;
+    }
     let live = h.handle.live.clone();
     assert_eq!(live.waiting(), work.len());
     for (workspace, _) in &work {

@@ -12,7 +12,7 @@ use fold_vcs::platform::Capabilities;
 
 use crate::daemon::{DRAIN_TIMEOUT, DaemonStart};
 use crate::jobs::{self, AutoCommit, ProjectTask};
-use crate::live::{LiveConfig, LiveState, WatchStart};
+use crate::live::{LiveConfig, LiveState, WatchStart, follow_watch_owners};
 use crate::push::{self, PushTargets, PushTask};
 use crate::services::agents::environment::WorkerEnvironment;
 use crate::services::agents::{AgentService, Launcher, SeenPresence, Supervisor, code_of};
@@ -85,6 +85,8 @@ pub struct ProjectHandle {
     cleanup_due: Arc<tokio::sync::Notify>,
     /// Decides the stalled flags again after each commit that makes a worker wait for someone or gives it the turn.
     stall_turns: ProjectTask,
+    /// Gives each workspace its watch or its rest on the timer scan again after each start or end of a worker process or a session.
+    watch_owners: ProjectTask,
     /// The device and inode of the database file this handle opened. SQLite keeps reading a file that was deleted, so only this tells the handle's database from a new one at the same path.
     database_file: Option<(u64, u64)>,
 }
@@ -231,6 +233,7 @@ impl ProjectHandle {
             bus.clone(),
             bus.subscribe(),
         ));
+        let watch_owners = ProjectTask::spawn(follow_watch_owners(live.clone(), bus.subscribe()));
         let workspace_cleanup = ProjectTask::spawn(follow_closed_workspaces(
             cleanup,
             bus.clone(),
@@ -267,6 +270,7 @@ impl ProjectHandle {
             workspace_cleanup,
             cleanup_due,
             stall_turns,
+            watch_owners,
             database_file,
         })
     }
@@ -311,12 +315,13 @@ impl ProjectHandle {
         }
     }
 
-    /// Waits up to `timeout` for the commit writer, the push delivery, the removal of closed workspace directories and the stall decisions to end after [`EventBus::close`], then aborts them, so none outlives the project's database.
+    /// Waits up to `timeout` for the commit writer, the push delivery, the removal of closed workspace directories, the stall decisions and the watch moves to end after [`EventBus::close`], then aborts them, so none outlives the project's database.
     pub async fn stop_tasks(&self, timeout: Duration) {
         self.auto_commit.stopped(timeout).await;
         self.push_task.stopped(timeout).await;
         self.workspace_cleanup.stopped(timeout).await;
         self.stall_turns.stopped(timeout).await;
+        self.watch_owners.stopped(timeout).await;
     }
 
     /// Asks the project's cleanup task to remove every closed workspace directory that is due, such as those a stopped daemon left. It returns at once; the removal runs in the background.

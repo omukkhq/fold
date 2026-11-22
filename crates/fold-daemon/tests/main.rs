@@ -56,6 +56,7 @@ mod acceptance_43_accounts;
 mod acceptance_44_login_waits;
 mod acceptance_45_request_attachments;
 mod acceptance_46_many_workspaces_start;
+mod acceptance_47_watch_follows_the_worker;
 mod acceptance_4_live_diff;
 mod acceptance_5_review_and_integrate;
 mod acceptance_6_dependency_unblocks;
