@@ -971,14 +971,14 @@ mod tests {
         assert!(!Role::Reviewer.prompt().contains("ask the review lead with"));
         let main = main_prompt();
         assert!(main.contains(
-            "about changes to the approved plan's boundaries (section 8), repeated failures, worker limits, blockers, human tasks and requests"
+            "about changes to the approved plan's boundaries (section 8), repeated failures, worker limits, holds, human tasks and requests"
         ));
         assert!(main.contains("never relay their questions"));
         assert!(main.contains(
             "Ask the user yourself about your own responsibilities: the plan and its boundaries, project-wide settings, and project checks"
         ));
         assert!(main.contains(
-            "Bring pending tool permissions, human reviews, request drafts, ready human tasks and blockers to the user, with each item id"
+            "Bring pending tool permissions, human reviews, request drafts, ready human tasks and holds to the user, with each item id"
         ));
         assert!(shared_prompt().contains(
             "Ask the humans directly about your own work; the main agent asks the user about the plan"

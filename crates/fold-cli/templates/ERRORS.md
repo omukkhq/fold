@@ -39,10 +39,10 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 | `handoff_denied` | Only an area lead or the review lead calls `write_handoff`. As the main agent, send yourself the note and ask the user to run `/clear`. |
 | `project_paused` | The user paused the agents of the project. Start no work. Only when the user asks, the main agent calls `resume_project`. |
 | `worker_peer_refused` | A command in a worker's Bash, or in a check that fold runs for the worker, acts only as that worker's own agent and never as a human; a check that fold runs for no worker acts as no agent. Use the fold tools of your own session. |
-| `invalid_hold_reason` | Give the blocker a reason of 1 to 500 characters. |
-| `task_on_hold` | The task has a blocker and waits for a person. Call `get_task` to read the reason, and call `get_ready_tasks` for other work. A human or the main agent clears it with `clear_hold`. |
+| `invalid_hold_reason` | Give the hold a reason of 1 to 500 characters. |
+| `task_on_hold` | The task is on hold and waits for a person. Call `get_task` to read the reason, and call `get_ready_tasks` for other work. A human or the main agent clears it with `clear_hold`. |
 | `task_needs_human` | The task is a human task: a person does it outside fold. Call `get_ready_tasks` for other work. A human or the main agent marks it Done with `complete_task`. |
-| `task_hold_denied` | Only a human, the main agent or the lead of the task's area sets a blocker, and only on a task in Backlog or Todo that no agent has started (detail reason `started`). Ask that lead or the main agent, or let the started work finish. |
+| `task_hold_denied` | Only a human, the main agent or the lead of the task's area puts a task on hold, and only a task in Backlog or Todo that no agent has started (detail reason `started`). Ask that lead or the main agent, or let the started work finish. |
 | `checklist_denied` | Only the holder's agent, its lead, the main agent or a human changes the checklist of a held task; only the lead of the task's area, the main agent or a human changes it when nobody holds the task. Call `get_task` and ask that agent. |
 | `checklist_ambiguous` | The task has two or more checklists and the plain item names none. Name one in `checklist`; `details.checklists` lists them. |
 | `checks_file_invalid` | `fold-checks.toml` in the workspace is not valid; the message names the line or the check. Fix the file and call the command again. |
@@ -51,7 +51,7 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 | `main_area` | The area `main` belongs to the main agent: it has no lead and no profile, and no review agent reviews its tasks. A human approves a proposal of `main`, or the main agent when the user said so. Review the proposals of the other areas. |
 | `review_lead_delegates` | The review lead never reviews a proposal itself. Call `start_worker` with role `reviewer` and the proposal ids; fold gives the reviewer the review claim, or a batch of a group. |
 | `review_plan_too_large` | A review plan holds at most 5 tasks, the tasks of its proposals included. Keep the most closely related tasks and review the others alone. |
-| `task_not_awaitable` | A plan cannot wait for this task; `details.reason` says why, such as `blocker`, `backlog`, `human_review` or `depends_on_member`, or `proposal_open` when its proposal is open: put that proposal in the plan. |
+| `task_not_awaitable` | A plan cannot wait for this task; `details.reason` says why, such as `backlog`, `human_review` or `depends_on_member`, or `proposal_open` when its proposal is open: put that proposal in the plan. |
 | `proposal_not_plannable` | Only an open proposal without a verdict, a review claim, a batch or the human review mark waits in a plan. Give the proposal to a reviewer alone with `start_worker`. |
 | `already_in_plan` | The proposal or task is in an open review plan. Start the plan with `start_worker` and `plan`, or take it out with `change_review_plan`. |
 | `review_plan_not_open` | The plan started or ended, or its wait ended so it takes no more tasks. Read it with `get_review_plan`. |
