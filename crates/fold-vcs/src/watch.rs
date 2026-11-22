@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 
 use fold_core::WorkspaceId;
 use fold_core::tree::FlatTree;
-use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::EventKind;
+#[cfg(not(target_os = "linux"))]
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::ignore::{Cover, FOLDIGNORE, GITIGNORE, IgnoreRules, TrackedSet, tracked_names};
 use crate::paths::{RepoPath, entries_at_or_below, is_reserved_name, os_bytes, os_path};
@@ -41,6 +43,8 @@ pub enum WatchRefused {
     Unsupported,
     /// This one directory cannot be watched, because it is gone or unreadable. The hub keeps no watch for it and tries again when an event names it.
     Unavailable,
+    /// The system refused a new notification instance for the workspace; only that workspace falls back to timer scans.
+    InstanceLimit,
 }
 
 /// The platform's native notifications. A backend delivers what it observes through the [`Notifier`] of its hub.
@@ -49,6 +53,15 @@ pub trait WatchBackend: Send {
     fn watch_dir(&mut self, dir: &Path) -> Result<(), WatchRefused>;
     /// Removing a watch the backend already dropped is not an error.
     fn unwatch_dir(&mut self, dir: &Path);
+    /// The watch of `dir` for the workspace `workspace`. The hub calls only this, so a backend that keeps each workspace apart, such as one notification queue per workspace, learns whose directory it is.
+    fn watch_in(&mut self, workspace: WorkspaceId, dir: &Path) -> Result<(), WatchRefused> {
+        let _ = workspace;
+        self.watch_dir(dir)
+    }
+    fn unwatch_in(&mut self, workspace: WorkspaceId, dir: &Path) {
+        let _ = workspace;
+        self.unwatch_dir(dir);
+    }
     /// True when one watch on a workspace root reports every change below it. The hub then hands the backend only the root and keeps its own record of the directories below, which still decides what is new, moved or ignored.
     fn watches_subtrees(&self) -> bool {
         false
@@ -63,6 +76,7 @@ pub trait WatchBackend: Send {
 pub enum DegradedReason {
     WatchLimit,
     NoNativeWatcher,
+    InstanceLimit,
 }
 
 impl DegradedReason {
@@ -73,6 +87,7 @@ impl DegradedReason {
         match self {
             Self::WatchLimit => "watch_limit",
             Self::NoNativeWatcher => "no_native_watcher",
+            Self::InstanceLimit => "instance_limit",
         }
     }
 }
@@ -99,6 +114,11 @@ pub enum WatchEvent {
 
 enum Msg {
     Raw(notify::Result<notify::Event>),
+    /// A notification from a queue that belongs to one workspace, which owns it whatever its paths say.
+    Attributed {
+        workspace: WorkspaceId,
+        event: notify::Result<notify::Event>,
+    },
     Add {
         id: WorkspaceId,
         root: PathBuf,
@@ -131,6 +151,11 @@ impl Notifier {
         // The hub is gone after shutdown; a late notification has nowhere to go.
         let _ = self.0.send(Msg::Raw(event));
     }
+
+    /// A notification of the workspace `workspace` alone: its paths are read against that workspace's root only, and a lost notification rescans only that workspace.
+    pub fn send_for(&self, workspace: WorkspaceId, event: notify::Result<notify::Event>) {
+        let _ = self.0.send(Msg::Attributed { workspace, event });
+    }
 }
 
 impl notify::EventHandler for Notifier {
@@ -139,12 +164,12 @@ impl notify::EventHandler for Notifier {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub(crate) struct NativeBackend {
     watcher: RecommendedWatcher,
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 impl NativeBackend {
     pub(crate) fn new(notifier: Notifier) -> notify::Result<Self> {
         Ok(Self {
@@ -191,7 +216,7 @@ impl WatchBackend for NativeBackend {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 impl WatchBackend for NativeBackend {
     fn watch_dir(&mut self, dir: &Path) -> Result<(), WatchRefused> {
         self.watcher
@@ -205,6 +230,446 @@ impl WatchBackend for NativeBackend {
     }
 }
 
+#[cfg(target_os = "linux")]
+pub use linux::INOTIFY_MASK;
+#[cfg(target_os = "linux")]
+pub(crate) use linux::NativeBackend;
+
+/// One inotify instance for each workspace, so each workspace has its own kernel queue of `fs.inotify.max_queued_events`: a busy workspace cannot fill the queue of another, and an `IN_Q_OVERFLOW` names exactly the workspace whose queue overflowed. One reader thread polls every instance and hands each notification to the hub as that workspace's own.
+#[cfg(target_os = "linux")]
+mod linux {
+    use std::collections::{BTreeMap, HashMap};
+    use std::ffi::OsStr;
+    use std::io;
+    use std::os::fd::OwnedFd;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+    use std::thread::{self, JoinHandle};
+
+    use fold_core::WorkspaceId;
+    use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
+    use notify::event::{
+        CreateKind, DataChange, Flag, MetadataKind, ModifyKind, RemoveKind, RenameMode,
+    };
+    use notify::{Event, EventKind};
+    use rustix::event::{EventfdFlags, PollFd, PollFlags};
+
+    use super::{Notifier, WatchBackend, WatchRefused};
+
+    /// Every change that can alter a file or directory, and nothing a read causes: no `IN_OPEN`, `IN_ACCESS` or `IN_CLOSE_NOWRITE`, so scans, builds and test runs that only read take no queue slot.
+    pub const INOTIFY_MASK: WatchMask = WatchMask::CREATE
+        .union(WatchMask::DELETE)
+        .union(WatchMask::CLOSE_WRITE)
+        .union(WatchMask::MODIFY)
+        .union(WatchMask::MOVED_FROM)
+        .union(WatchMask::MOVED_TO)
+        .union(WatchMask::ATTRIB)
+        .union(WatchMask::DELETE_SELF)
+        .union(WatchMask::MOVE_SELF);
+
+    pub(crate) type InstanceFactory = Box<dyn FnMut(WorkspaceId) -> io::Result<Inotify> + Send>;
+
+    const READ_BUFFER: usize = 64 * 1024;
+
+    struct Instance {
+        /// Tells a closed instance from a new one of the same workspace, so the reader never reads a queue the hub has closed.
+        serial: u64,
+        inotify: Inotify,
+        /// The reader polls this duplicate of the instance's descriptor, so a poll never waits on a number that the hub closed and the system handed out again.
+        polled: Arc<OwnedFd>,
+        dirs: HashMap<i32, PathBuf>,
+        /// Two paths share a descriptor when the kernel hands out the watch of a renamed directory again under its new name.
+        wds: HashMap<PathBuf, WatchDescriptor>,
+    }
+
+    impl Instance {
+        /// The kernel dropped the watch `wd`, because its directory was deleted or the watch was removed.
+        fn forget(&mut self, wd: i32) {
+            if let Some(path) = self.dirs.remove(&wd)
+                && self
+                    .wds
+                    .get(&path)
+                    .is_some_and(|known| known.get_watch_descriptor_id() == wd)
+            {
+                self.wds.remove(&path);
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct Shared {
+        instances: BTreeMap<WorkspaceId, Instance>,
+        serial: u64,
+        stop: bool,
+    }
+
+    pub(crate) struct NativeBackend {
+        shared: Arc<Mutex<Shared>>,
+        wake: Arc<OwnedFd>,
+        factory: InstanceFactory,
+        reader: Option<JoinHandle<()>>,
+    }
+
+    fn lock(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
+        shared.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn wake(fd: &OwnedFd) {
+        // A counter that cannot grow any more wakes the reader all the same.
+        let _ = rustix::io::write(fd, &1u64.to_ne_bytes());
+    }
+
+    impl NativeBackend {
+        pub(crate) fn new(notifier: Notifier) -> io::Result<Self> {
+            Self::with_factory(notifier, Box::new(|_| Inotify::init()))
+        }
+
+        pub(crate) fn with_factory(
+            notifier: Notifier,
+            factory: InstanceFactory,
+        ) -> io::Result<Self> {
+            let wake = Arc::new(rustix::event::eventfd(
+                0,
+                EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK,
+            )?);
+            let shared = Arc::new(Mutex::new(Shared::default()));
+            let reader = {
+                let shared = Arc::clone(&shared);
+                let wake = Arc::clone(&wake);
+                thread::Builder::new()
+                    .name("fold-inotify".to_owned())
+                    .spawn(move || read_loop(&shared, &wake, &notifier))?
+            };
+            Ok(Self {
+                shared,
+                wake,
+                factory,
+                reader: Some(reader),
+            })
+        }
+    }
+
+    impl Drop for NativeBackend {
+        fn drop(&mut self) {
+            lock(&self.shared).stop = true;
+            wake(&self.wake);
+            if let Some(reader) = self.reader.take() {
+                let _ = reader.join();
+            }
+        }
+    }
+
+    impl WatchBackend for NativeBackend {
+        /// Every watch belongs to the instance of a workspace, so a watch that names none is refused.
+        fn watch_dir(&mut self, _dir: &Path) -> Result<(), WatchRefused> {
+            Err(WatchRefused::Unsupported)
+        }
+
+        fn unwatch_dir(&mut self, _dir: &Path) {}
+
+        fn watch_in(&mut self, workspace: WorkspaceId, dir: &Path) -> Result<(), WatchRefused> {
+            let mut guard = lock(&self.shared);
+            let shared = &mut *guard;
+            if !shared.instances.contains_key(&workspace) {
+                let inotify =
+                    (self.factory)(workspace).map_err(|error| instance_refusal(&error))?;
+                let polled = rustix::io::fcntl_dupfd_cloexec(&inotify, 0)
+                    .map_err(|errno| instance_refusal(&errno.into()))?;
+                shared.serial += 1;
+                shared.instances.insert(
+                    workspace,
+                    Instance {
+                        serial: shared.serial,
+                        inotify,
+                        polled: Arc::new(polled),
+                        dirs: HashMap::new(),
+                        wds: HashMap::new(),
+                    },
+                );
+                wake(&self.wake);
+            }
+            let Some(instance) = shared.instances.get_mut(&workspace) else {
+                return Err(WatchRefused::Unavailable);
+            };
+            // The lock stays held until the descriptor is known, so the reader never meets an event of a watch it cannot name.
+            match instance.inotify.watches().add(dir, INOTIFY_MASK) {
+                Ok(wd) => {
+                    instance
+                        .dirs
+                        .insert(wd.get_watch_descriptor_id(), dir.to_path_buf());
+                    instance.wds.insert(dir.to_path_buf(), wd);
+                    Ok(())
+                }
+                Err(error) => {
+                    if instance.wds.is_empty() {
+                        shared.instances.remove(&workspace);
+                        wake(&self.wake);
+                    }
+                    Err(watch_refusal(&error))
+                }
+            }
+        }
+
+        fn unwatch_in(&mut self, workspace: WorkspaceId, dir: &Path) {
+            let mut guard = lock(&self.shared);
+            let shared = &mut *guard;
+            let Some(instance) = shared.instances.get_mut(&workspace) else {
+                return;
+            };
+            if let Some(wd) = instance.wds.remove(dir) {
+                let id = wd.get_watch_descriptor_id();
+                // A descriptor that names another path now watches a renamed directory that is still wanted.
+                if instance.dirs.get(&id).is_some_and(|known| known == dir) {
+                    instance.dirs.remove(&id);
+                    // The kernel drops the watch of a deleted directory by itself, so it may already be gone.
+                    let _ = instance.inotify.watches().remove(wd);
+                }
+            }
+            if instance.wds.is_empty() {
+                shared.instances.remove(&workspace);
+                wake(&self.wake);
+            }
+        }
+    }
+
+    pub(crate) fn instance_refusal(error: &io::Error) -> WatchRefused {
+        match error.raw_os_error() {
+            Some(libc::EMFILE | libc::ENFILE) => WatchRefused::InstanceLimit,
+            _ => WatchRefused::Unsupported,
+        }
+    }
+
+    pub(crate) fn watch_refusal(error: &io::Error) -> WatchRefused {
+        match error.raw_os_error() {
+            Some(libc::ENOSPC) => WatchRefused::LimitReached,
+            _ => WatchRefused::Unavailable,
+        }
+    }
+
+    struct Polled {
+        workspace: WorkspaceId,
+        serial: u64,
+        fd: Arc<OwnedFd>,
+    }
+
+    fn read_loop(shared: &Mutex<Shared>, wake_fd: &OwnedFd, notifier: &Notifier) {
+        let mut buffer = vec![0u8; READ_BUFFER];
+        let mut polled: Vec<Polled> = Vec::new();
+        loop {
+            {
+                let shared = lock(shared);
+                if shared.stop {
+                    return;
+                }
+                let same = polled.len() == shared.instances.len()
+                    && polled
+                        .iter()
+                        .zip(shared.instances.iter())
+                        .all(|(old, (id, instance))| {
+                            old.workspace == *id && old.serial == instance.serial
+                        });
+                if !same {
+                    polled = shared
+                        .instances
+                        .iter()
+                        .map(|(id, instance)| Polled {
+                            workspace: *id,
+                            serial: instance.serial,
+                            fd: Arc::clone(&instance.polled),
+                        })
+                        .collect();
+                }
+            }
+            let mut fds: Vec<PollFd<'_>> = Vec::with_capacity(polled.len() + 1);
+            fds.push(PollFd::new(wake_fd, PollFlags::IN));
+            fds.extend(
+                polled
+                    .iter()
+                    .map(|entry| PollFd::new(&*entry.fd, PollFlags::IN)),
+            );
+            match rustix::event::poll(&mut fds, None) {
+                Ok(_) => {}
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(error) => {
+                    tracing::warn!(%error, "inotify reader stopped");
+                    return;
+                }
+            }
+            if !fds[0].revents().is_empty() {
+                let mut count = [0u8; 8];
+                let _ = rustix::io::read(wake_fd, &mut count);
+            }
+            let ready: Vec<(WorkspaceId, u64)> = fds[1..]
+                .iter()
+                .zip(&polled)
+                .filter(|(fd, _)| !fd.revents().is_empty())
+                .map(|(_, entry)| (entry.workspace, entry.serial))
+                .collect();
+            drop(fds);
+            let mut out = Vec::new();
+            {
+                let mut shared = lock(shared);
+                for (id, serial) in ready {
+                    if let Some(instance) = shared
+                        .instances
+                        .get_mut(&id)
+                        .filter(|instance| instance.serial == serial)
+                    {
+                        drain(id, instance, &mut buffer, &mut out);
+                    }
+                }
+            }
+            for (id, event) in out {
+                notifier.send_for(id, Ok(event));
+            }
+        }
+    }
+
+    /// Reads the instance's queue until it is empty.
+    fn drain(
+        id: WorkspaceId,
+        instance: &mut Instance,
+        buffer: &mut [u8],
+        out: &mut Vec<(WorkspaceId, Event)>,
+    ) {
+        loop {
+            let events = match instance.inotify.read_events(buffer) {
+                Ok(events) => events,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return,
+                Err(error) => {
+                    tracing::warn!(workspace = %id, %error, "inotify queue could not be read");
+                    return;
+                }
+            };
+            let mut read = false;
+            for event in events {
+                read = true;
+                let wd = event.wd.get_watch_descriptor_id();
+                if event.mask.contains(EventMask::IGNORED) {
+                    instance.forget(wd);
+                } else if let Some(event) = translate(&instance.dirs, wd, event.mask, event.name) {
+                    out.push((id, event));
+                }
+            }
+            if !read {
+                return;
+            }
+        }
+    }
+
+    /// The notification in notify's terms, or `None` for one the hub has no use for. A self event, which has no name, names the watched directory itself.
+    pub(crate) fn translate(
+        dirs: &HashMap<i32, PathBuf>,
+        wd: i32,
+        mask: EventMask,
+        name: Option<&OsStr>,
+    ) -> Option<Event> {
+        if mask.contains(EventMask::Q_OVERFLOW) {
+            return Some(Event::new(EventKind::Other).set_flag(Flag::Rescan));
+        }
+        let folder = mask.contains(EventMask::ISDIR);
+        let kind = if mask.contains(EventMask::CREATE) {
+            EventKind::Create(if folder {
+                CreateKind::Folder
+            } else {
+                CreateKind::File
+            })
+        } else if mask.contains(EventMask::DELETE) {
+            EventKind::Remove(if folder {
+                RemoveKind::Folder
+            } else {
+                RemoveKind::File
+            })
+        } else if mask.intersects(EventMask::DELETE_SELF | EventMask::UNMOUNT) {
+            EventKind::Remove(RemoveKind::Any)
+        } else if mask.contains(EventMask::MOVED_FROM) {
+            EventKind::Modify(ModifyKind::Name(RenameMode::From))
+        } else if mask.contains(EventMask::MOVED_TO) {
+            EventKind::Modify(ModifyKind::Name(RenameMode::To))
+        } else if mask.contains(EventMask::MOVE_SELF) {
+            EventKind::Modify(ModifyKind::Name(RenameMode::Any))
+        } else if mask.intersects(EventMask::MODIFY | EventMask::CLOSE_WRITE) {
+            EventKind::Modify(ModifyKind::Data(DataChange::Any))
+        } else if mask.contains(EventMask::ATTRIB) {
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any))
+        } else {
+            return None;
+        };
+        let dir = dirs.get(&wd)?;
+        let path = name.map_or_else(|| dir.clone(), |name| dir.join(name));
+        Some(Event::new(kind).add_path(path))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::fs::File;
+        use std::os::unix::fs::FileExt;
+
+        use super::*;
+
+        fn instance(dir: &Path) -> Instance {
+            let inotify = Inotify::init().unwrap();
+            let polled = Arc::new(rustix::io::fcntl_dupfd_cloexec(&inotify, 0).unwrap());
+            let wd = inotify.watches().add(dir, INOTIFY_MASK).unwrap();
+            Instance {
+                serial: 0,
+                inotify,
+                polled,
+                dirs: [(wd.get_watch_descriptor_id(), dir.to_path_buf())].into(),
+                wds: [(dir.to_path_buf(), wd)].into(),
+            }
+        }
+
+        /// A real kernel overflow: one workspace's queue gets more events than `fs.inotify.max_queued_events` while nobody reads it, and the other workspace's queue holds only its own event.
+        #[test]
+        fn an_overflow_names_only_the_workspace_whose_queue_overflowed() {
+            let max: usize = std::fs::read_to_string("/proc/sys/fs/inotify/max_queued_events")
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            let parent = tempfile::tempdir().unwrap();
+            let busy_root = parent.path().join("busy");
+            let calm_root = parent.path().join("calm");
+            std::fs::create_dir(&busy_root).unwrap();
+            std::fs::create_dir(&calm_root).unwrap();
+            let busy_id = WorkspaceId::from_number(1).unwrap();
+            let calm_id = WorkspaceId::from_number(2).unwrap();
+            let mut busy = instance(&busy_root);
+            let mut calm = instance(&calm_root);
+
+            // The kernel merges an event into the one before it when both are the same, so the writes take turns between two files.
+            let files = [
+                File::create(busy_root.join("a")).unwrap(),
+                File::create(busy_root.join("b")).unwrap(),
+            ];
+            for n in 0..=max {
+                files[n % 2].write_all_at(b"x", n as u64 / 2).unwrap();
+            }
+            std::fs::write(calm_root.join("c"), b"c").unwrap();
+
+            let mut buffer = vec![0u8; READ_BUFFER];
+            let mut out = Vec::new();
+            drain(busy_id, &mut busy, &mut buffer, &mut out);
+            let lost: Vec<WorkspaceId> = out
+                .iter()
+                .filter(|(_, event)| event.need_rescan())
+                .map(|(id, _)| *id)
+                .collect();
+            assert_eq!(lost, vec![busy_id]);
+
+            out.clear();
+            drain(calm_id, &mut calm, &mut buffer, &mut out);
+            assert!(!out.is_empty());
+            assert!(
+                out.iter()
+                    .all(|(id, event)| *id == calm_id && !event.need_rescan())
+            );
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
 pub(crate) fn refusal(error: &notify::Error) -> WatchRefused {
     match error.kind {
         notify::ErrorKind::MaxFilesWatch => WatchRefused::LimitReached,
@@ -236,6 +701,22 @@ impl WatchHub {
             Ok(native) => Box::new(native),
             Err(_) => Box::new(NoBackend),
         };
+        Self::spawn(tx, rx, backend, config, Box::new(sink))
+    }
+
+    /// A hub over fold's inotify backend whose instances come from `factory`, one call for each workspace that gets its first watch. A factory error of `EMFILE` or `ENFILE` puts only that workspace in timer mode with [`DegradedReason::InstanceLimit`].
+    #[cfg(target_os = "linux")]
+    pub fn start_with_instances(
+        config: WatchConfig,
+        factory: impl FnMut(WorkspaceId) -> std::io::Result<inotify::Inotify> + Send + 'static,
+        sink: impl Fn(WatchEvent) + Send + 'static,
+    ) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let backend: Box<dyn WatchBackend> =
+            match NativeBackend::with_factory(Notifier(tx.clone()), Box::new(factory)) {
+                Ok(native) => Box::new(native),
+                Err(_) => Box::new(NoBackend),
+            };
         Self::spawn(tx, rx, backend, config, Box::new(sink))
     }
 
@@ -370,7 +851,8 @@ impl Hub {
             };
             let now = Instant::now();
             match next {
-                Msg::Raw(raw) => self.raw(raw, now),
+                Msg::Raw(raw) => self.raw(raw, None, now),
+                Msg::Attributed { workspace, event } => self.raw(event, Some(workspace), now),
                 Msg::Add {
                     id,
                     root,
@@ -501,29 +983,41 @@ impl Hub {
         self.workspaces.insert(id, workspace);
     }
 
-    fn raw(&mut self, raw: notify::Result<notify::Event>, now: Instant) {
+    /// `owner` is the workspace whose own queue delivered the notification, `None` for a queue that several workspaces share.
+    fn raw(
+        &mut self,
+        raw: notify::Result<notify::Event>,
+        owner: Option<WorkspaceId>,
+        now: Instant,
+    ) {
         let event = match raw {
             Ok(event) if !event.need_rescan() => event,
-            Ok(event) => return self.rescan(&event.paths, now),
-            Err(error) => return self.rescan(&error.paths, now),
+            Ok(event) => return self.rescan(self.lost_in(owner, &event.paths), now),
+            Err(error) => return self.rescan(self.lost_in(owner, &error.paths), now),
         };
         if matches!(event.kind, EventKind::Access(_) | EventKind::Other) {
             return;
         }
         for path in &event.paths {
-            self.touched(path, now);
+            self.touched(path, owner, now);
         }
     }
 
-    /// Every workspace that owns one of the paths, or every workspace when the platform named none. The lost notifications may have named new or removed directories, so the watches are brought in line with the tree as well.
-    fn rescan(&mut self, paths: &[PathBuf], now: Instant) {
-        let ids: Vec<WorkspaceId> = if paths.is_empty() {
-            self.workspaces.keys().copied().collect()
-        } else {
-            let owners: BTreeSet<WorkspaceId> =
-                paths.iter().filter_map(|path| self.owner(path)).collect();
-            owners.into_iter().collect()
-        };
+    /// The workspaces whose notifications were lost: the owner of the queue, else every workspace that owns one of the paths, or every workspace when the platform named none.
+    fn lost_in(&self, owner: Option<WorkspaceId>, paths: &[PathBuf]) -> Vec<WorkspaceId> {
+        if let Some(owner) = owner {
+            return vec![owner];
+        }
+        if paths.is_empty() {
+            return self.workspaces.keys().copied().collect();
+        }
+        let owners: BTreeSet<WorkspaceId> =
+            paths.iter().filter_map(|path| self.owner(path)).collect();
+        owners.into_iter().collect()
+    }
+
+    /// The lost notifications may have named new or removed directories, so the watches are brought in line with the tree as well.
+    fn rescan(&mut self, ids: Vec<WorkspaceId>, now: Instant) {
         for id in ids {
             let Some(workspace) = self.workspaces.get_mut(&id) else {
                 continue;
@@ -559,8 +1053,8 @@ impl Hub {
             .map(|workspace| workspace.id)
     }
 
-    fn touched(&mut self, path: &Path, now: Instant) {
-        let Some(id) = self.owner(path) else {
+    fn touched(&mut self, path: &Path, owner: Option<WorkspaceId>, now: Instant) {
+        let Some(id) = owner.or_else(|| self.owner(path)) else {
             return;
         };
         let backslash = self.backslash;
@@ -868,12 +1362,13 @@ impl Workspace {
             self.watched.insert(key, (full, identity));
             return;
         }
-        match ctx.backend.watch_dir(&full) {
+        match ctx.backend.watch_in(self.id, &full) {
             Ok(()) => {
                 self.watched.insert(key, (full, identity));
             }
             Err(WatchRefused::LimitReached) => self.degrade(ctx, DegradedReason::WatchLimit),
             Err(WatchRefused::Unsupported) => self.degrade(ctx, DegradedReason::NoNativeWatcher),
+            Err(WatchRefused::InstanceLimit) => self.degrade(ctx, DegradedReason::InstanceLimit),
             Err(WatchRefused::Unavailable) => {
                 tracing::debug!(workspace = %self.id, "a directory could not be watched");
             }
@@ -909,7 +1404,7 @@ impl Workspace {
             if let Some((full, _)) = self.watched.remove(&dir)
                 && (dir.is_empty() || !subtrees)
             {
-                backend.unwatch_dir(&full);
+                backend.unwatch_in(self.id, &full);
             }
         }
     }
@@ -943,6 +1438,7 @@ fn parent(path: &RepoPath) -> Option<RepoPath> {
 mod tests {
     use super::*;
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn refusals_map_from_notify_errors() {
         let limit = notify::Error::new(notify::ErrorKind::MaxFilesWatch);
@@ -955,6 +1451,7 @@ mod tests {
         assert_eq!(refusal(&io), WatchRefused::Unavailable);
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn native_backend_refuses_a_missing_directory() {
         let (tx, _rx) = mpsc::channel();
@@ -977,7 +1474,137 @@ mod tests {
             DegradedReason::NoNativeWatcher.as_str(),
             "no_native_watcher"
         );
+        assert_eq!(DegradedReason::InstanceLimit.as_str(), "instance_limit");
         assert_eq!(WatchConfig::default().debounce, Duration::from_millis(500));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inotify_refusals_map_from_errnos() {
+        use std::io::Error;
+        for errno in [libc::EMFILE, libc::ENFILE] {
+            assert_eq!(
+                linux::instance_refusal(&Error::from_raw_os_error(errno)),
+                WatchRefused::InstanceLimit
+            );
+        }
+        assert_eq!(
+            linux::instance_refusal(&Error::from_raw_os_error(libc::ENOSYS)),
+            WatchRefused::Unsupported
+        );
+        assert_eq!(
+            linux::watch_refusal(&Error::from_raw_os_error(libc::ENOSPC)),
+            WatchRefused::LimitReached
+        );
+        assert_eq!(
+            linux::watch_refusal(&Error::from_raw_os_error(libc::ENOENT)),
+            WatchRefused::Unavailable
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inotify_backend_watches_only_per_workspace() {
+        let (tx, _rx) = mpsc::channel();
+        let mut native = NativeBackend::new(Notifier(tx)).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let id = WorkspaceId::from_number(1).unwrap();
+        assert_eq!(native.watch_dir(dir.path()), Err(WatchRefused::Unsupported));
+        native.unwatch_dir(dir.path());
+        assert_eq!(
+            native.watch_in(id, &dir.path().join("absent")),
+            Err(WatchRefused::Unavailable)
+        );
+        native.watch_in(id, dir.path()).unwrap();
+        native.unwatch_in(id, dir.path());
+        native.unwatch_in(id, dir.path());
+        assert!(!native.backslash_separates());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inotify_events_translate_to_the_hubs_terms() {
+        use inotify::EventMask;
+        use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
+        use std::collections::HashMap;
+        use std::ffi::OsStr;
+
+        let dirs: HashMap<i32, PathBuf> = [(1, PathBuf::from("/w/src"))].into();
+        let name = Some(OsStr::new("a"));
+        let kind = |mask: EventMask, name: Option<&OsStr>| {
+            linux::translate(&dirs, 1, mask, name).map(|event| (event.kind, event.paths))
+        };
+        let at = |text: &str| vec![PathBuf::from(text)];
+
+        // An overflow has no watch and no path; it is the queue's own, so it stands for the queue's workspace.
+        let lost = linux::translate(&dirs, -1, EventMask::Q_OVERFLOW, None).unwrap();
+        assert!(lost.need_rescan());
+        assert!(lost.paths.is_empty());
+
+        assert_eq!(
+            kind(EventMask::CREATE | EventMask::ISDIR, name),
+            Some((EventKind::Create(CreateKind::Folder), at("/w/src/a")))
+        );
+        assert_eq!(
+            kind(EventMask::CREATE, name).map(|(kind, _)| kind),
+            Some(EventKind::Create(CreateKind::File))
+        );
+        assert_eq!(
+            kind(EventMask::DELETE | EventMask::ISDIR, name).map(|(kind, _)| kind),
+            Some(EventKind::Remove(RemoveKind::Folder))
+        );
+        assert_eq!(
+            kind(EventMask::DELETE, name).map(|(kind, _)| kind),
+            Some(EventKind::Remove(RemoveKind::File))
+        );
+        assert_eq!(
+            kind(EventMask::DELETE_SELF, None),
+            Some((EventKind::Remove(RemoveKind::Any), at("/w/src")))
+        );
+        assert_eq!(
+            kind(EventMask::MOVED_FROM, name).map(|(kind, _)| kind),
+            Some(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
+        );
+        assert_eq!(
+            kind(EventMask::MOVED_TO, name).map(|(kind, _)| kind),
+            Some(EventKind::Modify(ModifyKind::Name(RenameMode::To)))
+        );
+        assert_eq!(
+            kind(EventMask::MOVE_SELF, None).map(|(kind, _)| kind),
+            Some(EventKind::Modify(ModifyKind::Name(RenameMode::Any)))
+        );
+        for mask in [EventMask::MODIFY, EventMask::CLOSE_WRITE, EventMask::ATTRIB] {
+            assert!(matches!(
+                kind(mask, name),
+                Some((EventKind::Modify(_), paths)) if paths == at("/w/src/a")
+            ));
+        }
+        for mask in [EventMask::OPEN, EventMask::ACCESS, EventMask::CLOSE_NOWRITE] {
+            assert_eq!(kind(mask, name), None);
+        }
+        // A watch the backend no longer knows names nothing.
+        assert!(linux::translate(&dirs, 9, EventMask::CREATE, name).is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_inotify_mask_holds_no_read_events() {
+        use inotify::WatchMask;
+        assert!(
+            !INOTIFY_MASK
+                .intersects(WatchMask::OPEN | WatchMask::ACCESS | WatchMask::CLOSE_NOWRITE)
+        );
+        assert!(INOTIFY_MASK.contains(
+            WatchMask::CREATE
+                | WatchMask::DELETE
+                | WatchMask::CLOSE_WRITE
+                | WatchMask::MODIFY
+                | WatchMask::MOVED_FROM
+                | WatchMask::MOVED_TO
+                | WatchMask::ATTRIB
+                | WatchMask::DELETE_SELF
+                | WatchMask::MOVE_SELF
+        ));
     }
 
     fn config() -> WatchConfig {

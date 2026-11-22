@@ -793,6 +793,7 @@ dependencies = [
  "fail",
  "fold-core",
  "ignore",
+ "inotify",
  "libc",
  "notify",
  "proptest",
