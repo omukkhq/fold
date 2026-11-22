@@ -32,7 +32,7 @@ export type TaskIntegration = Schemas["TaskIntegration"];
 export type TaskEvent = Schemas["TaskEvent"];
 export type TaskKind = Schemas["TaskKind"];
 export type TaskReport = Schemas["TaskReport"];
-export type Blocker = Schemas["BlockerMark"];
+export type Blocker = Schemas["HoldMark"];
 
 export type TaskDetail = Schemas["TaskView"];
 
@@ -135,7 +135,7 @@ export async function setBlocker(
   reason: string,
 ): Promise<void> {
   await unwrap(
-    api.PUT("/api/v1/projects/{slug}/tasks/{id}/blocker", {
+    api.PUT("/api/v1/projects/{slug}/tasks/{id}/hold", {
       params: { path: { slug, id: task } },
       body: { reason },
     }),
@@ -144,7 +144,7 @@ export async function setBlocker(
 
 export async function clearBlocker(slug: string, task: string): Promise<void> {
   await unwrap(
-    api.DELETE("/api/v1/projects/{slug}/tasks/{id}/blocker", {
+    api.DELETE("/api/v1/projects/{slug}/tasks/{id}/hold", {
       params: { path: { slug, id: task } },
     }),
   );

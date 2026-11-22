@@ -930,7 +930,7 @@ function Links({
   const [blocking, setBlocking] = useState(false);
   const [adding, setAdding] = useState(false);
   const controls = blockerControls(task);
-  const canSet = controls.canSet && task.blocker === null && !blocking;
+  const canSet = controls.canSet && task.hold === null && !blocking;
   const canAdd = canEditDependencies(task.status) && !adding;
   return (
     <SideCard title="Links">

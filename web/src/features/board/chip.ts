@@ -40,7 +40,7 @@ type ChipCard = Pick<
   | "attention"
   | "blocked"
   | "blocked_by"
-  | "blocker"
+  | "hold"
   | "kind"
   | "proposal"
   | "report"
@@ -100,7 +100,7 @@ export function cardChip(
   if (hasKind(card.attention, "human_review")) {
     return { tone: "warn", icon: UserCheck, text: "Your review" };
   }
-  if (card.blocker !== null) {
+  if (card.hold !== null) {
     return { tone: "warn", icon: Hand, text: "Blocker" };
   }
   const blocked = blockedText(card);

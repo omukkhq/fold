@@ -19,7 +19,7 @@ use crate::services::agents::starter_of;
 use crate::services::events::EventBuffer;
 
 impl TaskService {
-    /// Creates a plan's tasks, edges, parent links, review marks, blockers and plain checklist items in one transaction, so a planned blocker is on before any lead can start the task. A task that names the same prerequisite twice gets one edge. Notices are published only after all task statuses have been calculated. `registry` names the humans eligible for a named review mark.
+    /// Creates a plan's tasks, edges, parent links, review marks, holds and plain checklist items in one transaction, so a planned hold is on before any lead can start the task. A task that names the same prerequisite twice gets one edge. Notices are published only after all task statuses have been calculated. `registry` names the humans eligible for a named review mark.
     pub async fn create_task_plan(
         &self,
         actor: &Actor,
@@ -98,7 +98,7 @@ impl TaskService {
                 }
                 let main_marks = in_main_area(&task.labels) && !task.main_approves;
                 mark_main_task(tx, &mut buffer, id, main_marks, now).await?;
-                if let Some(reason) = &task.blocker {
+                if let Some(reason) = &task.hold {
                     let reason = HoldReason::parse(reason).map_err(FoldError::from)?;
                     let areas = areas_of(tx, &task.labels).await?;
                     policy::can_set_hold(&starter, &areas).map_err(FoldError::from)?;

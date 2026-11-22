@@ -2879,7 +2879,7 @@ async fn a_catch_up_names_in_ready_order_only_the_ready_tasks_of_the_area_that_n
     harness
         .call(
             MAIN,
-            "set_blocker",
+            "set_hold",
             json!({"id": "T-4", "reason": "Wait for the brand colours"}),
         )
         .await;

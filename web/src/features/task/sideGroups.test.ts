@@ -96,7 +96,7 @@ describe("linkGaps", () => {
     expect(
       linkGaps(
         taskView("T-1", {
-          blocker: { reason: "Wait", set_by: "tanim", set_at: 0 },
+          hold: { reason: "Wait", set_by: "tanim", set_at: 0 },
           dependencies: [
             {
               task: "T-2",

@@ -11,7 +11,7 @@ use super::{TaskDetail, TaskError, TaskService, TaskView, areas_of, task_not_fou
 use crate::services::agents::starter_of;
 use crate::services::events::EventBuffer;
 
-/// The hold mark, which the board labels Blocker. Each command is one write transaction that appends `task.hold_set` or `task.hold_cleared`; neither runs `recompute`, because the hold never changes a status, but a new hold takes the task out of a review plan that waits for it.
+/// The hold mark, which the board shows as On hold. Each command is one write transaction that appends `task.hold_set` or `task.hold_cleared`; neither runs `recompute`, because the hold never changes a status, but a new hold takes the task out of a review plan that waits for it.
 impl TaskService {
     /// Puts a task that no agent has started on hold with `reason`, or changes the reason of its hold, by a human, the main agent or the lead of an area whose label the task carries. A task with a claim, a live task workspace or an open proposal, or one past Todo, is refused with `task_hold_denied` and the detail reason `started`. The same reason again changes nothing and appends no event. While the hold is on, `get_ready_tasks` leaves the task out, a claim is refused and no lead starts a task worker for it.
     pub async fn set_hold(
@@ -106,20 +106,20 @@ impl TaskService {
     }
 }
 
-/// What a named human may do now with the blocker of a task and with the Done mark of a human task, as a task view offers it.
+/// What a named human may do now with the hold of a task and with the Done mark of a human task, as a task view offers it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HumanTaskRights {
-    pub set_blocker: bool,
-    pub clear_blocker: bool,
+    pub set_hold: bool,
+    pub clear_hold: bool,
     pub mark_done: bool,
 }
 
-/// The rights of a named human on `detail`; a request that names no human gets none. A human sets a blocker on a task no agent has started, clears one on a task that is not archived and marks a human task Done while it is open; `complete_task` still checks the prerequisites.
+/// The rights of a named human on `detail`; a request that names no human gets none. A human puts a task on hold when no agent has started it, takes the hold off a task that is not archived and marks a human task Done while it is open; `complete_task` still checks the prerequisites.
 pub fn human_task_rights(detail: &TaskDetail, named_human: bool) -> HumanTaskRights {
     let open = detail.task.archived_at.is_none();
     HumanTaskRights {
-        set_blocker: named_human && detail.blocker_allowed,
-        clear_blocker: named_human && open && detail.task.hold.is_some(),
+        set_hold: named_human && detail.hold_allowed,
+        clear_hold: named_human && open && detail.task.hold.is_some(),
         mark_done: named_human
             && open
             && detail.task.kind == TaskKind::Human
@@ -146,11 +146,11 @@ pub(crate) fn agent_refusal(row: &TaskRow) -> Option<FoldError> {
     Some(
         FoldError::new(
             codes::TASK_ON_HOLD,
-            format!("{} has a blocker and waits for a person", row.id),
+            format!("{} is on hold and waits for a person", row.id),
         )
         .with_details([("task", task), ("set_by", json!(hold.set_by.as_str()))])
         .with_hint(
-            "wait until a human or the main agent calls clear_blocker; get_task shows the reason; call get_ready_tasks for other work",
+            "wait until a human or the main agent calls clear_hold; get_task shows the reason; call get_ready_tasks for other work",
         ),
     )
 }
@@ -167,7 +167,7 @@ fn closed(row: &TaskRow, done: bool) -> Option<TaskError> {
     Some(
         FoldError::new(codes::TASK_CLOSED, format!("{} is {reason}", row.id))
             .with_details([("reason", json!(reason))])
-            .with_hint("a Done or archived task needs no blocker")
+            .with_hint("a Done or archived task needs no hold")
             .into(),
     )
 }

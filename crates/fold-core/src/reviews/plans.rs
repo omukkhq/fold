@@ -37,7 +37,8 @@ define_names!(
         NotProposalKind = "not_proposal_kind",
         MainArea = "main_area",
         HumanReview = "human_review",
-        Blocker = "blocker",
+        /// The string is a stored and wire value (review_plan_members.release_reason, event payloads, error details) and stays "blocker".
+        Hold = "blocker",
         DependsOnMember = "depends_on_member",
         Backlog = "backlog",
         InReview = "in_review",
@@ -55,7 +56,9 @@ impl AwaitIssue {
             AwaitIssue::HumanReview => {
                 "has the human review mark, so its proposal is reviewed alone"
             }
-            AwaitIssue::Blocker => "has a blocker, so no agent works on it until a human clears it",
+            AwaitIssue::Hold => {
+                "is on hold, so no agent works on it until a human takes it off hold"
+            }
             AwaitIssue::DependsOnMember => {
                 "needs the task of a plan member, so its proposal could only open after the plan's review"
             }
@@ -74,11 +77,11 @@ pub struct AwaitFacts {
     pub archived: bool,
     pub human_review: bool,
     pub main_area: bool,
-    pub blocker: bool,
+    pub hold: bool,
     pub depends_on_member: bool,
 }
 
-/// A plan waits only for an agent task of kind `proposal` in To do or In progress that will open a proposal a reviewer agent reviews in a batch: not archived, not of the area main, without the human review mark and without a blocker, and not after a member's task, which would make the plan wait for itself.
+/// A plan waits only for an agent task of kind `proposal` in To do or In progress that will open a proposal a reviewer agent reviews in a batch: not archived, not of the area main, without the human review mark and not on hold, and not after a member's task, which would make the plan wait for itself.
 pub fn await_issue(facts: &AwaitFacts) -> Option<AwaitIssue> {
     if facts.archived {
         return Some(AwaitIssue::Archived);
@@ -93,8 +96,8 @@ pub fn await_issue(facts: &AwaitFacts) -> Option<AwaitIssue> {
     if facts.human_review {
         return Some(AwaitIssue::HumanReview);
     }
-    if facts.blocker {
-        return Some(AwaitIssue::Blocker);
+    if facts.hold {
+        return Some(AwaitIssue::Hold);
     }
     if facts.depends_on_member {
         return Some(AwaitIssue::DependsOnMember);
@@ -257,7 +260,8 @@ define_names!(
         NotProposalKind = "not_proposal_kind",
         MainArea = "main_area",
         HumanReview = "human_review",
-        Blocker = "blocker",
+        /// The string is a stored and wire value (review_plan_members.release_reason, event payloads, error details) and stays "blocker".
+        Hold = "blocker",
         DependsOnMember = "depends_on_member",
         Backlog = "backlog",
         InReview = "in_review",
@@ -272,7 +276,7 @@ impl From<AwaitIssue> for PlanRelease {
             AwaitIssue::NotProposalKind => PlanRelease::NotProposalKind,
             AwaitIssue::MainArea => PlanRelease::MainArea,
             AwaitIssue::HumanReview => PlanRelease::HumanReview,
-            AwaitIssue::Blocker => PlanRelease::Blocker,
+            AwaitIssue::Hold => PlanRelease::Hold,
             AwaitIssue::DependsOnMember => PlanRelease::DependsOnMember,
             AwaitIssue::Backlog => PlanRelease::Backlog,
             AwaitIssue::InReview => PlanRelease::InReview,
@@ -374,7 +378,7 @@ mod tests {
         archived: false,
         human_review: false,
         main_area: false,
-        blocker: false,
+        hold: false,
         depends_on_member: false,
     };
 
@@ -425,10 +429,10 @@ mod tests {
             ),
             (
                 AwaitFacts {
-                    blocker: true,
+                    hold: true,
                     ..ELIGIBLE
                 },
-                AwaitIssue::Blocker,
+                AwaitIssue::Hold,
             ),
             (
                 AwaitFacts {
@@ -680,7 +684,7 @@ mod tests {
             (
                 7,
                 AwaitFacts {
-                    blocker: true,
+                    hold: true,
                     ..ELIGIBLE
                 },
             ),
@@ -859,14 +863,14 @@ mod tests {
             let related: Vec<RelatedTask> = links
                 .iter()
                 .map(|&(number, relation)| {
-                    let (status, blocker, archived, proposal, in_plan) =
+                    let (status, hold, archived, proposal, in_plan) =
                         facts[number as usize - 1];
                     RelatedTask {
                         task: t(number),
                         relation: relations[relation],
                         facts: AwaitFacts {
                             status: statuses[status],
-                            blocker,
+                            hold,
                             archived,
                             ..ELIGIBLE
                         },

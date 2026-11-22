@@ -88,7 +88,7 @@ describe("humanWork", () => {
 describe("blockerView", () => {
   it("shows the reason and who set it", () => {
     expect(blockerView(taskView("T-1"), 0)).toBeNull();
-    const view = blockerView(taskView("T-1", { blocker: HOLD }), 61_000);
+    const view = blockerView(taskView("T-1", { hold: HOLD }), 61_000);
     expect(view?.reason).toBe("Wait for the logo");
     expect(segmentsText(view?.setBy ?? [])).toBe(
       "Set by @web-lead · 1 min ago",
@@ -103,8 +103,8 @@ describe("blockerControls", () => {
     expect(
       blockerControls({
         ...task,
-        can_set_blocker: true,
-        can_clear_blocker: true,
+        can_set_hold: true,
+        can_clear_hold: true,
       }),
     ).toEqual({ canSet: true, canClear: true });
   });

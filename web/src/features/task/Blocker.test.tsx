@@ -65,7 +65,7 @@ const HOLD = { reason: "Wait for the logo", set_by: "web-lead", set_at: 0 };
 
 describe("the blocker group", () => {
   it("sets a blocker with a reason", async () => {
-    const task = taskView("T-2", { can_set_blocker: true });
+    const task = taskView("T-2", { can_set_hold: true });
     mount(<TaskSide slug="demo" task={task} live={null} now={0} />);
     // Without a blocker the Links group offers Set blocker, which opens the Blocker row's form.
     const links = await screen.findByRole("region", { name: "Links" });
@@ -99,9 +99,9 @@ describe("the blocker group", () => {
 
   it("shows the reason and clears the blocker", async () => {
     const task = taskView("T-2", {
-      can_set_blocker: true,
-      can_clear_blocker: true,
-      blocker: HOLD,
+      can_set_hold: true,
+      can_clear_hold: true,
+      hold: HOLD,
     });
     mount(<TaskSide slug="demo" task={task} live={null} now={0} />);
     const group = await screen.findByRole("region", { name: "Blocker" });
@@ -122,7 +122,7 @@ describe("the blocker group", () => {
   });
 
   it("offers no control without a named human", async () => {
-    const task = taskView("T-2", { blocker: HOLD });
+    const task = taskView("T-2", { hold: HOLD });
     mount(<TaskSide slug="demo" task={task} live={null} now={0} />);
     const group = await screen.findByRole("region", { name: "Blocker" });
     expect(within(group).queryByRole("button")).toBeNull();

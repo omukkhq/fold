@@ -171,7 +171,7 @@ pub async fn related_plan_tasks(
                 archived: false,
                 human_review: found.human_review,
                 main_area: in_main_area(&found.labels),
-                blocker: found.blocker,
+                hold: found.hold,
                 depends_on_member: false,
             },
             open_proposal: found.open_proposal,
@@ -454,7 +454,7 @@ async fn settle_awaited(
         archived: row.archived_at.is_some(),
         human_review: row.human_review.is_some(),
         main_area: task_in_main_area(tx.conn(), task).await?,
-        blocker: row.hold.is_some(),
+        hold: row.hold.is_some(),
         depends_on_member: depends_on_member(dag, task, tasks_of_plan),
     };
     Ok(match await_issue(&facts) {
@@ -648,7 +648,7 @@ async fn awaitable(
         archived: row.archived_at.is_some(),
         human_review: row.human_review.is_some(),
         main_area: task_in_main_area(tx.conn(), task).await?,
-        blocker: row.hold.is_some(),
+        hold: row.hold.is_some(),
         depends_on_member: depends_on_member(&dag, task, tasks_of_plan),
     };
     if let Some(issue) = await_issue(&facts) {
@@ -690,7 +690,7 @@ async fn add_member(
 
 /// Review plans: open proposals without a review that wait up to an hour for related tasks to open their proposals, so the review lead gives them all to one reviewer as one batch.
 impl ReviewService {
-    /// Makes a plan of the review lead for the open proposals `proposals` that waits for the related `tasks`, in one transaction with `review.plan_created`. Its wait ends an hour after now. fold refuses a plan of more than five tasks (`review_plan_too_large`), a proposal with a verdict on any version, a review claim, a batch or the human review mark (`proposal_not_plannable`), a proposal of main (`main_area`), and a task the plan cannot wait for (`task_not_awaitable`): one with an open proposal, one that is not a To do or In progress agent task of kind proposal, one with the human review mark or a blocker, one of main, and one that needs the task of another member directly or not. A proposal or task in another live plan is `already_in_plan`.
+    /// Makes a plan of the review lead for the open proposals `proposals` that waits for the related `tasks`, in one transaction with `review.plan_created`. Its wait ends an hour after now. fold refuses a plan of more than five tasks (`review_plan_too_large`), a proposal with a verdict on any version, a review claim, a batch or the human review mark (`proposal_not_plannable`), a proposal of main (`main_area`), and a task the plan cannot wait for (`task_not_awaitable`): one with an open proposal, one that is not a To do or In progress agent task of kind proposal, one with the human review mark or on hold, one of main, and one that needs the task of another member directly or not. A proposal or task in another live plan is `already_in_plan`.
     pub async fn create_review_plan(
         &self,
         actor: &Actor,

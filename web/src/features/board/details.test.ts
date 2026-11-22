@@ -29,7 +29,7 @@ describe("cardDetails", () => {
       worker: "api-audit",
       kind: "no_proposal",
       report: "Drew the icons.",
-      blocker: { reason: "Wait for the logo", set_by: "tanim", set_at: 0 },
+      hold: { reason: "Wait for the logo", set_by: "tanim", set_at: 0 },
       blocked_by: ["T-2", "T-9"],
       blocks: 1,
       messages: 2,
@@ -169,7 +169,7 @@ describe("cardDetails", () => {
       boardCard("T-3", {
         kind: "no_proposal",
         report: "Drew the `icons`.",
-        blocker: { reason: "Wait for the logo", set_by: "tanim", set_at: 0 },
+        hold: { reason: "Wait for the logo", set_by: "tanim", set_at: 0 },
       }),
       null,
       0,

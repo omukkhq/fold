@@ -244,12 +244,12 @@ pub fn can_set_hold(starter: &Starter, task_areas: &[AreaName]) -> Result<(), Po
         Starter::Human | Starter::MainAgent => Ok(()),
         Starter::AreaLead(own) if task_areas.contains(own) => Ok(()),
         Starter::Unsupervised => Err(not_the_main_agent(
-            "ask the main agent or the lead of the task's area to call set_blocker",
+            "ask the main agent or the lead of the task's area to call set_hold",
         )),
         _ => Err(PolicyDenied {
             code: codes::TASK_HOLD_DENIED,
-            message: "only a human, the main agent or the lead of the task's area sets a blocker",
-            hint: "ask the lead of the task's area or the main agent to call set_blocker",
+            message: "only a human, the main agent or the lead of the task's area puts a task on hold",
+            hint: "ask the lead of the task's area or the main agent to call set_hold",
         }),
     }
 }
@@ -259,12 +259,12 @@ pub fn can_clear_hold(starter: &Starter) -> Result<(), PolicyDenied> {
     match starter {
         Starter::Human | Starter::MainAgent => Ok(()),
         Starter::Unsupervised => Err(not_the_main_agent(
-            "ask the user to clear the blocker in the web interface",
+            "ask the user to take the task off hold in the web interface",
         )),
         _ => Err(PolicyDenied {
             code: codes::MAIN_AGENT_REQUIRED,
-            message: "only a human or the main agent clears a blocker",
-            hint: "call send_message to ask a human to clear the blocker",
+            message: "only a human or the main agent takes a task off hold",
+            hint: "call send_message to ask a human to take the task off hold",
         }),
     }
 }
@@ -716,7 +716,7 @@ mod tests {
         ] {
             let denied = can_set_hold(&starter, &areas).unwrap_err();
             assert_eq!(denied.code(), codes::TASK_HOLD_DENIED, "{starter:?}");
-            assert!(denied.hint().contains("set_blocker"));
+            assert!(denied.hint().contains("set_hold"));
         }
         assert_eq!(
             can_set_hold(&Starter::Unsupervised, &areas)

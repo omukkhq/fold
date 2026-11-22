@@ -1567,24 +1567,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/projects/{slug}/tasks/{id}/blocker": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Puts a blocker on the task with its reason, or changes the reason: no agent claims the task and no lead starts a task worker for it until a human clears it. Only a task in Backlog or Todo that no agent has started gets one. The status does not change. */
-        put: operations["set_blocker"];
-        post?: never;
-        /** Removes the blocker of the task, so agents can take it again. A task without a blocker is returned as it is. */
-        delete: operations["clear_blocker"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/projects/{slug}/tasks/{id}/checklist-items": {
         parameters: {
             query?: never;
@@ -1648,6 +1630,24 @@ export interface paths {
         post?: never;
         /** Removes a direct edge. An edge of a linked checklist item goes only with its item. */
         delete: operations["remove_dependency"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/tasks/{id}/hold": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Puts the task on hold with its reason, or changes the reason: no agent claims the task and no lead starts a task worker for it until a human takes the hold off. Only a task in Backlog or Todo that no agent has started can be put on hold. The status does not change. */
+        put: operations["set_hold"];
+        post?: never;
+        /** Takes the task off hold, so agents can take it again. A task that is not on hold is returned as it is. */
+        delete: operations["clear_hold"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2305,23 +2305,6 @@ export interface components {
          * @enum {string}
          */
         Behavior: "allow" | "deny";
-        /** @description Why the task waits for a person. */
-        BlockerBody: {
-            /** @description Plain text, not empty, at most 500 characters. */
-            reason: string;
-        };
-        /** @description The blocker of a task: while it is set, no agent claims the task and no lead starts a task worker for it. It never changes the status. */
-        BlockerMark: {
-            /** @description Why the task waits for a person. */
-            reason: string;
-            /**
-             * Format: int64
-             * @description UTC milliseconds.
-             */
-            set_at: number;
-            /** @description The worker or human that set it, such as `web-lead` or `human:tanim`. */
-            set_by: string;
-        };
         /** @description The last tracked edit in the task's workspace. */
         BoardActivity: {
             /**
@@ -2340,7 +2323,6 @@ export interface components {
             blocked: boolean;
             /** @description The direct prerequisites that are not Done. */
             blocked_by: string[];
-            blocker: components["schemas"]["BlockerMark"] | null;
             /**
              * Format: int32
              * @description How many open tasks wait directly for this one; 0 once it is Done.
@@ -2355,6 +2337,7 @@ export interface components {
             completed_at: number | null;
             /** @description Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them. */
             edits_after_version: boolean | null;
+            hold: components["schemas"]["HoldMark"] | null;
             human_review: components["schemas"]["HumanReviewMark"] | null;
             kind: components["schemas"]["TaskKind"];
             labels: components["schemas"]["Label"][];
@@ -3503,6 +3486,23 @@ export interface components {
         };
         /** @enum {string} */
         HeldClaimKind: "implementation" | "review";
+        /** @description Why the task waits for a person. */
+        HoldBody: {
+            /** @description Plain text, not empty, at most 500 characters. */
+            reason: string;
+        };
+        /** @description The hold of a task: while it is set, no agent claims the task and no lead starts a task worker for it. It never changes the status. */
+        HoldMark: {
+            /** @description Why the task waits for a person. */
+            reason: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            set_at: number;
+            /** @description The worker or human that set it, such as `web-lead` or `human:tanim`. */
+            set_by: string;
+        };
         /** @description The host's notice settings: the targets that every project that uses the host targets sends to, and the web address of links. */
         HostNotify: {
             /** @description Oldest first. */
@@ -5829,15 +5829,14 @@ export interface components {
             areas_conflict: boolean;
             attention: components["schemas"]["AttentionItem"][];
             blocked: boolean;
-            blocker: components["schemas"]["BlockerMark"] | null;
             /** @description Whether the human who made the request may turn the human review mark on, change it or clear it. False without a named human. */
             can_change_human_review: boolean;
-            /** @description Whether the human who made the request may clear the blocker. False without a named human or a blocker. */
-            can_clear_blocker: boolean;
+            /** @description Whether the human who made the request may take the task off hold. False without a named human or a hold. */
+            can_clear_hold: boolean;
             /** @description Whether the human who made the request may mark this human task Done: false without a named human, for any other kind and for a Done or archived task. The daemon refuses it while a prerequisite is not Done. */
             can_mark_done: boolean;
-            /** @description Whether the human who made the request may set the blocker or change its reason: false without a named human, and false once an agent has started the task (a claim, a task workspace or an open proposal) or it is past Todo. */
-            can_set_blocker: boolean;
+            /** @description Whether the human who made the request may put the task on hold or change the hold reason: false without a named human, and false once an agent has started the task (a claim, a task workspace or an open proposal) or it is past Todo. */
+            can_set_hold: boolean;
             /** @description Of the live workspace, or of the latest one when none is live; newest first. */
             changesets: components["schemas"]["TaskChangeset"][];
             check_run: components["schemas"]["LiveCheckRun"] | null;
@@ -5861,6 +5860,7 @@ export interface components {
             edits_after_version: boolean | null;
             /** @description The task's newest stored events, newest first, at most 50. */
             history: components["schemas"]["TaskEvent"][];
+            hold: components["schemas"]["HoldMark"] | null;
             human_review: components["schemas"]["HumanReviewMark"] | null;
             /**
              * Format: int64
@@ -15218,186 +15218,6 @@ export interface operations {
             };
         };
     };
-    set_blocker: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The project slug */
-                slug: string;
-                /** @description The task id, such as T-12 */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BlockerBody"];
-            };
-        };
-        responses: {
-            /** @description The task with its blocker */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskView"];
-                };
-            };
-            /** @description `invalid_hold_reason`, `invalid_id` or `invalid_name` */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `task_hold_denied` with the detail reason `started`: the task has a claim, a task workspace or an open proposal, or is past Todo; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `task_not_found` or `project_not_found` */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `task_closed` */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Internal error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `project_unavailable` */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    clear_blocker: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The project slug */
-                slug: string;
-                /** @description The task id, such as T-12 */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The task without a blocker */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskView"];
-                };
-            };
-            /** @description `invalid_id` or `invalid_name` */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `task_not_found` or `project_not_found` */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `task_closed` */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Internal error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `project_unavailable` */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
     add_checklist_item: {
         parameters: {
             query?: never;
@@ -15720,6 +15540,186 @@ export interface operations {
             };
             /** @description `dependency_not_found` or `project_not_found` */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    set_hold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HoldBody"];
+            };
+        };
+        responses: {
+            /** @description The task with its hold */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskView"];
+                };
+            };
+            /** @description `invalid_hold_reason`, `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_hold_denied` with the detail reason `started`: the task has a claim, a task workspace or an open proposal, or is past Todo; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_closed` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    clear_hold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The task without a hold */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskView"];
+                };
+            };
+            /** @description `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_closed` */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

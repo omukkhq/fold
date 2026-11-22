@@ -855,7 +855,7 @@ async fn a_plan_links_existing_work_and_validates_named_human_review() {
         needs: Vec::new(),
         parent: None,
         human_review: None,
-        blocker: None,
+        hold: None,
         checklist: Vec::new(),
         main_approves: false,
     };

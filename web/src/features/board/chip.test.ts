@@ -41,16 +41,16 @@ describe("cardChip", () => {
           { kind: "human_review", closable: false, action: null },
           { kind: "question", closable: true, action: null },
         ],
-        blocker: BLOCKER,
+        hold: BLOCKER,
       }),
     ).toBe("Question for you");
     expect(
       chipText({
         attention: [{ kind: "human_review", closable: false, action: null }],
-        blocker: BLOCKER,
+        hold: BLOCKER,
       }),
     ).toBe("Your review");
-    expect(chipText({ blocker: BLOCKER, blocked: true })).toBe("Blocker");
+    expect(chipText({ hold: BLOCKER, blocked: true })).toBe("Blocker");
   });
 
   it("names the prerequisite of a blocked card, also when it stalls", () => {
@@ -102,7 +102,7 @@ describe("cardChip", () => {
     expect(cardChip(card)?.text).toBe("Stalled · needs you");
     expect(
       cardChip(
-        { ...card, blocker: { reason: "keys", set_by: "ana", set_at: 0 } },
+        { ...card, hold: { reason: "keys", set_by: "ana", set_at: 0 } },
         run,
       )?.text,
     ).toBe("Blocker");

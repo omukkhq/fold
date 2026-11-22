@@ -67,10 +67,10 @@ export interface BlockerView {
 
 /** The blocker of the task as the side group shows it; null without one. */
 export function blockerView(
-  task: Pick<TaskDetail, "blocker">,
+  task: Pick<TaskDetail, "hold">,
   now: number,
 ): BlockerView | null {
-  const blocker = task.blocker;
+  const blocker = task.hold;
   if (blocker === null) {
     return null;
   }
@@ -82,9 +82,9 @@ export function blockerView(
 
 /** The daemon decides both: a named human sets or changes a blocker only before an agent starts the task, and clears one on a task that is not archived. */
 export function blockerControls(
-  task: Pick<TaskDetail, "can_set_blocker" | "can_clear_blocker">,
+  task: Pick<TaskDetail, "can_set_hold" | "can_clear_hold">,
 ): { canSet: boolean; canClear: boolean } {
-  return { canSet: task.can_set_blocker, canClear: task.can_clear_blocker };
+  return { canSet: task.can_set_hold, canClear: task.can_clear_hold };
 }
 
 export interface KindOption {

@@ -160,8 +160,8 @@ pub struct TaskDetail {
     pub reports: Vec<ReportView>,
     /// The task's newest [`HISTORY_LIMIT`] events, newest first.
     pub history: Vec<Event>,
-    /// The task can get a blocker or a new reason now: it is not archived and no agent has started it (`policy::can_hold_task`). Who may set it is decided by the command.
-    pub blocker_allowed: bool,
+    /// The task can be put on hold or get a new hold reason now: it is not archived and no agent has started it (`policy::can_hold_task`). Who may set it is decided by the command.
+    pub hold_allowed: bool,
 }
 
 /// The task graph as `graph` reads it.
@@ -321,7 +321,7 @@ impl TaskService {
             }
             None => Vec::new(),
         };
-        let blocker_allowed = row.archived_at.is_none()
+        let hold_allowed = row.archived_at.is_none()
             && fold_core::policy::can_hold_task(&fold_core::policy::TaskStart {
                 status: row.status,
                 claimed: claim.is_some(),
@@ -465,7 +465,7 @@ impl TaskService {
             integration,
             reports,
             history,
-            blocker_allowed,
+            hold_allowed,
         })
     }
 

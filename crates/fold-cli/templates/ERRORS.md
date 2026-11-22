@@ -40,7 +40,7 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 | `project_paused` | The user paused the agents of the project. Start no work. Only when the user asks, the main agent calls `resume_project`. |
 | `worker_peer_refused` | A command in a worker's Bash, or in a check that fold runs for the worker, acts only as that worker's own agent and never as a human; a check that fold runs for no worker acts as no agent. Use the fold tools of your own session. |
 | `invalid_hold_reason` | Give the blocker a reason of 1 to 500 characters. |
-| `task_on_hold` | The task has a blocker and waits for a person. Call `get_task` to read the reason, and call `get_ready_tasks` for other work. A human or the main agent clears it with `clear_blocker`. |
+| `task_on_hold` | The task has a blocker and waits for a person. Call `get_task` to read the reason, and call `get_ready_tasks` for other work. A human or the main agent clears it with `clear_hold`. |
 | `task_needs_human` | The task is a human task: a person does it outside fold. Call `get_ready_tasks` for other work. A human or the main agent marks it Done with `complete_task`. |
 | `task_hold_denied` | Only a human, the main agent or the lead of the task's area sets a blocker, and only on a task in Backlog or Todo that no agent has started (detail reason `started`). Ask that lead or the main agent, or let the started work finish. |
 | `checklist_denied` | Only the holder's agent, its lead, the main agent or a human changes the checklist of a held task; only the lead of the task's area, the main agent or a human changes it when nobody holds the task. Call `get_task` and ask that agent. |

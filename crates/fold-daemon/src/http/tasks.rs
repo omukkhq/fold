@@ -33,7 +33,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(archive_task))
         .routes(routes!(complete_task))
         .routes(routes!(send_back_task))
-        .routes(routes!(set_blocker, clear_blocker))
+        .routes(routes!(set_hold, clear_hold))
         .routes(routes!(add_dependency))
         .routes(routes!(remove_dependency))
         .routes(routes!(add_checklist_item))
@@ -220,9 +220,9 @@ pub struct HumanReviewMark {
     pub set_by: String,
 }
 
-/// The blocker of a task: while it is set, no agent claims the task and no lead starts a task worker for it. It never changes the status.
+/// The hold of a task: while it is set, no agent claims the task and no lead starts a task worker for it. It never changes the status.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
-pub struct BlockerMark {
+pub struct HoldMark {
     /// Why the task waits for a person.
     pub reason: String,
     /// The worker or human that set it, such as `web-lead` or `human:tanim`.
@@ -231,7 +231,7 @@ pub struct BlockerMark {
     pub set_at: i64,
 }
 
-impl From<fold_core::HoldMark> for BlockerMark {
+impl From<fold_core::HoldMark> for HoldMark {
     fn from(mark: fold_core::HoldMark) -> Self {
         Self {
             reason: mark.reason.to_string(),
@@ -284,9 +284,9 @@ pub struct BoardCard {
     pub workspace: Option<String>,
     #[schema(required = true)]
     pub human_review: Option<HumanReviewMark>,
-    /// The blocker; null while the task has none.
+    /// The hold; null while the task is not on hold.
     #[schema(required = true)]
-    pub blocker: Option<BlockerMark>,
+    pub hold: Option<HoldMark>,
     /// How many messages name the task.
     pub messages: u32,
     /// UTC milliseconds of the completion record; null until the task is Done.
@@ -402,7 +402,7 @@ impl From<service::BoardCard> for BoardCard {
             worker: card.holder.map(|worker| worker.to_string()),
             workspace: card.workspace.map(|workspace| workspace.to_string()),
             human_review: card.human_review.map(HumanReviewMark::from),
-            blocker: card.hold.map(BlockerMark::from),
+            hold: card.hold.map(HoldMark::from),
             messages: card.messages,
             completed_at: card.completed_at.map(|at| at.as_millis()),
             attention: attention(card.attention),
@@ -557,9 +557,9 @@ pub struct TaskView {
     /// When the human review mark was last set, in UTC milliseconds; null without a mark.
     #[schema(required = true)]
     pub human_review_set_at: Option<i64>,
-    /// The blocker; null while the task has none.
+    /// The hold; null while the task is not on hold.
     #[schema(required = true)]
-    pub blocker: Option<BlockerMark>,
+    pub hold: Option<HoldMark>,
     pub attention: Vec<AttentionItem>,
     /// The rule of the status calculation that decided the status, with the ids it used.
     pub status_reason: String,
@@ -591,10 +591,10 @@ pub struct TaskView {
     pub history: Vec<TaskEvent>,
     /// Whether the human who made the request may turn the human review mark on, change it or clear it. False without a named human.
     pub can_change_human_review: bool,
-    /// Whether the human who made the request may set the blocker or change its reason: false without a named human, and false once an agent has started the task (a claim, a task workspace or an open proposal) or it is past Todo.
-    pub can_set_blocker: bool,
-    /// Whether the human who made the request may clear the blocker. False without a named human or a blocker.
-    pub can_clear_blocker: bool,
+    /// Whether the human who made the request may put the task on hold or change the hold reason: false without a named human, and false once an agent has started the task (a claim, a task workspace or an open proposal) or it is past Todo.
+    pub can_set_hold: bool,
+    /// Whether the human who made the request may take the task off hold. False without a named human or a hold.
+    pub can_clear_hold: bool,
     /// Whether the human who made the request may mark this human task Done: false without a named human, for any other kind and for a Done or archived task. The daemon refuses it while a prerequisite is not Done.
     pub can_mark_done: bool,
 }
@@ -736,8 +736,8 @@ pub(super) fn task_view(detail: service::TaskDetail, human: Option<&Human>) -> T
     let mut view = TaskView::from(detail);
     view.can_change_human_review =
         human.is_some_and(|human| service::can_change_human_review(&human.actor()));
-    view.can_set_blocker = rights.set_blocker;
-    view.can_clear_blocker = rights.clear_blocker;
+    view.can_set_hold = rights.set_hold;
+    view.can_clear_hold = rights.clear_hold;
     view.can_mark_done = rights.mark_done;
     view
 }
@@ -827,7 +827,7 @@ impl From<service::TaskDetail> for TaskView {
             human_review: task.human_review.map(HumanReviewMark::from),
             attention: attention(detail.attention),
             human_review_set_at: detail.human_review_set_at.map(|at| at.as_millis()),
-            blocker: task.hold.map(BlockerMark::from),
+            hold: task.hold.map(HoldMark::from),
             status_reason: detail.status_reason,
             workspace_info: detail.workspace_info.map(|info| TaskWorkspaceInfo {
                 directory: info.directory,
@@ -890,8 +890,8 @@ impl From<service::TaskDetail> for TaskView {
                 })
                 .collect(),
             can_change_human_review: false,
-            can_set_blocker: false,
-            can_clear_blocker: false,
+            can_set_hold: false,
+            can_clear_hold: false,
             can_mark_done: false,
         }
     }
@@ -962,7 +962,7 @@ pub struct SendBackBody {
 
 /// Why the task waits for a person.
 #[derive(Debug, Deserialize, ToSchema)]
-pub struct BlockerBody {
+pub struct HoldBody {
     /// Plain text, not empty, at most 500 characters.
     pub reason: String,
 }
@@ -1477,18 +1477,18 @@ pub async fn send_back_task(
     Ok(Json(task_view(tasks.get_view(task).await?, Some(&human))))
 }
 
-/// Puts a blocker on the task with its reason, or changes the reason: no agent claims the task and no lead starts a task worker for it until a human clears it. Only a task in Backlog or Todo that no agent has started gets one. The status does not change.
+/// Puts the task on hold with its reason, or changes the reason: no agent claims the task and no lead starts a task worker for it until a human takes the hold off. Only a task in Backlog or Todo that no agent has started can be put on hold. The status does not change.
 #[utoipa::path(
     put,
-    path = "/api/v1/projects/{slug}/tasks/{id}/blocker",
-    operation_id = "set_blocker",
+    path = "/api/v1/projects/{slug}/tasks/{id}/hold",
+    operation_id = "set_hold",
     params(
         ("slug" = String, Path, description = "The project slug"),
         ("id" = String, Path, description = "The task id, such as T-12"),
     ),
-    request_body = BlockerBody,
+    request_body = HoldBody,
     responses(
-        (status = 200, description = "The task with its blocker", body = TaskView),
+        (status = 200, description = "The task with its hold", body = TaskView),
         (status = 400, description = "`invalid_hold_reason`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 403, description = "`task_hold_denied` with the detail reason `started`: the task has a claim, a task workspace or an open proposal, or is past Todo", body = ErrorEnvelope),
@@ -1498,11 +1498,11 @@ pub async fn send_back_task(
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
-pub async fn set_blocker(
+pub async fn set_hold(
     human: Human,
     project: Project,
     Path((_slug, task)): Path<(String, String)>,
-    ApiJson(body): ApiJson<BlockerBody>,
+    ApiJson(body): ApiJson<HoldBody>,
 ) -> Result<Json<TaskView>, ApiError> {
     let task: TaskId = id(&task)?;
     let tasks = &project.0.tasks;
@@ -1510,17 +1510,17 @@ pub async fn set_blocker(
     Ok(Json(task_view(tasks.get_view(task).await?, Some(&human))))
 }
 
-/// Removes the blocker of the task, so agents can take it again. A task without a blocker is returned as it is.
+/// Takes the task off hold, so agents can take it again. A task that is not on hold is returned as it is.
 #[utoipa::path(
     delete,
-    path = "/api/v1/projects/{slug}/tasks/{id}/blocker",
-    operation_id = "clear_blocker",
+    path = "/api/v1/projects/{slug}/tasks/{id}/hold",
+    operation_id = "clear_hold",
     params(
         ("slug" = String, Path, description = "The project slug"),
         ("id" = String, Path, description = "The task id, such as T-12"),
     ),
     responses(
-        (status = 200, description = "The task without a blocker", body = TaskView),
+        (status = 200, description = "The task without a hold", body = TaskView),
         (status = 400, description = "`invalid_id` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`task_not_found` or `project_not_found`", body = ErrorEnvelope),
@@ -1529,7 +1529,7 @@ pub async fn set_blocker(
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
-pub async fn clear_blocker(
+pub async fn clear_hold(
     human: Human,
     project: Project,
     Path((_slug, task)): Path<(String, String)>,

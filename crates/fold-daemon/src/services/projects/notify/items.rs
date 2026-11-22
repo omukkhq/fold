@@ -10,7 +10,7 @@ pub fn item_key(item: &NeedsYouItem) -> String {
         NeedsYouKind::Permission => item.question.map(|id| id.to_string()),
         NeedsYouKind::HumanReview => item.proposal.map(|id| id.to_string()),
         NeedsYouKind::RequestDraft => item.request.map(|id| id.to_string()),
-        NeedsYouKind::HumanTask | NeedsYouKind::Blocker | NeedsYouKind::WorkerStalled => {
+        NeedsYouKind::HumanTask | NeedsYouKind::Hold | NeedsYouKind::WorkerStalled => {
             item.task.map(|id| id.to_string())
         }
         NeedsYouKind::StaleClaim => item
@@ -53,7 +53,7 @@ fn public_id(item: &NeedsYouItem) -> Option<String> {
     }
 }
 
-/// The title of a notice: the proposal, request, task or target title, a question's short header, or words of fold's own. Never a message body, a blocker's reason, a path, a commit or Claude Code's error text.
+/// The title of a notice: the proposal, request, task or target title, a question's short header, or words of fold's own. Never a message body, a hold's reason, a path, a commit or Claude Code's error text.
 fn title(item: &NeedsYouItem) -> String {
     let agent = item
         .agent
@@ -83,7 +83,7 @@ fn title(item: &NeedsYouItem) -> String {
         NeedsYouKind::HumanReview => own(&item.title, "A proposal waits for your approval"),
         NeedsYouKind::RequestDraft => own(&item.title, "A card draft waits for you"),
         NeedsYouKind::HumanTask => own(&item.title, "A task is ready for a person"),
-        NeedsYouKind::Blocker => own(&item.title, "A task has a blocker"),
+        NeedsYouKind::Hold => own(&item.title, "A task is on hold"),
         NeedsYouKind::HumanChange => "Your change conflicts with main".to_owned(),
         NeedsYouKind::HeadMoved => "The project folder's Git branch moved".to_owned(),
         NeedsYouKind::FolderHeld => "The project folder waits on your changes".to_owned(),
@@ -138,7 +138,7 @@ fn path(item: &NeedsYouItem) -> String {
             format!("requests/{}", id(item.request.map(|r| r.to_string())))
         }
         NeedsYouKind::HumanTask
-        | NeedsYouKind::Blocker
+        | NeedsYouKind::Hold
         | NeedsYouKind::WorkerStalled
         | NeedsYouKind::StaleClaim => {
             format!("t/{}", id(item.task.map(|t| t.to_string())))
@@ -221,12 +221,12 @@ mod tests {
             ("proposals/P-3", ["ana".to_owned()].as_slice())
         );
 
-        let mut blocker = of(NeedsYouKind::Blocker);
-        blocker.task = TaskId::from_number(12);
-        blocker.title = Some("Ship it".to_owned());
-        blocker.reason = Some("a reason a human wrote".to_owned());
-        assert_eq!(item_key(&blocker), "blocker:T-12");
-        assert_eq!(notice_item(&blocker).title, "Ship it");
+        let mut hold = of(NeedsYouKind::Hold);
+        hold.task = TaskId::from_number(12);
+        hold.title = Some("Ship it".to_owned());
+        hold.reason = Some("a reason a human wrote".to_owned());
+        assert_eq!(item_key(&hold), "blocker:T-12");
+        assert_eq!(notice_item(&hold).title, "Ship it");
 
         let mut permission = of(NeedsYouKind::Permission);
         permission.question = PermissionQuestionId::from_number(2);
@@ -321,7 +321,7 @@ mod tests {
             NeedsYouKind::HumanReview,
             NeedsYouKind::RequestDraft,
             NeedsYouKind::HumanTask,
-            NeedsYouKind::Blocker,
+            NeedsYouKind::Hold,
             NeedsYouKind::HumanChange,
             NeedsYouKind::HeadMoved,
             NeedsYouKind::FolderHeld,

@@ -38,7 +38,7 @@ pub enum TaskValueError {
     InvalidStepText,
     #[error("a task kind is proposal, no_proposal or human")]
     InvalidKind,
-    #[error("a blocker reason is not empty and has at most 500 characters")]
+    #[error("a hold reason is not empty and has at most 500 characters")]
     InvalidHoldReason,
 }
 
@@ -184,7 +184,7 @@ impl fmt::Display for HoldReason {
     }
 }
 
-/// The hold mark of a task, which the board labels Blocker: while it is on, no agent claims the task and no lead starts a task worker for it, until a person says the work can start. It is set by hand with a reason, unlike `tasks.blocked`, which recompute calculates from unfinished prerequisites. It never changes the task's status.
+/// The hold mark of a task, which the board shows as On hold: while it is on, no agent claims the task and no lead starts a task worker for it, until a person says the work can start. It is set by hand with a reason, unlike `tasks.blocked`, which recompute calculates from unfinished prerequisites. It never changes the task's status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HoldMark {
     pub reason: HoldReason,

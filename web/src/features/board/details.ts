@@ -84,8 +84,8 @@ export function cardDetails(
   if (kind !== null) {
     rows.push({ kind: "text", name: "Kind", text: kind });
   }
-  if (card.blocker !== null) {
-    rows.push(proseRow("Blocker", card.blocker.reason, "reason"));
+  if (card.hold !== null) {
+    rows.push(proseRow("Blocker", card.hold.reason, "reason"));
   }
   if (card.blocked_by.length > 0) {
     rows.push({
