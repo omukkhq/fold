@@ -194,7 +194,7 @@ describe("needsYouGroups", () => {
     expect(group?.lines[0]?.title).toBeNull();
   });
 
-  it("lists ready human tasks and blockers last, each opening its task", () => {
+  it("lists ready human tasks and holds last, each opening its task", () => {
     const groups = needsYouGroups("demo", [
       needsItem({
         kind: "blocker",
@@ -228,7 +228,7 @@ describe("needsYouGroups", () => {
       key: "blocker:T-2",
       chip: "T-2",
       task: null,
-      text: "has a blocker",
+      text: "is on hold",
       title: "Wait for the app id",
       href: "/p/demo/t/T-2",
     });
@@ -431,7 +431,7 @@ describe("needsYouGroups", () => {
     });
   });
 
-  it("puts an unstash conflict, then main's checks file, after the blockers", () => {
+  it("puts an unstash conflict, then main's checks file, after the holds", () => {
     const groups = needsYouGroups("demo", [
       needsItem({ kind: "checks_file_invalid_on_main", paths: ["a.toml"] }),
       needsItem({ kind: "unstash_conflicted", paths: ["a.md"] }),

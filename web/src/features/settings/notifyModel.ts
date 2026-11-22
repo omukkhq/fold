@@ -33,7 +33,7 @@ export const EVENT_OPTIONS: readonly {
   { name: "needs_you.opened", label: "Needs you: opened" },
   { name: "needs_you.closed", label: "Needs you: closed" },
   { name: "task.moved", label: "Card moved" },
-  { name: "task.blocked", label: "Blocker set or cleared" },
+  { name: "task.blocked", label: "Hold set or cleared" },
   { name: "review.changes_requested", label: "Changes requested" },
   { name: "proposal.integrated", label: "Integrated into main" },
   { name: "integration.failed", label: "Integration failed" },

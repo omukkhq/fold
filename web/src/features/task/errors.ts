@@ -79,7 +79,7 @@ export function describeError(error: unknown): ErrorView | null {
     case "invalid_hold_reason":
       return {
         field: null,
-        text: "Give the blocker a reason of 1 to 500 characters.",
+        text: "Give the hold a reason of 1 to 500 characters.",
       };
     case "task_closed":
       return {

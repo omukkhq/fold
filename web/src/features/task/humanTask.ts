@@ -59,29 +59,29 @@ export function humanWork(
   };
 }
 
-export interface BlockerView {
+export interface HoldView {
   reason: string;
   /** `Set by @web-lead · 2 min ago`. */
   setBy: Segment[];
 }
 
-/** The blocker of the task as the side group shows it; null without one. */
-export function blockerView(
+/** The hold of the task as the side group shows it; null without one. */
+export function holdView(
   task: Pick<TaskDetail, "hold">,
   now: number,
-): BlockerView | null {
-  const blocker = task.hold;
-  if (blocker === null) {
+): HoldView | null {
+  const hold = task.hold;
+  if (hold === null) {
     return null;
   }
   return {
-    reason: blocker.reason,
-    setBy: seg`Set by ${actorSegment(blocker.set_by)} · ${formatSince(now, blocker.set_at)}`,
+    reason: hold.reason,
+    setBy: seg`Set by ${actorSegment(hold.set_by)} · ${formatSince(now, hold.set_at)}`,
   };
 }
 
-/** The daemon decides both: a named human sets or changes a blocker only before an agent starts the task, and clears one on a task that is not archived. */
-export function blockerControls(
+/** The daemon decides both: a named human puts a task on hold or changes the hold only before an agent starts the task, and takes one off a task that is not archived. */
+export function holdControls(
   task: Pick<TaskDetail, "can_set_hold" | "can_clear_hold">,
 ): { canSet: boolean; canClear: boolean } {
   return { canSet: task.can_set_hold, canClear: task.can_clear_hold };

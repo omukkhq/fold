@@ -10,11 +10,11 @@ import {
   addDependency,
   archiveTask,
   attachLabel,
-  clearBlocker,
+  takeOffHold,
   clearHumanReview,
   completeTask,
   sendBackTask,
-  setBlocker,
+  putOnHold,
   setHumanReview,
   createLabel,
   createLabelOn,
@@ -154,17 +154,17 @@ describe("writes to a task", () => {
     ]);
   });
 
-  it("sets and clears a blocker", async () => {
+  it("puts a task on hold and takes it off", async () => {
     daemon.on(`PUT ${P}/tasks/T-6/hold`, ok(taskView("T-6")));
     daemon.on(`DELETE ${P}/tasks/T-6/hold`, ok(taskView("T-6")));
-    await setBlocker("demo", "T-6", "Wait for the logo");
-    await clearBlocker("demo", "T-6");
+    await putOnHold("demo", "T-6", "Wait for the logo");
+    await takeOffHold("demo", "T-6");
     expect(bodyOf(`PUT ${P}/tasks/T-6/hold`)).toEqual({
       reason: "Wait for the logo",
     });
     expect(daemon.made(`DELETE ${P}/tasks/T-6/hold`)).toHaveLength(1);
     daemon.on(`PUT ${P}/tasks/T-7/hold`, refuse(400, "invalid_hold_reason"));
-    await expect(setBlocker("demo", "T-7", " ")).rejects.toSatisfy(
+    await expect(putOnHold("demo", "T-7", " ")).rejects.toSatisfy(
       (e: unknown) => apiErrorCode(e) === "invalid_hold_reason",
     );
   });

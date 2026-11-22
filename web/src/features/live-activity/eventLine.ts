@@ -451,11 +451,11 @@ const SPECS: Record<EventType, Spec> = {
   },
   "task.hold_set": {
     icon: Hand,
-    text: (e) => `put a blocker on ${taskOf(e)}`,
+    text: (e) => `put ${taskOf(e)} on hold`,
   },
   "task.hold_cleared": {
     icon: Check,
-    text: (e) => `cleared the blocker of ${taskOf(e)}`,
+    text: (e) => `took ${taskOf(e)} off hold`,
   },
   "label.created": { icon: Tag, text: fixed("created a label") },
   "dependency.added": {

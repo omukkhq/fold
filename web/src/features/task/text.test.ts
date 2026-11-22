@@ -88,7 +88,7 @@ describe("historyText", () => {
         created_at: AT,
         seq: 2,
       }),
-    ).toBe("Blocker set by @web-lead · 13:40");
+    ).toBe("Put on hold by @web-lead · 13:40");
     expect(
       historyText({
         type: "task.hold_cleared",
@@ -96,7 +96,7 @@ describe("historyText", () => {
         created_at: AT,
         seq: 3,
       }),
-    ).toBe("Blocker cleared by @tanim · 13:40");
+    ).toBe("Taken off hold by @tanim · 13:40");
   });
 
   it("names a type that has no sentence", () => {

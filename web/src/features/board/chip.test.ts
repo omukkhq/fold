@@ -31,26 +31,26 @@ const proposal = (
 const chipText = (over: Partial<BoardCard>) =>
   cardChip(boardCard("T-1", { status: "in_progress", ...over }))?.text ?? null;
 
-const BLOCKER = { reason: "Wait", set_by: "human:tanim", set_at: 0 };
+const HOLD = { reason: "Wait", set_by: "human:tanim", set_at: 0 };
 
 describe("cardChip", () => {
-  it("puts a question before a review, a review before a blocker", () => {
+  it("puts a question before a review, a review before a hold", () => {
     expect(
       chipText({
         attention: [
           { kind: "human_review", closable: false, action: null },
           { kind: "question", closable: true, action: null },
         ],
-        hold: BLOCKER,
+        hold: HOLD,
       }),
     ).toBe("Question for you");
     expect(
       chipText({
         attention: [{ kind: "human_review", closable: false, action: null }],
-        hold: BLOCKER,
+        hold: HOLD,
       }),
     ).toBe("Your review");
-    expect(chipText({ hold: BLOCKER, blocked: true })).toBe("Blocker");
+    expect(chipText({ hold: HOLD, blocked: true })).toBe("On hold");
   });
 
   it("names the prerequisite of a blocked card, also when it stalls", () => {
@@ -84,7 +84,7 @@ describe("cardChip", () => {
     ).toBe("Stale claim · needs you");
   });
 
-  it("shows a check run that goes in the neutral tone, before a stall and a stale claim and after a blocker", () => {
+  it("shows a check run that goes in the neutral tone, before a stall and a stale claim and after a hold", () => {
     const run = {
       run: "cr-4",
       purpose: "check" as const,
@@ -105,7 +105,7 @@ describe("cardChip", () => {
         { ...card, hold: { reason: "keys", set_by: "ana", set_at: 0 } },
         run,
       )?.text,
-    ).toBe("Blocker");
+    ).toBe("On hold");
   });
 
   it("never shows a stale claim over a check run that goes", () => {

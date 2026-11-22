@@ -19,7 +19,7 @@ export interface NeedsYouLine {
   /** The words, with each command between backticks and the item's data escaped, for `CodeText`. */
   text: string;
   task: string | null;
-  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change or of an unstash, the files that hold the project folder back, the file, line and problem of main's checks file, the command that brings the Git branch back, lets a worker reach fold again or lets the daemon find claude, Claude Code's error of a worker that cannot reach the model. Marked and escaped as `text` is. */
+  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a hold, the conflicting files of a human change or of an unstash, the files that hold the project folder back, the file, line and problem of main's checks file, the command that brings the Git branch back, lets a worker reach fold again or lets the daemon find claude, Claude Code's error of a worker that cannot reach the model. Marked and escaped as `text` is. */
   title: string | null;
   since: number;
   /** True when the title belongs in the sentence after a colon, as `P-4 needs your review: Audit log`; otherwise it is the second line. */
@@ -305,7 +305,7 @@ function lineOf(
         chip: item.task,
         task: null,
         title: titleText(item.reason),
-        text: "has a blocker",
+        text: "is on hold",
         href: taskPath(slug, item.task ?? ""),
       };
     case "question":

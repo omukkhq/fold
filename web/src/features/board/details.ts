@@ -85,7 +85,7 @@ export function cardDetails(
     rows.push({ kind: "text", name: "Kind", text: kind });
   }
   if (card.hold !== null) {
-    rows.push(proseRow("Blocker", card.hold.reason, "reason"));
+    rows.push(proseRow("On hold", card.hold.reason, "reason"));
   }
   if (card.blocked_by.length > 0) {
     rows.push({

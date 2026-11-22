@@ -73,8 +73,8 @@ const EVENT_VERBS: Partial<Record<TaskEvent["type"], string>> = {
   "integration.succeeded": "Integrated by",
   "task.reported": "Reported finished by",
   "task.sent_back": "Sent back by",
-  "task.hold_set": "Blocker set by",
-  "task.hold_cleared": "Blocker cleared by",
+  "task.hold_set": "Put on hold by",
+  "task.hold_cleared": "Taken off hold by",
 };
 
 /** `Claimed by frontend/ui · 13:40`; a type without a sentence shows its name. */

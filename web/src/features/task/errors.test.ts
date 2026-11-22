@@ -98,7 +98,7 @@ describe("describeError", () => {
     );
     expect(describeError(refusal("task_kind_mismatch"))?.field).toBeNull();
     expect(describeError(refusal("invalid_hold_reason"))?.text).toBe(
-      "Give the blocker a reason of 1 to 500 characters.",
+      "Give the hold a reason of 1 to 500 characters.",
     );
     expect(describeError(refusal("prerequisites_not_done"))?.text).toBe(
       "A task that this task needs is not Done. Complete this task when its prerequisites are Done.",
