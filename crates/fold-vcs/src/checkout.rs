@@ -85,7 +85,7 @@ pub fn read_folder_entry(
     Ok(FolderEntry::Entry(FlatEntry { kind, hash }))
 }
 
-/// A cheap fingerprint of what the folder holds at `paths` below `root`, from their metadata alone, read one directory handle at a time with no symlink followed and no file opened: it changes when one of them is written, removed, replaced or swapped for another kind, so a watch runs a follow only then. Blocking.
+/// A cheap fingerprint of what the folder holds at `paths` below `root`, from their metadata alone, read one directory handle at a time with no symlink followed and no file opened: it changes when one of them is written, removed, replaced or swapped for another kind, so a watch runs a follow only then. The kernel stamps writes with a coarse clock, so a rewrite of the same size in the same tick as the write before it, with the file kept in place, can leave the stamp as it was; a later change of a path shows both. Blocking.
 pub fn folder_stamp(root: &Path, paths: &[RepoPath]) -> Vec<u8> {
     let root = DirHandle::open(root).ok();
     let mut stamp = Vec::new();

@@ -80,7 +80,7 @@ pub enum Enclosing {
     GitDirectory(PathBuf),
 }
 
-/// The repository that holds `dir`, found the way Git finds it with no `git` process: from `dir` up, the first folder whose `.git` is a Git directory or a file that names one is the top of a working tree, and the first folder that is itself a Git directory holds `dir` in its Git data. A `.git` file that names none ends the walk with nothing, as it stops Git. The walk never goes up into a ceiling folder of `discovery`, nor into a folder on another file system unless `discovery` allows it. Blocking.
+/// The repository that holds `dir`, found the way Git finds it with no `git` process: from `dir` up, the first folder whose `.git` is a Git directory or a file that names one is the top of a working tree, and the first folder that is itself a Git directory holds `dir` in its Git data. A `.git` file that names none ends the walk with nothing, as it stops Git. A `.git` that is neither a folder nor a file is passed by, as older Git passes it by; newer Git stops there with an error, after which the folder is still in the working tree above, so the walk gives that answer on every Git version. The walk never goes up into a ceiling folder of `discovery`, nor into a folder on another file system unless `discovery` allows it. Blocking.
 pub(crate) fn enclosing(dir: &Path, discovery: &Discovery) -> Option<Enclosing> {
     let dir = fs::canonicalize(dir).ok()?;
     let ceilings = discovery.ceilings();
@@ -114,7 +114,7 @@ pub(crate) fn enclosing(dir: &Path, discovery: &Discovery) -> Option<Enclosing> 
                 return git_file_target(&dot_git)
                     .map(|_| Enclosing::WorkingTree(folder.to_owned()));
             }
-            // Git passes by a `.git` that is neither a folder nor a file, such as a socket, and never opens it.
+            // A `.git` that is neither a folder nor a file, such as a socket, is passed by and never opened. Older Git passes it by too; newer Git stops with "not a regular file", and the folder is still in the working tree above.
             _ => {}
         }
         if is_git_directory(folder) {
@@ -172,7 +172,7 @@ mod tests {
         assert!(status.success(), "git {args:?}");
     }
 
-    /// What `git` finds around `dir` and what the walk finds there, which must be the same.
+    /// What `git` finds around `dir` and what the walk finds there, which must be the same wherever every Git version gives one answer.
     fn both(dir: &Path, discovery: &Discovery) -> Option<Enclosing> {
         let missing = tempfile::tempdir().unwrap();
         let by_git = Git::default()
@@ -292,7 +292,20 @@ mod tests {
         let socket = work.join("sub/socket");
         fs::create_dir(&socket).unwrap();
         let _listener = std::os::unix::net::UnixListener::bind(socket.join(".git")).unwrap();
-        assert_eq!(both(&socket, &none), tree(&work));
+        // Older Git passes the socket by and newer Git refuses the folder; the walk, which answers when Git finds nothing, passes it by on both.
+        let by_git = Git::default()
+            .with_discovery(none.clone())
+            .git_enclosing(&socket)
+            .unwrap();
+        assert!(by_git.is_none() || by_git == tree(&work), "{by_git:?}");
+        assert_eq!(enclosing(&socket, &none), tree(&work));
+        assert_eq!(
+            Git::default()
+                .with_discovery(none.clone())
+                .enclosing_repository(&socket, true)
+                .unwrap(),
+            tree(&work)
+        );
     }
 
     #[test]
