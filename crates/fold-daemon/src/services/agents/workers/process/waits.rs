@@ -332,7 +332,8 @@ impl Supervisor {
             .acquire()
             .await
             .map_err(StoreError::from)?;
-        Ok(agents::list_worker_processes(&mut conn).await?)
+        // An ended row takes no turn and keeps no release, so only the running ones count.
+        Ok(agents::list_running_worker_processes(&mut conn).await?)
     }
 
     /// Puts back the releases of single workers that a plan did not use.

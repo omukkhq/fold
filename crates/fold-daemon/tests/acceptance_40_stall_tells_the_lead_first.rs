@@ -84,6 +84,19 @@ async fn until_notices(fake: &FakeClaude, count: usize) -> Vec<String> {
     .await
 }
 
+/// Until the stream of the newest run of [`TASK_WORKER`] shows its open command, so a later move of the clock counts that call from before the move.
+async fn until_open_call(harness: &Harness) {
+    let agent = fold_core::AgentName::parse(TASK_WORKER).unwrap();
+    let live = harness.handle.live.clone();
+    eventually(WAIT, async || {
+        match live.streams().and_then(|streams| streams.facts(&agent)) {
+            Some(facts) if facts.open_call.is_some() => Ok(()),
+            other => Err(other.map(|facts| facts.last_output_at)),
+        }
+    })
+    .await;
+}
+
 async fn until_quiet(harness: &Harness, work: &Work) {
     eventually(WAIT, async || match decide(harness, work).await {
         None => Ok(()),
@@ -123,6 +136,7 @@ async fn acceptance_40_a_stall_goes_to_the_lead_first_and_to_a_person_only_when_
     assert_eq!(restarted["worker"]["tasks"], json!(["T-1"]));
     until_runs(&fake, TASK_WORKER, 2).await;
     until_quiet(&harness, &work).await;
+    until_open_call(&harness).await;
     harness.project.clock().advance(5 * MINUTE).unwrap();
     assert_eq!(
         decide(&harness, &work).await,

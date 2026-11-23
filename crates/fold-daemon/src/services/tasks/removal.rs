@@ -221,12 +221,7 @@ pub(super) async fn holder_of(
             .and_then(|area| area.lead)
             .into_iter()
             .collect(),
-        Some((Role::Reviewer, _)) => agents::list_worker_processes(tx.conn())
-            .await?
-            .into_iter()
-            .filter(|process| process.role == Role::ReviewLead)
-            .map(|process| process.agent)
-            .collect(),
+        Some((Role::Reviewer, _)) => agents::review_lead(tx.conn()).await?.into_iter().collect(),
         Some(_) | None => Vec::new(),
     };
     Ok(Some(TaskHolder {

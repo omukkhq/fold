@@ -1437,12 +1437,9 @@ async fn unreviewed_of(
 
 /// The agents that fold started as the review lead.
 async fn review_leads(store: &Store) -> Result<std::collections::BTreeSet<AgentName>, StoreError> {
-    let mut conn = store.read().acquire().await?;
-    Ok(agents::list_worker_processes(&mut conn)
+    Ok(agents::review_lead(store.read())
         .await?
         .into_iter()
-        .filter(|process| process.role == fold_core::roles::Role::ReviewLead)
-        .map(|process| process.agent)
         .collect())
 }
 

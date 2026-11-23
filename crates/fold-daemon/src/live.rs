@@ -764,16 +764,14 @@ pub fn watch_wanted(worker: Option<WorkerState>, session_open: bool) -> bool {
 /// The agents whose workspaces hold a watch now, as [`watch_wanted`] decides it from the store.
 async fn active_owners(store: &Store) -> Result<HashSet<AgentName>, fold_store::StoreError> {
     let mut conn = store.read().acquire().await?;
-    let processes = fold_store::agents::list_worker_processes(&mut conn).await?;
+    // An ended process never gives the watch by itself, so the running ones decide it with the sessions.
+    let processes = fold_store::agents::running_worker_states(&mut *conn).await?;
     let sessions: HashSet<AgentName> = fold_store::agents::open_session_calls_by_agent(&mut *conn)
         .await?
         .into_iter()
         .map(|(agent, _)| agent)
         .collect();
-    let states: HashMap<AgentName, WorkerState> = processes
-        .into_iter()
-        .map(|row| (row.agent, row.state))
-        .collect();
+    let states: HashMap<AgentName, WorkerState> = processes.into_iter().collect();
     Ok(states
         .keys()
         .chain(sessions.iter())

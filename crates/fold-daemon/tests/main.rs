@@ -222,6 +222,7 @@ mod webhook_notices_failpoints;
 mod worker_activity;
 mod worker_cost;
 mod worker_folders;
+mod worker_history;
 mod worker_limits;
 mod worker_park;
 mod worker_questions;

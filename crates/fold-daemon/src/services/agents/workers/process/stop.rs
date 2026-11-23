@@ -255,7 +255,7 @@ impl Supervisor {
     /// Ends every worker process the way a stop does, all at once, but keeps each row's state, so the next daemon start or the resume of a pause runs the workers that were working or idle again in their own sessions. A pause leaves a worker that is `stopping` to finish its stop.
     pub(in crate::services::agents::workers) async fn detach_all(&self, leave_stopping: bool) {
         let rows = match self.inner.store.read().acquire().await {
-            Ok(mut conn) => agents::list_worker_processes(&mut conn)
+            Ok(mut conn) => agents::list_running_worker_processes(&mut conn)
                 .await
                 .unwrap_or_default(),
             Err(_) => Vec::new(),
@@ -333,13 +333,11 @@ impl Supervisor {
         } else if kind == types::REVIEW_BATCH_SUBMITTED {
             // A batch review names its batch, not each member, so every running reviewer is checked.
             let mut conn = read.acquire().await.map_err(StoreError::from)?;
-            agents::list_worker_processes(&mut conn)
+            agents::list_running_worker_processes(&mut conn)
                 .await?
                 .into_iter()
                 .filter(|row| {
-                    row.role == fold_core::Role::Reviewer
-                        && row.state.is_running()
-                        && row.state != WorkerState::Stopping
+                    row.role == fold_core::Role::Reviewer && row.state != WorkerState::Stopping
                 })
                 .map(|row| agents::BoundWorker {
                     id: row.id,
@@ -375,7 +373,7 @@ impl Supervisor {
             .acquire()
             .await
             .map_err(StoreError::from)?;
-        let rows = agents::list_worker_processes(&mut conn).await?;
+        let rows = agents::list_running_worker_processes(&mut conn).await?;
         drop(conn);
         let mut stopped = Vec::new();
         for row in rows {
@@ -418,7 +416,7 @@ impl Supervisor {
         let rows = async {
             let read = self.inner.store.read();
             let mut conn = read.acquire().await.map_err(StoreError::from)?;
-            let rows: Vec<WorkerProcessRow> = agents::list_worker_processes(&mut conn)
+            let rows: Vec<WorkerProcessRow> = agents::list_running_worker_processes(&mut conn)
                 .await?
                 .into_iter()
                 .filter(|row| matches!(row.state, WorkerState::Working | WorkerState::Idle))
