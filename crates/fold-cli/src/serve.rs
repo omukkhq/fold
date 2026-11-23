@@ -288,7 +288,7 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
         .enable_all()
         .build()
         .map_err(ServeError::Runtime)?;
-    runtime.block_on(async {
+    block_on_then_end(runtime, RUNTIME_END_LIMIT, async {
         let signals = shutdown_signal().map_err(ServeError::Signals)?;
         let daemon = Daemon::start_on_host(
             config,
@@ -306,9 +306,50 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
     })
 }
 
+/// How long the process waits for blocking tasks after the daemon has stopped. The daemon's shutdown budget is 45 s, so with this limit a stop takes at most 55 s, inside the 60 s `STOP_TIMEOUT` of `fld restart`.
+const RUNTIME_END_LIMIT: Duration = Duration::from_secs(10);
+
+/// Runs `future` to its end, then ends the runtime and waits at most `limit` for its blocking tasks. Dropping a runtime waits for them without a limit, so a stuck task would keep the process alive.
+fn block_on_then_end<F: std::future::Future>(
+    runtime: tokio::runtime::Runtime,
+    limit: Duration,
+    future: F,
+) -> F::Output {
+    let output = runtime.block_on(future);
+    runtime.shutdown_timeout(limit);
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_blocking_task_that_never_ends_does_not_keep_the_runtime_alive() {
+        let (never_sender, never) = std::sync::mpsc::channel::<()>();
+        let (started_sender, started) = std::sync::mpsc::channel::<()>();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let limit = Duration::from_millis(200);
+        let begin = std::time::Instant::now();
+        let output = block_on_then_end(runtime, limit, async move {
+            tokio::task::spawn_blocking(move || {
+                started_sender.send(()).unwrap();
+                let _ = never.recv();
+            });
+            tokio::task::spawn_blocking(move || started.recv().unwrap())
+                .await
+                .unwrap();
+            7
+        });
+        let elapsed = begin.elapsed();
+        assert_eq!(output, 7);
+        assert!(elapsed >= limit, "{elapsed:?}");
+        assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+        drop(never_sender);
+    }
 
     #[test]
     fn rmcp_stays_at_warn_whatever_rust_log_asks() {
