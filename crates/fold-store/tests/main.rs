@@ -32,6 +32,7 @@ mod proposals_schema;
 mod registry;
 mod removal;
 mod requests_schema;
+mod review_batch_release;
 mod review_batches_schema;
 mod review_plans_schema;
 mod reviews_schema;

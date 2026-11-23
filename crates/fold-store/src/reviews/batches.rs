@@ -43,6 +43,7 @@ pub enum MemberRelease {
     Removed,
     Submitted,
     Closed,
+    ReviewedAlone,
 }
 
 impl MemberRelease {
@@ -51,6 +52,7 @@ impl MemberRelease {
             MemberRelease::Removed => "removed",
             MemberRelease::Submitted => "submitted",
             MemberRelease::Closed => "closed",
+            MemberRelease::ReviewedAlone => "reviewed_alone",
         }
     }
 
@@ -59,6 +61,7 @@ impl MemberRelease {
             "removed" => Ok(MemberRelease::Removed),
             "submitted" => Ok(MemberRelease::Submitted),
             "closed" => Ok(MemberRelease::Closed),
+            "reviewed_alone" => Ok(MemberRelease::ReviewedAlone),
             _ => Err(StoreError::Corrupt("review_batch_members.release_reason")),
         }
     }
@@ -308,6 +311,48 @@ pub async fn remove_member(
     .await?
     .rows_affected();
     Ok(updated == 1)
+}
+
+/// Releases the open membership of the proposal in the batch as `reviewed_alone`, because the proposal got its verdict outside the batch, in the caller's write. The batch itself stays open. False, with nothing changed, when the proposal is not an open member.
+pub async fn release_member_reviewed_alone(
+    tx: &mut WriteTx,
+    batch: ReviewBatchId,
+    proposal: ProposalId,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let (batch, proposal, now) = (batch.to_db(), proposal.to_db(), now.as_millis());
+    let updated = sqlx::query!(
+        "UPDATE review_batch_members SET released_at = ?3, release_reason = 'reviewed_alone'
+         WHERE released_at IS NULL
+           AND batch_id = (SELECT id FROM review_batches WHERE number = ?1)
+           AND proposal_id = (SELECT id FROM proposals WHERE number = ?2)",
+        batch,
+        proposal,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(updated == 1)
+}
+
+/// Whether the batch still has a member that has not left it, whatever the state of its proposal.
+pub async fn has_open_member(
+    executor: impl SqliteExecutor<'_>,
+    batch: ReviewBatchId,
+) -> Result<bool, StoreError> {
+    let number = batch.to_db();
+    let found = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM review_batch_members m
+               JOIN review_batches b ON b.id = m.batch_id
+               WHERE b.number = ? AND m.released_at IS NULL
+           ) AS "found!: bool""#,
+        number
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(found)
 }
 
 /// Marks an open batch submitted and releases its open members as `submitted`, in the caller's write. False, with nothing changed, when the batch is not open.
