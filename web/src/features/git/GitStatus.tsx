@@ -132,10 +132,17 @@ export function GitStatus({
             <Location>{remote.location}</Location>
             <Branch name={remote.branch} />
             <span className="flex-1" />
-            <span className={cn("min-w-0 text-14", TONE[remote.tone])}>
+            <span
+              title={remote.status}
+              className={cn(
+                "min-w-0 truncate text-14 tabular-nums",
+                TONE[remote.tone],
+              )}
+            >
               {remote.status}
             </span>
-            <span className="flex w-git-commit shrink-0 justify-end">
+            {/* The cell takes the width of the id and its icon: a fixed width narrower than they are lets the right-aligned id spill left over the status. */}
+            <span className="flex shrink-0 justify-end">
               <CommitId commit={remote.commit} className="text-text" />
             </span>
           </Row>
