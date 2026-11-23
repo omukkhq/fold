@@ -29,6 +29,7 @@ use crate::services::workspaces::{
     BatchMergeCache, CarryCache, WorkspaceLocks, WorkspaceService, follow_closed_workspaces,
     follow_stall_turns,
 };
+use crate::shutdown;
 use crate::support::unpoisoned;
 
 /// An open project: its database, its clock and the live state shared by every request. Later domains add their state here.
@@ -300,28 +301,84 @@ impl ProjectHandle {
         self.stop().await;
     }
 
-    /// Closes the project after its workers stopped and its bus closed: the live state of its workspaces is written and let go, its commit writer and push delivery end, every open session ends and its database is checkpointed and closed.
+    /// Closes the project after its workers stopped and its bus closed: the live state of its workspaces is written and let go, its commit writer and push delivery end, every open session ends and its database is checkpointed and closed. It waits for each step, because the daemon keeps running and the project can open again in the same folder, which must find the check directory at rest and no pipeline of the old handle.
     pub(crate) async fn stop(&self) {
-        self.checks.shutdown().await;
-        for live in self.live.all() {
-            self.live.detach(live.view.workspace).await;
-        }
-        self.stop_tasks(DRAIN_TIMEOUT).await;
-        if let Err(error) = self.agents().close_sessions_at_shutdown().await {
+        self.stop_steps(false).await;
+    }
+
+    /// [`ProjectHandle::stop`] for the daemon's stop, after which the process ends: each step gets its limit from [`shutdown`] and is let go after it.
+    pub(crate) async fn stop_within_limits(&self) {
+        self.stop_steps(true).await;
+    }
+
+    async fn stop_steps(&self, limited: bool) {
+        self.step(
+            limited,
+            "checks",
+            shutdown::CHECKS_LIMIT,
+            self.checks.shutdown(),
+        )
+        .await;
+        self.step(limited, "live_detach", shutdown::LIVE_DETACH_LIMIT, async {
+            for live in self.live.all() {
+                self.live.detach(live.view.workspace).await;
+            }
+        })
+        .await;
+        self.stop_tasks(if limited {
+            shutdown::PROJECT_TASKS_LIMIT
+        } else {
+            DRAIN_TIMEOUT
+        })
+        .await;
+        if let Some(Err(error)) = self
+            .step(
+                limited,
+                "close_sessions",
+                shutdown::CLOSE_SESSIONS_LIMIT,
+                self.agents().close_sessions_at_shutdown(),
+            )
+            .await
+        {
             tracing::error!(project = %self.slug, %error, "could not end sessions");
         }
-        if let Err(error) = self.store.close().await {
+        if let Some(Err(error)) = self
+            .step(
+                limited,
+                "store_close",
+                shutdown::STORE_CLOSE_LIMIT,
+                self.store.close(),
+            )
+            .await
+        {
             tracing::error!(project = %self.slug, %error, "could not close the project database");
         }
     }
 
-    /// Waits up to `timeout` for the commit writer, the push delivery, the removal of closed workspace directories, the stall decisions and the watch moves to end after [`EventBus::close`], then aborts them, so none outlives the project's database.
+    /// Runs one step of [`ProjectHandle::stop_steps`], within `limit` when `limited`; `None` when it was let go.
+    async fn step<T>(
+        &self,
+        limited: bool,
+        name: &'static str,
+        limit: Duration,
+        work: impl Future<Output = T>,
+    ) -> Option<T> {
+        if limited {
+            shutdown::within(name, Some(&self.slug), limit, work).await
+        } else {
+            Some(work.await)
+        }
+    }
+
+    /// Waits up to `timeout` for the commit writer, the push delivery, the removal of closed workspace directories, the stall decisions and the watch moves to end after [`EventBus::close`], all at the same time, then aborts them, so none outlives the project's database.
     pub async fn stop_tasks(&self, timeout: Duration) {
-        self.auto_commit.stopped(timeout).await;
-        self.push_task.stopped(timeout).await;
-        self.workspace_cleanup.stopped(timeout).await;
-        self.stall_turns.stopped(timeout).await;
-        self.watch_owners.stopped(timeout).await;
+        tokio::join!(
+            self.auto_commit.stopped(timeout),
+            self.push_task.stopped(timeout),
+            self.workspace_cleanup.stopped(timeout),
+            self.stall_turns.stopped(timeout),
+            self.watch_owners.stopped(timeout),
+        );
     }
 
     /// Asks the project's cleanup task to remove every closed workspace directory that is due, such as those a stopped daemon left. It returns at once; the removal runs in the background.

@@ -199,13 +199,7 @@ impl Supervisor {
             if run.reaped.load(Ordering::SeqCst) {
                 continue;
             }
-            if let Some(pid) = run
-                .pid
-                .and_then(|pid| i32::try_from(pid).ok())
-                .and_then(rustix::process::Pid::from_raw)
-            {
-                let _ = rustix::process::kill_process_group(pid, signal);
-            }
+            signal_group(run, signal);
         }
         // SIGKILL cannot be ignored, so only the reader's last lines and the recorded exit remain; the timeout guards against a pid that was never known.
         let killed = tokio::time::timeout(KILL_WAIT, exited.wait_for(|done| *done)).await;
@@ -237,9 +231,25 @@ impl Supervisor {
         }
     }
 
-    /// Ends every worker process at the daemon's stop; see [`Supervisor::detach_all`].
+    /// Ends every worker process as the daemon's stop does, with no time limit; see [`Supervisor::detach_all`].
     pub async fn shutdown(&self) {
         self.detach_all(false).await;
+    }
+
+    /// [`Supervisor::shutdown`] for the daemon's stop: it lets the stop go after [`crate::shutdown::WORKER_STOPS_LIMIT`], then sends SIGKILL to the process group of every process it found at the start that is not reaped yet, so neither a process nor a command of its tools runs on beside the worker that the next start resumes. The SIGKILL comes from a guard, so it also runs when the stop itself is dropped.
+    pub async fn shutdown_within(&self, project: &str) {
+        let running: Vec<(AgentName, Running)> = lock(&self.inner.running)
+            .iter()
+            .map(|(agent, run)| (agent.clone(), run.clone()))
+            .collect();
+        let _kill = KillLeft { project, running };
+        crate::shutdown::within(
+            "worker_stops",
+            Some(project),
+            crate::shutdown::WORKER_STOPS_LIMIT,
+            self.detach_all(false),
+        )
+        .await;
     }
 
     /// Ends every worker process the way a stop does, all at once, but keeps each row's state, so the next daemon start or the resume of a pause runs the workers that were working or idle again in their own sessions. A pause leaves a worker that is `stopping` to finish its stop.
@@ -471,6 +481,35 @@ impl Supervisor {
                 code = error.code().unwrap_or(codes::INTERNAL_ERROR),
                 "could not check for finished workers"
             ),
+        }
+    }
+}
+
+/// Sends `signal` to the process group of `run`, when its pid is known.
+fn signal_group(run: &Running, signal: rustix::process::Signal) {
+    if let Some(pid) = run
+        .pid
+        .and_then(|pid| i32::try_from(pid).ok())
+        .and_then(rustix::process::Pid::from_raw)
+    {
+        let _ = rustix::process::kill_process_group(pid, signal);
+    }
+}
+
+/// The worker processes of a daemon stop, whose groups get SIGKILL when the stop ends or is dropped. A reaped process is skipped, so an ended process's reused pid is never signalled; one that has exited but is not reaped yet still holds its pid.
+struct KillLeft<'a> {
+    project: &'a str,
+    running: Vec<(AgentName, Running)>,
+}
+
+impl Drop for KillLeft<'_> {
+    fn drop(&mut self) {
+        for (agent, run) in &self.running {
+            if run.reaped.load(Ordering::SeqCst) || *run.exited.borrow() {
+                continue;
+            }
+            tracing::warn!(project = self.project, %agent, "a worker process did not end in time; fold sent SIGKILL to its process group");
+            signal_group(run, rustix::process::Signal::KILL);
         }
     }
 }

@@ -103,6 +103,11 @@ impl SocketServer {
         *unpoisoned(self.handler.write()) = handler;
     }
 
+    /// Aborts the accept loop and with it every open connection, for a drain that went over its limit.
+    pub fn abort_handle(&self) -> tokio::task::AbortHandle {
+        self.task.abort_handle()
+    }
+
     /// Ends the open connections and waits until they are closed; the accept loop stops at the `shutdown` of [`SocketServer::bind`]. Each connection finishes what it is doing: an HTTP connection its request, an MCP session the calls in flight, whose adapter then reads the end of the stream. A connection still open after [`DRAIN_TIMEOUT`] is cut. Until this is called, the connections that were open at the shutdown keep being served, so the daemon can stop its worker processes while their sessions still answer.
     pub async fn stopped(self) {
         self.drain.send_replace(true);

@@ -8,6 +8,7 @@ pub mod mcp;
 pub mod projects;
 pub mod push;
 pub mod services;
+pub mod shutdown;
 pub mod socket;
 pub(crate) mod support;
 

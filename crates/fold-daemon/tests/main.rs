@@ -202,6 +202,8 @@ mod services_messages;
 mod services_question_sets;
 mod session_context;
 mod session_push;
+#[cfg(feature = "failpoints")]
+mod shutdown_failpoints;
 mod socket_peers;
 mod sse_stream;
 mod supervised_main;

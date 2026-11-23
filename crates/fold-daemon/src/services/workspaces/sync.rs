@@ -160,6 +160,8 @@ impl WorkspaceService {
                 "workspace_sync_after_write fired",
             )))
         });
+        #[cfg(feature = "failpoints")]
+        crate::shutdown::hold("workspace_sync_hold", "after_write").await;
 
         let conflicted: Vec<ConflictRow> = outcome
             .conflicted

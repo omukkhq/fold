@@ -20,6 +20,7 @@ use crate::mcp;
 use crate::projects::{FolderFiles, Projects, resume_workers};
 use crate::services::agents::environment::WorkerEnvironment;
 use crate::services::agents::{Launcher, accounts};
+use crate::shutdown;
 use crate::socket::SocketServer;
 
 /// How long the open connections of the HTTP listener and of the socket get to finish after shutdown starts, and the jobs to stop.
@@ -341,39 +342,60 @@ impl RunningDaemon {
     /// Stops accepting and stops the jobs, ends the worker processes while their sessions are still served (their rows keep their state, so the next start resumes them), closes every project's bus, which ends the event streams, the waits and the commit writers, drains the socket and HTTP connections, then ends open sessions, checkpoints every WAL and removes the socket file.
     pub async fn shutdown(self) {
         let _ = self.stop.send(true);
-        self.gc_daily.stopped(DRAIN_TIMEOUT).await;
-        self.presence.stopped(DRAIN_TIMEOUT).await;
-        self.live.stopped(DRAIN_TIMEOUT).await;
-        self.auto_checkpoints.stopped(DRAIN_TIMEOUT).await;
-        self.leases.stopped(DRAIN_TIMEOUT).await;
-        self.stalls.stopped(DRAIN_TIMEOUT).await;
-        self.auto_integrate.stopped(DRAIN_TIMEOUT).await;
-        self.worker_idle.stopped(DRAIN_TIMEOUT).await;
-        self.notify.stopped(DRAIN_TIMEOUT).await;
-        self.plan_deadlines.stopped(DRAIN_TIMEOUT).await;
+        tokio::join!(
+            self.gc_daily.stopped(DRAIN_TIMEOUT),
+            self.presence.stopped(DRAIN_TIMEOUT),
+            self.live.stopped(DRAIN_TIMEOUT),
+            self.auto_checkpoints.stopped(DRAIN_TIMEOUT),
+            self.leases.stopped(DRAIN_TIMEOUT),
+            self.stalls.stopped(DRAIN_TIMEOUT),
+            self.auto_integrate.stopped(DRAIN_TIMEOUT),
+            self.worker_idle.stopped(DRAIN_TIMEOUT),
+            self.notify.stopped(DRAIN_TIMEOUT),
+            self.plan_deadlines.stopped(DRAIN_TIMEOUT),
+        );
         let handles = self.state.projects.handles();
         // The projects end their workers at the same time, so the stop that systemd and `fld restart` wait for does not grow with the number of projects.
         let mut stops = tokio::task::JoinSet::new();
         for handle in &handles {
             let handle = Arc::clone(handle);
-            stops.spawn(async move { handle.workers.shutdown().await });
+            stops.spawn(async move { handle.workers.shutdown_within(&handle.slug).await });
         }
         while stops.join_next().await.is_some() {}
         for handle in &handles {
             handle.bus.close();
         }
-        self.socket.stopped().await;
-        let abort = self.http.abort_handle();
-        if tokio::time::timeout(DRAIN_TIMEOUT, self.http)
-            .await
-            .is_err()
-        {
-            abort.abort();
+        let socket_abort = self.socket.abort_handle();
+        let http_abort = self.http.abort_handle();
+        let (socket, http) = tokio::join!(
+            shutdown::within(
+                "socket",
+                None,
+                shutdown::SOCKET_LIMIT,
+                self.socket.stopped()
+            ),
+            shutdown::within("http", None, DRAIN_TIMEOUT, self.http),
+        );
+        if socket.is_none() {
+            socket_abort.abort();
         }
+        if http.is_none() {
+            http_abort.abort();
+        }
+        let mut stops = tokio::task::JoinSet::new();
         for handle in &handles {
-            handle.stop().await;
+            let handle = Arc::clone(handle);
+            stops.spawn(async move { handle.stop_within_limits().await });
         }
-        if let Err(error) = self.state.registry.close().await {
+        while stops.join_next().await.is_some() {}
+        if let Some(Err(error)) = shutdown::within(
+            "registry_close",
+            None,
+            shutdown::REGISTRY_CLOSE_LIMIT,
+            self.state.registry.close(),
+        )
+        .await
+        {
             tracing::error!(%error, "could not close the registry database");
         }
         if let Err(error) = tokio::fs::remove_file(&self.config.socket).await {
