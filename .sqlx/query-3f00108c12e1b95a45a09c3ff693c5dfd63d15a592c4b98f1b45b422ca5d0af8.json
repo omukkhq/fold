@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT g.name FROM worker_processes w JOIN agents g ON g.id = w.agent_id\n           WHERE w.role = ? ORDER BY w.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "name",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3f00108c12e1b95a45a09c3ff693c5dfd63d15a592c4b98f1b45b422ca5d0af8"
+}

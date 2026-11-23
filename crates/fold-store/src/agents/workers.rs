@@ -588,6 +588,92 @@ pub async fn list_worker_processes(
     with_bindings(conn, raw).await
 }
 
+/// Every worker process that is not `stopped` or `failed`, in start order: the rows of [`list_worker_processes`] without the ended ones.
+pub async fn list_running_worker_processes(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<WorkerProcessRow>, StoreError> {
+    let raw = select_processes!(
+        "WHERE w.state IN ('starting', 'working', 'idle', 'stopping') ORDER BY w.id"
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    with_bindings(conn, raw).await
+}
+
+/// Every worker process of `role` in start order, ended ones included.
+pub async fn list_worker_processes_of_role(
+    conn: &mut SqliteConnection,
+    role: Role,
+) -> Result<Vec<WorkerProcessRow>, StoreError> {
+    let role = role.as_str();
+    let raw = select_processes!("WHERE w.role = ? ORDER BY w.id", role)
+        .fetch_all(&mut *conn)
+        .await?;
+    with_bindings(conn, raw).await
+}
+
+/// The worker processes of `agents` in start order; an agent with no process adds no row.
+pub async fn list_worker_processes_of_agents(
+    conn: &mut SqliteConnection,
+    agents: &[AgentName],
+) -> Result<Vec<WorkerProcessRow>, StoreError> {
+    let names = serde_json::Value::from(
+        agents
+            .iter()
+            .map(|agent| agent.as_str())
+            .collect::<Vec<_>>(),
+    )
+    .to_string();
+    let raw = select_processes!(
+        "WHERE g.name IN (SELECT value FROM json_each(?)) ORDER BY w.id",
+        names
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    with_bindings(conn, raw).await
+}
+
+/// The agent and state of every worker process that is not `stopped` or `failed`, in start order.
+pub async fn running_worker_states(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<(AgentName, WorkerState)>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT g.name AS agent, w.state
+           FROM worker_processes w JOIN agents g ON g.id = w.agent_id
+           WHERE w.state IN ('starting', 'working', 'idle', 'stopping')
+           ORDER BY w.id"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let agent =
+                AgentName::parse(&row.agent).map_err(|_| StoreError::Corrupt("agents.name"))?;
+            let state = WorkerState::parse(&row.state)
+                .ok_or(StoreError::Corrupt("worker_processes.state"))?;
+            Ok((agent, state))
+        })
+        .collect()
+}
+
+/// The agents of every worker process of `role` in start order, ended ones included.
+pub async fn worker_agents_of_role(
+    executor: impl SqliteExecutor<'_>,
+    role: Role,
+) -> Result<Vec<AgentName>, StoreError> {
+    let role = role.as_str();
+    let rows = sqlx::query_scalar!(
+        r#"SELECT g.name FROM worker_processes w JOIN agents g ON g.id = w.agent_id
+           WHERE w.role = ? ORDER BY w.id"#,
+        role
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|name| AgentName::parse(&name).map_err(|_| StoreError::Corrupt("agents.name")))
+        .collect()
+}
+
 /// The time each supervised agent's process last started: a start, a resume or a hand-off moves it.
 pub async fn process_starts(
     executor: impl SqliteExecutor<'_>,

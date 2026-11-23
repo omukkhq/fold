@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT g.name AS agent, w.state\n           FROM worker_processes w JOIN agents g ON g.id = w.agent_id\n           WHERE w.state IN ('starting', 'working', 'idle', 'stopping')\n           ORDER BY w.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "state"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "64c75802f8dd870dd6e0dade1f8073e866ddfbb2490b16e423b61e1a0f859ea2"
+}
