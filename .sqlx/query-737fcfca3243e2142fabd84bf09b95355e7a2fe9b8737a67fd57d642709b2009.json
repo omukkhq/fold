@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT n.card_id, t.number AS \"number!: i64\"\n           FROM request_draft_card_needs n\n           JOIN tasks t ON t.id = n.task_id\n           JOIN request_draft_cards c ON c.id = n.card_id\n           JOIN request_drafts d ON d.id = c.draft_id\n           JOIN requests r ON r.id = d.request_id\n           WHERE r.number = ? ORDER BY n.card_id, n.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "card_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "request_draft_card_needs",
+            "name": "card_id"
+          }
+        }
+      },
+      {
+        "name": "number!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "737fcfca3243e2142fabd84bf09b95355e7a2fe9b8737a67fd57d642709b2009"
+}

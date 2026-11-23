@@ -4,7 +4,7 @@ use sqlx::SqliteConnection;
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
-/// What a task has left behind that `delete_task` may not erase. Workspaces and proposals count in any state and of any kind; a message counts when it names the task, a worker's turn when it counts for the task, and a review plan when the task was ever one of its members.
+/// What a task has left behind that `delete_task` may not erase. Workspaces and proposals count in any state and of any kind; a message counts when it names the task, a worker's turn when it counts for the task, a review plan when the task was ever one of its members, and a request draft when one of its cards needs the task.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TaskHistory {
     pub workspace: bool,
@@ -14,6 +14,8 @@ pub struct TaskHistory {
     pub report: bool,
     pub turn: bool,
     pub review_plan: bool,
+    /// A request's card draft needs the task.
+    pub request_need: bool,
 }
 
 impl TaskHistory {
@@ -25,6 +27,7 @@ impl TaskHistory {
             || self.report
             || self.turn
             || self.review_plan
+            || self.request_need
     }
 }
 
@@ -37,7 +40,8 @@ pub async fn history(conn: &mut SqliteConnection, task: TaskId) -> Result<TaskHi
                   EXISTS (SELECT 1 FROM messages m WHERE m.task_id = t.id) AS "message!: bool",
                   EXISTS (SELECT 1 FROM task_reports r WHERE r.task_id = t.id) AS "report!: bool",
                   EXISTS (SELECT 1 FROM worker_turns x WHERE x.task_id = t.id) AS "turn!: bool",
-                  EXISTS (SELECT 1 FROM review_plan_members m WHERE m.task_id = t.id) AS "review_plan!: bool"
+                  EXISTS (SELECT 1 FROM review_plan_members m WHERE m.task_id = t.id) AS "review_plan!: bool",
+                  EXISTS (SELECT 1 FROM request_draft_card_needs n WHERE n.task_id = t.id) AS "request_need!: bool"
            FROM tasks t WHERE t.number = ?"#,
         number
     )
@@ -51,6 +55,7 @@ pub async fn history(conn: &mut SqliteConnection, task: TaskId) -> Result<TaskHi
         report: row.report,
         turn: row.turn,
         review_plan: row.review_plan,
+        request_need: row.request_need,
     }))
 }
 

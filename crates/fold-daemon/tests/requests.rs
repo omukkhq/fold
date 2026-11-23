@@ -8,7 +8,8 @@ use fold_core::object::ObjectKind;
 use fold_core::requests::{DraftCard, DraftEdge, RequestKind, RequestState, Requester};
 use fold_core::roles::Role;
 use fold_core::{
-    Actor, AgentActor, HumanName, RequestId, TaskId, TaskStatus, Timestamp, WorkerName, codes,
+    Actor, AgentActor, HumanName, RequestId, TaskId, TaskKind, TaskStatus, Timestamp, WorkerName,
+    codes,
 };
 use fold_daemon::services::events::EventBus;
 use fold_daemon::services::tasks::{
@@ -63,6 +64,8 @@ fn draft(cards: &[&str], edges: &[(&str, &str)]) -> SubmitDraft {
                 title: format!("Build {key}"),
                 description: format!("**Scope** the {key} part"),
                 label: None,
+                kind: TaskKind::Proposal,
+                needs: Vec::new(),
             })
             .collect(),
         edges: edges

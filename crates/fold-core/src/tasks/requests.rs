@@ -12,7 +12,7 @@ use crate::ids::{ProposalId, RequestId, RevisionId, TaskId};
 use crate::reviews::Side;
 use crate::tasks::claims::is_stale;
 use crate::tasks::dag::{Dag, EdgeRefusal};
-use crate::tasks::{LabelName, define_names};
+use crate::tasks::{LabelName, TaskKind, define_names};
 use crate::text::{LineFault, one_line};
 use crate::time::Timestamp;
 
@@ -367,6 +367,10 @@ pub struct DraftCard {
     pub description: String,
     /// The label of the area whose lead builds the card; approval gives the task this label, so fold sends the ready task to that lead. `None` sends it to the main agent.
     pub label: Option<LabelName>,
+    /// How the card's task reaches Done.
+    pub kind: TaskKind,
+    /// Existing tasks the card's task needs, in the order given.
+    pub needs: Vec<TaskId>,
 }
 
 /// The dependent card needs the prerequisite card.
@@ -407,6 +411,11 @@ pub enum DraftRefusal {
     TitleTooLong(String),
     EmptyDescription(String),
     DescriptionTooLong(String),
+    /// The card needs the same existing task more than once.
+    DuplicateNeed {
+        key: String,
+        task: TaskId,
+    },
     /// The 1-based position of the edge that names a key no card has.
     UnknownKey(usize),
     SelfEdge(String),
@@ -431,6 +440,7 @@ impl DraftRefusal {
             DraftRefusal::TitleTooLong(_) => "title_too_long",
             DraftRefusal::EmptyDescription(_) => "empty_description",
             DraftRefusal::DescriptionTooLong(_) => "description_too_long",
+            DraftRefusal::DuplicateNeed { .. } => "duplicate_need",
             DraftRefusal::UnknownKey(_) => "unknown_key",
             DraftRefusal::SelfEdge(_) => "self_edge",
             DraftRefusal::DuplicateEdge { .. } => "duplicate_edge",
@@ -461,6 +471,9 @@ impl From<DraftRefusal> for FoldError {
             | DraftRefusal::EmptyDescription(key)
             | DraftRefusal::DescriptionTooLong(key)
             | DraftRefusal::SelfEdge(key) => Some(("key", json!(key))),
+            DraftRefusal::DuplicateNeed { key, task } => {
+                Some(("need", json!({"key": key, "task": task.to_string()})))
+            }
             DraftRefusal::DuplicateEdge {
                 prerequisite,
                 dependent,
@@ -487,7 +500,7 @@ fn valid_key(key: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
 }
 
-/// Checks a draft: 1 to [`MAX_CARDS`] cards with unique keys, each with a one-line title of at most [`MAX_TITLE_CHARS`] characters and a non-blank description of at most [`MAX_TEXT_CHARS`]; every edge names two different existing keys, once, and the edges form no cycle. The title rule is the task title rule, so an approval never meets a card its task would refuse.
+/// Checks a draft: 1 to [`MAX_CARDS`] cards with unique keys, each with a one-line title of at most [`MAX_TITLE_CHARS`] characters and a non-blank description of at most [`MAX_TEXT_CHARS`]; no card needs the same existing task twice; every edge names two different existing keys, once, and the edges form no cycle. The title rule is the task title rule, so an approval never meets a card its task would refuse.
 pub fn validate_draft(cards: Vec<DraftCard>, edges: Vec<DraftEdge>) -> Result<Draft, DraftRefusal> {
     if cards.is_empty() {
         return Err(DraftRefusal::Empty);
@@ -521,11 +534,21 @@ pub fn validate_draft(cards: Vec<DraftCard>, edges: Vec<DraftEdge>) -> Result<Dr
         if card.description.chars().count() > MAX_TEXT_CHARS {
             return Err(DraftRefusal::DescriptionTooLong(key()));
         }
+        for (position, need) in card.needs.iter().enumerate() {
+            if card.needs[..position].contains(need) {
+                return Err(DraftRefusal::DuplicateNeed {
+                    key: card.key.clone(),
+                    task: *need,
+                });
+            }
+        }
         checked.push(DraftCard {
             key: card.key.clone(),
             title: title.to_owned(),
             description: card.description.clone(),
             label: card.label.clone(),
+            kind: card.kind,
+            needs: card.needs.clone(),
         });
     }
     let mut graph: Vec<(TaskId, TaskId)> = Vec::with_capacity(edges.len());
@@ -614,6 +637,18 @@ mod tests {
             title: format!("Card {key}"),
             description: "**Scope** one thing".to_owned(),
             label: None,
+            kind: TaskKind::Proposal,
+            needs: Vec::new(),
+        }
+    }
+
+    fn needing(tasks: &[u32]) -> DraftCard {
+        DraftCard {
+            needs: tasks
+                .iter()
+                .map(|n| TaskId::from_number(*n).unwrap())
+                .collect(),
+            ..card("c1")
         }
     }
 
@@ -890,6 +925,8 @@ mod tests {
             Some("backend")
         );
         assert_eq!(draft.cards()[1].label, None);
+        assert_eq!(draft.cards()[1].kind, TaskKind::Proposal);
+        assert!(validate_draft(vec![needing(&[3, 4])], Vec::new()).is_ok());
         assert_eq!(draft.edges().len(), 3);
         let most: Vec<DraftCard> = (1..=20).map(|n| card(&format!("c{n}"))).collect();
         assert!(validate_draft(most, Vec::new()).is_ok());
@@ -944,6 +981,10 @@ mod tests {
                     vec![edge("c1", "c2"), edge("c1", "c2")],
                 ),
                 "duplicate_edge",
+            ),
+            (
+                refusal(vec![needing(&[3, 4, 3])], Vec::new()),
+                "duplicate_need",
             ),
             (refusal(vec![long_title], Vec::new()), "title_too_long"),
             (
@@ -1037,6 +1078,10 @@ mod tests {
         assert_eq!(
             details(refusal(vec![card("c1"), card("c1")], Vec::new())),
             json!({"reason": "duplicate_key", "key": "c1"})
+        );
+        assert_eq!(
+            details(refusal(vec![needing(&[3, 4, 3])], Vec::new())),
+            json!({"reason": "duplicate_need", "need": {"key": "c1", "task": "T-3"}})
         );
         assert_eq!(
             details(refusal(

@@ -5,7 +5,9 @@ use fold_core::requests::{
     CodeAnchor, CodeRef, Draft, DraftCard, DraftEdge, RequestKind, RequestState, Requester,
 };
 use fold_core::reviews::Side;
-use fold_core::{LabelName, ProposalId, RequestId, RevisionId, TaskId, Timestamp, WorkerName};
+use fold_core::{
+    LabelName, ProposalId, RequestId, RevisionId, TaskId, TaskKind, Timestamp, WorkerName,
+};
 use sqlx::SqliteConnection;
 
 use crate::columns::{count, time};
@@ -578,7 +580,7 @@ pub async fn close(
     expect_one(result.rows_affected())
 }
 
-/// Inserts draft `version` with its cards and edges. A version that exists fails on `request_drafts.request_id, request_drafts.version`. The caller checks that each card label exists; a missing one is stored as no label.
+/// Inserts draft `version` with its cards, their needs and its edges. A version that exists fails on `request_drafts.request_id, request_drafts.version`. The caller checks that each card label exists; a missing one is stored as no label. A needed task that does not exist fails with `StoreError::Invalid`.
 pub async fn insert_draft(
     tx: &mut WriteTx,
     request: RequestId,
@@ -608,18 +610,35 @@ pub async fn insert_draft(
         let position =
             i64::try_from(index + 1).map_err(|_| StoreError::Invalid("too many cards"))?;
         let label = card.label.as_ref().map(LabelName::as_str);
-        sqlx::query!(
-            "INSERT INTO request_draft_cards (draft_id, key, position, title, description, label_id)
-             VALUES (?, ?, ?, ?, ?, (SELECT id FROM labels WHERE name = ?))",
+        let kind = card.kind.as_str();
+        let card_id = sqlx::query_scalar!(
+            r#"INSERT INTO request_draft_cards (draft_id, key, position, title, description, label_id, kind)
+               VALUES (?, ?, ?, ?, ?, (SELECT id FROM labels WHERE name = ?), ?)
+               RETURNING id AS "id!: i64""#,
             draft_id,
             card.key,
             position,
             card.title,
             card.description,
-            label
+            label,
+            kind
         )
-        .execute(tx.conn())
+        .fetch_one(tx.conn())
         .await?;
+        for need in &card.needs {
+            let task = need.to_db();
+            let result = sqlx::query!(
+                "INSERT INTO request_draft_card_needs (card_id, task_id)
+                 SELECT ?, id FROM tasks WHERE number = ?",
+                card_id,
+                task
+            )
+            .execute(tx.conn())
+            .await?;
+            if result.rows_affected() != 1 {
+                return Err(StoreError::Invalid("the needed task does not exist"));
+            }
+        }
     }
     for edge in draft.edges() {
         sqlx::query!(
@@ -649,9 +668,29 @@ pub async fn drafts(
     )
     .fetch_all(&mut *conn)
     .await?;
+    let mut needs: HashMap<i64, Vec<TaskId>> = HashMap::new();
+    for row in sqlx::query!(
+        r#"SELECT n.card_id, t.number AS "number!: i64"
+           FROM request_draft_card_needs n
+           JOIN tasks t ON t.id = n.task_id
+           JOIN request_draft_cards c ON c.id = n.card_id
+           JOIN request_drafts d ON d.id = c.draft_id
+           JOIN requests r ON r.id = d.request_id
+           WHERE r.number = ? ORDER BY n.card_id, n.id"#,
+        number
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    {
+        needs
+            .entry(row.card_id)
+            .or_default()
+            .push(TaskId::try_from_db(row.number).ok_or(StoreError::Corrupt("tasks.number"))?);
+    }
     let mut cards: HashMap<i64, Vec<DraftCard>> = HashMap::new();
     for row in sqlx::query!(
-        r#"SELECT c.draft_id, c.key, c.title, c.description, l.name AS "label?: String"
+        r#"SELECT c.id AS "id!: i64", c.draft_id, c.key, c.title, c.description, c.kind,
+                  l.name AS "label?: String"
            FROM request_draft_cards c
            JOIN request_drafts d ON d.id = c.draft_id
            JOIN requests r ON r.id = d.request_id
@@ -672,6 +711,9 @@ pub async fn drafts(
             title: row.title,
             description: row.description,
             label,
+            kind: TaskKind::parse(&row.kind)
+                .ok_or(StoreError::Corrupt("request_draft_cards.kind"))?,
+            needs: needs.remove(&row.id).unwrap_or_default(),
         });
     }
     let mut edges: HashMap<i64, Vec<DraftEdge>> = HashMap::new();

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO request_draft_cards (draft_id, key, position, title, description, label_id, kind)\n               VALUES (?, ?, ?, ?, ?, (SELECT id FROM labels WHERE name = ?), ?)\n               RETURNING id AS \"id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "request_draft_cards",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "69d60b54a7d80f2dbf0d81547d1ed70236721a0589f900deaf53efc7280d748f"
+}

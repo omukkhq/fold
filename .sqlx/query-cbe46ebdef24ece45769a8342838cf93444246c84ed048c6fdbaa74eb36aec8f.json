@@ -1,11 +1,22 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT c.draft_id, c.key, c.title, c.description, l.name AS \"label?: String\"\n           FROM request_draft_cards c\n           JOIN request_drafts d ON d.id = c.draft_id\n           JOIN requests r ON r.id = d.request_id\n           LEFT JOIN labels l ON l.id = c.label_id\n           WHERE r.number = ? ORDER BY c.draft_id, c.position",
+  "query": "SELECT c.id AS \"id!: i64\", c.draft_id, c.key, c.title, c.description, c.kind,\n                  l.name AS \"label?: String\"\n           FROM request_draft_cards c\n           JOIN request_drafts d ON d.id = c.draft_id\n           JOIN requests r ON r.id = d.request_id\n           LEFT JOIN labels l ON l.id = c.label_id\n           WHERE r.number = ? ORDER BY c.draft_id, c.position",
   "describe": {
     "columns": [
       {
-        "name": "draft_id",
+        "name": "id!: i64",
         "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "request_draft_cards",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "draft_id",
+        "ordinal": 1,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -16,7 +27,7 @@
       },
       {
         "name": "key",
-        "ordinal": 1,
+        "ordinal": 2,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -27,7 +38,7 @@
       },
       {
         "name": "title",
-        "ordinal": 2,
+        "ordinal": 3,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -38,7 +49,7 @@
       },
       {
         "name": "description",
-        "ordinal": 3,
+        "ordinal": 4,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -48,8 +59,19 @@
         }
       },
       {
+        "name": "kind",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "request_draft_cards",
+            "name": "kind"
+          }
+        }
+      },
+      {
         "name": "label?: String",
-        "ordinal": 4,
+        "ordinal": 6,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -67,8 +89,10 @@
       false,
       false,
       false,
+      false,
+      false,
       true
     ]
   },
-  "hash": "f7826947252540af427a3770efaff77d62dfed922cad21e2fc8d53c47243f0db"
+  "hash": "cbe46ebdef24ece45769a8342838cf93444246c84ed048c6fdbaa74eb36aec8f"
 }

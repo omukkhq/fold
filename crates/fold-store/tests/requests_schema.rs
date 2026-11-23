@@ -1,7 +1,8 @@
 use crate::common::{count, exec, open};
 use fold_core::object::{ObjectKind, hash_object};
-use fold_core::{RequestId, TaskId};
-use fold_store::tasks::requests::set_task_request;
+use fold_core::requests::{DraftCard, DraftEdge, validate_draft};
+use fold_core::{RequestId, TaskId, TaskKind, Timestamp};
+use fold_store::tasks::requests::{drafts, insert_draft, set_task_request};
 use fold_store::testing::assert_append_only;
 use fold_store::workspaces::gc_roots;
 use fold_store::{Store, StoreError};
@@ -15,6 +16,7 @@ INSERT INTO requests (id, number, kind, title, body, state, requester, drafter_w
 INSERT INTO request_drafts (id, request_id, version, author, created_at) VALUES (1, 1, 1, 'frontend', 0);
 INSERT INTO request_draft_cards (draft_id, key, position, title, description) VALUES (1, 'c1', 1, 'One', 'd'), (1, 'c2', 2, 'Two', 'd');
 INSERT INTO request_draft_edges (draft_id, prerequisite_key, dependent_key) VALUES (1, 'c1', 'c2');
+INSERT INTO request_draft_card_needs (card_id, task_id) VALUES (1, 1);
 INSERT INTO request_comments (request_id, version, author, body, created_at) VALUES (1, 1, 'human:tanim', 'more', 0);
 ";
 
@@ -56,6 +58,7 @@ async fn the_request_history_tables_are_append_only() {
         "request_drafts",
         "request_draft_cards",
         "request_draft_edges",
+        "request_draft_card_needs",
         "request_comments",
     ] {
         assert_append_only(&store, table).await;
@@ -333,5 +336,132 @@ async fn a_code_location_names_one_anchor_and_a_forward_range() {
     assert_eq!(
         count(&store, "SELECT COUNT(*) FROM request_code_refs").await,
         1
+    );
+}
+
+#[cfg(test)]
+fn card(key: &str, kind: TaskKind, needs: &[u32]) -> DraftCard {
+    DraftCard {
+        key: key.to_owned(),
+        title: format!("Card {key}"),
+        description: "d".to_owned(),
+        label: None,
+        kind,
+        needs: needs
+            .iter()
+            .map(|n| TaskId::from_number(*n).unwrap())
+            .collect(),
+    }
+}
+
+#[tokio::test]
+async fn a_draft_version_reads_back_with_its_kinds_and_needs() {
+    let (_dir, store) = seeded().await;
+    exec(
+        &store,
+        "INSERT INTO tasks (id, number, title, created_by, created_at, updated_at) VALUES (2, 2, 'two', 'frontend', 0, 0)",
+    )
+    .await
+    .unwrap();
+    let draft = validate_draft(
+        vec![
+            card("a", TaskKind::NoProposal, &[2, 1]),
+            card("b", TaskKind::Human, &[]),
+            card("c", TaskKind::Proposal, &[1]),
+        ],
+        vec![DraftEdge {
+            prerequisite: "a".to_owned(),
+            dependent: "c".to_owned(),
+        }],
+    )
+    .unwrap();
+    let request = RequestId::from_number(1).unwrap();
+    store
+        .write(async |tx| {
+            insert_draft(
+                tx,
+                request,
+                2,
+                "frontend",
+                None,
+                &draft,
+                Timestamp::from_millis(5).unwrap(),
+            )
+            .await
+        })
+        .await
+        .unwrap();
+    let mut conn = store.read().acquire().await.unwrap();
+    let rows = drafts(&mut conn, request).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].cards[0].kind, TaskKind::Proposal);
+    assert_eq!(rows[0].cards[0].needs, [TaskId::from_number(1).unwrap()]);
+    assert!(rows[0].cards[1].needs.is_empty());
+    assert_eq!(rows[1].cards, draft.cards());
+    assert_eq!(rows[1].edges, draft.edges());
+}
+
+#[tokio::test]
+async fn a_draft_that_needs_an_unknown_task_is_refused_whole() {
+    let (_dir, store) = seeded().await;
+    let draft = validate_draft(vec![card("a", TaskKind::Proposal, &[9])], Vec::new()).unwrap();
+    let request = RequestId::from_number(1).unwrap();
+    let error = store
+        .write(async |tx| {
+            insert_draft(
+                tx,
+                request,
+                2,
+                "frontend",
+                None,
+                &draft,
+                Timestamp::from_millis(5).unwrap(),
+            )
+            .await
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Invalid(_)), "{error}");
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM request_drafts").await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_card_keeps_a_known_kind_and_each_need_once() {
+    let (_dir, store) = seeded().await;
+    let kind = refused(
+        &store,
+        "INSERT INTO request_draft_cards (draft_id, key, position, title, description, kind) VALUES (1, 'c3', 3, 'Three', 'd', 'design')",
+    )
+    .await;
+    assert_eq!(
+        kind.constraint().as_deref(),
+        Some("request_draft_cards_kind_values")
+    );
+    let twice = refused(
+        &store,
+        "INSERT INTO request_draft_card_needs (card_id, task_id) VALUES (1, 1)",
+    )
+    .await;
+    assert_eq!(
+        twice.constraint().as_deref(),
+        Some("request_draft_card_needs.card_id, request_draft_card_needs.task_id")
+    );
+    let missing = refused(
+        &store,
+        "INSERT INTO request_draft_card_needs (card_id, task_id) VALUES (2, 7)",
+    )
+    .await;
+    assert!(missing.to_string().contains("FOREIGN KEY"), "{missing}");
+    assert!(
+        fold_store::tasks::history(
+            &mut store.read().acquire().await.unwrap(),
+            TaskId::from_number(1).unwrap()
+        )
+        .await
+        .unwrap()
+        .request_need
     );
 }

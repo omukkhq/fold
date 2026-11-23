@@ -11,7 +11,7 @@ use fold_core::requests::{
     CodeAnchor, CodeRef, CodeSelection, DraftCard, DraftEdge, MAX_ATTACHMENT_BYTES,
     MAX_ATTACHMENTS, Requester, attachment_too_large, check_attachment_count, valid_media_type,
 };
-use fold_core::{FoldError, LabelName, ProposalId, RequestId, RevisionId, codes};
+use fold_core::{FoldError, LabelName, ProposalId, RequestId, RevisionId, TaskKind, codes};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use utoipa::{IntoParams, ToSchema};
@@ -845,6 +845,8 @@ pub async fn edit_request_draft(
                         .map(LabelName::parse)
                         .transpose()
                         .map_err(FoldError::from)?,
+                    kind: TaskKind::Proposal,
+                    needs: Vec::new(),
                 })
             })
             .collect::<Result<_, FoldError>>()?,

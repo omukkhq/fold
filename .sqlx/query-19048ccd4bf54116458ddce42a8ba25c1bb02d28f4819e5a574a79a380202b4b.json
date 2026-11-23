@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO request_draft_card_needs (card_id, task_id)\n                 SELECT ?, id FROM tasks WHERE number = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "19048ccd4bf54116458ddce42a8ba25c1bb02d28f4819e5a574a79a380202b4b"
+}

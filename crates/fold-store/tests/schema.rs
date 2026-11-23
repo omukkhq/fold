@@ -179,6 +179,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "request_attachments",
         "request_code_refs",
         "request_comments",
+        "request_draft_card_needs",
         "request_draft_cards",
         "request_draft_edges",
         "request_drafts",

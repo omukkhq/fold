@@ -4,7 +4,7 @@ use fold_core::requests::{
     CodeAnchor, CodeRef, DraftCard, DraftEdge, MAX_ATTACHMENT_BYTES, RequestKind, RequestState,
     Requester,
 };
-use fold_core::{Actor, FoldError, LabelName, RequestId, WorkspaceId, codes};
+use fold_core::{Actor, FoldError, LabelName, RequestId, TaskKind, WorkspaceId, codes};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{ContentBlock, JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -316,6 +316,8 @@ fn draft(
                     title: card.title,
                     description: card.description,
                     label: card.label.as_deref().map(LabelName::parse).transpose()?,
+                    kind: TaskKind::Proposal,
+                    needs: Vec::new(),
                 })
             })
             .collect::<Result<_, FoldError>>()?,
