@@ -153,6 +153,7 @@ fn all_equals_the_plans_event_types() {
         "claim.needs_person",
         "worker.parked",
         "claim.renewed",
+        "request.escalated",
     ]);
     assert_eq!(declared, expected);
 }

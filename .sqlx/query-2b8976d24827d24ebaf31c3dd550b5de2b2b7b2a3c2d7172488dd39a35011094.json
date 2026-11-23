@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE requests SET escalated_at = ?2 WHERE number = ?1 AND escalated_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "2b8976d24827d24ebaf31c3dd550b5de2b2b7b2a3c2d7172488dd39a35011094"
+}

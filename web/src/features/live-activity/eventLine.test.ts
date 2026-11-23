@@ -266,6 +266,9 @@ describe("eventLine", () => {
     ).toBe("approved RQ-4 as T-12, T-13");
     expect(line("request.approved")).toBe("approved a request");
     expect(line("request.closed", { request: "RQ-4" })).toBe("closed RQ-4");
+    expect(line("request.escalated", { request: "RQ-4" })).toBe(
+      "escalated RQ-4",
+    );
     expect(
       line("review.batch_created", {
         batch: "rb-3",

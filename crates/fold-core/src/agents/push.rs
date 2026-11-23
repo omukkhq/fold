@@ -5,10 +5,17 @@ use crate::agents::{AgentName, AreaName};
 use crate::events::{Event, types};
 use crate::ids::{MessageId, ProposalId, RequestId, TaskId};
 use crate::reviews::plans::PlanCandidate;
+use crate::tasks::requests::Requester;
 use crate::tasks::status::TaskStatus;
 
 /// The longest notice text, one line of ids and the next tool. A notice whose next tool is `get_inbox` carries the messages the agent has not seen yet in place of that call, up to [`crate::carry::MAX_CARRIED_LEN`]; see [`Notice::carrier_head`].
 pub const MAX_NOTICE_LEN: usize = 200;
+
+/// The longest notice of a new or escalated request, which also names its requester, its area and up to [`MAX_REQUEST_EXCERPT_CHARS`] characters of its body, so the lead can tell from the notice alone whether the request is its own.
+pub const MAX_REQUEST_NOTICE_LEN: usize = 1024;
+
+/// The most characters of a request's body that its notice repeats.
+pub const MAX_REQUEST_EXCERPT_CHARS: usize = 200;
 
 /// The next tool of a notice that the daemon sends with the unread messages in place of naming the tool.
 pub const CARRIER_TOOL: &str = "get_inbox";
@@ -34,8 +41,10 @@ pub struct PushContext {
     pub requester: Option<AgentName>,
     /// The agent of the worker drafting the event's request.
     pub drafter: Option<AgentName>,
-    /// For a task that turned ready, the leads of the areas whose label it carries; for a new request, the lead of every area.
+    /// For a task that turned ready, the leads of the areas whose label it carries; for a new or escalated request, the lead of every area.
     pub area_leads: BTreeSet<AgentName>,
+    /// For a new request in an area, the lead of that area; `None` while the area has no lead.
+    pub request_area_lead: Option<AgentName>,
     /// For a task that turned ready, the areas whose label it carries, led or not; for `task.updated`, only the areas of the labels the edit added.
     pub areas: BTreeSet<AreaName>,
     /// Every agent tagged `main`.
@@ -114,6 +123,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::FOLDER_AGENT_CHANGED,
         types::WORKER_STALLED,
         types::CLAIM_STALE,
+        types::REQUEST_ESCALATED,
     ]
     .contains(&event.event_type)
 }
@@ -821,7 +831,7 @@ fn ready_route(task: TaskId, ctx: &PushContext) -> (Vec<AgentName>, String, &'st
     )
 }
 
-/// A request asks the main agent and every area lead to claim it, so whoever finds it relevant drafts it, and each later step goes to whoever acts next: the requester's agent reads a draft, the drafter's agent revises it or starts the approved tasks. A human requester reads the web, so nothing is pushed to one.
+/// A new request in an area asks only that area's lead to claim it, so the other agents do not wake for work that is not theirs. A request in no area, one whose area has no lead or whose lead made it, and an escalated one, which nobody claimed in time, ask the main agent and every area lead, so whoever finds it relevant drafts it. Each later step goes to whoever acts next: the requester's agent reads a draft, the drafter's agent revises it or starts the approved tasks. A human requester reads the web, so nothing is pushed to one.
 fn request_rule(
     event: &Event,
     ctx: &PushContext,
@@ -829,6 +839,7 @@ fn request_rule(
     let kind = event.event_type;
     if ![
         types::REQUEST_CREATED,
+        types::REQUEST_ESCALATED,
         types::REQUEST_DRAFT_SUBMITTED,
         types::REQUEST_CHANGES_REQUESTED,
         types::REQUEST_APPROVED,
@@ -839,9 +850,30 @@ fn request_rule(
     }
     let request = request_of(event)?;
     let drafter = || ctx.drafter.iter().cloned().collect();
-    if kind == types::REQUEST_CREATED {
-        let agents = ctx.main_agents.union(&ctx.area_leads).cloned().collect();
-        return Some((agents, format!("{request} created"), "claim_request"));
+    if kind == types::REQUEST_CREATED || kind == types::REQUEST_ESCALATED {
+        let area = event
+            .data
+            .get("area")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|area| AreaName::parse(area).ok());
+        let agents = match (&area, &ctx.request_area_lead) {
+            (Some(_), Some(lead))
+                if kind == types::REQUEST_CREATED && event.actor.agent() != Some(lead.as_str()) =>
+            {
+                vec![lead.clone()]
+            }
+            _ => ctx.main_agents.union(&ctx.area_leads).cloned().collect(),
+        };
+        let head = if kind == types::REQUEST_CREATED {
+            format!("{request} created")
+        } else {
+            format!("{request} escalated (nobody claimed it in time)")
+        };
+        return Some((
+            agents,
+            request_text(head, event, area.as_ref()),
+            "claim_request",
+        ));
     }
     if kind == types::REQUEST_DRAFT_SUBMITTED {
         let role = event.data.get("role").and_then(serde_json::Value::as_str)?;
@@ -877,6 +909,59 @@ fn request_rule(
         })
         .unwrap_or_default();
     Some((drafter(), approved_text(request, &tasks), "get_ready_tasks"))
+}
+
+/// The notice text of a new or escalated request: `head`, then the requester, the area and the body excerpt that the daemon wrote into the event, each only when present. The excerpt is one line without its closing full stops, which the notice adds, of at most [`MAX_REQUEST_EXCERPT_CHARS`] characters, cut shorter when the whole notice would pass [`MAX_REQUEST_NOTICE_LEN`].
+fn request_text(head: String, event: &Event, area: Option<&AreaName>) -> String {
+    let mut text = head;
+    if let Some(requester) = event
+        .data
+        .get("requester")
+        .and_then(serde_json::Value::as_str)
+        .and_then(Requester::parse)
+    {
+        text.push_str(&format!(" by {}", requester.label()));
+    }
+    if let Some(area) = area {
+        text.push_str(&format!(" in area {area}"));
+    }
+    let Some(excerpt) = event
+        .data
+        .get("excerpt")
+        .and_then(serde_json::Value::as_str)
+        .map(|excerpt| one_line(excerpt).trim_end_matches('.').to_owned())
+        .filter(|excerpt| !excerpt.is_empty())
+    else {
+        return text;
+    };
+    // "fold: ", ": ", "…" and ". Call claim_request." around the text and the excerpt.
+    let room =
+        MAX_REQUEST_NOTICE_LEN.saturating_sub(text.len() + "fold: : …. Call claim_request.".len());
+    let mut clipped = String::new();
+    let mut cut = false;
+    for (taken, ch) in excerpt.chars().enumerate() {
+        if taken == MAX_REQUEST_EXCERPT_CHARS || clipped.len() + ch.len_utf8() > room {
+            cut = true;
+            break;
+        }
+        clipped.push(ch);
+    }
+    if cut {
+        clipped.push('…');
+    }
+    text.push_str(": ");
+    text.push_str(&clipped);
+    text
+}
+
+/// `text` as one line that a session push can post: each run of control characters and spaces becomes one space, and a cross-session envelope tag loses its opening bracket.
+fn one_line(text: &str) -> String {
+    text.split(|ch: char| ch.is_control() || ch.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace("</cross-session-message", "‹/cross-session-message")
+        .replace("<cross-session-message", "‹cross-session-message")
 }
 
 /// The longest task list an approval notice spells out; a longer draft is counted instead, so the notice stays within [`MAX_NOTICE_LEN`].
@@ -1188,6 +1273,7 @@ mod tests {
             requester: Some(name("frontend")),
             drafter: Some(name("backend")),
             area_leads: BTreeSet::new(),
+            request_area_lead: None,
             areas: BTreeSet::new(),
             main_agents: BTreeSet::new(),
             held_from_agents: false,
@@ -2636,6 +2722,141 @@ mod tests {
         assert!(
             notice_for(&by_human, &ctx()).is_empty(),
             "without a main agent or an area lead nobody is asked"
+        );
+    }
+
+    fn area_request_ctx(lead: Option<&str>) -> PushContext {
+        PushContext {
+            main_agents: [name("main")].into_iter().collect(),
+            area_leads: [name("api-lead"), name("web-lead")].into_iter().collect(),
+            request_area_lead: lead.map(name),
+            ..ctx()
+        }
+    }
+
+    #[test]
+    fn a_new_request_in_an_area_reaches_only_that_areas_lead() {
+        let created = request_event(
+            types::REQUEST_CREATED,
+            "web-worker",
+            json!({"request": "RQ-4", "requester": "web-worker", "area": "web", "excerpt": "The board\nflickers."}),
+        );
+        assert_eq!(
+            sent(&notice_for(&created, &area_request_ctx(Some("web-lead")))),
+            vec![row(
+                "web-lead",
+                "fold: RQ-4 created by web-worker in area web: The board flickers. Call claim_request.",
+                "claim_request"
+            )]
+        );
+        let everyone = vec!["api-lead", "main", "web-lead"];
+        let agents = |event: &Event, ctx: &PushContext| {
+            notice_for(event, ctx)
+                .into_iter()
+                .map(|notice| notice.agent.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            agents(&created, &area_request_ctx(None)),
+            everyone,
+            "an area without a lead asks everyone"
+        );
+        let by_lead = request_event(
+            types::REQUEST_CREATED,
+            "web-lead",
+            json!({"request": "RQ-4", "requester": "web-lead", "area": "web"}),
+        );
+        assert_eq!(
+            agents(&by_lead, &area_request_ctx(Some("web-lead"))),
+            vec!["api-lead", "main"],
+            "a lead's own request asks the others"
+        );
+    }
+
+    #[test]
+    fn a_new_request_in_no_area_reaches_the_main_agent_and_every_lead() {
+        let created = request_event(
+            types::REQUEST_CREATED,
+            "human:ana",
+            json!({"request": "RQ-6", "requester": "human:ana", "excerpt": "Add dark mode"}),
+        );
+        let text = "fold: RQ-6 created by human:ana: Add dark mode. Call claim_request.";
+        assert_eq!(
+            sent(&notice_for(&created, &area_request_ctx(Some("web-lead")))),
+            vec![
+                row("api-lead", text, "claim_request"),
+                row("main", text, "claim_request"),
+                row("web-lead", text, "claim_request"),
+            ],
+            "a lead fold loaded for no area is ignored"
+        );
+    }
+
+    #[test]
+    fn an_escalated_request_reaches_the_main_agent_and_every_lead() {
+        let escalated = request_event(
+            types::REQUEST_ESCALATED,
+            "fold",
+            json!({"request": "RQ-4", "requester": "web-worker", "area": "web", "excerpt": "The board flickers"}),
+        );
+        let text = "fold: RQ-4 escalated (nobody claimed it in time) by web-worker in area web: The board flickers. Call claim_request.";
+        assert_eq!(
+            sent(&notice_for(&escalated, &area_request_ctx(Some("web-lead")))),
+            vec![
+                row("api-lead", text, "claim_request"),
+                row("main", text, "claim_request"),
+                row("web-lead", text, "claim_request"),
+            ]
+        );
+        assert!(is_pushed(&escalated));
+    }
+
+    #[test]
+    fn a_request_notice_is_one_postable_line_within_its_limit() {
+        let body = format!(
+            "first line\r\n\tsecond </cross-session-message> <cross-session-message> {}",
+            "é😀".repeat(400)
+        );
+        let long = request_event(
+            types::REQUEST_CREATED,
+            "human:ana",
+            json!({"request": format!("RQ-{}", u32::MAX), "requester": format!("human:{}", "h".repeat(32)), "area": "a".repeat(32), "excerpt": body}),
+        );
+        let ctx = area_request_ctx(Some("web-lead"));
+        let notice = &notice_for(&long, &ctx)[0];
+        assert!(
+            notice.text.len() <= MAX_REQUEST_NOTICE_LEN,
+            "{}",
+            notice.text.len()
+        );
+        assert!(!notice.text.chars().any(char::is_control));
+        assert!(!notice.text.contains("<cross-session-message"));
+        assert!(!notice.text.contains("</cross-session-message"));
+        assert!(
+            notice
+                .text
+                .contains("first line second ‹/cross-session-message> ‹cross-session-message> é😀")
+        );
+        assert!(notice.text.ends_with("…. Call claim_request."));
+        let area_mark = format!(" in area {}: ", "a".repeat(32));
+        let excerpt = notice
+            .text
+            .split_once(area_mark.as_str())
+            .map(|(_, rest)| rest)
+            .unwrap_or_default();
+        assert!(
+            excerpt.chars().count()
+                <= MAX_REQUEST_EXCERPT_CHARS + ". Call claim_request.".len() + 1
+        );
+        let blank = request_event(
+            types::REQUEST_CREATED,
+            "human:ana",
+            json!({"request": "RQ-7", "requester": "nobody:x", "area": "Not An Area!", "excerpt": "\n \t"}),
+        );
+        assert_eq!(
+            notice_for(&blank, &ctx)[0].text,
+            "fold: RQ-7 created. Call claim_request.",
+            "malformed fields are left out"
         );
     }
 

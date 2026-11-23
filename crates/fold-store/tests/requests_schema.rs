@@ -1,8 +1,8 @@
 use crate::common::{count, exec, open};
 use fold_core::object::{ObjectKind, hash_object};
-use fold_core::requests::{DraftCard, DraftEdge, validate_draft};
-use fold_core::{RequestId, TaskId, TaskKind, Timestamp};
-use fold_store::tasks::requests::{drafts, insert_draft, set_task_request};
+use fold_core::requests::{DraftCard, DraftEdge, Requester, validate_draft};
+use fold_core::{AreaName, RequestId, TaskId, TaskKind, Timestamp};
+use fold_store::tasks::requests::{self, NewRequest, drafts, insert_draft, set_task_request};
 use fold_store::testing::assert_append_only;
 use fold_store::workspaces::gc_roots;
 use fold_store::{Store, StoreError};
@@ -336,6 +336,190 @@ async fn a_code_location_names_one_anchor_and_a_forward_range() {
     assert_eq!(
         count(&store, "SELECT COUNT(*) FROM request_code_refs").await,
         1
+    );
+}
+
+#[cfg(test)]
+fn ts(millis: i64) -> Timestamp {
+    Timestamp::from_millis(millis).unwrap()
+}
+
+/// Two areas, `web` and `api`, with labels 21 and 22.
+#[cfg(test)]
+async fn with_areas() -> (tempfile::TempDir, Store) {
+    let (dir, store) = seeded().await;
+    for statement in [
+        "INSERT INTO labels (id, name, color, created_at) VALUES (21, 'web', 'sage', 0), (22, 'api', 'teal', 0)",
+        "INSERT INTO areas (id, name, label_id, created_by, created_at) VALUES (31, 'web', 21, 'main', 0), (32, 'api', 22, 'main', 0)",
+    ] {
+        exec(&store, statement).await.unwrap();
+    }
+    (dir, store)
+}
+
+#[cfg(test)]
+async fn insert_request(store: &Store, number: u32, area: Option<&str>, now: i64) {
+    let area = area.map(|area| AreaName::parse(area).unwrap());
+    let requester = Requester::parse("web-worker").unwrap();
+    store
+        .write(async |tx| {
+            requests::insert(
+                tx,
+                &NewRequest {
+                    number: RequestId::from_number(number).unwrap(),
+                    body: "The board flickers",
+                    requester: &requester,
+                    area: area.as_ref(),
+                    now: ts(now),
+                },
+            )
+            .await
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_request_keeps_its_area_and_an_unknown_area_is_refused() {
+    let (_dir, store) = with_areas().await;
+    insert_request(&store, 2, Some("web"), 5).await;
+    insert_request(&store, 3, None, 5).await;
+    let mut conn = store.read().acquire().await.unwrap();
+    let fetch = async |conn: &mut sqlx::SqliteConnection, number: u32| {
+        requests::fetch(conn, RequestId::from_number(number).unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    let web = fetch(&mut conn, 2).await;
+    assert_eq!(web.area.as_ref().map(AreaName::as_str), Some("web"));
+    assert_eq!(web.escalated_at, None);
+    assert_eq!(fetch(&mut conn, 3).await.area, None);
+    drop(conn);
+
+    let requester = Requester::parse("web-worker").unwrap();
+    let ghost = AreaName::parse("ghost").unwrap();
+    let unknown = store
+        .write(async |tx| {
+            requests::insert(
+                tx,
+                &NewRequest {
+                    number: RequestId::from_number(4).unwrap(),
+                    body: "b",
+                    requester: &requester,
+                    area: Some(&ghost),
+                    now: ts(5),
+                },
+            )
+            .await
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(unknown, StoreError::Invalid(_)), "{unknown}");
+    let foreign = refused(&store, &request_sql(4, ", area_id", ", 99")).await;
+    assert!(foreign.to_string().contains("FOREIGN KEY"), "{foreign}");
+    let moved = refused(&store, "UPDATE requests SET area_id = 32 WHERE number = 2").await;
+    assert!(
+        moved
+            .to_string()
+            .contains("requests.area_id never changes once set"),
+        "{moved}"
+    );
+    exec(&store, "UPDATE requests SET area_id = 32 WHERE number = 3")
+        .await
+        .unwrap();
+    let mut conn = store.read().acquire().await.unwrap();
+    assert_eq!(
+        fetch(&mut conn, 3)
+            .await
+            .area
+            .as_ref()
+            .map(AreaName::as_str),
+        Some("api"),
+        "a request without an area may get one"
+    );
+}
+
+#[tokio::test]
+async fn only_open_unclaimed_area_requests_older_than_the_time_wait() {
+    let (_dir, store) = with_areas().await;
+    insert_request(&store, 2, Some("web"), 10).await;
+    insert_request(&store, 3, Some("api"), 20).await;
+    insert_request(&store, 4, None, 10).await;
+    insert_request(&store, 5, Some("web"), 30).await;
+    insert_request(&store, 6, Some("web"), 10).await;
+    insert_request(&store, 7, Some("web"), 10).await;
+    exec(
+        &store,
+        "UPDATE requests SET state = 'drafting', kind = 'bug', title = 'T', drafter_worker_id = 1, drafter_since = 11 WHERE number = 6",
+    )
+    .await
+    .unwrap();
+    exec(
+        &store,
+        "UPDATE requests SET state = 'closed', close_reason = 'dup' WHERE number = 7",
+    )
+    .await
+    .unwrap();
+    let waiting = |before: i64| {
+        let store = &store;
+        async move {
+            requests::waiting_area_requests(store.read(), ts(before))
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|request| (request.id.to_string(), request.area.to_string()))
+                .collect::<Vec<_>>()
+        }
+    };
+    let pair = |id: &str, area: &str| (id.to_owned(), area.to_owned());
+    assert_eq!(
+        waiting(30).await,
+        vec![pair("RQ-2", "web"), pair("RQ-3", "api")],
+        "created exactly at the time is not older"
+    );
+    assert_eq!(waiting(10).await, Vec::new());
+    let first = requests::waiting_area_requests(store.read(), ts(30))
+        .await
+        .unwrap();
+    assert_eq!(first[0].requester, Requester::parse("web-worker").unwrap());
+    assert_eq!(first[0].created_at, ts(10));
+
+    let mark = |number: u32| {
+        let store = &store;
+        async move {
+            store
+                .write(async |tx| {
+                    requests::mark_escalated(tx, RequestId::from_number(number).unwrap(), ts(40))
+                        .await
+                })
+                .await
+        }
+    };
+    assert!(mark(2).await.unwrap());
+    assert!(!mark(2).await.unwrap(), "a request escalates once");
+    assert!(matches!(mark(99).await, Err(StoreError::Invalid(_))));
+    assert_eq!(
+        waiting(50).await,
+        vec![pair("RQ-3", "api"), pair("RQ-5", "web")]
+    );
+    let mut conn = store.read().acquire().await.unwrap();
+    let escalated = requests::fetch(&mut conn, RequestId::from_number(2).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(escalated.escalated_at, Some(ts(40)));
+    drop(conn);
+    let again = refused(
+        &store,
+        "UPDATE requests SET escalated_at = 41 WHERE number = 2",
+    )
+    .await;
+    assert!(
+        again
+            .to_string()
+            .contains("requests.escalated_at is set once"),
+        "{again}"
     );
 }
 

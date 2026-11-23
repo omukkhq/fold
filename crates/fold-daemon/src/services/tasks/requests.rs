@@ -228,6 +228,7 @@ impl TaskService {
                     number: id,
                     body: &body,
                     requester: &requester,
+                    area: None,
                     now,
                 };
                 requests::insert(tx, &new).await?;

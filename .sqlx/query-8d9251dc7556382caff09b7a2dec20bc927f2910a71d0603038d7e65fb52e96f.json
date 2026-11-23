@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"count!: i64\" FROM requests WHERE number = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "count!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8d9251dc7556382caff09b7a2dec20bc927f2910a71d0603038d7e65fb52e96f"
+}

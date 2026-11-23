@@ -182,6 +182,7 @@ define_event_types! {
     CLAIM_NEEDS_PERSON = "claim.needs_person",
     WORKER_PARKED = "worker.parked",
     CLAIM_RENEWED = "claim.renewed",
+    REQUEST_ESCALATED = "request.escalated",
 }
 
 impl EventType {

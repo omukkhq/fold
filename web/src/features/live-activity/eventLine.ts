@@ -822,6 +822,10 @@ const SPECS: Record<EventType, Spec> = {
     icon: X,
     text: (e) => `closed ${requestOf(e)}`,
   },
+  "request.escalated": {
+    icon: MessageSquare,
+    text: (e) => `escalated ${requestOf(e)}`,
+  },
   "area.defined": {
     icon: Tag,
     text: (e) => {

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT r.number, r.kind, r.title, r.body, r.state, r.requester,\n                      r.drafter_worker_id, w.agent_id AS \"drafter_agent_id?: i64\",\n                      w.name AS \"drafter_name?: String\", r.drafter_since,\n                      r.close_reason, r.created_at, r.updated_at,\n                      (SELECT MAX(d.version) FROM request_drafts d WHERE d.request_id = r.id) AS \"latest_version?: i64\",\n                      c.path AS \"code_path?: String\", c.start_line AS \"code_start?: i64\",\n                      c.end_line AS \"code_end?: i64\", c.excerpt AS \"code_excerpt?: String\",\n                      c.excerpt_cut AS \"code_cut?: bool\", c.side AS \"code_side?: String\",\n                      cr.number AS \"code_revision?: i64\", cp.number AS \"code_proposal?: i64\",\n                      cv.version AS \"code_version?: i64\"\n               FROM requests r\n               LEFT JOIN workers w ON w.id = r.drafter_worker_id\n               LEFT JOIN request_code_refs c ON c.request_id = r.id\n               LEFT JOIN revisions cr ON cr.id = c.revision_id\n               LEFT JOIN proposal_versions cv ON cv.id = c.version_id\n               LEFT JOIN proposals cp ON cp.id = cv.proposal_id\n               WHERE (?1 IS NULL OR r.state = ?1)\n           AND (?2 IS NULL OR r.kind = ?2)\n           AND (?3 IS NULL OR r.requester = ?3)\n         ORDER BY r.number DESC\n         LIMIT ?4",
+  "query": "SELECT r.number, r.kind, r.title, r.body, r.state, r.requester,\n                      ra.name AS \"area?: String\", r.escalated_at,\n                      r.drafter_worker_id, w.agent_id AS \"drafter_agent_id?: i64\",\n                      w.name AS \"drafter_name?: String\", r.drafter_since,\n                      r.close_reason, r.created_at, r.updated_at,\n                      (SELECT MAX(d.version) FROM request_drafts d WHERE d.request_id = r.id) AS \"latest_version?: i64\",\n                      c.path AS \"code_path?: String\", c.start_line AS \"code_start?: i64\",\n                      c.end_line AS \"code_end?: i64\", c.excerpt AS \"code_excerpt?: String\",\n                      c.excerpt_cut AS \"code_cut?: bool\", c.side AS \"code_side?: String\",\n                      cr.number AS \"code_revision?: i64\", cp.number AS \"code_proposal?: i64\",\n                      cv.version AS \"code_version?: i64\"\n               FROM requests r\n               LEFT JOIN workers w ON w.id = r.drafter_worker_id\n               LEFT JOIN areas ra ON ra.id = r.area_id\n               LEFT JOIN request_code_refs c ON c.request_id = r.id\n               LEFT JOIN revisions cr ON cr.id = c.revision_id\n               LEFT JOIN proposal_versions cv ON cv.id = c.version_id\n               LEFT JOIN proposals cp ON cp.id = cv.proposal_id\n               WHERE r.number = ?",
   "describe": {
     "columns": [
       {
@@ -70,8 +70,30 @@
         }
       },
       {
-        "name": "drafter_worker_id",
+        "name": "area?: String",
         "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "areas",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "escalated_at",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "requests",
+            "name": "escalated_at"
+          }
+        }
+      },
+      {
+        "name": "drafter_worker_id",
+        "ordinal": 8,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -82,7 +104,7 @@
       },
       {
         "name": "drafter_agent_id?: i64",
-        "ordinal": 7,
+        "ordinal": 9,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -93,7 +115,7 @@
       },
       {
         "name": "drafter_name?: String",
-        "ordinal": 8,
+        "ordinal": 10,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -104,7 +126,7 @@
       },
       {
         "name": "drafter_since",
-        "ordinal": 9,
+        "ordinal": 11,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -115,7 +137,7 @@
       },
       {
         "name": "close_reason",
-        "ordinal": 10,
+        "ordinal": 12,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -126,7 +148,7 @@
       },
       {
         "name": "created_at",
-        "ordinal": 11,
+        "ordinal": 13,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -137,7 +159,7 @@
       },
       {
         "name": "updated_at",
-        "ordinal": 12,
+        "ordinal": 14,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -148,13 +170,13 @@
       },
       {
         "name": "latest_version?: i64",
-        "ordinal": 13,
+        "ordinal": 15,
         "type_info": "Integer",
         "origin": "Expression"
       },
       {
         "name": "code_path?: String",
-        "ordinal": 14,
+        "ordinal": 16,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -165,7 +187,7 @@
       },
       {
         "name": "code_start?: i64",
-        "ordinal": 15,
+        "ordinal": 17,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -176,7 +198,7 @@
       },
       {
         "name": "code_end?: i64",
-        "ordinal": 16,
+        "ordinal": 18,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -187,7 +209,7 @@
       },
       {
         "name": "code_excerpt?: String",
-        "ordinal": 17,
+        "ordinal": 19,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -198,7 +220,7 @@
       },
       {
         "name": "code_cut?: bool",
-        "ordinal": 18,
+        "ordinal": 20,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -209,7 +231,7 @@
       },
       {
         "name": "code_side?: String",
-        "ordinal": 19,
+        "ordinal": 21,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -220,7 +242,7 @@
       },
       {
         "name": "code_revision?: i64",
-        "ordinal": 20,
+        "ordinal": 22,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -231,7 +253,7 @@
       },
       {
         "name": "code_proposal?: i64",
-        "ordinal": 21,
+        "ordinal": 23,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -242,7 +264,7 @@
       },
       {
         "name": "code_version?: i64",
-        "ordinal": 22,
+        "ordinal": 24,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -253,7 +275,7 @@
       }
     ],
     "parameters": {
-      "Right": 4
+      "Right": 1
     },
     "nullable": [
       false,
@@ -262,6 +284,8 @@
       false,
       false,
       false,
+      true,
+      true,
       true,
       true,
       true,
@@ -281,5 +305,5 @@
       true
     ]
   },
-  "hash": "95dda779cf8671a203b92f2742fe28f11f3af287eb3d33d2205b31358a4e4d87"
+  "hash": "d334d64336b2ae2f4ffd8f414dd1c73a3ae1c08c9ff38d87fd7b53b11af0193b"
 }

@@ -6,7 +6,7 @@ use fold_core::requests::{
 };
 use fold_core::reviews::Side;
 use fold_core::{
-    LabelName, ProposalId, RequestId, RevisionId, TaskId, TaskKind, Timestamp, WorkerName,
+    AreaName, LabelName, ProposalId, RequestId, RevisionId, TaskId, TaskKind, Timestamp, WorkerName,
 };
 use sqlx::SqliteConnection;
 
@@ -34,6 +34,10 @@ pub struct RequestRow {
     pub body: String,
     pub state: RequestState,
     pub requester: Requester,
+    /// The area whose lead hears of the request first; `None` for a request in no area.
+    pub area: Option<AreaName>,
+    /// When fold told every lead of an area request that nobody claimed in time.
+    pub escalated_at: Option<Timestamp>,
     pub drafter: Option<Drafter>,
     pub close_reason: Option<String>,
     pub created_at: Timestamp,
@@ -49,6 +53,8 @@ pub struct NewRequest<'a> {
     pub number: RequestId,
     pub body: &'a str,
     pub requester: &'a Requester,
+    /// Must name an existing area.
+    pub area: Option<&'a AreaName>,
     pub now: Timestamp,
 }
 
@@ -108,6 +114,7 @@ macro_rules! select_requests {
         sqlx::query_as!(
             RawRequest,
             r#"SELECT r.number, r.kind, r.title, r.body, r.state, r.requester,
+                      ra.name AS "area?: String", r.escalated_at,
                       r.drafter_worker_id, w.agent_id AS "drafter_agent_id?: i64",
                       w.name AS "drafter_name?: String", r.drafter_since,
                       r.close_reason, r.created_at, r.updated_at,
@@ -119,6 +126,7 @@ macro_rules! select_requests {
                       cv.version AS "code_version?: i64"
                FROM requests r
                LEFT JOIN workers w ON w.id = r.drafter_worker_id
+               LEFT JOIN areas ra ON ra.id = r.area_id
                LEFT JOIN request_code_refs c ON c.request_id = r.id
                LEFT JOIN revisions cr ON cr.id = c.revision_id
                LEFT JOIN proposal_versions cv ON cv.id = c.version_id
@@ -136,6 +144,8 @@ struct RawRequest {
     body: String,
     state: String,
     requester: String,
+    area: Option<String>,
+    escalated_at: Option<i64>,
     drafter_worker_id: Option<i64>,
     drafter_agent_id: Option<i64>,
     drafter_name: Option<String>,
@@ -223,6 +233,14 @@ impl RawRequest {
             state: RequestState::parse(&self.state).ok_or(StoreError::Corrupt("requests.state"))?,
             requester: Requester::parse(&self.requester)
                 .ok_or(StoreError::Corrupt("requests.requester"))?,
+            area: self
+                .area
+                .map(|area| AreaName::parse(&area).map_err(|_| StoreError::Corrupt("areas.name")))
+                .transpose()?,
+            escalated_at: self
+                .escalated_at
+                .map(|at| time(at, "requests.escalated_at"))
+                .transpose()?,
             drafter,
             close_reason: self.close_reason,
             created_at: time(self.created_at, "requests.created_at")?,
@@ -236,17 +254,27 @@ impl RawRequest {
     }
 }
 
-/// Inserts an `open` request without a kind or a title.
+/// Inserts an `open` request without a kind or a title, in its area when it has one.
 pub async fn insert(tx: &mut WriteTx, request: &NewRequest<'_>) -> Result<(), StoreError> {
     let number = request.number.to_db();
     let requester = request.requester.label();
     let now = request.now.as_millis();
+    let area_id = match request.area {
+        Some(area) => Some(
+            crate::agents::find_area(tx.conn(), area)
+                .await?
+                .ok_or(StoreError::Invalid("the request's area does not exist"))?
+                .id,
+        ),
+        None => None,
+    };
     sqlx::query!(
-        "INSERT INTO requests (number, body, requester, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?4)",
+        "INSERT INTO requests (number, body, requester, area_id, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
         number,
         request.body,
         requester,
+        area_id,
         now
     )
     .execute(tx.conn())
@@ -438,6 +466,75 @@ pub async fn unfinished(
             })
         })
         .collect()
+}
+
+/// An open area request that nobody claimed and fold has not escalated yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitingAreaRequest {
+    pub id: RequestId,
+    pub area: AreaName,
+    pub requester: Requester,
+    pub created_at: Timestamp,
+}
+
+/// The open, unclaimed, not yet escalated requests with an area that were created before `before`, oldest first.
+pub async fn waiting_area_requests(
+    executor: impl sqlx::SqliteExecutor<'_>,
+    before: Timestamp,
+) -> Result<Vec<WaitingAreaRequest>, StoreError> {
+    let before = before.as_millis();
+    let rows = sqlx::query!(
+        r#"SELECT r.number AS "number!: i64", a.name AS "area!: String", r.requester, r.created_at
+           FROM requests r JOIN areas a ON a.id = r.area_id
+           WHERE r.area_id IS NOT NULL AND r.state = 'open' AND r.escalated_at IS NULL
+             AND r.drafter_worker_id IS NULL AND r.created_at < ?1
+           ORDER BY r.created_at, r.number"#,
+        before
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(WaitingAreaRequest {
+                id: RequestId::try_from_db(row.number)
+                    .ok_or(StoreError::Corrupt("requests.number"))?,
+                area: AreaName::parse(&row.area).map_err(|_| StoreError::Corrupt("areas.name"))?,
+                requester: Requester::parse(&row.requester)
+                    .ok_or(StoreError::Corrupt("requests.requester"))?,
+                created_at: time(row.created_at, "requests.created_at")?,
+            })
+        })
+        .collect()
+}
+
+/// Marks the request escalated at `now`; `false` when it was escalated already, so a repeated job run escalates each request once.
+pub async fn mark_escalated(
+    tx: &mut WriteTx,
+    request: RequestId,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let number = request.to_db();
+    let now = now.as_millis();
+    let result = sqlx::query!(
+        "UPDATE requests SET escalated_at = ?2 WHERE number = ?1 AND escalated_at IS NULL",
+        number,
+        now
+    )
+    .execute(tx.conn())
+    .await?;
+    if result.rows_affected() == 1 {
+        return Ok(true);
+    }
+    let exists = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!: i64" FROM requests WHERE number = ?1"#,
+        number
+    )
+    .fetch_one(tx.conn())
+    .await?;
+    if exists == 0 {
+        return Err(StoreError::Invalid("the request does not exist"));
+    }
+    Ok(false)
 }
 
 fn expect_one(affected: u64) -> Result<(), StoreError> {

@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.number AS \"number!: i64\", a.name AS \"area!: String\", r.requester, r.created_at\n           FROM requests r JOIN areas a ON a.id = r.area_id\n           WHERE r.area_id IS NOT NULL AND r.state = 'open' AND r.escalated_at IS NULL\n             AND r.drafter_worker_id IS NULL AND r.created_at < ?1\n           ORDER BY r.created_at, r.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "requests",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "area!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "areas",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "requester",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "requests",
+            "name": "requester"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "requests",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3aaefceab75eed6b66e8e0ddd607b83102cf3c3d70a8516f243b0ba2591fcaa6"
+}
