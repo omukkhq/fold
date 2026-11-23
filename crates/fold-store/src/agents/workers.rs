@@ -600,6 +600,18 @@ pub async fn list_running_worker_processes(
     with_bindings(conn, raw).await
 }
 
+/// Every worker process that is not `stopped`, in start order: the running rows and the `failed` ones. The state list, not `<> 'stopped'`, lets SQLite use the state index.
+pub async fn list_unstopped_worker_processes(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<WorkerProcessRow>, StoreError> {
+    let raw = select_processes!(
+        "WHERE w.state IN ('starting', 'working', 'idle', 'stopping', 'failed') ORDER BY w.id"
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    with_bindings(conn, raw).await
+}
+
 /// Every worker process of `role` in start order, ended ones included.
 pub async fn list_worker_processes_of_role(
     conn: &mut SqliteConnection,

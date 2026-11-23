@@ -53,6 +53,18 @@ async fn each_read_gives_the_rows_of_the_full_listing_that_it_promises() {
         .unwrap();
     assert_eq!(running, pick(&[1, 2, 3, 4, 7]));
 
+    let unstopped = agents::list_unstopped_worker_processes(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(unstopped, pick(&[1, 2, 3, 4, 6, 7]));
+    assert_eq!(
+        unstopped[2].tasks,
+        vec![
+            TaskId::try_from_db(1).unwrap(),
+            TaskId::try_from_db(2).unwrap()
+        ]
+    );
+
     let coders = agents::list_worker_processes_of_role(&mut conn, Role::TaskWorker)
         .await
         .unwrap();
@@ -146,6 +158,8 @@ async fn the_state_and_role_reads_use_an_index() {
     let (_dir, store) = open_with_rows().await;
     let running =
         plan(&store, "SELECT id FROM worker_processes w WHERE w.state IN ('starting', 'working', 'idle', 'stopping') ORDER BY w.id").await;
+    let unstopped =
+        plan(&store, "SELECT id FROM worker_processes w WHERE w.state IN ('starting', 'working', 'idle', 'stopping', 'failed') ORDER BY w.id").await;
     let role = plan(
         &store,
         "SELECT id FROM worker_processes w WHERE w.role = 'task_worker' ORDER BY w.id",
@@ -153,6 +167,7 @@ async fn the_state_and_role_reads_use_an_index() {
     .await;
     println!("running: {running}\nrole: {role}");
     assert!(running.contains("worker_processes_state"), "{running}");
+    assert!(unstopped.contains("worker_processes_state"), "{unstopped}");
     assert!(role.contains("worker_processes_role_state"), "{role}");
 }
 

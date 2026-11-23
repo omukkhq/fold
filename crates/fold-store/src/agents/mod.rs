@@ -60,8 +60,9 @@ pub use workers::{
     set_fold_fingerprint,
 };
 pub use workers::{
-    list_running_worker_processes, list_worker_processes_of_agents, list_worker_processes_of_role,
-    running_worker_states, worker_agents_of_role,
+    list_running_worker_processes, list_unstopped_worker_processes,
+    list_worker_processes_of_agents, list_worker_processes_of_role, running_worker_states,
+    worker_agents_of_role,
 };
 pub use workers::{park_worker, parked_holders, turn_waiting_holders};
 
