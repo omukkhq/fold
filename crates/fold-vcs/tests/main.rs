@@ -27,3 +27,5 @@ mod shared;
 mod snapshot;
 mod sync;
 mod watch;
+#[cfg(target_os = "linux")]
+mod watch_inotify;

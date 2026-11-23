@@ -8,7 +8,7 @@ use fold_core::reviews::checks::{CHECK_TIMEOUT, ChecksFile, Outcome, Planned};
 use fold_core::{AgentName, Clock};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedRwLockReadGuard, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::services::agents::peers::{self, PeerWorker};
@@ -81,6 +81,8 @@ pub struct CheckRunner {
     tasks: Arc<Mutex<JoinSet<()>>>,
     /// Held while fold's check directory is brought to a tree and while checks run in it.
     check_dir: Arc<tokio::sync::Mutex<()>>,
+    /// Shared by every blocking task in the check directory while it runs. An abort ends a run's future at once but not the blocking task it waits for, so [`CheckRunner::shutdown`] takes it whole to wait for those tasks.
+    dir_work: Arc<tokio::sync::RwLock<()>>,
     queue: Arc<Queue>,
     held: Arc<Mutex<Vec<HeldRequest>>>,
 }
@@ -148,6 +150,7 @@ impl CheckRunner {
             limits: RunLimits::default(),
             tasks: Arc::default(),
             check_dir: Arc::default(),
+            dir_work: Arc::default(),
             queue: Arc::default(),
             held: Arc::default(),
         }
@@ -210,6 +213,11 @@ impl CheckRunner {
         Arc::clone(&self.check_dir)
     }
 
+    /// A share of the check directory for one blocking task in it, which the task holds until it ends.
+    pub(crate) async fn dir_work(&self) -> OwnedRwLockReadGuard<()> {
+        Arc::clone(&self.dir_work).read_owned().await
+    }
+
     /// Runs `work` in the background. Finished runs are dropped from the set here, so it holds only those still going.
     pub(crate) fn spawn(&self, work: impl Future<Output = ()> + Send + 'static) {
         let mut tasks = lock(&self.tasks);
@@ -228,11 +236,12 @@ impl CheckRunner {
         }
     }
 
-    /// Aborts every run still going. A run cut short leaves its row running, which the next open of the project ends as stopped.
+    /// Aborts every run still going, then waits until no blocking task writes or reads the check directory any more, so the next open of the project finds the directory at rest. A run cut short leaves its row running, which the next open of the project ends as stopped.
     pub async fn shutdown(&self) {
         let mut tasks = std::mem::take(&mut *lock(&self.tasks));
         tasks.abort_all();
         while tasks.join_next().await.is_some() {}
+        drop(self.dir_work.write().await);
     }
 }
 
@@ -778,6 +787,37 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), second.turn())
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_shutdown_waits_for_the_blocking_work_of_a_run_it_aborts() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let runner = CheckRunner::default();
+        let (started, on_start) = tokio::sync::oneshot::channel();
+        let (release, on_release) = std::sync::mpsc::channel::<()>();
+        let ended = Arc::new(AtomicBool::new(false));
+        let seen = Arc::clone(&ended);
+        let inner = runner.clone();
+        runner.spawn(async move {
+            let work = inner.dir_work().await;
+            let _ = tokio::task::spawn_blocking(move || {
+                let _work = work;
+                let _ = started.send(());
+                let _ = on_release.recv();
+                seen.store(true, Ordering::SeqCst);
+            })
+            .await;
+        });
+        on_start.await.unwrap();
+        let shutdown = runner.shutdown();
+        tokio::pin!(shutdown);
+        let early = tokio::time::timeout(Duration::from_millis(50), &mut shutdown).await;
+        assert!(early.is_err(), "the blocking work still uses the directory");
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), shutdown)
+            .await
+            .unwrap();
+        assert!(ended.load(Ordering::SeqCst));
     }
 
     #[tokio::test]

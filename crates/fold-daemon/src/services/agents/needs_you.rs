@@ -416,13 +416,24 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         item.header = row.header;
         items.push(item);
     }
-    let processes = agents::list_worker_processes(&mut conn).await?;
+    // A stopped row gives no item of its own; only a stale claim's holder needs its process, ended or not.
+    let processes = agents::list_unstopped_worker_processes(&mut conn).await?;
     items.extend(wait_items(&processes));
-    let running: std::collections::HashMap<AgentName, bool> = processes
+    let stale = claims::claims_for_person(&mut *conn).await?;
+    let holders: Vec<AgentName> = stale
         .iter()
-        .map(|row| (row.agent.clone(), row.state.is_running()))
+        .map(|claim| claim.worker.agent())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
         .collect();
-    for claim in claims::claims_for_person(&mut *conn).await? {
+    let running: std::collections::HashMap<AgentName, bool> =
+        agents::list_worker_processes_of_agents(&mut conn, &holders)
+            .await?
+            .iter()
+            .chain(&processes)
+            .map(|row| (row.agent.clone(), row.state.is_running()))
+            .collect();
+    for claim in stale {
         let holder = claim.worker.agent();
         items.push(NeedsYouItem::stale_claim(
             &claim,

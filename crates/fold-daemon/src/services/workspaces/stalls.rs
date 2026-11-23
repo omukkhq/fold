@@ -55,7 +55,14 @@ pub(super) async fn decide_stalls(
         live.mark_stalls_decided();
         return Ok(0);
     }
-    let inputs = stall_inputs(store, live.opened_at()).await?;
+    let owners: Vec<AgentName> = states
+        .iter()
+        .filter_map(|state| WorkerName::parse(&state.view.worker).ok())
+        .map(|worker| worker.agent())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let inputs = stall_inputs(store, live.opened_at(), &owners).await?;
     let mut changed = 0;
     let mut new_stalls = Vec::new();
     for state in states {
@@ -468,8 +475,34 @@ impl StallInputs {
     }
 }
 
+/// What the stall rule reads of one worker process, by its agent.
+fn process_facts(row: agents::WorkerProcessRow) -> (AgentName, ProcessFacts) {
+    let explained = row.failed_reason.as_deref().is_some_and(needs_restart)
+        || model_unreachable(row.failed_turns, row.state);
+    let facts = ProcessFacts {
+        role: row.role,
+        running: row.state.is_running(),
+        started_at: row.started_at,
+        ended_at: row.stopped_at.unwrap_or(row.started_at),
+        failed: row.state == WorkerState::Failed,
+        starter: starter_agent(&row.started_by),
+        explained,
+        waits: row
+            .wait
+            .as_ref()
+            .filter(|_| shows_wait(row.state))
+            .map(|wait| (wait.reason, wait.since)),
+        park: row.park,
+    };
+    (row.agent, facts)
+}
+
 /// The pause, the holder of each unreleased implementation claim by task, the turn of each open proposal by task, the proposal-stage check runs by workspace, and what each worker waits for and when it was last given the turn, read in one read transaction.
-async fn stall_inputs(store: &Store, opened_at: Timestamp) -> Result<StallInputs, StoreError> {
+async fn stall_inputs(
+    store: &Store,
+    opened_at: Timestamp,
+    owners: &[AgentName],
+) -> Result<StallInputs, StoreError> {
     let mut tx = store.read().begin().await?;
     let pause = agents::pause_state(&mut *tx).await?;
     let names: HashMap<i64, WorkerName> = agents::all_workers(&mut *tx)
@@ -528,30 +561,6 @@ async fn stall_inputs(store: &Store, opened_at: Timestamp) -> Result<StallInputs
         .await?
         .into_iter()
         .collect();
-    let processes = agents::list_worker_processes(&mut tx)
-        .await?
-        .into_iter()
-        .map(|row| {
-            let explained = row.failed_reason.as_deref().is_some_and(needs_restart)
-                || model_unreachable(row.failed_turns, row.state);
-            let facts = ProcessFacts {
-                role: row.role,
-                running: row.state.is_running(),
-                started_at: row.started_at,
-                ended_at: row.stopped_at.unwrap_or(row.started_at),
-                failed: row.state == WorkerState::Failed,
-                starter: starter_agent(&row.started_by),
-                explained,
-                waits: row
-                    .wait
-                    .as_ref()
-                    .filter(|_| shows_wait(row.state))
-                    .map(|wait| (wait.reason, wait.since)),
-                park: row.park,
-            };
-            (row.agent, facts)
-        })
-        .collect();
     let reported = reports::tasks_with_open_reports(&mut *tx)
         .await?
         .into_iter()
@@ -575,6 +584,12 @@ async fn stall_inputs(store: &Store, opened_at: Timestamp) -> Result<StallInputs
         .map(|session| session.agent)
         .collect();
     let owed = agents::owed_starts(&mut *tx).await?;
+    // The owners' processes, ended ones too, decide each workspace; an owed resume counts every process of its role, so each role that one waits in is read whole.
+    let mut rows = agents::list_worker_processes_of_agents(&mut tx, owners).await?;
+    for role in owed.iter().map(|owed| owed.role).collect::<BTreeSet<_>>() {
+        rows.extend(agents::list_worker_processes_of_role(&mut tx, role).await?);
+    }
+    let processes = rows.into_iter().map(process_facts).collect();
     let limits_changed_at =
         events::newest_at_of_type(&mut *tx, types::WORKERS_LIMITS_CHANGED).await?;
     let told_before = events::newest_at_by_workspace(&mut *tx, types::WORKER_STALLED, opened_at)

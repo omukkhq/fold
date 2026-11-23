@@ -134,7 +134,11 @@ impl ReviewService {
             state: RunState::Stopped,
             reason: Some(RunReason::FoldFailed),
         };
-        let (results, verdict) = match self.workspaces.check_dir_to(at.merged).await {
+        let (results, verdict) = match self
+            .workspaces
+            .check_dir_to(at.merged, self.checks.dir_work().await)
+            .await
+        {
             Ok(dir) => {
                 let results =
                     runner::run_commands(&dir, specs, self.checks.limits(), &*self.clock).await;
@@ -142,7 +146,11 @@ impl ReviewService {
                     tracing::warn!(run = %run.id, "a command of the integration checks could not start or be waited for");
                     fault
                 } else {
-                    match self.workspaces.check_dir_holds(at.merged).await {
+                    match self
+                        .workspaces
+                        .check_dir_holds(at.merged, self.checks.dir_work().await)
+                        .await
+                    {
                         Ok(true) => Verdict::of(&results),
                         Ok(false) => Verdict::failed(RunReason::FilesChanged),
                         Err(error) => {
@@ -403,7 +411,8 @@ impl ReviewService {
             }
             let lock = service.checks.check_dir();
             let _held = lock.lock().await;
-            if let Err(error) = service.workspaces.check_dir_to(tree).await {
+            let work = service.checks.dir_work().await;
+            if let Err(error) = service.workspaces.check_dir_to(tree, work).await {
                 tracing::warn!(
                     code = error.log_code(),
                     "the check directory could not follow main"

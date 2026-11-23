@@ -154,8 +154,14 @@ impl AgentService {
         let claims = agents::held_claims(&mut *tx).await?;
         let workspaces = agents::owned_live_workspaces(&mut *tx).await?;
         let proposals = agents::open_proposals(&mut *tx).await?;
-        let mut processes: HashMap<i64, ProcessSummary> = agents::list_worker_processes(&mut tx)
-            .await?
+        // The screen shows ended processes too, so only the filter narrows the read.
+        let process_rows = match &filter.agent {
+            Some(name) => {
+                agents::list_worker_processes_of_agents(&mut tx, std::slice::from_ref(name)).await?
+            }
+            None => agents::list_worker_processes(&mut tx).await?,
+        };
+        let mut processes: HashMap<i64, ProcessSummary> = process_rows
             .into_iter()
             .map(|row| {
                 let waits_for = waits_for(&row);

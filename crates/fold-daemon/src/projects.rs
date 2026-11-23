@@ -12,7 +12,7 @@ use fold_vcs::platform::Capabilities;
 
 use crate::daemon::{DRAIN_TIMEOUT, DaemonStart};
 use crate::jobs::{self, AutoCommit, ProjectTask};
-use crate::live::{LiveConfig, LiveState};
+use crate::live::{LiveConfig, LiveState, WatchStart, follow_watch_owners};
 use crate::push::{self, PushTargets, PushTask};
 use crate::services::agents::environment::WorkerEnvironment;
 use crate::services::agents::{AgentService, Launcher, SeenPresence, Supervisor, code_of};
@@ -29,6 +29,7 @@ use crate::services::workspaces::{
     BatchMergeCache, CarryCache, WorkspaceLocks, WorkspaceService, follow_closed_workspaces,
     follow_stall_turns,
 };
+use crate::shutdown;
 use crate::support::unpoisoned;
 
 /// An open project: its database, its clock and the live state shared by every request. Later domains add their state here.
@@ -85,6 +86,8 @@ pub struct ProjectHandle {
     cleanup_due: Arc<tokio::sync::Notify>,
     /// Decides the stalled flags again after each commit that makes a worker wait for someone or gives it the turn.
     stall_turns: ProjectTask,
+    /// Gives each workspace its watch or its rest on the timer scan again after each start or end of a worker process or a session.
+    watch_owners: ProjectTask,
     /// The device and inode of the database file this handle opened. SQLite keeps reading a file that was deleted, so only this tells the handle's database from a new one at the same path.
     database_file: Option<(u64, u64)>,
 }
@@ -122,7 +125,7 @@ async fn refuse_old_layout(slug: &str, paths: &ProjectPaths) -> Result<(), FoldE
 impl ProjectHandle {
     /// Opens the project database, which applies its pending migrations. A missing database is not created: the registry only lists projects that `fld init` set up. The live state takes its intervals from the configuration read here; an invalid configuration gives it the defaults, and the commands that read the configuration report the error.
     pub async fn open(row: &ProjectRow, clock: Arc<dyn Clock>) -> Result<Self, FoldError> {
-        Self::open_with(row, clock, Launcher::default()).await
+        Self::open_with(row, clock, Launcher::default(), WatchStart::default()).await
     }
 
     /// The handle as the `Arc` every request shares, made known to its own jobs.
@@ -132,11 +135,12 @@ impl ProjectHandle {
         handle
     }
 
-    /// [`ProjectHandle::open`] with the programs its worker processes run.
+    /// [`ProjectHandle::open`] with the programs its worker processes run and the start of its watcher.
     pub async fn open_with(
         row: &ProjectRow,
         clock: Arc<dyn Clock>,
         launcher: Launcher,
+        watch: WatchStart,
     ) -> Result<Self, FoldError> {
         let paths = ProjectPaths::new(&row.root);
         let present = tokio::fs::try_exists(paths.db()).await.unwrap_or(false);
@@ -167,6 +171,7 @@ impl ProjectHandle {
             LiveConfig::from_project(&config),
             Arc::clone(&capabilities),
         );
+        live.start_watch_with(watch);
         let workspace_locks = Arc::new(WorkspaceLocks::default());
         let objects = Arc::new(tokio::sync::RwLock::new(()));
         let tasks = TaskService::new(
@@ -229,6 +234,7 @@ impl ProjectHandle {
             bus.clone(),
             bus.subscribe(),
         ));
+        let watch_owners = ProjectTask::spawn(follow_watch_owners(live.clone(), bus.subscribe()));
         let workspace_cleanup = ProjectTask::spawn(follow_closed_workspaces(
             cleanup,
             bus.clone(),
@@ -265,6 +271,7 @@ impl ProjectHandle {
             workspace_cleanup,
             cleanup_due,
             stall_turns,
+            watch_owners,
             database_file,
         })
     }
@@ -294,27 +301,84 @@ impl ProjectHandle {
         self.stop().await;
     }
 
-    /// Closes the project after its workers stopped and its bus closed: the live state of its workspaces is written and let go, its commit writer and push delivery end, every open session ends and its database is checkpointed and closed.
+    /// Closes the project after its workers stopped and its bus closed: the live state of its workspaces is written and let go, its commit writer and push delivery end, every open session ends and its database is checkpointed and closed. It waits for each step, because the daemon keeps running and the project can open again in the same folder, which must find the check directory at rest and no pipeline of the old handle.
     pub(crate) async fn stop(&self) {
-        self.checks.shutdown().await;
-        for live in self.live.all() {
-            self.live.detach(live.view.workspace).await;
-        }
-        self.stop_tasks(DRAIN_TIMEOUT).await;
-        if let Err(error) = self.agents().close_sessions_at_shutdown().await {
+        self.stop_steps(false).await;
+    }
+
+    /// [`ProjectHandle::stop`] for the daemon's stop, after which the process ends: each step gets its limit from [`shutdown`] and is let go after it.
+    pub(crate) async fn stop_within_limits(&self) {
+        self.stop_steps(true).await;
+    }
+
+    async fn stop_steps(&self, limited: bool) {
+        self.step(
+            limited,
+            "checks",
+            shutdown::CHECKS_LIMIT,
+            self.checks.shutdown(),
+        )
+        .await;
+        self.step(limited, "live_detach", shutdown::LIVE_DETACH_LIMIT, async {
+            for live in self.live.all() {
+                self.live.detach(live.view.workspace).await;
+            }
+        })
+        .await;
+        self.stop_tasks(if limited {
+            shutdown::PROJECT_TASKS_LIMIT
+        } else {
+            DRAIN_TIMEOUT
+        })
+        .await;
+        if let Some(Err(error)) = self
+            .step(
+                limited,
+                "close_sessions",
+                shutdown::CLOSE_SESSIONS_LIMIT,
+                self.agents().close_sessions_at_shutdown(),
+            )
+            .await
+        {
             tracing::error!(project = %self.slug, %error, "could not end sessions");
         }
-        if let Err(error) = self.store.close().await {
+        if let Some(Err(error)) = self
+            .step(
+                limited,
+                "store_close",
+                shutdown::STORE_CLOSE_LIMIT,
+                self.store.close(),
+            )
+            .await
+        {
             tracing::error!(project = %self.slug, %error, "could not close the project database");
         }
     }
 
-    /// Waits up to `timeout` for the commit writer, the push delivery, the removal of closed workspace directories and the stall decisions to end after [`EventBus::close`], then aborts them, so none outlives the project's database.
+    /// Runs one step of [`ProjectHandle::stop_steps`], within `limit` when `limited`; `None` when it was let go.
+    async fn step<T>(
+        &self,
+        limited: bool,
+        name: &'static str,
+        limit: Duration,
+        work: impl Future<Output = T>,
+    ) -> Option<T> {
+        if limited {
+            shutdown::within(name, Some(&self.slug), limit, work).await
+        } else {
+            Some(work.await)
+        }
+    }
+
+    /// Waits up to `timeout` for the commit writer, the push delivery, the removal of closed workspace directories, the stall decisions and the watch moves to end after [`EventBus::close`], all at the same time, then aborts them, so none outlives the project's database.
     pub async fn stop_tasks(&self, timeout: Duration) {
-        self.auto_commit.stopped(timeout).await;
-        self.push_task.stopped(timeout).await;
-        self.workspace_cleanup.stopped(timeout).await;
-        self.stall_turns.stopped(timeout).await;
+        tokio::join!(
+            self.auto_commit.stopped(timeout),
+            self.push_task.stopped(timeout),
+            self.workspace_cleanup.stopped(timeout),
+            self.stall_turns.stopped(timeout),
+            self.watch_owners.stopped(timeout),
+        );
     }
 
     /// Asks the project's cleanup task to remove every closed workspace directory that is due, such as those a stopped daemon left. It returns at once; the removal runs in the background.
@@ -560,6 +624,8 @@ pub struct Projects {
     opening: tokio::sync::Mutex<()>,
     /// The programs every project's worker processes run.
     launcher: Launcher,
+    /// How every project's live state starts its watcher.
+    watch: WatchStart,
     /// What the daemon found at its start about the environment of the workers.
     environment: WorkerEnvironment,
     /// When and how the daemon process started.
@@ -583,6 +649,12 @@ impl Projects {
     #[must_use]
     pub fn with_launcher(mut self, launcher: Launcher) -> Self {
         self.launcher = launcher;
+        self
+    }
+
+    #[must_use]
+    pub fn with_watch_start(mut self, watch: WatchStart) -> Self {
+        self.watch = watch;
         self
     }
 
@@ -709,10 +781,11 @@ impl Projects {
         }
         // An open of a folder that is there settles it, so a project that fails to open is not tried again on every tick.
         self.mark_away(&row.slug, false);
-        let outcome = ProjectHandle::open_with(row, clock, self.launcher.clone())
-            .await
-            .map(|handle| handle.with_check_permits(self.check_permits.clone()))
-            .map(ProjectHandle::share);
+        let outcome =
+            ProjectHandle::open_with(row, clock, self.launcher.clone(), self.watch.clone())
+                .await
+                .map(|handle| handle.with_check_permits(self.check_permits.clone()))
+                .map(ProjectHandle::share);
         if let Ok(handle) = &outcome {
             self.folder_files.write(root).await;
             unpoisoned(self.removed.write()).remove(&row.slug);

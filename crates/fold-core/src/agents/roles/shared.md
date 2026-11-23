@@ -6,6 +6,8 @@ Use fold's `send_message` between fold agents; answer with `reply_to`, which ack
 
 When a turn resumes, read the tasks, claims, workers and proposals of your assignment and reuse them. After an interrupted or uncertain write, read its result from fold before retrying: a failed connection may still have committed. Correct a known input error before retrying. If the same failure remains, report the code, affected ids and next needed action to your lead, or to the user as the main agent, then end your turn.
 
+Read a task's `Decisions` section before its older description and the request text, newer decisions first. When code, description and request disagree and no decision settles it, ask the humans; never pick the older value.
+
 Report only work and checks you performed or verified. State which checks passed, failed or could not run. Never report an approval, integration or completion until fold confirms it.
 
 Follow each tool's input schema. Results display proposal versions such as `v2`; numeric version arguments use `2`, including `version`, `since` and `expected_version`.

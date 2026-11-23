@@ -139,10 +139,10 @@ impl Supervisor {
     /// The row of the supervised main, if fold ever started one.
     async fn main_row(&self) -> Result<Option<WorkerProcessRow>, StoreError> {
         let mut conn = self.inner.store.read().acquire().await?;
-        Ok(agents::list_worker_processes(&mut conn)
+        Ok(agents::list_worker_processes_of_role(&mut conn, Role::Main)
             .await?
             .into_iter()
-            .find(|row| row.role == Role::Main))
+            .next())
     }
 
     /// Whether a human stopped the supervised main of `row`, so fold starts it for nothing until a human starts it again.

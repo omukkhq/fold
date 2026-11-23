@@ -66,11 +66,18 @@ impl WorkspaceService {
     }
 
     /// Brings fold's check directory to the tree `tree`: its tracked files become the tree's, and ignored files such as the dependencies a setup installed stay, and the project's shared paths get their links, so a check reads them as in a workspace. The directory is created on first use. It is fold's own directory, never a workspace, so whatever an earlier run left in it is overwritten.
-    pub(crate) async fn check_dir_to(&self, tree: ObjectHash) -> Result<PathBuf, WorkspaceError> {
+    ///
+    /// `work` is held until the blocking write ends, not only until the caller's future is dropped, so a stop that aborts the run can wait for the write before the next run writes the directory.
+    pub(crate) async fn check_dir_to(
+        &self,
+        tree: ObjectHash,
+        work: impl Send + 'static,
+    ) -> Result<PathBuf, WorkspaceError> {
         let config = load_config(&self.paths).await?;
         let paths = self.paths.clone();
         let probed = Arc::clone(&self.caps);
         blocking(move || {
+            let _work = work;
             let caps = capabilities(&probed, &paths)?;
             let objects = open_objects(&paths)?;
             let root = paths.checks_dir();
@@ -97,11 +104,18 @@ impl WorkspaceService {
     }
 
     /// Whether the tracked files of fold's check directory equal the tree `tree`, so a check run left them as it found them.
-    pub(crate) async fn check_dir_holds(&self, tree: ObjectHash) -> Result<bool, WorkspaceError> {
+    ///
+    /// `work` is held until the blocking scan ends, as for [`WorkspaceService::check_dir_to`].
+    pub(crate) async fn check_dir_holds(
+        &self,
+        tree: ObjectHash,
+        work: impl Send + 'static,
+    ) -> Result<bool, WorkspaceError> {
         let config = load_config(&self.paths).await?;
         let paths = self.paths.clone();
         let probed = Arc::clone(&self.caps);
         blocking(move || {
+            let _work = work;
             let caps = capabilities(&probed, &paths)?;
             let objects = open_objects(&paths)?;
             let root = paths.checks_dir();

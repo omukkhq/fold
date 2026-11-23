@@ -55,7 +55,13 @@ pub async fn sweep_leases(
                 is_lapsed(renewed_at, runs_of(worker), now, lease_minutes)
             })
             .await?;
-            let receivers = Receivers::read(tx).await?;
+            let holders: Vec<AgentName> = marked
+                .iter()
+                .map(|claim| claim.worker.agent())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let receivers = Receivers::read(tx, &holders).await?;
             let mut nobody = Vec::new();
             for claim in &marked {
                 let told = receivers.of(&claim.worker.agent());
@@ -163,7 +169,8 @@ struct Receivers {
 }
 
 impl Receivers {
-    async fn read(tx: &mut WriteTx) -> Result<Self, StoreError> {
+    /// Reads the receivers of the stale claims of `holders`: the starter of each holder's process, ended or not, and every agent that runs.
+    async fn read(tx: &mut WriteTx, holders: &[AgentName]) -> Result<Self, StoreError> {
         let every = agents::list_agents(tx.conn()).await?;
         let known: HashSet<&AgentName> = every.iter().map(|agent| &agent.name).collect();
         let tagged: HashSet<i64> = agents::all_tags(tx.conn())
@@ -177,7 +184,6 @@ impl Receivers {
             .filter(|agent| tagged.contains(&agent.id))
             .map(|agent| agent.name.clone())
             .collect();
-        let processes = agents::list_worker_processes(tx.conn()).await?;
         let sessions = agents::open_sessions_by_agent(tx.conn()).await?;
         let mut running: HashSet<AgentName> = every
             .iter()
@@ -185,12 +191,13 @@ impl Receivers {
             .map(|agent| agent.name.clone())
             .collect();
         running.extend(
-            processes
-                .iter()
-                .filter(|row| row.state.is_running())
-                .map(|row| row.agent.clone()),
+            agents::running_worker_states(tx.conn())
+                .await?
+                .into_iter()
+                .map(|(agent, _)| agent),
         );
-        let starters = processes
+        let starters = agents::list_worker_processes_of_agents(tx.conn(), holders)
+            .await?
             .into_iter()
             .filter_map(|row| {
                 let starter =

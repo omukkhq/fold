@@ -48,7 +48,19 @@ impl Probe {
     }
 
     pub(crate) fn inotify_max_watches(&self) -> Option<u64> {
-        self.read("/proc/sys/fs/inotify/max_user_watches")?
+        self.inotify_setting("max_user_watches")
+    }
+
+    pub(crate) fn inotify_max_queued_events(&self) -> Option<u64> {
+        self.inotify_setting("max_queued_events")
+    }
+
+    pub(crate) fn inotify_max_instances(&self) -> Option<u64> {
+        self.inotify_setting("max_user_instances")
+    }
+
+    fn inotify_setting(&self, name: &str) -> Option<u64> {
+        self.read(&format!("/proc/sys/fs/inotify/{name}"))?
             .trim()
             .parse()
             .ok()
@@ -161,11 +173,15 @@ mod tests {
         let dir = root.path().join("proc/sys/fs/inotify");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("max_user_watches"), "8192\n").unwrap();
+        std::fs::write(dir.join("max_queued_events"), "16384\n").unwrap();
+        std::fs::write(dir.join("max_user_instances"), "128\n").unwrap();
         std::fs::create_dir_all(root.path().join("run/systemd/system")).unwrap();
         std::fs::create_dir_all(root.path().join("var/lib/systemd/linger")).unwrap();
         std::fs::write(root.path().join("var/lib/systemd/linger/ana"), "").unwrap();
         let probe = Probe::new(root.path());
         assert_eq!(probe.inotify_max_watches(), Some(8192));
+        assert_eq!(probe.inotify_max_queued_events(), Some(16_384));
+        assert_eq!(probe.inotify_max_instances(), Some(128));
         assert!(probe.systemd_running());
         assert!(probe.linger_enabled("ana"));
         assert!(!probe.linger_enabled("bob"));
@@ -179,6 +195,8 @@ mod tests {
         let root = tmp();
         let probe = Probe::new(root.path());
         assert_eq!(probe.inotify_max_watches(), None);
+        assert_eq!(probe.inotify_max_queued_events(), None);
+        assert_eq!(probe.inotify_max_instances(), None);
         assert!(!probe.systemd_running());
         assert!(!probe.linger_enabled("ana"));
     }

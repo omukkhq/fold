@@ -75,9 +75,12 @@ fn config() -> LiveConfig {
             debounce: Duration::from_millis(200),
             max_wait: Duration::from_millis(800),
             degraded_interval: Duration::from_secs(10),
+            ..WatchConfig::default()
         },
         rescan: Duration::from_secs(60),
         max_file_bytes: 1 << 26,
+        watch_group: 1,
+        watch_gap: Duration::from_secs(2),
     }
 }
 
@@ -90,6 +93,35 @@ impl WatchBackend for Silent {
     }
 
     fn unwatch_dir(&mut self, _dir: &Path) {}
+}
+
+/// A watcher whose notifications never arrive and which keeps the directories it watches now.
+#[cfg(test)]
+#[derive(Clone, Default)]
+struct Counting(Arc<std::sync::Mutex<std::collections::BTreeSet<PathBuf>>>);
+
+#[cfg(test)]
+impl Counting {
+    /// Whether a directory in `root` has a watch.
+    fn watches(&self, root: &Path) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|dir| dir.starts_with(root))
+    }
+}
+
+#[cfg(test)]
+impl WatchBackend for Counting {
+    fn watch_dir(&mut self, dir: &Path) -> Result<(), WatchRefused> {
+        self.0.lock().unwrap().insert(dir.to_path_buf());
+        Ok(())
+    }
+
+    fn unwatch_dir(&mut self, dir: &Path) {
+        self.0.lock().unwrap().remove(dir);
+    }
 }
 
 /// A platform without native notifications.
@@ -611,6 +643,164 @@ async fn abandon_and_archive_detach_the_state_and_stop_the_pipeline() {
         panic!("an unknown workspace is a refusal");
     };
     assert_eq!(error.code(), "workspace_not_found");
+}
+
+#[tokio::test]
+async fn workspaces_attached_in_groups_get_their_watch_a_group_at_a_time() {
+    let counting = Counting::default();
+    let fx = Fixture::with_backend(counting.clone()).await;
+    let (first, first_dir) = fx.create(&fx.frontend, 1).await;
+    let (second, second_dir) = fx.create(&fx.backend, 2).await;
+    for workspace in [first, second] {
+        fx.live.detach(workspace).await;
+    }
+    assert!(!counting.watches(&first_dir) && !counting.watches(&second_dir));
+    for workspace in [first, second] {
+        fx.live.attach_in_group(workspace).await.unwrap();
+    }
+    assert_eq!(fx.live.waiting(), 2);
+    assert!(
+        fx.live.get(first).is_none() && fx.live.get(second).is_none(),
+        "the first scan waits for its group too"
+    );
+
+    // One workspace a group, and the gap is 2 s of the project's clock.
+    fx.live.tick();
+    fx.wait_for(first, |_| true).await;
+    assert!(counting.watches(&first_dir));
+    fx.live.tick();
+    assert_eq!(fx.live.waiting(), 1);
+    assert!(!counting.watches(&second_dir));
+    fx.advance(2);
+    fx.wait_for(second, |_| true).await;
+    assert!(counting.watches(&second_dir));
+    assert_eq!(fx.live.waiting(), 0);
+}
+
+#[tokio::test]
+async fn a_read_or_a_call_of_its_worker_watches_a_waiting_workspace_at_once() {
+    let counting = Counting::default();
+    let fx = Fixture::with_backend(counting.clone()).await;
+    let (first, first_dir) = fx.create(&fx.frontend, 1).await;
+    let (second, second_dir) = fx.create(&fx.backend, 2).await;
+    for workspace in [first, second] {
+        fx.live.detach(workspace).await;
+        fx.live.attach_in_group(workspace).await.unwrap();
+    }
+    assert_eq!(fx.live.waiting(), 2);
+
+    let state = fx.live.attach(second).await.unwrap();
+    assert_eq!(state.view.workspace, second);
+    assert!(counting.watches(&second_dir), "a read watches it at once");
+    assert!(!counting.watches(&first_dir));
+
+    // A call of a worker with no waiting workspace leaves the others waiting.
+    fx.live.watch_worker(&fx.backend.name).await;
+    assert!(!counting.watches(&first_dir));
+    assert_eq!(fx.live.waiting(), 1);
+
+    fx.live.watch_worker(&fx.frontend.name).await;
+    assert!(counting.watches(&first_dir), "its worker acts");
+    fx.wait_for(first, |_| true).await;
+    assert_eq!(fx.live.waiting(), 0);
+
+    // A workspace detached while it waits never gets a watch.
+    fx.live.detach(first).await;
+    fx.live.attach_in_group(first).await.unwrap();
+    fx.live.detach(first).await;
+    assert_eq!(fx.live.waiting(), 0);
+    fx.live.tick();
+    assert!(!counting.watches(&first_dir));
+}
+
+#[tokio::test]
+async fn a_workspace_whose_owner_left_rests_on_the_timer_scan_and_shows_its_changes_within_rescan_seconds()
+ {
+    let counting = Counting::default();
+    let fx = Fixture::with_backend(counting.clone()).await;
+    let (id, dir) = fx.create(&fx.frontend, 1).await;
+    assert!(
+        counting.watches(&dir),
+        "an owner in an open session keeps the watch"
+    );
+    fx.live.follow_owners().await;
+    assert!(counting.watches(&dir));
+    assert_eq!(fx.live.resting(), 0);
+
+    let now = fx.project.now();
+    fx.project
+        .store()
+        .write(async |tx| fold_store::agents::end_open_sessions(tx, now).await)
+        .await
+        .unwrap();
+    fx.live.follow_owners().await;
+    assert!(!counting.watches(&dir), "no open session, no watch");
+    assert_eq!(fx.live.resting(), 1);
+    // The rest scans once; a read answers after that scan, so the edit below comes after it.
+    fx.live.rescan(id).await.unwrap();
+
+    fs::write(dir.join("timer.txt"), "seen by the timer\n").unwrap();
+    fx.live.tick();
+    fx.live.tick();
+    assert!(
+        fx.live.get(id).unwrap().view.files.is_empty(),
+        "nothing scans before rescan_seconds"
+    );
+    fx.advance(60);
+    let found = fx.wait_for(id, |state| !state.view.files.is_empty()).await;
+    assert_eq!(
+        files(&found.view),
+        [row("timer.txt", None, ChangeKind::Added, 1, 0)]
+    );
+    assert!(!counting.watches(&dir), "the timer scan adds no watch");
+
+    // A read scans a resting workspace and leaves it resting.
+    fs::write(dir.join("read.txt"), "seen by a read\n").unwrap();
+    let read = fx.live.rescan(id).await.unwrap();
+    assert_eq!(read.view.files.len(), 2);
+    assert!(!counting.watches(&dir));
+
+    // A call of its worker gives it the watch back at once.
+    fx.live.watch_worker(&fx.frontend.name).await;
+    assert!(counting.watches(&dir));
+    assert_eq!(fx.live.resting(), 0);
+
+    // With no session the next look at the owners takes the watch again, and a detach forgets the rest.
+    fx.live.follow_owners().await;
+    assert!(!counting.watches(&dir));
+    fx.live.detach(id).await;
+    assert_eq!(fx.live.resting(), 0);
+}
+
+#[tokio::test]
+async fn a_read_of_a_waiting_workspace_whose_owner_left_scans_it_without_a_watch() {
+    let counting = Counting::default();
+    let fx = Fixture::with_backend(counting.clone()).await;
+    let (id, dir) = fx.create(&fx.frontend, 1).await;
+    fx.live.detach(id).await;
+    fx.live.attach_in_group(id).await.unwrap();
+    let now = fx.project.now();
+    fx.project
+        .store()
+        .write(async |tx| fold_store::agents::end_open_sessions(tx, now).await)
+        .await
+        .unwrap();
+
+    fs::write(dir.join("read.txt"), "seen by a read\n").unwrap();
+    let read = fx.live.attach(id).await.unwrap();
+    assert_eq!(read.view.files.len(), 1);
+    assert!(
+        !counting.watches(&dir),
+        "a read gives no watch to an owner who left"
+    );
+    assert_eq!(fx.live.waiting(), 0);
+    assert_eq!(fx.live.resting(), 1);
+
+    fx.live.watch_worker(&fx.frontend.name).await;
+    assert!(
+        counting.watches(&dir),
+        "a call of its worker gives the watch"
+    );
 }
 
 #[tokio::test]

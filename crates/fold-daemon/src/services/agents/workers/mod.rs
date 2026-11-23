@@ -658,6 +658,10 @@ impl AgentService {
             for workspace in &assigned.adopted {
                 live.set_worker(*workspace, &holder);
             }
+            // `worker.started` went out before the adopted workspaces named their new owner, so the watches follow the owner again now.
+            if !assigned.adopted.is_empty() {
+                live.follow_owners().await;
+            }
         }
         let label = match &area {
             Some(area) => agents::find_area(self.store.read(), area)

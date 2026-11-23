@@ -556,6 +556,10 @@ const SPECS: Record<EventType, Spec> = {
     icon: TriangleAlert,
     text: (e) => `${workspaceOf(e)} refreshes on a periodic scan`,
   },
+  "workspace.watch_restored": {
+    icon: FilePen,
+    text: (e) => `${workspaceOf(e)} refreshes on file changes again`,
+  },
   "checkpoint.recorded": {
     icon: Bookmark,
     text: (e) => {

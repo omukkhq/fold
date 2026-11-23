@@ -164,14 +164,22 @@ impl Actions {
             .into_iter()
             .map(|worker| (worker.id, worker.name.agent()))
             .collect();
-        let holders = agents::held_claims(&mut *conn)
+        let holders: HashMap<TaskId, AgentName> = agents::held_claims(&mut *conn)
             .await?
             .into_iter()
             .filter(|claim| claim.kind == ClaimKind::Implementation)
             .filter_map(|claim| Some((claim.task, names.get(&claim.worker_id)?.clone())))
             .collect();
         let stale_holders = stale_holders(claims::claims_for_person(&mut *conn).await?);
-        let running = agents::list_worker_processes(conn)
+        // Only the holders' processes name an action, an ended one too.
+        let named: Vec<AgentName> = holders
+            .values()
+            .chain(stale_holders.values())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let running = agents::list_worker_processes_of_agents(conn, &named)
             .await?
             .into_iter()
             .map(|row| (row.agent, row.state.is_running()))

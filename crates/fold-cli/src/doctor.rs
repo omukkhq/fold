@@ -34,6 +34,7 @@ use fold_daemon::config::{LOCK_FILE, SOCKET_FILE};
 const NOT_APPLICABLE: &str = "not applicable on this platform";
 const MIN_WATCHES: u64 = 65_536;
 const RECOMMENDED_WATCHES: u64 = 524_288;
+const WATCHES_KEY: &str = "fs.inotify.max_user_watches";
 const MIN_FREE_BYTES: u64 = 1 << 30;
 const DEGRADED_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -358,6 +359,13 @@ pub(crate) fn collect(
     let answering = socket
         .as_deref()
         .filter(|_| matches!(daemon, status::Daemon::Running { .. }));
+    let watch_lists = watch_lists(answering, &registered, host.platform.linux);
+    let watched = answering.map(|_| watch_lists.values().map(inotify::watched_workspaces).sum());
+    sections[0].checks.push(inotify::instances_check(
+        host.platform.linux,
+        host.probe.inotify_max_instances(),
+        watched,
+    ));
     let listed = host_paths(&host.dirs)
         .and_then(|paths| fold_daemon::services::agents::accounts::list(&paths.accounts_dir()));
     let mut used: Vec<fold_core::accounts::AccountName> = registered
@@ -370,14 +378,23 @@ pub(crate) fn collect(
         .checks
         .push(accounts::accounts_verdict(&listed, &used, &report, now));
     for (label, root) in projects {
-        let mut checks = project_checks(&root, host, now, runtime);
+        let slug = push::slug_of(&registered, &root);
+        let degraded = slug
+            .as_ref()
+            .and_then(|slug| watch_lists.get(slug))
+            .map(inotify::degraded_workspaces);
+        let watch = WatchState {
+            degraded,
+            started_at: start.map(|start| start.started_at),
+            recommended: inotify::recommended_instances(watched),
+        };
+        let mut checks = project_checks(&root, host, now, runtime, &watch);
         if root.is_dir() {
             checks.push(accounts::project_account_verdict(
                 accounts::named_account(&root).as_ref(),
                 &listed,
             ));
         }
-        let slug = push::slug_of(&registered, &root);
         checks.push(push::push_check(socket.as_deref(), slug.as_deref()));
         checks.push(workers::workers_check(
             answering,
@@ -390,6 +407,33 @@ pub(crate) fn collect(
         });
     }
     Ok(Report { header, sections })
+}
+
+/// The daemon's workspace list of each registered project, by slug, read only on Linux where each watched workspace holds one inotify instance. A project whose list the daemon does not give is left out.
+fn watch_lists(
+    answering: Option<&Path>,
+    registered: &[Registered],
+    linux: bool,
+) -> std::collections::BTreeMap<String, serde_json::Value> {
+    let Some(socket) = answering.filter(|_| linux) else {
+        return std::collections::BTreeMap::new();
+    };
+    registered
+        .iter()
+        .filter_map(|(slug, _)| {
+            let list = push::get_json(socket, &format!("/api/v1/projects/{slug}/workspaces"))?;
+            Some((slug.clone(), list))
+        })
+        .collect()
+}
+
+/// What the running daemon reports of one project's watches.
+pub(crate) struct WatchState {
+    /// The workspaces it scans on a timer now; `None` when the daemon gives no workspace list for the project.
+    pub(crate) degraded: Option<Vec<String>>,
+    pub(crate) started_at: Option<Timestamp>,
+    /// The `max_user_instances` value the fix names.
+    pub(crate) recommended: u64,
 }
 
 /// The shadowing walk climbs the parents of the root, so a relative `--project` is resolved first.
@@ -461,6 +505,7 @@ fn host_checks(socket_flag: Option<&Path>, file: &FileConfig, host: &Host) -> Ve
         service_manager_check(host),
         linger_check(host),
         inotify_limit_check(host),
+        inotify::queue_check(host.platform.linux, host.probe.inotify_max_queued_events()),
     ]
 }
 
@@ -843,9 +888,10 @@ pub(crate) fn watch_limit_verdict(linux: bool, limit: Option<u64>) -> WatchLimit
     }
 }
 
-fn sysctl_fix() -> String {
+/// The file appends, so the fixes of several limits keep each other's lines.
+pub(crate) fn sysctl_fix(key: &str, value: u64) -> String {
     format!(
-        "sudo sysctl fs.inotify.max_user_watches={RECOMMENDED_WATCHES}, and to keep it: echo fs.inotify.max_user_watches={RECOMMENDED_WATCHES} | sudo tee /etc/sysctl.d/99-fold.conf"
+        "sudo sysctl {key}={value}, and to keep it: echo {key}={value} | sudo tee -a /etc/sysctl.d/99-fold.conf"
     )
 }
 
@@ -860,7 +906,7 @@ fn inotify_limit_check(host: &Host) -> Check {
         WatchLimit::Low(limit) => Check::warn(
             "inotify limit",
             format!("max_user_watches is {limit}, below {MIN_WATCHES}"),
-            sysctl_fix(),
+            sysctl_fix(WATCHES_KEY, RECOMMENDED_WATCHES),
         ),
     }
 }
@@ -954,6 +1000,7 @@ fn project_checks(
     host: &Host,
     now: Timestamp,
     runtime: &tokio::runtime::Runtime,
+    watch: &WatchState,
 ) -> Vec<Check> {
     if !root.is_dir() {
         return vec![Check::fail(
@@ -994,11 +1041,17 @@ fn project_checks(
             exclude_check(&paths),
         ]);
     }
-    checks.push(if watch_applicable {
-        degraded_check(&facts, now)
+    if watch_applicable {
+        checks.push(degraded_check(&facts, now));
+        checks.push(inotify::without_instance_check(
+            watch.degraded.as_deref(),
+            &facts.degraded_watches,
+            watch.started_at,
+            watch.recommended,
+        ));
     } else {
-        Check::not_applicable("inotify watches")
-    });
+        checks.push(Check::not_applicable("inotify watches"));
+    }
     checks.push(claude_files_check(root));
     checks.push(role_prompts_check(&paths));
     checks.push(models_check(&paths, &facts));
@@ -1033,6 +1086,8 @@ pub(crate) struct DatabaseFacts {
     /// The pragma itself returned an error, which SQLite does for a damaged page it cannot read.
     pub(crate) quick_check_errored: bool,
     pub(crate) degraded: Vec<Timestamp>,
+    /// Every stored `workspace.watch_degraded` event of a workspace, in the order of storage.
+    pub(crate) degraded_watches: Vec<inotify::DegradedEvent>,
     /// Whether the project's Git sync is on; `None` when the database cannot tell.
     pub(crate) git_sync: Option<bool>,
     /// The model of each area profile that names one, as `(area, model)`.
@@ -1077,6 +1132,7 @@ async fn inspect_database(path: &Path, events_now: Option<Timestamp>) -> Databas
         && facts.quick_check_problems == Some(0)
     {
         facts.degraded = degraded_events(&mut conn, now).await.unwrap_or_default();
+        facts.degraded_watches = degraded_watches(&mut conn).await.unwrap_or_default();
     }
     facts.git_sync = sqlx::query_scalar!(r#"SELECT COUNT(*) AS "count!: i64" FROM git_sync"#)
         .fetch_one(&mut conn)
@@ -1108,6 +1164,29 @@ async fn degraded_events(
     Ok(rows
         .into_iter()
         .filter_map(|created_at| Timestamp::from_millis(created_at).ok())
+        .collect())
+}
+
+/// The `workspace.watch_degraded` events of every workspace with its public id and reason, oldest first. `events.workspace_id` holds the workspace's public number.
+async fn degraded_watches(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<inotify::DegradedEvent>, sqlx::Error> {
+    let rows: Vec<(i64, Option<String>, i64)> = sqlx::query_as(
+        "SELECT workspace_id, reason, created_at FROM events
+         WHERE type = ? AND workspace_id IS NOT NULL ORDER BY seq",
+    )
+    .bind(types::WORKSPACE_WATCH_DEGRADED.as_str())
+    .fetch_all(conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(workspace, reason, created_at)| {
+            Some(inotify::DegradedEvent {
+                workspace: fold_core::WorkspaceId::try_from_db(workspace)?.to_string(),
+                reason,
+                at: Timestamp::from_millis(created_at).ok()?,
+            })
+        })
         .collect())
 }
 
@@ -1169,7 +1248,7 @@ fn degraded_check(facts: &DatabaseFacts, now: Timestamp) -> Check {
             format!(
                 "{count} watch_degraded events with reason watch_limit in the last 24 hours; a degraded workspace scans every 10 s and keeps working"
             ),
-            sysctl_fix(),
+            sysctl_fix(WATCHES_KEY, RECOMMENDED_WATCHES),
         ),
     }
 }
@@ -1448,6 +1527,7 @@ fn shadowing_checks(root: &Path, home: Option<&Path>) -> Vec<Check> {
 mod accounts;
 mod daemon;
 mod environment;
+mod inotify;
 mod push;
 mod workers;
 

@@ -25,6 +25,7 @@ fn config(debounce_ms: u64, max_wait_ms: u64) -> WatchConfig {
         debounce: Duration::from_millis(debounce_ms),
         max_wait: Duration::from_millis(max_wait_ms),
         degraded_interval: Duration::from_secs(60),
+        ..WatchConfig::default()
     }
 }
 
@@ -623,7 +624,14 @@ fn overflow_requests_a_rescan_of_the_affected_workspaces() {
     let parent = tempfile::tempdir().unwrap();
     let one = workspace_dir(&parent, "one");
     let two = workspace_dir(&parent, "two");
-    let (hub, rx) = with_backend(Fake::default(), config(100, 1_000));
+    // Every loss here asks for its own rescan, so none of them may count towards timer mode.
+    let (hub, rx) = with_backend(
+        Fake::default(),
+        WatchConfig {
+            overflow_limit: 0,
+            ..config(100, 1_000)
+        },
+    );
     hub.add_workspace(ws(1), &one, rules(&one), Arc::default());
     hub.add_workspace(ws(2), &two, rules(&two), Arc::default());
     let notifier = hub.notifier();
@@ -836,4 +844,119 @@ fn a_moved_tracked_set_picks_the_watches_below_an_ignored_directory_again() {
     assert_eq!(hub.watched_dirs(ws(1)), vec![root.to_path_buf()]);
     // An id the hub does not hold is left alone, and the call still returns.
     hub.retrack(ws(2), tracked.get());
+}
+
+/// Collects events until one matches `wanted`, and returns every event seen up to and with it.
+fn events_until(
+    rx: &Receiver<WatchEvent>,
+    wanted: impl Fn(&WatchEvent) -> bool,
+) -> Vec<WatchEvent> {
+    let deadline = Instant::now() + WAIT;
+    let mut seen = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let event = rx
+            .recv_timeout(left)
+            .unwrap_or_else(|error| panic!("saw {seen:?}: {error}"));
+        let done = wanted(&event);
+        seen.push(event);
+        if done {
+            return seen;
+        }
+    }
+}
+
+#[test]
+fn repeated_overflows_put_only_that_workspace_on_timer_scans_until_the_pause_ends() {
+    let parent = tempfile::tempdir().unwrap();
+    let one = workspace_dir(&parent, "one");
+    let two = workspace_dir(&parent, "two");
+    fs::create_dir(one.join("src")).unwrap();
+    let fake = Fake::default();
+    let interval = Duration::from_millis(100);
+    let pause = Duration::from_millis(800);
+    let (hub, rx) = with_backend(
+        fake.clone(),
+        WatchConfig {
+            degraded_interval: interval,
+            overflow_pause: pause,
+            ..config(50, 1_000)
+        },
+    );
+    hub.add_workspace(ws(1), &one, rules(&one), Arc::default());
+    hub.add_workspace(ws(2), &two, rules(&two), Arc::default());
+    let notifier = hub.notifier();
+    let overflow = || Ok(Event::new(EventKind::Other).set_flag(Flag::Rescan));
+
+    let degraded_at = Instant::now();
+    for _ in 0..3 {
+        notifier.send_for(ws(1), overflow());
+    }
+    let seen = events_until(&rx, |event| matches!(event, WatchEvent::Degraded { .. }));
+    assert_eq!(
+        seen.last(),
+        Some(&WatchEvent::Degraded {
+            workspace: ws(1),
+            reason: DegradedReason::Overflow,
+        })
+    );
+    assert!(seen.iter().all(
+        |event| *event == WatchEvent::RescanRequested { workspace: ws(1) }
+            || matches!(event, WatchEvent::Degraded { .. })
+    ));
+    // Timer mode drops the workspace's watches, so its queue cannot overflow again; the other workspace keeps its watch.
+    assert!(hub.watched_dirs(ws(1)).is_empty());
+    assert_eq!(fake.watched_paths(), vec![two.clone()]);
+
+    // A change in timer mode shows through the timer's rescans, which come long before the pause ends. The first rescan may still be the end of a scan that started before the third loss, so the second is surely a tick.
+    fs::write(one.join("src/file"), b"f").unwrap();
+    for _ in 0..2 {
+        let seen = events_until(&rx, |event| {
+            *event == WatchEvent::RescanRequested { workspace: ws(1) }
+        });
+        assert!(
+            seen.iter()
+                .all(|event| matches!(event, WatchEvent::RescanRequested { .. }))
+        );
+    }
+    // More losses in timer mode add no second Degraded, and the other workspace still reports its changes.
+    notifier.send_for(ws(1), overflow());
+    notifier.send(Ok(
+        Event::new(EventKind::Create(CreateKind::File)).add_path(two.join("b"))
+    ));
+    let seen = events_until(&rx, |event| matches!(event, WatchEvent::Changed { .. }));
+    assert_eq!(
+        seen.last(),
+        Some(&WatchEvent::Changed {
+            workspace: ws(2),
+            paths: paths(&["b"]),
+        })
+    );
+
+    // After the pause the hub watches the workspace again and says so once, then asks for a rescan of what it missed.
+    let seen = events_until(&rx, |event| matches!(event, WatchEvent::Restored { .. }));
+    assert!(degraded_at.elapsed() >= pause);
+    assert_eq!(
+        seen.last(),
+        Some(&WatchEvent::Restored { workspace: ws(1) })
+    );
+    assert!(
+        seen.iter()
+            .all(|event| !matches!(event, WatchEvent::Degraded { .. }))
+    );
+    assert_eq!(next(&rx), WatchEvent::RescanRequested { workspace: ws(1) });
+    assert_eq!(hub.watched_dirs(ws(1)), vec![one.clone(), one.join("src")]);
+    notifier.send_for(
+        ws(1),
+        Ok(Event::new(EventKind::Create(CreateKind::File)).add_path(one.join("src/new"))),
+    );
+    assert_eq!(
+        next(&rx),
+        WatchEvent::Changed {
+            workspace: ws(1),
+            paths: paths(&["src/new"]),
+        }
+    );
+    // The timer stopped with the watch's return.
+    quiet(&rx, interval * 3);
 }
