@@ -69,6 +69,10 @@
   --height-bar: 60px;
   --height-bar-compact: 56px;
   --height-chart: 140px;
+  /* The fixed box of an attachment thumbnail, and the tallest an opened image grows. */
+  --width-thumb: 96px;
+  --height-thumb: 64px;
+  --height-preview: 70vh;
   --width-skeleton-s: 70px;
   --width-skeleton-l: 120px;
   --width-diff-number: 44px;

@@ -25,7 +25,10 @@ import {
 import { newRequestSchema, type NewRequestValues } from "./compose";
 import { describeFailure, type Failure } from "./errors";
 import { FailurePanel } from "@/components/states/FailurePanel";
+import { Thumbnail } from "@/components/thumbnail/Thumbnail";
 import { formatSize } from "./present";
+import { isPreviewableFile } from "./preview";
+import { usePreviewUrls } from "./usePreviewUrls";
 
 interface NewRequestDialogProps {
   slug: string;
@@ -38,15 +41,17 @@ interface NewRequestDialogProps {
 
 function FileRow({
   file,
+  previewUrl,
   disabled,
   onRemove,
 }: {
   file: File;
+  previewUrl: string | undefined;
   disabled: boolean;
   onRemove: () => void;
 }) {
   const problem = fileProblem(file);
-  const Icon = file.type.startsWith("image/") ? ImageIcon : FileText;
+  const Icon = isPreviewableFile(file) ? ImageIcon : FileText;
   return (
     <li
       className={cn(
@@ -54,7 +59,11 @@ function FileRow({
         problem ? "bg-bad-soft" : "bg-sunken",
       )}
     >
-      <Icon aria-hidden="true" size={15} className="shrink-0 text-text-2" />
+      {previewUrl ? (
+        <Thumbnail src={previewUrl} name={file.name} />
+      ) : (
+        <Icon aria-hidden="true" size={15} className="shrink-0 text-text-2" />
+      )}
       <span className="min-w-0 flex-1 truncate text-15 text-text">
         {file.name}
       </span>
@@ -94,6 +103,7 @@ export function NewRequestDialog({
   const [dragging, setDragging] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
   const hintId = useId();
+  const previews = usePreviewUrls(files);
   const {
     control,
     handleSubmit,
@@ -264,6 +274,7 @@ export function NewRequestDialog({
                           <FileRow
                             key={`${file.name}:${String(index)}`}
                             file={file}
+                            previewUrl={previews.get(file)}
                             disabled={isSubmitting}
                             onRemove={() => {
                               setFiles(files.filter((_, i) => i !== index));
