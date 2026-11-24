@@ -44,6 +44,17 @@ impl AgentService {
         Ok(())
     }
 
+    /// The hand-off request that a returning `wait_for_events` of `agent` carries: `Some` for a supervised lead or review lead past its role's `handoff_at` whose session wrote no note yet. A service without worker processes asks nothing.
+    pub async fn wait_handoff(
+        &self,
+        agent: &AgentName,
+    ) -> Result<Option<&'static str>, AgentError> {
+        match &self.workers {
+            Some(supervisor) => supervisor.wait_handoff(agent).await,
+            None => Ok(None),
+        }
+    }
+
     /// The newest hand-off note of every agent that wrote one, for `list_workers`.
     pub async fn latest_handoffs(&self) -> Result<HashMap<AgentName, HandoffRow>, AgentError> {
         Ok(agents::latest_handoffs(self.store.read())

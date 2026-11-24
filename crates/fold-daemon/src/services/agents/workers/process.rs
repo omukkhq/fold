@@ -222,6 +222,8 @@ struct Inner {
     switch_turns: Mutex<HashMap<AgentName, Vec<String>>>,
     /// The turns fold owes workers whose last turn ended for a cause outside them.
     owed: Mutex<waits::OwedTurns>,
+    /// The context window of each model, as the last result that named it reported it. A wait inside a turn has no result of its own to size the context by.
+    windows: Mutex<HashMap<String, u64>>,
 }
 
 impl Drop for Inner {
@@ -293,6 +295,7 @@ impl Supervisor {
                 switching: Mutex::new(HashSet::new()),
                 switch_turns: Mutex::default(),
                 owed: Mutex::default(),
+                windows: Mutex::default(),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();

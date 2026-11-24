@@ -360,9 +360,23 @@ async fn acceptance_22_a_message_to_a_reviewer_owed_a_new_version_resumes_it_for
     let runs = until_runs(&fake, REVIEWER, 3).await;
     let turn = &runs[2].stdin[1];
     assert!(
-        turn.contains("for a message") && turn.contains("m-1") && turn.contains("m-2"),
+        turn.contains("for a message") && turn.contains("m-2"),
         "{turn}"
     );
+    // A notice can give m-1 whole to the resumed reviewer before it stops, and then m-1 counts as read and is owed no more.
+    if !turn.contains("m-1") {
+        let acked: Option<i64> = sqlx::query_scalar(
+            "SELECT r.acked_at FROM message_recipients r
+             JOIN messages m ON m.id = r.message_id
+             JOIN workers w ON w.id = r.worker_id
+             WHERE m.number = 1 AND w.name = ?1",
+        )
+        .bind(REVIEWER)
+        .fetch_one(harness.handle.store.read())
+        .await
+        .unwrap();
+        assert!(acked.is_some(), "{turn}");
+    }
 }
 
 /// Acceptance 22: a reviewer whose session is gone at a daemon start and whose new session the reviewer limit refuses leaves its version to nobody, so fold tells the review lead which version waits for a review.

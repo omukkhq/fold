@@ -71,7 +71,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             WAIT_FOR_EVENTS,
-            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. A new message to you also ends the wait, whatever the filter says; the result then carries your new messages in `inbox`, so call get_inbox only when it says more wait. A message that `inbox` gives whole counts as read; a cut one stays unread until get_thread. For the main agent and an area lead, a request that another agent or a human created or released and that nobody drafts ends the wait too; the result names it in `requests`: read it with get_request, then claim_request it when it is yours. A worker.stalled or claim.stale that fold tells you of ends the wait too, with a hint to call restart_worker. Use it instead of polling get_events. An area lead or the review lead waits only with a task, proposal or area filter, and ends its turn when nothing is due: fold gives it ready tasks, requests, messages and stalls as new turns.",
+            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. A new message to you also ends the wait, whatever the filter says; the result then carries your new messages in `inbox`, so call get_inbox only when it says more wait. A message that `inbox` gives whole counts as read; a cut one stays unread until get_thread. For the main agent and an area lead, a request that another agent or a human created or released and that nobody drafts ends the wait too; the result names it in `requests`: read it with get_request, then claim_request it when it is yours. A worker.stalled or claim.stale that fold tells you of ends the wait too, with a hint to call restart_worker. A lead or the review lead whose context has grown past its handoff_at gets `handoff` in the result: call write_handoff as it says. Use it instead of polling get_events. An area lead or the review lead waits only with a task, proposal or area filter, and ends its turn when nothing is due: fold gives it ready tasks, requests, messages and stalls as new turns.",
             schema_for_type::<WaitForEventsInput>(),
         ),
     ]
@@ -156,6 +156,21 @@ fn wait_json(
     result
 }
 
+/// `result` with `handoff`, the request for a hand-off note, when the waiting worker is a lead past its role's `handoff_at`. A failed check leaves the result as it is: the check after the lead's turn asks again.
+async fn with_handoff(server: &FoldServer, worker: &WorkerRow, mut result: Value) -> Value {
+    match server.agents.wait_handoff(&worker.name.agent()).await {
+        Ok(Some(request)) => result["handoff"] = json!(request),
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(
+                code = from_agent(error).code(),
+                "could not check a waiting lead's context size"
+            );
+        }
+    }
+    result
+}
+
 pub async fn get_events(
     server: &FoldServer,
     worker: &WorkerRow,
@@ -231,15 +246,12 @@ pub async fn wait_for_events(
                         }
                     }
                 };
-                return Ok(wait_json(
-                    &page,
-                    &waiting,
-                    inbox,
-                    waiter.requests(),
-                    waiter.stalled(),
-                ));
+                let result = wait_json(&page, &waiting, inbox, waiter.requests(), waiter.stalled());
+                return Ok(with_handoff(server, worker, result).await);
             }
-            WaitStep::TimedOut => return Ok(json!({"timed_out": true})),
+            WaitStep::TimedOut => {
+                return Ok(with_handoff(server, worker, json!({"timed_out": true})).await);
+            }
             WaitStep::Tick(count) => {
                 let session = server.session().await;
                 if let Err(error) = server

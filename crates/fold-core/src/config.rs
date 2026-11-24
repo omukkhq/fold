@@ -88,7 +88,7 @@ pub struct RoleConfig {
     /// The MCP servers the role may load, by name: `fold` and servers of the project's `.mcp.json`. Without it the role loads every server the user's own Claude Code loads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<Vec<String>>,
-    /// Only for the long-lived roles: the share of the model's context window, in percent, past which fold gives the worker a fresh context through a hand-off note. Without it, [`crate::roles::default_handoff_percent`] of the window applies.
+    /// Only for the long-lived roles: the share of the model's context window, in percent, past which fold gives the worker a fresh context through a hand-off note. Without it, [`DEFAULT_REVIEW_LEAD_HANDOFF_PERCENT`] applies to the review lead and [`crate::roles::default_handoff_percent`] of the window to the other long-lived roles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff_at: Option<u64>,
 }
@@ -104,6 +104,9 @@ pub struct RoleSettings {
     /// `None` for a short-lived role, which stops when its work is done and is never refreshed.
     pub handoff_at: Option<HandoffAt>,
 }
+
+/// The review lead's `handoff_at` when its role sets none. It reads every proposal of the project, so its context grows faster than an area lead's and hands off earlier than the window default.
+pub const DEFAULT_REVIEW_LEAD_HANDOFF_PERCENT: u64 = 40;
 
 /// How long a short-lived worker may stay idle before fold stops it, when its role sets no `idle_minutes`.
 pub const DEFAULT_IDLE_MINUTES: u64 = 15;
@@ -215,10 +218,12 @@ impl ProjectConfig {
             idle_minutes: (!role.is_long_lived())
                 .then(|| section.idle_minutes.unwrap_or(DEFAULT_IDLE_MINUTES)),
             mcp: section.mcp,
-            handoff_at: role.is_long_lived().then(|| {
-                section
-                    .handoff_at
-                    .map_or(HandoffAt::Default, HandoffAt::Percent)
+            handoff_at: role.is_long_lived().then(|| match section.handoff_at {
+                Some(percent) => HandoffAt::Percent(percent),
+                None if role == Role::ReviewLead => {
+                    HandoffAt::Percent(DEFAULT_REVIEW_LEAD_HANDOFF_PERCENT)
+                }
+                None => HandoffAt::Default,
             }),
         }
     }
@@ -731,7 +736,7 @@ mod tests {
     }
 
     #[test]
-    fn both_leads_hand_off_at_the_window_default_without_a_handoff_at() {
+    fn the_review_lead_hands_off_earlier_than_an_area_lead_without_a_handoff_at() {
         let config = ProjectConfig::from_toml("").unwrap();
         assert_eq!(
             config.role(Role::AreaLead).handoff_at,
@@ -739,8 +744,9 @@ mod tests {
         );
         assert_eq!(
             config.role(Role::ReviewLead).handoff_at,
-            Some(HandoffAt::Default)
+            Some(HandoffAt::Percent(DEFAULT_REVIEW_LEAD_HANDOFF_PERCENT))
         );
+        assert_eq!(config.role(Role::Main).handoff_at, Some(HandoffAt::Default));
     }
 
     #[test]

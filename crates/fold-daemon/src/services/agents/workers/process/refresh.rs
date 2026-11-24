@@ -35,6 +35,12 @@ fn context_window(windows: &[(String, u64)], model: Option<&str>) -> u64 {
 impl Supervisor {
     /// After each turn of a long-lived worker: a note of its session starts it fresh; otherwise a context past its role's `handoff_at` asks once for a note, and a lead that let [`fold_core::roles::HANDOFF_TURNS`] turns pass since the ask without one starts fresh with the fold summary alone. A worker that fold started to answer a message stops once it has answered, and a worker whose process started with another account than the project's continues with the project's.
     pub(super) async fn after_turn(&self, agent: &AgentName, windows: &[(String, u64)]) {
+        lock(&self.inner.windows).extend(
+            windows
+                .iter()
+                .filter(|(_, window)| *window > 0)
+                .map(|(model, window)| (model.clone(), *window)),
+        );
         if let Err(error) = self.check_handoff(agent, windows).await {
             tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not check a worker's context size");
         }
@@ -84,24 +90,73 @@ impl Supervisor {
             return Ok(());
         }
         drop(conn);
-        let config = load_config(&self.inner.paths).await?;
-        let Some(at) = config.role(row.role).handoff_at else {
-            return Ok(());
-        };
-        let window = context_window(windows, row.model.as_deref());
-        if !handoff_due(row.context_tokens, window, at) {
+        if !self.past_handoff_at(&row, windows).await? {
             return Ok(());
         }
-        let now = self.inner.clock.now();
-        let asked = self
-            .inner
-            .store
-            .write(async |tx| agents::set_handoff_asked(tx, row.id, row.turns, now).await)
-            .await?;
-        if asked {
+        if self.mark_handoff_asked(&row).await? {
             self.send_turn(agent, HANDOFF_REQUEST);
         }
         Ok(())
+    }
+
+    /// Whether the row's context has reached its role's `handoff_at` in the window of its model among `windows`.
+    async fn past_handoff_at(
+        &self,
+        row: &WorkerProcessRow,
+        windows: &[(String, u64)],
+    ) -> Result<bool, AgentError> {
+        let config = load_config(&self.inner.paths).await?;
+        let Some(at) = config.role(row.role).handoff_at else {
+            return Ok(false);
+        };
+        let window = context_window(windows, row.model.as_deref());
+        Ok(handoff_due(row.context_tokens, window, at))
+    }
+
+    /// Records the first ask for a note of the row's session; returns whether this call asked.
+    async fn mark_handoff_asked(&self, row: &WorkerProcessRow) -> Result<bool, AgentError> {
+        let now = self.inner.clock.now();
+        Ok(self
+            .inner
+            .store
+            .write(async |tx| agents::set_handoff_asked(tx, row.id, row.turns, now).await)
+            .await?)
+    }
+
+    /// The hand-off request for a `wait_for_events` of a lead that returns, by the rule of the check after each turn: a lead or the review lead whose session wrote no note yet and whose context has reached its role's `handoff_at`, in the window that the last result of its model reported. A lead can wait inside one turn for hours, so the check at the turn's end alone never asks it. The ask is recorded as that check records it, so the turns it then has to write the note count from it.
+    pub(in crate::services::agents) async fn wait_handoff(
+        &self,
+        agent: &AgentName,
+    ) -> Result<Option<&'static str>, AgentError> {
+        let mut conn = self
+            .inner
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        let Some(row) = agents::find_worker_process(&mut conn, agent).await? else {
+            return Ok(None);
+        };
+        if !matches!(row.role, Role::AreaLead | Role::ReviewLead) || !row.state.is_running() {
+            return Ok(None);
+        }
+        if agents::session_handoff(&mut *conn, &row.session_id)
+            .await?
+            .is_some()
+        {
+            return Ok(None);
+        }
+        drop(conn);
+        let windows: Vec<(String, u64)> = lock(&self.inner.windows)
+            .iter()
+            .map(|(model, window)| (model.clone(), *window))
+            .collect();
+        if !self.past_handoff_at(&row, &windows).await? {
+            return Ok(None);
+        }
+        self.mark_handoff_asked(&row).await?;
+        Ok(Some(HANDOFF_REQUEST))
     }
 
     /// Sends `text` as the next user turn of the agent's running process, if it has one.

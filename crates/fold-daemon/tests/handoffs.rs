@@ -16,6 +16,7 @@ use crate::workers_support::{FakeClaude, Run, fixture};
 
 const MAIN: &str = "frontend";
 const LEAD: &str = "web-lead";
+const REVIEW_LEAD: &str = "review-lead";
 
 /// The recorded turn reports a context of 25310 tokens in a window of 1000000; the grown one reports 700192, past the default of 60 percent for that window.
 const SMALL: &str = "\"cache_read_input_tokens\":25118";
@@ -377,5 +378,129 @@ async fn a_note_written_during_a_turn_refreshes_the_lead_when_the_turn_ends() {
         events
             .iter()
             .all(|(kind, _)| kind != "worker.stopped" && kind != "worker.failed")
+    );
+}
+
+/// Sets the lead's context as a turn that is still under way reports it, with no result yet.
+async fn grow_inside_the_turn(harness: &Harness, tokens: i64) {
+    let row = worker(harness).await;
+    harness
+        .handle
+        .store
+        .write(async |tx| {
+            sqlx::query("UPDATE worker_processes SET context_tokens = ?1 WHERE id = ?2")
+                .bind(tokens)
+                .bind(row.id)
+                .execute(tx.conn())
+                .await
+                .map_err(fold_store::StoreError::from)
+        })
+        .await
+        .unwrap();
+}
+
+/// The result of a short wait of `agent` once one carries `handoff`. The windows of a turn's result are learned just after its row turns idle, so the first wait can come before them.
+async fn handoff_wait(harness: &Harness, agent: &str) -> Value {
+    eventually(WAIT, async || {
+        let woke = harness
+            .call(agent, "wait_for_events", json!({"timeout_s": 1}))
+            .await;
+        if woke.get("handoff").is_some() {
+            Ok(woke)
+        } else {
+            Err(woke)
+        }
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_lead_past_its_threshold_gets_the_handoff_request_in_a_wait_result() {
+    let turn = Turn::new();
+    let fake = turn.fake();
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    lead(&mut harness).await;
+    let small = harness
+        .call(LEAD, "wait_for_events", json!({"timeout_s": 1}))
+        .await;
+    assert_eq!(small.get("handoff"), None, "{small}");
+
+    // The first turn's result reported a window of 1000000, so 700000 tokens are past the default of 60 percent.
+    grow_inside_the_turn(&harness, 700_000).await;
+    let woke = handoff_wait(&harness, LEAD).await;
+    assert_eq!(woke["timed_out"], true, "{woke}");
+    assert_eq!(woke["handoff"], HANDOFF_REQUEST, "{woke}");
+    let asked = worker(&harness).await;
+    let turns = agents::handoff_asked(harness.handle.store.read(), asked.id)
+        .await
+        .unwrap();
+    assert_eq!(turns, Some(1), "the ask counts from the turn it came in");
+
+    harness
+        .call(LEAD, "write_handoff", json!({"text": "Next: split T-1."}))
+        .await;
+    let after = harness
+        .call(LEAD, "wait_for_events", json!({"timeout_s": 1}))
+        .await;
+    assert_eq!(
+        after.get("handoff"),
+        None,
+        "a session with a note is not asked again: {after}"
+    );
+}
+
+#[tokio::test]
+async fn the_review_lead_hands_off_at_its_own_lower_default_in_a_wait() {
+    let turn = Turn::new();
+    let fake = turn.fake();
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    lead(&mut harness).await;
+    grow_inside_the_turn(&harness, 450_000).await;
+
+    harness
+        .call(MAIN, "start_worker", json!({"role": "review_lead"}))
+        .await;
+    harness.connect(REVIEW_LEAD).await;
+    let review_lead = eventually(WAIT, async || {
+        let row = harness
+            .handle
+            .agents()
+            .get_worker(&AgentName::parse(REVIEW_LEAD).unwrap())
+            .await
+            .unwrap();
+        if row.state == WorkerState::Idle && row.turns == 1 {
+            Ok(row)
+        } else {
+            Err((row.state, row.turns))
+        }
+    })
+    .await;
+    harness
+        .handle
+        .store
+        .write(async |tx| {
+            sqlx::query("UPDATE worker_processes SET context_tokens = 450000 WHERE id = ?1")
+                .bind(review_lead.id)
+                .execute(tx.conn())
+                .await
+                .map_err(fold_store::StoreError::from)
+        })
+        .await
+        .unwrap();
+    let woke = handoff_wait(&harness, REVIEW_LEAD).await;
+    assert_eq!(
+        woke["handoff"], HANDOFF_REQUEST,
+        "45 percent is past the review lead's 40: {woke}"
+    );
+    // fold knows the window now, so the area lead's wait is sized by it too.
+    let area_lead = harness
+        .call(LEAD, "wait_for_events", json!({"timeout_s": 1}))
+        .await;
+    assert_eq!(
+        area_lead.get("handoff"),
+        None,
+        "45 percent is below an area lead's 60: {area_lead}"
     );
 }
