@@ -418,7 +418,7 @@ async fn four_approved_members_of_a_five_member_batch_integrate_with_one_check_r
 }
 
 #[tokio::test]
-async fn an_approved_member_of_an_open_batch_waits_for_the_batch_review() {
+async fn an_approved_member_of_an_open_batch_leaves_it_and_integrates_alone() {
     let scene = Scene::new().await;
     scene.batch(&[1, 2]).await;
     scene
@@ -427,24 +427,11 @@ async fn an_approved_member_of_an_open_batch_waits_for_the_batch_review() {
         .submit_review(&scene.review, p(1), 1, Verdict::Approve, "ok", Vec::new())
         .await
         .unwrap();
-    assert!(
-        scene
-            .fx
-            .reviews()
-            .integrate_ready()
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(scene.state(1).await, ProposalState::Open);
-    // A member alone is integrated on request.
-    let alone = scene
-        .fx
-        .reviews()
-        .integrate_proposal(&scene.review, p(1), Some(1))
-        .await
-        .unwrap();
-    assert_eq!(alone, IntegrationOutcome::Succeeded { revision: r(2) });
+    let done = scene.fx.reviews().integrate_ready().await.unwrap();
+    let integrated: Vec<ProposalId> = done.iter().map(|done| done.proposal).collect();
+    assert_eq!(integrated, [p(1)]);
+    assert_eq!(scene.state(1).await, ProposalState::Integrated);
+    assert_eq!(scene.state(2).await, ProposalState::Open);
     assert_eq!(scene.integrations().await, [(1, 2, None)]);
 }
 

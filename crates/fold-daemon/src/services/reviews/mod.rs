@@ -41,7 +41,9 @@ pub use batches::{
     BatchVerdict, BatchVerdictView, LeftOut, LeftOutReason, MemberSince, ReviewBatchView,
     SubmittedBatch,
 };
-pub(crate) use batches::{close_batches_of, free_reviews_for_start};
+pub(crate) use batches::{
+    HeldBatch, close_batches_of, free_reviews_for_start, held_open_batches, tell_batch_holder,
+};
 pub use changes::{ChangeRange, ProposalChange, SinceChange};
 pub use checkouts::{CheckoutTarget, ListedCheckout, ReviewCheckout};
 pub use claims::ReviewClaimView;

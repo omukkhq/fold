@@ -1221,8 +1221,9 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
             == Some(true);
         if !session_lost {
             ctx.unreviewed = unreviewed_of(store, &agent).await?;
+            ctx.held_batches = held_batches_of(store, &agent).await?;
         }
-        if !ctx.unreviewed.is_empty() {
+        if !ctx.unreviewed.is_empty() || !ctx.held_batches.is_empty() {
             ctx.review_leads = review_leads(store).await?;
         }
         return Ok(ctx);
@@ -1432,6 +1433,23 @@ async fn unreviewed_of(
     Ok(held
         .into_iter()
         .filter(|proposal| !owed.contains(proposal))
+        .collect())
+}
+
+/// The open review batches with a member left that a worker of `agent`, which ended, holds; none while the project is paused, since the resume of the pause runs the reviewer again.
+async fn held_batches_of(
+    store: &Store,
+    agent: &AgentName,
+) -> Result<Vec<fold_core::ReviewBatchId>, StoreError> {
+    if agents::pause_state(store.read()).await?.is_paused() {
+        return Ok(Vec::new());
+    }
+    let mut conn = store.read().acquire().await?;
+    Ok(crate::services::reviews::held_open_batches(&mut conn)
+        .await?
+        .into_iter()
+        .filter(|held| held.holder.belongs_to(agent))
+        .map(|held| held.batch)
         .collect())
 }
 

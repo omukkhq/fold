@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use crate::agents::roles::{CLAUDE_NOT_FOUND, FLD_MISSING, MCP_UNAVAILABLE};
 use crate::agents::{AgentName, AreaName};
 use crate::events::{Event, types};
-use crate::ids::{MessageId, ProposalId, RequestId, TaskId};
+use crate::ids::{MessageId, ProposalId, RequestId, ReviewBatchId, TaskId};
 use crate::reviews::plans::PlanCandidate;
 use crate::tasks::requests::Requester;
 use crate::tasks::status::TaskStatus;
@@ -57,6 +57,8 @@ pub struct PushContext {
     pub main_task: bool,
     /// For `worker.stopped` and `worker.failed` of a reviewer, the open proposals whose review claim it still holds, whose newest version has no verdict and for which fold owes it no resume; empty while the project is paused, because the resume of the pause runs the reviewer again.
     pub unreviewed: Vec<ProposalId>,
+    /// For `worker.stopped` and `worker.failed` of a reviewer, the open review batches it holds that still have a member, which no reviewer sends now; empty while the project is paused, as `unreviewed` is.
+    pub held_batches: Vec<ReviewBatchId>,
     /// For `proposal.opened`, `proposal.version_added` and `proposal.review_again_requested`, the event's proposal waits in a review plan, whose own notices tell the review lead when to start its reviewer.
     pub planned: bool,
     /// For `proposal.opened`, and for `proposal.version_added` without a review claim, of a proposal that waits in no review plan: the related open proposals that can be reviewed with it and the related tasks that a plan for it can wait for, strongest link first; empty once the proposal has a verdict.
@@ -681,12 +683,12 @@ fn unreachable_worker_rule(
     Some((agents, text, "list_workers"))
 }
 
-/// A reviewer that ended with versions that have no verdict, which fold does not resume it for, reaches the review lead: fold resumes a reviewer once for each version, and the claim it keeps hides the versions from the review lead's notices. `start_worker` takes over the claim of a reviewer that has ended.
+/// A reviewer that ended with versions that have no verdict, which fold does not resume it for, or with open batches that still have members, reaches the review lead: fold resumes a reviewer once for each version, the claim it keeps hides the versions from the review lead's notices, and nobody sends the review of its batches. `start_worker` takes over the claim of a reviewer that has ended, and takes each proposal it names out of the ended reviewer's batch.
 fn ended_reviewer_rule(
     event: &Event,
     ctx: &PushContext,
 ) -> Option<(Vec<AgentName>, String, &'static str)> {
-    if ctx.unreviewed.is_empty() {
+    if ctx.unreviewed.is_empty() && ctx.held_batches.is_empty() {
         return None;
     }
     let agent = event
@@ -694,10 +696,49 @@ fn ended_reviewer_rule(
         .get("agent")
         .and_then(serde_json::Value::as_str)?;
     let proposals: Vec<String> = ctx.unreviewed.iter().map(ToString::to_string).collect();
-    let text = format!(
-        "{agent} ended with no verdict on {}; a reviewer you start takes over its claim",
-        listed(&proposals, proposals.len(), "proposal", "proposals", true)
-    );
+    let batches: Vec<String> = ctx.held_batches.iter().map(ToString::to_string).collect();
+    let compose = |spelled: bool| {
+        let unreviewed = format!(
+            "with no verdict on {}",
+            listed(
+                &proposals,
+                proposals.len(),
+                "proposal",
+                "proposals",
+                spelled
+            )
+        );
+        let list = listed(
+            &batches,
+            batches.len(),
+            "open batch",
+            "open batches",
+            spelled,
+        );
+        let held = if list != batches.join(", ") {
+            format!("holding {list}")
+        } else if batches.len() == 1 {
+            format!("holding the open batch {list}")
+        } else {
+            format!("holding open batches {list}")
+        };
+        match (proposals.is_empty(), batches.is_empty()) {
+            (_, true) => {
+                format!("{agent} ended {unreviewed}; a reviewer you start takes over its claim")
+            }
+            (true, false) => format!(
+                "{agent} ended {held}; a reviewer you start with its members takes them over"
+            ),
+            (false, false) => format!(
+                "{agent} ended {held} and {unreviewed}; a reviewer you start takes over its claims and members"
+            ),
+        }
+    };
+    // "fold: " and ". Call start_worker." frame the text.
+    let budget = MAX_NOTICE_LEN - "fold: . Call start_worker.".len();
+    let text = Some(compose(true))
+        .filter(|text| text.len() <= budget)
+        .unwrap_or_else(|| compose(false));
     let leads = ctx
         .review_leads
         .iter()
@@ -1280,6 +1321,7 @@ mod tests {
             starter: None,
             main_task: false,
             unreviewed: Vec::new(),
+            held_batches: Vec::new(),
             planned: false,
             plan_candidates: Vec::new(),
         }
@@ -2272,6 +2314,103 @@ mod tests {
         );
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].next_tool, "list_workers");
+    }
+
+    #[test]
+    fn a_reviewer_that_ends_holding_an_open_batch_tells_the_review_leads() {
+        let batch = |number| ReviewBatchId::from_number(number).unwrap();
+        let holding = PushContext {
+            held_batches: vec![batch(2)],
+            ..ctx()
+        };
+        let text = "fold: reviewer-1 ended holding the open batch rb-2; a reviewer you start with its members takes them over. Call start_worker.";
+        for kind in [types::WORKER_STOPPED, types::WORKER_FAILED] {
+            let event = with_data(event(kind, "fold"), json!({"agent": "reviewer-1"}));
+            assert_eq!(
+                sent(&notice_for(&event, &holding)),
+                vec![
+                    row("frontend", text, "start_worker"),
+                    row("lead", text, "start_worker"),
+                    row("review", text, "start_worker"),
+                ],
+                "{kind}"
+            );
+        }
+        // A reviewer that holds no open batch and left no version without a verdict tells nobody.
+        let stopped = with_data(
+            event(types::WORKER_STOPPED, "fold"),
+            json!({"agent": "reviewer-1"}),
+        );
+        assert!(notice_for(&stopped, &ctx()).is_empty());
+        // The holder that ends is never told of itself.
+        let lead_stops = with_data(
+            event(types::WORKER_STOPPED, "fold"),
+            json!({"agent": "lead"}),
+        );
+        assert!(
+            sent(&notice_for(&lead_stops, &holding))
+                .iter()
+                .all(|(agent, _, _)| agent != "lead")
+        );
+    }
+
+    #[test]
+    fn an_ended_batch_holder_with_unreviewed_proposals_gets_one_joined_notice() {
+        let batch = |number| ReviewBatchId::from_number(number).unwrap();
+        let proposal = |number| ProposalId::from_number(number).unwrap();
+        let both = PushContext {
+            review_leads: [name("lead")].into_iter().collect(),
+            unreviewed: vec![proposal(3), proposal(5)],
+            held_batches: vec![batch(2), batch(4)],
+            ..ctx()
+        };
+        let stopped = with_data(
+            event(types::WORKER_STOPPED, "fold"),
+            json!({"agent": "reviewer-1"}),
+        );
+        assert_eq!(
+            sent(&notice_for(&stopped, &both)),
+            vec![row(
+                "lead",
+                "fold: reviewer-1 ended holding open batches rb-2, rb-4 and with no verdict on P-3, P-5; a reviewer you start takes over its claims and members. Call start_worker.",
+                "start_worker"
+            )]
+        );
+        // Long names and lists fall back to counts, so the notice stays one short line.
+        let long = PushContext {
+            review_leads: [name("lead")].into_iter().collect(),
+            unreviewed: (0..12).map(|n| proposal(u32::MAX - n)).collect(),
+            held_batches: (0..12).map(|n| batch(u32::MAX - n)).collect(),
+            ..ctx()
+        };
+        let agent = "r".repeat(32);
+        let stopped = with_data(
+            event(types::WORKER_STOPPED, "fold"),
+            json!({"agent": agent}),
+        );
+        let notices = notice_for(&stopped, &long);
+        assert_eq!(notices.len(), 1);
+        assert!(
+            notices[0].text.len() <= MAX_NOTICE_LEN,
+            "{}",
+            notices[0].text
+        );
+        assert!(
+            notices[0]
+                .text
+                .contains("holding 12 open batches and with no verdict on 12 proposals")
+        );
+        let one = PushContext {
+            unreviewed: Vec::new(),
+            held_batches: vec![batch(u32::MAX)],
+            ..long
+        };
+        let longest = with_data(
+            event(types::WORKER_STOPPED, "fold"),
+            json!({"agent": "r".repeat(32)}),
+        );
+        let notices = notice_for(&longest, &one);
+        assert!(notices[0].text.len() <= MAX_NOTICE_LEN);
     }
 
     #[test]

@@ -573,8 +573,13 @@ pub(super) async fn watch_done(
                 continue;
             }
         };
-        for agent in done {
+        for agent in done.stop {
             supervisor.spawn_stop(agent);
+        }
+        if !done.held.is_empty() {
+            let held = done.held;
+            let supervisor = supervisor.clone();
+            tokio::spawn(async move { supervisor.tell_batch_holders(&held).await });
         }
         let items = resume::resume_items(&event);
         if !items.is_empty() {

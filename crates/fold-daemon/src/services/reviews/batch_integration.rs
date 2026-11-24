@@ -211,7 +211,10 @@ async fn read_members(
             Some(facts) => {
                 let row = &facts.proposal;
                 member_standing(&StandingFacts {
-                    removed: member.release == Some(MemberRelease::Removed),
+                    removed: matches!(
+                        member.release,
+                        Some(MemberRelease::Removed | MemberRelease::ReviewedAlone)
+                    ),
                     ended: row.state != ProposalState::Open,
                     flagged: row.conflicted || row.checks_failed,
                     sent_back: batches::changes_requested_since(
