@@ -208,8 +208,8 @@ struct Inner {
     message_starts: Mutex<HashSet<AgentName>>,
     /// Who runs the main agent now: the interactive main sessions and a start of the supervised main.
     main_gate: Mutex<main::MainGate>,
-    /// While a start of the supervised main is under way, the turns that came meanwhile, for its process.
-    main_waking: Mutex<Option<Vec<String>>>,
+    /// While a start of the supervised main is under way, the starts that came meanwhile.
+    main_waking: Mutex<Option<main::MainWaking>>,
     /// Wakes the project's removal of closed workspace directories, which follows only stored events: the supervised main's turn ends with none, and its closed workspaces become due once it is idle.
     cleanup_due: Mutex<Option<Arc<tokio::sync::Notify>>>,
     /// The workers' tool calls that can write files, which place a change of the project folder in a worker's call.

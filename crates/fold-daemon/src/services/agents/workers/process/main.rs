@@ -28,6 +28,13 @@ pub(super) struct MainGate {
     starting: bool,
 }
 
+/// The starts of the supervised main that came while one was under way: whether any came, and their turns.
+#[derive(Debug, Default)]
+pub(super) struct MainWaking {
+    asked: bool,
+    turns: Vec<String>,
+}
+
 /// Holds [`MainGate::starting`] while a launch of the supervised main puts its process in place.
 pub(super) struct MainStart {
     supervisor: Supervisor,
@@ -280,26 +287,42 @@ impl Supervisor {
         }
     }
 
-    /// Runs the supervised main with `turn`: resumes its stopped or failed row in its own session, or creates its row and starts it in a new session. One start at a time: a turn that comes while one is under way is sent to the started process after its first turn. A start that a pause, the setting or an interactive session refuses starts nothing.
+    /// Runs the supervised main with `turn`: resumes its stopped or failed row in its own session, or creates its row and starts it in a new session. One start at a time: a turn that comes while one is under way is sent to the started process after its first turn. When the setting or an interactive session refused the start under way, the starts that came meanwhile are tried once more with their turns, since the refusal can have ended in between, such as at the end of the last interactive session. A start that a pause, the setting or an interactive session refuses starts nothing.
     pub(super) async fn ensure_main(&self, turn: Option<String>) -> Result<(), AgentError> {
         {
             let mut waking = lock(&self.inner.main_waking);
             if let Some(pending) = waking.as_mut() {
-                pending.extend(turn);
+                pending.asked = true;
+                pending.turns.extend(turn);
                 return Ok(());
             }
-            *waking = Some(Vec::new());
+            *waking = Some(MainWaking::default());
         }
-        let started = self.ensure_main_once(turn).await;
-        let pending = lock(&self.inner.main_waking).take().unwrap_or_default();
-        if !pending.is_empty()
-            && let Ok(Some(row)) = self.main_row().await
-        {
-            self.send_turn(&row.agent, &pending.join("\n\n"));
-        }
-        match started {
-            Err(error) if is_paused_refusal(&error) || is_main_refusal(&error) => Ok(()),
-            other => other,
+        let mut turn = turn;
+        loop {
+            let started = self.ensure_main_once(turn).await;
+            let refused = matches!(&started, Err(error) if is_main_refusal(error));
+            let pending = {
+                let mut waking = lock(&self.inner.main_waking);
+                let pending = waking.take().unwrap_or_default();
+                if refused && pending.asked {
+                    *waking = Some(MainWaking::default());
+                }
+                pending
+            };
+            if refused && pending.asked {
+                turn = (!pending.turns.is_empty()).then(|| pending.turns.join("\n\n"));
+                continue;
+            }
+            if !pending.turns.is_empty()
+                && let Ok(Some(row)) = self.main_row().await
+            {
+                self.send_turn(&row.agent, &pending.turns.join("\n\n"));
+            }
+            return match started {
+                Err(error) if is_paused_refusal(&error) || is_main_refusal(&error) => Ok(()),
+                other => other,
+            };
         }
     }
 

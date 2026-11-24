@@ -621,10 +621,13 @@ async fn the_end_of_the_interactive_main_session_starts_the_supervised_main() {
 
     harness.disconnect(MAIN).await;
     let run = until_told(&fake, "RQ-1").await;
+    assert_eq!(fake.runs_of(MAIN).len(), 1, "fold starts one main");
     let first = &run.stdin[1];
     assert!(first.contains("fold started you as main"), "{first}");
+    // The supervisor can handle request.created only after the session ended, and then its wake starts the main with the request's notice before the catch-up at the end of the session runs.
     assert!(
-        first.contains("These open requests wait for a drafter: RQ-1."),
+        first.contains("These open requests wait for a drafter: RQ-1.")
+            || first.contains("RQ-1 created by human:"),
         "{first}"
     );
 }
