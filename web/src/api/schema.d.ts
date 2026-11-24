@@ -2328,7 +2328,7 @@ export interface components {
              * @description How many open tasks wait directly for this one; 0 once it is Done.
              */
             blocks: number;
-            check_run: components["schemas"]["LiveCheckRun"] | null;
+            check_run: components["schemas"]["CardCheckRun"] | null;
             checklist: components["schemas"]["ChecklistCounts"];
             /**
              * Format: int64
@@ -2412,6 +2412,23 @@ export interface components {
         /** @description The five columns in board order: backlog, todo, in_progress, review, done. Archived tasks are left out. */
         BoardView: {
             columns: components["schemas"]["BoardColumn"][];
+        };
+        /** @description A check run in progress for a board card's task. */
+        CardCheckRun: {
+            /**
+             * @description The proposal the run checks, or whose next version it makes; null for `check` and `create_proposal`.
+             * @example P-3
+             */
+            proposal: string | null;
+            purpose: components["schemas"]["CheckPurpose"];
+            /** @example cr-4 */
+            run: string;
+            stage: components["schemas"]["CheckStage"];
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            started_at: number;
         };
         /** @enum {string} */
         ChangeKind: "added" | "modified" | "deleted" | "renamed";

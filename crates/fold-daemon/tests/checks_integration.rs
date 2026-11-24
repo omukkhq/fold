@@ -915,3 +915,53 @@ async fn a_process_of_an_integration_check_acts_as_no_agent() {
     integrated(&fx, proposal).await;
     assert_eq!(peers::check_peer(&[found[0], std::process::id()]), None);
 }
+
+/// The start and the end of an integration run name the task, the proposal and the stage, and the board card shows the run only while it goes.
+#[tokio::test]
+async fn an_integration_run_names_its_task_proposal_and_stage_and_shows_on_the_card_while_it_goes()
+{
+    let fx = Fixture::new().await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
+    let gate = tempfile::tempdir().unwrap();
+    let go = gate.path().join("go");
+    let run = format!("until [ -e '{}' ]; do sleep 0.05; done", go.display());
+    let proposal = approved(&fx, 1, |dir| checks_file(dir, &run)).await;
+    fx.reviews
+        .integrate_proposal(&human(), p(proposal), Some(1))
+        .await
+        .unwrap();
+    let card_run = async || {
+        let board = fx.tasks.board().await.unwrap();
+        board
+            .columns
+            .into_iter()
+            .flat_map(|column| column.cards)
+            .find(|card| card.id == t(1))
+            .expect("T-1 is on the board")
+            .check_run
+    };
+    let going = eventually(WAIT, async || card_run().await.ok_or("no run yet")).await;
+    assert_eq!(going.stage, Stage::Integration);
+    assert_eq!(going.proposal, Some(p(proposal)));
+    std::fs::write(&go, "").unwrap();
+    integrated(&fx, proposal).await;
+    assert_eq!(card_run().await, None);
+    let events = fold_store::events::read_after(
+        fx.project.store().read(),
+        0,
+        &fold_core::EventFilter::default(),
+        1000,
+    )
+    .await
+    .unwrap();
+    for name in ["checks.started", "checks.finished"] {
+        let event = events
+            .iter()
+            .filter(|event| event.event_type.as_str() == name)
+            .find(|event| event.data["stage"] == "integration")
+            .unwrap_or_else(|| panic!("an integration {name}"));
+        assert_eq!(event.task, Some(t(1)), "{name}");
+        assert_eq!(event.proposal, Some(p(proposal)), "{name}");
+        assert_eq!(event.data["run"], going.run.to_string(), "{name}");
+    }
+}

@@ -4,13 +4,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use fold_core::claims::is_stale;
 use fold_core::events::types;
 use fold_core::reviews::ProposalStanding;
+use fold_core::reviews::checks::{Purpose, Stage};
 use fold_core::status::status_reason;
 use fold_core::tasks::areas::{FeedbackReader, areas_conflict, feedback_readers};
 use fold_core::{
-    AgentName, AreaName, ChangesetId, ChecklistName, DependencyOrigin, Event, HoldMark, LabelName,
-    ProposalId, RevisionId, TaskId, TaskKind, TaskStatus, TaskTitle, Timestamp, WorkerName,
-    WorkspaceId,
+    AgentName, AreaName, ChangesetId, CheckRunId, ChecklistName, DependencyOrigin, Event, HoldMark,
+    LabelName, ProposalId, RevisionId, TaskId, TaskKind, TaskStatus, TaskTitle, Timestamp,
+    WorkerName, WorkspaceId,
 };
+use fold_store::reviews::checks::{self, CheckRunRow};
 use fold_store::reviews::{self, ProposalSummary, ReviewEntry};
 use fold_store::tasks::checklists::{self, ItemContent};
 use fold_store::tasks::claims;
@@ -106,6 +108,43 @@ pub struct CardProposal {
     pub review_plan: Option<ProposalPlan>,
     /// The worker that holds the unreleased review claim.
     pub review_claim: Option<String>,
+}
+
+/// A check run in progress for a board card's task, read from the store so it holds after a daemon restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CardCheckRun {
+    pub run: CheckRunId,
+    pub stage: Stage,
+    pub purpose: Purpose,
+    /// The proposal the run checks, or whose next version it makes; `None` for a `check` or `create_proposal` run.
+    pub proposal: Option<ProposalId>,
+    pub started_at: Timestamp,
+}
+
+impl CardCheckRun {
+    fn of(run: &CheckRunRow) -> Self {
+        Self {
+            run: run.id,
+            stage: run.stage,
+            purpose: run.purpose,
+            proposal: run.proposal,
+            started_at: run.created_at,
+        }
+    }
+}
+
+/// The running run of each task: the newest integration-stage run, else the newest proposal-stage run, as a task can have one of each at once.
+fn running_by_task(runs: &[CheckRunRow]) -> BTreeMap<TaskId, CardCheckRun> {
+    let mut by_task: BTreeMap<TaskId, CardCheckRun> = BTreeMap::new();
+    for run in runs {
+        let replace = by_task
+            .get(&run.task)
+            .is_none_or(|kept| kept.stage != Stage::Integration || run.stage == Stage::Integration);
+        if replace {
+            by_task.insert(run.task, CardCheckRun::of(run));
+        }
+    }
+    by_task
 }
 
 /// A checklist item with the title and status of the task it links.
@@ -221,8 +260,8 @@ pub struct BoardCard {
     pub activity: Option<Activity>,
     /// See [`TaskService::edits_after_version`].
     pub edits_after_version: Option<bool>,
-    /// See [`TaskService::check_run`].
-    pub check_run: Option<LiveCheckRun>,
+    /// The check run in progress for the task, as the store holds it; `None` while none goes.
+    pub check_run: Option<CardCheckRun>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -578,6 +617,7 @@ impl TaskService {
             .map_err(StoreError::from)?;
         let areas = area_labels(&mut conn).await?;
         let mut plans = proposal_plans(&mut conn).await?;
+        let mut running = running_by_task(&checks::running_runs(&mut *conn).await?);
         drop(conn);
         let ids: Vec<TaskId> = snapshot.tasks.iter().map(|row| row.id).collect();
         let stalled = stalled_tasks(self.live.as_ref());
@@ -645,7 +685,7 @@ impl TaskService {
                 completed_at: snapshot.completions.get(&row.id).copied(),
                 proposal,
                 edits_after_version,
-                check_run: self.check_run(snapshot.workspaces.get(&row.id).copied()),
+                check_run: running.remove(&row.id),
                 activity: {
                     let times = snapshot.activity.get(&row.id);
                     self.activity_of(
