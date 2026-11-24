@@ -2328,7 +2328,7 @@ export interface components {
              * @description How many open tasks wait directly for this one; 0 once it is Done.
              */
             blocks: number;
-            check_run: components["schemas"]["LiveCheckRun"] | null;
+            check_run: components["schemas"]["CardCheckRun"] | null;
             checklist: components["schemas"]["ChecklistCounts"];
             /**
              * Format: int64
@@ -2412,6 +2412,23 @@ export interface components {
         /** @description The five columns in board order: backlog, todo, in_progress, review, done. Archived tasks are left out. */
         BoardView: {
             columns: components["schemas"]["BoardColumn"][];
+        };
+        /** @description A check run in progress for a board card's task. */
+        CardCheckRun: {
+            /**
+             * @description The proposal the run checks, or whose next version it makes; null for `check` and `create_proposal`.
+             * @example P-3
+             */
+            proposal: string | null;
+            purpose: components["schemas"]["CheckPurpose"];
+            /** @example cr-4 */
+            run: string;
+            stage: components["schemas"]["CheckStage"];
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            started_at: number;
         };
         /** @enum {string} */
         ChangeKind: "added" | "modified" | "deleted" | "renamed";
@@ -2792,6 +2809,31 @@ export interface components {
             main: string;
             version: string;
         };
+        /** @description Why an open proposal is `conflicted` on its current version, as its newest handoff to a fixer stored it. */
+        ConflictedReason: {
+            /**
+             * @description The reviewer agent that fixes it; null when the review lead got the conflict to start a reviewer for it.
+             * @example reviewer
+             */
+            fixer: string | null;
+            /** @enum {string} */
+            kind: "merge_conflict";
+        } | {
+            /**
+             * @description The reviewer agent that fixes it; null when the review lead got the failure to start a reviewer for it.
+             * @example reviewer
+             */
+            fixer: string | null;
+            /** @enum {string} */
+            kind: "lane_checks_failed";
+            /** @example migrations */
+            lane: string;
+            /**
+             * @description The failed integration check run.
+             * @example cr-4
+             */
+            run: string;
+        };
         /** @description A sum of turns. */
         CostAmount: {
             /**
@@ -2973,11 +3015,20 @@ export interface components {
              * @example c1
              */
             key: string;
+            /** @description The kind of the card's task; `proposal` when left out. Only the main agent, a human or the lead of the card's area writes a `no_proposal` or `human` card (`task_kind_denied`). */
+            kind?: components["schemas"]["TaskKind"];
             /**
              * @description The label of the area whose lead builds the card; approval gives the task this label. Absent for a card the main agent routes itself.
              * @example backend
              */
             label?: string | null;
+            /**
+             * @description Existing tasks the card's task needs; approval adds a dependency on each. Each must exist (`task_not_found`) and appear once.
+             * @example [
+             *       "T-12"
+             *     ]
+             */
+            needs?: string[];
             title: string;
         };
         DraftChangesBody: {
@@ -3043,7 +3094,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "workspace.watch_restored" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed" | "review.plan_created" | "review.plan_changed" | "review.plan_joined" | "review.plan_left" | "review.plan_wait_ended" | "review.plan_started" | "review.plan_ended" | "review.batch_integrated" | "review.batch_waiting" | "review.batch_wait_ended" | "review.batch_ready" | "notify.target_changed" | "folder.agent_changed" | "folder.agent_change_cleared" | "shared.changed" | "shared.changes_dismissed" | "shared.paths_changed" | "stash.discarded" | "worker.stalled" | "workers.account_changed" | "worker.waiting" | "worker.wait_ended" | "claim.needs_person" | "worker.parked" | "claim.renewed";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "workspace.watch_restored" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed" | "review.plan_created" | "review.plan_changed" | "review.plan_joined" | "review.plan_left" | "review.plan_wait_ended" | "review.plan_started" | "review.plan_ended" | "review.batch_integrated" | "review.batch_waiting" | "review.batch_wait_ended" | "review.batch_ready" | "notify.target_changed" | "folder.agent_changed" | "folder.agent_change_cleared" | "shared.changed" | "shared.changes_dismissed" | "shared.paths_changed" | "stash.discarded" | "worker.stalled" | "workers.account_changed" | "worker.waiting" | "worker.wait_ended" | "claim.needs_person" | "worker.parked" | "claim.renewed" | "request.escalated" | "worker.start_queued" | "worker.queued_start_dropped";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -3642,6 +3693,11 @@ export interface components {
         /** @description The secret of a one-time sign-in link from `fld web`, which the sign-in screen reads from the link. */
         LinkSignIn: {
             link: string;
+        };
+        /** @description A listed proposal with its lane and the reason of its conflict flag. */
+        ListedProposal: components["schemas"]["ProposalSummary"] & {
+            conflicted_reason: components["schemas"]["ConflictedReason"] | null;
+            lane: components["schemas"]["ProposalLane"] | null;
         };
         /** @description What fold saw of a workspace's worker, as the stall rule decides it. fold keeps the times of the worker's output in memory, so after a daemon start it counts from that start. */
         LiveActivity: {
@@ -4372,10 +4428,12 @@ export interface components {
             checks: components["schemas"]["CheckRun"][];
             comments: components["schemas"]["CommentCounts"];
             conflict: components["schemas"]["ConflictReportView"] | null;
+            conflicted_reason: components["schemas"]["ConflictedReason"] | null;
             /** @description The files the selected version changes against its base, in path order. */
             files: components["schemas"]["ComparedFile"][];
             /** @description What stands between the requesting human and integrating the selected version. */
             gates: components["schemas"]["ProposalGate"][];
+            lane: components["schemas"]["ProposalLane"] | null;
             /**
              * Format: int32
              * @description The newest version before the selected one that has a verdict, by any reviewer, agent or human: what changed since it is what is left to review.
@@ -4407,9 +4465,24 @@ export interface components {
             gate: components["schemas"]["GateName"];
             status: components["schemas"]["GateStatusKind"];
         };
+        /** @description Where an open member of a serial lane of main's `fold-checks.toml` stands: a proposal whose current version changes a path of the lane. The members integrate one at a time in the order of their first approval. */
+        ProposalLane: {
+            /**
+             * @description The hold reason while a member ahead integrates first, such as `lane migrations, position 2`; null at the front.
+             * @example lane migrations, position 2
+             */
+            held: string | null;
+            /** @example migrations */
+            name: string;
+            /**
+             * Format: int32
+             * @description From 1 at the front, in the order of first approval; null before the proposal's first approval.
+             */
+            position: number | null;
+        };
         ProposalList: {
             /** @description In number order. */
-            proposals: components["schemas"]["ProposalSummary"][];
+            proposals: components["schemas"]["ListedProposal"][];
             /**
              * @description The open proposals of the whole project, whatever the filter, whose current version waits for the signed-in human's review, in number order: the `human_review` items of Needs you that are theirs, which the Proposals screen marks. Empty when the request names no human.
              * @example [
@@ -4480,7 +4553,7 @@ export interface components {
              * @description UTC milliseconds.
              */
             closed_at: number | null;
-            /** @description The latest integration of the current version conflicted with main. */
+            /** @description The current version waits for a fix on main by its reviewer: its latest integration conflicted with main, or, for a member of a serial lane, its integration checks failed after another member moved the lane. The proposal detail and the list give the reason. */
             conflicted: boolean;
             /**
              * Format: int64
@@ -13016,7 +13089,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `request_not_found` or `project_not_found` */
+            /** @description `request_not_found`, `task_not_found` for a needed task or `project_not_found` */
             404: {
                 headers: {
                     [name: string]: unknown;

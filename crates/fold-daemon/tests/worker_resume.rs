@@ -233,10 +233,11 @@ async fn requested_changes_resume_the_stopped_task_worker_with_the_comments_unti
     );
 }
 
+/// A conflict at integration never goes back to the author: with no reviewer that holds the review claim and no review lead, fold tells the main agent, and the stopped task worker stays stopped.
 #[tokio::test]
-async fn a_conflict_at_integration_resumes_the_stopped_task_worker_with_the_sync_step() {
+async fn a_conflict_at_integration_leaves_the_stopped_task_worker_alone() {
     let fake = FakeClaude::new("result");
-    let (harness, work) =
+    let (harness, _work) =
         proposed_by_a_task_worker(&fake, &[("README.md", "# demo: the page\n")]).await;
     let other = harness.create_task(MAIN, "Name the endpoint").await;
     let theirs = harness.start_work(MAIN, &other).await;
@@ -256,29 +257,41 @@ async fn a_conflict_at_integration_resumes_the_stopped_task_worker_with_the_sync
         .await;
     assert_eq!(refused["code"], codes::INTEGRATION_CONFLICTED);
 
-    let runs = until_runs(&fake, TASK_WORKER, 2).await;
-    assert!(runs[1].has("--resume"));
-    let turn = &runs[1].stdin[1];
-    for wanted in [
-        "P-1 v1 for T-1: conflicts with main",
-        &format!("Your task workspace is {}", work.workspace),
-        "README.md",
-        "sync_workspace",
-    ] {
-        assert!(turn.contains(wanted), "{wanted} in {turn}");
-    }
-    let resumed = until_resumed(&harness, 1).await;
-    assert_eq!(resumed[0].1["reason"], "conflict");
-    assert_eq!(resumed[0].1["resumed"], true);
-    until_state(&harness, TASK_WORKER, WorkerState::Idle).await;
-
-    let synced = harness
-        .call(TASK_WORKER, "sync_workspace", json!({"ws": work.workspace}))
-        .await;
-    assert_eq!(synced["conflicted"], json!(["README.md"]), "{synced}");
-    work.write(&[("README.md", "# demo: the page and the endpoint\n")]);
-    post_next_version(&harness, &work).await;
-    until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
+    let notice = eventually(WAIT, async || {
+        let inbox = harness.call(MAIN, "get_inbox", json!({})).await;
+        inbox["messages"]
+            .as_array()
+            .and_then(|messages| {
+                messages
+                    .iter()
+                    .find(|message| {
+                        message
+                            .to_string()
+                            .contains("P-1 v1 for T-1 conflicts with main")
+                    })
+                    .cloned()
+            })
+            .ok_or(())
+    })
+    .await;
+    assert!(
+        notice
+            .to_string()
+            .contains("start one for P-1 with start_worker"),
+        "{notice}"
+    );
+    assert_eq!(fake.runs_of(TASK_WORKER).len(), 1);
+    assert_eq!(
+        worker(&harness, TASK_WORKER).await.state,
+        WorkerState::Stopped
+    );
+    assert!(
+        harness
+            .events()
+            .await
+            .iter()
+            .all(|event| event.kind != "worker.resumed")
+    );
 }
 
 #[tokio::test]
@@ -617,8 +630,9 @@ async fn an_owed_resume_goes_before_a_leads_new_start() {
     let message = refused["message"].as_str().unwrap();
     assert!(message.contains("@web-worker"), "{message}");
     let hint = refused["hint"].as_str().unwrap();
-    assert!(hint.contains("wait_for_events"), "{hint}");
+    assert!(!hint.contains("wait_for_events"), "{hint}");
     assert!(hint.contains("start_worker"), "{hint}");
+    assert_eq!(hint.matches("queue: true").count(), 1, "{hint}");
 
     harness
         .call("web-lead", "stop_worker", json!({"name": other}))

@@ -23,6 +23,7 @@ mod conflicts;
 mod human_edits;
 mod human_review;
 mod integrate;
+mod lanes;
 mod notify;
 mod plans;
 mod proposals;
@@ -41,18 +42,24 @@ pub use batches::{
     BatchVerdict, BatchVerdictView, LeftOut, LeftOutReason, MemberSince, ReviewBatchView,
     SubmittedBatch,
 };
-pub(crate) use batches::{close_batches_of, free_reviews_for_start};
+pub(crate) use batches::{
+    HeldBatch, close_batches_of, free_reviews_for_start, held_open_batches, tell_batch_holder,
+};
 pub use changes::{ChangeRange, ProposalChange, SinceChange};
 pub use checkouts::{CheckoutTarget, ListedCheckout, ReviewCheckout};
 pub use claims::ReviewClaimView;
 pub(crate) use claims::{Assignment, assign_reviews_in_tx};
 pub use comments::{CommentInput, CommentLocation, CommentView};
+pub use conflicts::ConflictedReason;
+pub(crate) use conflicts::{Handoff, NoReviewer, handoff_notice_in_tx, reviewer_turn};
 pub use human_edits::HumanEdit;
 pub use human_review::{AwaitingHumanReview, awaiting_human_review, awaiting_human_review_in};
+pub(crate) use integrate::queued_actor;
 pub use integrate::{
     AutomaticIntegration, DirectChange, DirectOutcome, HumanRecord, IntegrationOutcome,
     PullIntegration, PullOutcome, RecordAuthor, RecordIntegration,
 };
+pub use lanes::LaneListing;
 pub use plans::{
     AwaitedTask, DEFAULT_PLAN_LIST, MAX_PLAN_LIST, PlanChange, ProposalPlan, RelatedTaskView,
     ReviewPlanView, proposal_plan, proposal_plans, related_plan_tasks,

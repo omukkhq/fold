@@ -8,11 +8,12 @@ use fold_core::object::ObjectKind;
 use fold_core::requests::{DraftCard, DraftEdge, RequestKind, RequestState, Requester};
 use fold_core::roles::Role;
 use fold_core::{
-    Actor, AgentActor, HumanName, RequestId, TaskId, TaskStatus, Timestamp, WorkerName, codes,
+    Actor, AgentActor, AreaName, HumanName, RequestId, TaskDescription, TaskId, TaskKind,
+    TaskStatus, TaskTitle, Timestamp, WorkerName, codes,
 };
 use fold_daemon::services::events::EventBus;
 use fold_daemon::services::tasks::{
-    NewRequestAttachment, RequestFilter, SubmitDraft, TaskError, TaskService,
+    CreateTask, NewRequestAttachment, RequestFilter, SubmitDraft, TaskError, TaskService,
 };
 use fold_store::testing::{TestProject, execute};
 use fold_vcs::objects::ObjectStore;
@@ -63,6 +64,8 @@ fn draft(cards: &[&str], edges: &[(&str, &str)]) -> SubmitDraft {
                 title: format!("Build {key}"),
                 description: format!("**Scope** the {key} part"),
                 label: None,
+                kind: TaskKind::Proposal,
+                needs: Vec::new(),
             })
             .collect(),
         edges: edges
@@ -220,7 +223,15 @@ async fn a_human_creates_a_request_with_an_attachment_and_a_mention() {
 
     let events = fx.events_after(before).await;
     assert_eq!(types(&events), ["request.created"]);
-    assert_eq!(events[0].2, json!({"request": "RQ-1", "attachments": 1}));
+    assert_eq!(
+        events[0].2,
+        json!({
+            "request": "RQ-1",
+            "attachments": 1,
+            "requester": "human:tanim",
+        }),
+        "the event names the requester, never the text"
+    );
 
     let by_agent = fx
         .tasks
@@ -229,6 +240,160 @@ async fn a_human_creates_a_request_with_an_attachment_and_a_mention() {
         .unwrap();
     assert_eq!(by_agent.id, rq(2));
     assert_eq!(by_agent.requester, Requester::parse("backend").unwrap());
+}
+
+#[tokio::test]
+async fn a_request_takes_the_named_area_or_its_workers_and_none_for_a_human() {
+    let fx = Fixture::new().await;
+    let front = AreaName::parse("front").unwrap();
+    let own = fx
+        .tasks
+        .create_request(&agent("frontend"), "The header jumps", Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(own.area, Some(front.clone()), "the area of the worker");
+    let human_made = fx
+        .tasks
+        .create_request(&human("ana"), "Add dark mode", Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(human_made.area, None);
+    let named = fx
+        .tasks
+        .create_request_in(
+            &human("ana"),
+            "The checks are slow",
+            Vec::new(),
+            Some(AreaName::parse("checks").unwrap()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(named.area.as_ref().map(AreaName::as_str), Some("checks"));
+
+    let before = fx.last_seq().await;
+    let unknown = fx
+        .tasks
+        .create_request_in(
+            &agent("frontend"),
+            "Somewhere else",
+            Vec::new(),
+            Some(AreaName::parse("nowhere").unwrap()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(code(&unknown), codes::AREA_NOT_FOUND);
+    assert_eq!(details(&unknown), json!({"area": "nowhere"}));
+    assert!(
+        fx.events_after(before).await.is_empty(),
+        "a refused request leaves nothing"
+    );
+}
+
+#[tokio::test]
+async fn an_area_request_nobody_claims_in_time_is_escalated_once_by_the_clock() {
+    let fx = Fixture::new().await;
+    let front = Some(AreaName::parse("front").unwrap());
+    let waiting = fx
+        .tasks
+        .create_request_in(
+            &human("ana"),
+            "The board\nflickers",
+            Vec::new(),
+            front.clone(),
+        )
+        .await
+        .unwrap()
+        .id;
+    let claimed = fx
+        .tasks
+        .create_request_in(&human("ana"), "Export is slow", Vec::new(), front)
+        .await
+        .unwrap()
+        .id;
+    fx.tasks
+        .claim_request(&agent("frontend"), claimed, RequestKind::Bug, "Slow export")
+        .await
+        .unwrap();
+    fx.create(&human("ana"), "No area at all").await;
+
+    fx.advance(Duration::from_secs(10 * 60));
+    let before = fx.last_seq().await;
+    assert_eq!(
+        fx.tasks.escalate_due_requests(10).await.unwrap(),
+        0,
+        "a request is due only once more than the wait has passed"
+    );
+    fx.advance(Duration::from_millis(1));
+    let now = fx.project.now();
+    assert_eq!(fx.tasks.escalate_due_requests(10).await.unwrap(), 1);
+    let events = fx.events_after(before).await;
+    assert_eq!(types(&events), ["request.escalated"]);
+    assert_eq!(
+        events[0].2,
+        json!({"request": "RQ-1", "requester": "human:ana", "area": "front"})
+    );
+    let view = fx
+        .tasks
+        .read_request(&human("ana"), waiting)
+        .await
+        .unwrap()
+        .request;
+    assert_eq!(view.escalated_at, Some(now));
+
+    fx.advance(Duration::from_secs(3600));
+    assert_eq!(
+        fx.tasks.escalate_due_requests(10).await.unwrap(),
+        0,
+        "a request is escalated once, and a claimed or arealess one never"
+    );
+    assert_eq!(fx.events_after(before).await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_pause_holds_the_escalation_and_the_wait_counts_again_from_the_resume() {
+    let fx = Fixture::new().await;
+    fx.tasks
+        .create_request_in(
+            &human("ana"),
+            "The board flickers",
+            Vec::new(),
+            Some(AreaName::parse("front").unwrap()),
+        )
+        .await
+        .unwrap();
+    let paused_at = fx.advance(Duration::from_secs(60)).as_millis();
+    execute(
+        fx.project.store(),
+        &format!(
+            "INSERT INTO project_pause (id, paused_at, paused_by) VALUES (1, {paused_at}, 'human:ana')"
+        ),
+    )
+    .await;
+    fx.advance(Duration::from_secs(3600));
+    let before = fx.last_seq().await;
+    assert_eq!(
+        fx.tasks.escalate_due_requests(10).await.unwrap(),
+        0,
+        "no lead can claim while paused"
+    );
+
+    let resumed_at = fx.project.now().as_millis();
+    execute(
+        fx.project.store(),
+        &format!(
+            "UPDATE project_pause SET paused_at = NULL, paused_by = NULL, resumed_at = {resumed_at} WHERE id = 1"
+        ),
+    )
+    .await;
+    fx.advance(Duration::from_secs(10 * 60));
+    assert_eq!(
+        fx.tasks.escalate_due_requests(10).await.unwrap(),
+        0,
+        "the lead gets the whole wait again after the resume"
+    );
+    fx.advance(Duration::from_millis(1));
+    assert_eq!(fx.tasks.escalate_due_requests(10).await.unwrap(), 1);
+    assert_eq!(types(&fx.events_after(before).await), ["request.escalated"]);
 }
 
 #[tokio::test]
@@ -385,6 +550,16 @@ async fn only_an_orchestrator_claims_and_the_claim_sorts_and_names_the_request()
     assert_eq!(
         details(&second),
         json!({"request": "RQ-1", "holder": "frontend"})
+    );
+    let TaskError::Fold(refusal) = &second else {
+        panic!("not a refusal: {second}");
+    };
+    assert_eq!(
+        refusal.hint(),
+        Some(
+            "frontend drafts it: call send_message to frontend with request RQ-1 to add what you know, or call list_requests to pick another request"
+        ),
+        "the hint names the drafter to message"
     );
 
     let again = fx
@@ -848,4 +1023,162 @@ async fn requests_list_by_state_kind_and_requester() {
     assert!(fx.tasks.list_requests(&mine).await.unwrap().is_empty());
     let missing = fx.tasks.get_request(rq(7)).await.unwrap_err();
     assert_eq!(code(&missing), codes::REQUEST_NOT_FOUND);
+}
+
+#[tokio::test]
+async fn an_approved_card_that_needs_an_existing_task_waits_for_it_and_a_human_card_becomes_a_human_task()
+ {
+    let fx = Fixture::new().await;
+    let tanim = human("tanim");
+    let existing = fx
+        .tasks
+        .create_task_of_kind(
+            &tanim,
+            CreateTask {
+                title: TaskTitle::parse("Sign the provider contract").unwrap(),
+                description: TaskDescription::new("**Scope** the contract".to_owned()),
+                labels: Vec::new(),
+            },
+            TaskKind::Human,
+            &[],
+            None,
+        )
+        .await
+        .unwrap()
+        .id;
+    let id = fx.claimed(&tanim).await;
+    let mut written = draft(&["build", "verify"], &[("build", "verify")]);
+    written.cards[0].needs = vec![existing];
+    written.cards[1].kind = TaskKind::Human;
+    let denied = fx
+        .tasks
+        .submit_request_draft(&agent("frontend"), id, written, None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(code(&denied), codes::TASK_KIND_DENIED);
+
+    let mut unknown = draft(&["build"], &[]);
+    unknown.cards[0].needs = vec![t(99)];
+    let missing = fx
+        .tasks
+        .submit_request_draft(&agent("frontend"), id, unknown, None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(code(&missing), codes::TASK_NOT_FOUND);
+    assert_eq!(fx.count("SELECT COUNT(*) FROM request_drafts").await, 0);
+
+    let mut needing = draft(&["build"], &[]);
+    needing.cards[0].needs = vec![existing];
+    fx.tasks
+        .submit_request_draft(&agent("frontend"), id, needing, None, None)
+        .await
+        .unwrap();
+    let mut edited = draft(&["build", "verify"], &[("build", "verify")]);
+    edited.cards[0].needs = vec![existing];
+    edited.cards[1].kind = TaskKind::Human;
+    fx.tasks
+        .edit_request_draft(&tanim, id, edited)
+        .await
+        .unwrap();
+    let detail = fx.tasks.get_request(id).await.unwrap();
+    assert_eq!(detail.drafts[1].cards[0].needs, vec![existing]);
+    assert_eq!(detail.drafts[1].cards[1].kind, TaskKind::Human);
+
+    let approved = fx.tasks.approve_request_draft(&tanim, id, 2).await.unwrap();
+    let (build, verify) = (approved.tasks[0], approved.tasks[1]);
+    let build_view = fx.tasks.get(build).await.unwrap();
+    let verify_view = fx.tasks.get(verify).await.unwrap();
+    assert_eq!(
+        (build_view.kind, build_view.status),
+        (TaskKind::Proposal, TaskStatus::Backlog)
+    );
+    assert_eq!(
+        (verify_view.kind, verify_view.status),
+        (TaskKind::Human, TaskStatus::Backlog)
+    );
+    let edges: Vec<(TaskId, TaskId)> = fx
+        .tasks
+        .edges()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|edge| (edge.task, edge.needs))
+        .collect();
+    assert!(edges.contains(&(build, existing)));
+    assert!(edges.contains(&(verify, build)));
+    let ready: Vec<TaskId> = fx
+        .tasks
+        .ready()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|task| task.id)
+        .collect();
+    assert!(!ready.contains(&build));
+
+    fx.tasks.complete_task(&tanim, existing).await.unwrap();
+    assert_eq!(fx.tasks.get(build).await.unwrap().status, TaskStatus::Todo);
+    let ready: Vec<TaskId> = fx
+        .tasks
+        .ready()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|task| task.id)
+        .collect();
+    assert!(ready.contains(&build));
+    assert_eq!(
+        fx.tasks.get(verify).await.unwrap().status,
+        TaskStatus::Backlog
+    );
+}
+
+#[tokio::test]
+async fn a_needed_task_cannot_be_deleted_and_an_archived_one_refuses_the_approval_and_creates_nothing()
+ {
+    let fx = Fixture::new().await;
+    let tanim = human("tanim");
+    let needed = fx
+        .tasks
+        .create_task_of_kind(
+            &tanim,
+            CreateTask {
+                title: TaskTitle::parse("Sign the provider contract").unwrap(),
+                description: TaskDescription::new("**Scope** the contract".to_owned()),
+                labels: Vec::new(),
+            },
+            TaskKind::Human,
+            &[],
+            None,
+        )
+        .await
+        .unwrap()
+        .id;
+    let id = fx.claimed(&tanim).await;
+    let mut written = draft(&["build"], &[]);
+    written.cards[0].needs = vec![needed];
+    fx.tasks
+        .submit_request_draft(&agent("frontend"), id, written, None, None)
+        .await
+        .unwrap();
+
+    let kept = fx.tasks.delete_task(&tanim, needed).await.unwrap_err();
+    assert_eq!(code(&kept), codes::INVALID_REQUEST);
+    fx.tasks.archive_task(&tanim, needed).await.unwrap();
+    let tasks_before = fx.count("SELECT COUNT(*) FROM tasks").await;
+    let state = fx.tasks.get_request(id).await.unwrap().request.state;
+
+    let refused = fx
+        .tasks
+        .approve_request_draft(&tanim, id, 1)
+        .await
+        .unwrap_err();
+    assert_eq!(code(&refused), codes::TASK_CLOSED);
+    assert_eq!(fx.tasks.get_request(id).await.unwrap().request.state, state);
+    assert_eq!(fx.count("SELECT COUNT(*) FROM tasks").await, tasks_before);
+    assert_eq!(
+        fx.count("SELECT COUNT(*) FROM events WHERE type = 'request.approved'")
+            .await,
+        0
+    );
 }

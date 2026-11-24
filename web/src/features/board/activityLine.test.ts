@@ -364,7 +364,7 @@ describe("activityLine", () => {
       ...card({ path: "a.ts", at: NOW - 9 * MINUTE }, [
         { kind: "stalled", closable: false, action: null },
       ]),
-      check_run: run,
+      check_run: { ...run, stage: "proposal" as const },
       proposal: {
         id: "P-1",
         state: "changes_requested" as const,

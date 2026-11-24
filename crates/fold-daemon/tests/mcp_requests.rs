@@ -75,7 +75,8 @@ async fn every_request_tool_succeeds_through_a_whole_request() {
     .await;
     assert_eq!(
         created,
-        json!({"id": "RQ-1", "state": "open", "attachments": 1})
+        json!({"id": "RQ-1", "state": "open", "attachments": 1, "area": "frontend-work"}),
+        "a worker's request is in its worker's area"
     );
 
     let listed = ok(&h, "backend", "list_requests", json!({"state": "open"})).await;
@@ -87,6 +88,7 @@ async fn every_request_tool_succeeds_through_a_whole_request() {
             "kind": null,
             "title": null,
             "excerpt": "The board is slow",
+            "area": "frontend-work",
             "requester": "frontend",
             "drafter": null,
             "latest_version": null,
@@ -523,4 +525,88 @@ async fn list_requests_returns_the_newest_up_to_its_limit() {
     assert_eq!(none["details"]["field"], "limit", "{none}");
     let all = ok(&h, "backend", "list_requests", json!({})).await;
     assert_eq!(ids(&all), ["RQ-3", "RQ-2", "RQ-1"]);
+}
+
+#[tokio::test]
+async fn a_card_carries_its_kind_and_its_needed_tasks_into_the_approved_task() {
+    let h = harness().await;
+    let existing = h.create_task("backend", "Sign the provider contract").await;
+    ok(
+        &h,
+        "frontend",
+        "create_request",
+        json!({"body": "Verify the provider"}),
+    )
+    .await;
+    ok(
+        &h,
+        "backend",
+        "claim_request",
+        json!({"id": "RQ-1", "kind": "feature", "title": "Verify the provider"}),
+    )
+    .await;
+    let card = |extra: Value| {
+        let mut card = json!({"key": "c1", "title": "Verify the provider", "description": "Check the provider by hand."});
+        for (name, value) in extra.as_object().unwrap() {
+            card[name] = value.clone();
+        }
+        json!({"id": "RQ-1", "cards": [card]})
+    };
+
+    let unknown = err(
+        &h,
+        "backend",
+        "submit_request_draft",
+        card(json!({"needs": ["T-99"]})),
+    )
+    .await;
+    assert_eq!(unknown["code"], "task_not_found");
+    let bad_id = err(
+        &h,
+        "backend",
+        "submit_request_draft",
+        card(json!({"needs": ["c2"]})),
+    )
+    .await;
+    assert_eq!(bad_id["code"], "invalid_id");
+    let bad_kind = err(
+        &h,
+        "backend",
+        "submit_request_draft",
+        card(json!({"kind": "later"})),
+    )
+    .await;
+    assert_eq!(bad_kind["code"], "invalid_task_kind");
+    let outside = err(
+        &h,
+        "backend",
+        "submit_request_draft",
+        card(json!({"kind": "human"})),
+    )
+    .await;
+    assert_eq!(outside["code"], "task_kind_denied");
+
+    ok(
+        &h,
+        "backend",
+        "submit_request_draft",
+        card(json!({"kind": "human", "needs": [existing], "label": "backend-work"})),
+    )
+    .await;
+    let read = ok(&h, "frontend", "get_request", json!({"id": "RQ-1"})).await;
+    assert_eq!(read["draft"]["cards"][0]["kind"], "human");
+    assert_eq!(read["draft"]["cards"][0]["needs"], json!([existing]));
+
+    let approved = ok(
+        &h,
+        "frontend",
+        "approve_request_draft",
+        json!({"id": "RQ-1", "expected_version": 1}),
+    )
+    .await;
+    assert_eq!(approved["tasks"], json!(["T-2"]));
+    let task = ok(&h, "frontend", "get_task", json!({"id": "T-2"})).await;
+    assert_eq!(task["kind"], "human");
+    assert_eq!(task["status"], "backlog");
+    assert_eq!(task["needs"][0]["id"], json!(existing));
 }

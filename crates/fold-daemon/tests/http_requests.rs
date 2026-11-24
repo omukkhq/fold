@@ -247,15 +247,32 @@ async fn a_human_creates_asks_for_changes_edits_and_approves() {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(stale["error"]["code"], "stale_version");
 
+    let mut unknown = draft();
+    unknown[0]["needs"] = json!(["T-99"]);
+    let (status, refused) = h
+        .http(
+            Method::POST,
+            &format!("{BASE}/requests/RQ-1/drafts"),
+            Some(&json!({"cards": unknown})),
+            "ana",
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+    assert_eq!(refused["error"]["code"], "task_not_found");
+    let mut cards = draft();
+    cards[1]["kind"] = json!("human");
     let (status, edited) = h
         .http(
             Method::POST,
             &format!("{BASE}/requests/RQ-1/drafts"),
-            Some(&json!({"cards": draft(), "edges": [{"prerequisite": "c1", "dependent": "c2"}], "note": "Mine."})),
+            Some(&json!({"cards": cards, "edges": [{"prerequisite": "c1", "dependent": "c2"}], "note": "Mine."})),
             "ana",
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["drafts"][0]["cards"][1]["kind"], "proposal");
+    assert_eq!(edited["drafts"][0]["cards"][1]["needs"], json!([]));
+    assert_eq!(edited["drafts"][2]["cards"][1]["kind"], "human");
     assert_eq!(edited["request"]["latest_version"], 3);
     assert_eq!(edited["drafts"][2]["author"], "human:ana");
 
@@ -287,6 +304,11 @@ async fn a_human_creates_asks_for_changes_edits_and_approves() {
     .await
     .unwrap();
     assert_eq!(linked, 2);
+    let human_task: String = sqlx::query_scalar("SELECT kind FROM tasks WHERE number = 2")
+        .fetch_one(h.handle.store.read())
+        .await
+        .unwrap();
+    assert_eq!(human_task, "human");
     let (status, read) = h
         .http(Method::GET, &format!("{BASE}/requests/RQ-1"), None, "ana")
         .await;

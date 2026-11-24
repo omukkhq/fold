@@ -4,7 +4,9 @@ use fold_core::requests::{
     CodeAnchor, CodeRef, DraftCard, DraftEdge, MAX_ATTACHMENT_BYTES, RequestKind, RequestState,
     Requester,
 };
-use fold_core::{Actor, FoldError, LabelName, RequestId, WorkspaceId, codes};
+use fold_core::{
+    Actor, AreaName, FoldError, LabelName, RequestId, TaskId, TaskKind, WorkspaceId, codes,
+};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{ContentBlock, JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -43,6 +45,9 @@ pub struct CreateRequestInput {
     /// Your workspace, such as ws-9, that holds the attachments. Needed only with attachments.
     #[serde(default)]
     pub ws: Option<String>,
+    /// The area whose lead hears of the request first, such as web. Leave it out for the area of your own worker; the main agent's request has no area and goes to the main agent and every area lead. When the area lead does not claim it in time, fold tells them all.
+    #[serde(default)]
+    pub area: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -115,6 +120,12 @@ pub struct CardInput {
     /// The label of the area that builds this card, such as backend; the main agent sets it. Approval gives the task this label, and fold sends the ready task to the area's lead. Create the label with create_label first; main, the label of the main agent's own area, always exists, and its ready task goes to the main agent, which builds it. Leave it out for a task that the main agent routes itself.
     #[serde(default)]
     pub label: Option<String>,
+    /// Existing tasks the card's task needs, such as ["T-12"]: approval adds a dependency on each, so the new task is never ready before they are Done. Name another card of this draft with an edge instead. Each task must exist (task_not_found) and appear once.
+    #[serde(default)]
+    pub needs: Vec<String>,
+    /// The kind of the card's task: proposal (the default), no_proposal or human, as in create_task. Only the main agent, a human or the lead of the card's area writes a no_proposal or human card (task_kind_denied).
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 /// One dependency between two cards of a draft.
@@ -196,7 +207,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             CREATE_REQUEST,
-            "Ask for work: a bug, a feature or a question, written as a message with optional files from your workspace. The main agent or an area lead sorts and names it, then drafts the cards.",
+            "Ask for work: a bug, a feature or a question, written as a message with optional files from your workspace. fold tells the lead of its area first, by default the area of your worker; a request in no area, or one that its lead does not claim within request_escalate_minutes, goes to the main agent and every area lead. The one who claims it sorts and names it, then drafts the cards.",
             schema_for_type::<CreateRequestInput>(),
         ),
         Tool::new(
@@ -206,7 +217,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_REQUEST,
-            "Read one request: the message, the attachments (read one with get_request_attachment), the code it was made on (path, lines, an excerpt and the revision or proposal version), one draft version with its cards and edges, the requester's comments, the clarification thread and the tasks an approval created.",
+            "Read one request: the message, its requester, area and drafter, the attachments (read one with get_request_attachment), the code it was made on (path, lines, an excerpt and the revision or proposal version), one draft version with its cards and edges, the requester's comments, the clarification thread and the tasks an approval created.",
             schema_for_type::<GetRequestInput>(),
         ),
         Tool::new(
@@ -226,7 +237,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             SUBMIT_REQUEST_DRAFT,
-            "As the drafter, send the next draft version: the cards in the task template and the dependency edges between them. The requester then approves it, asks for changes or edits it.",
+            "As the drafter, send the next draft version: the cards in the task template, each with its kind and the existing tasks it needs, and the dependency edges between them. The requester then approves it, asks for changes or edits it.",
             schema_for_type::<SubmitRequestDraftInput>(),
         ),
         Tool::new(
@@ -241,7 +252,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             APPROVE_REQUEST_DRAFT,
-            "As the requester, approve the latest draft version: each card becomes a task and each edge a dependency, in one step.",
+            "As the requester, approve the latest draft version: each card becomes a task of its kind, and each edge and each needed existing task a dependency, in one step.",
             schema_for_type::<ApproveRequestDraftInput>(),
         ),
         Tool::new(
@@ -316,6 +327,29 @@ fn draft(
                     title: card.title,
                     description: card.description,
                     label: card.label.as_deref().map(LabelName::parse).transpose()?,
+                    kind: card
+                        .kind
+                        .as_deref()
+                        .map(|kind| {
+                            kind.parse::<TaskKind>().map_err(|error| {
+                                FoldError::from(error).with_details([("field", json!("kind"))]).with_hint(
+                                    "give kind as proposal, no_proposal or human, or leave it out for proposal",
+                                )
+                            })
+                        })
+                        .transpose()?
+                        .unwrap_or(TaskKind::Proposal),
+                    needs: card
+                        .needs
+                        .iter()
+                        .map(|need| {
+                            need.parse::<TaskId>().map_err(|error| {
+                                FoldError::from(error).with_details([("field", json!("needs"))]).with_hint(
+                                    "give each need as an existing task id such as T-12; name a card of this draft with an edge instead",
+                                )
+                            })
+                        })
+                        .collect::<Result<_, FoldError>>()?,
                 })
             })
             .collect::<Result<_, FoldError>>()?,
@@ -330,7 +364,7 @@ fn draft(
     })
 }
 
-/// A card names its label only when it has one.
+/// A card names its label, its kind and its needed tasks only when it has them.
 fn card_json(card: &DraftCard) -> Value {
     let mut value = json!({
         "key": card.key,
@@ -339,6 +373,12 @@ fn card_json(card: &DraftCard) -> Value {
     });
     if let Some(label) = &card.label {
         value["label"] = json!(label.as_str());
+    }
+    if card.kind != TaskKind::Proposal {
+        value["kind"] = json!(card.kind.as_str());
+    }
+    if !card.needs.is_empty() {
+        value["needs"] = json!(card.needs.iter().map(TaskId::to_string).collect::<Vec<_>>());
     }
     value
 }
@@ -352,6 +392,7 @@ fn summary_json(view: &RequestView) -> Value {
         "title": view.title,
         "excerpt": view.excerpt,
         "requester": view.requester.label(),
+        "area": view.area.as_ref().map(ToString::to_string),
         "drafter": view.drafter.as_ref().map(ToString::to_string),
         "latest_version": view.latest_version,
     })
@@ -392,7 +433,9 @@ fn detail_json(detail: &RequestDetail, version: Option<u32>) -> Result<Value, Fo
         "title": request.title,
         "body": request.body,
         "requester": request.requester.label(),
+        "area": request.area.as_ref().map(ToString::to_string),
         "drafter": request.drafter.as_ref().map(ToString::to_string),
+        "escalated": request.escalated_at.is_some(),
         "close_reason": request.close_reason,
         "attachments": detail.attachments.iter().map(|attachment| json!({
             "position": attachment.position,
@@ -452,6 +495,7 @@ async fn create_request(
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let input: CreateRequestInput = parse(arguments)?;
+    let area = input.area.as_deref().map(AreaName::parse).transpose()?;
     let ws = match input.ws.as_deref() {
         Some(ws) if !input.attachments.is_empty() => Some(ws.parse::<WorkspaceId>()?),
         _ => None,
@@ -466,14 +510,18 @@ async fn create_request(
         .collect();
     let view = server
         .tasks
-        .create_request(actor, &input.body, attachments)
+        .create_request_in(actor, &input.body, attachments, area)
         .await
         .map_err(from_task)?;
-    Ok(json!({
+    let mut reply = json!({
         "id": view.id.to_string(),
         "state": view.state.as_str(),
         "attachments": input.attachments.len(),
-    }))
+    });
+    if let Some(area) = &view.area {
+        reply["area"] = json!(area.as_str());
+    }
+    Ok(reply)
 }
 
 async fn list_requests(

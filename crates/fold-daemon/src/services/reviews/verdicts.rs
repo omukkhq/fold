@@ -9,6 +9,7 @@ use fold_store::reviews::{self, NewComment, ProposalRow, ReviewerRef, batches};
 use fold_store::{SqliteConnection, StoreError, WriteTx, counters, workspaces};
 use serde_json::json;
 
+use super::batches::release_reviewed_alone;
 use super::checks::{VersionRun, next_version_run};
 use super::comments::{CommentInput, MAX_BODY_CHARS, check_ranges, check_shape};
 use super::integrate::checks_failed_refusal;
@@ -30,7 +31,7 @@ pub struct SubmittedReview {
 }
 
 impl ReviewService {
-    /// Reviews `version` of an open proposal with a verdict, a body and line comments, in one write transaction. `version` is the version the reviewer read; when another version is current, before the comments are checked or inside the transaction, the review is `stale_version` and writes nothing, so a verdict never lands on a version its reviewer did not read. The body may be empty only when the review carries a comment, and a reject needs a body, which becomes the close reason. Each comment's file and lines are checked against the version's base tree (side `old`) or its own tree (side `new`) before the transaction. `request_changes` puts the proposal with its author, so the task moves to In Progress; a later approval of the same version gives it back to the reviewer; `reject` closes the proposal and the task returns to In Progress.
+    /// Reviews `version` of an open proposal with a verdict, a body and line comments, in one write transaction. `version` is the version the reviewer read; when another version is current, before the comments are checked or inside the transaction, the review is `stale_version` and writes nothing, so a verdict never lands on a version its reviewer did not read. The body may be empty only when the review carries a comment, and a reject needs a body, which becomes the close reason. Each comment's file and lines are checked against the version's base tree (side `old`) or its own tree (side `new`) before the transaction. `request_changes` puts the proposal with its author, so the task moves to In Progress; a later approval of the same version gives it back to the reviewer; `reject` closes the proposal and the task returns to In Progress. A verdict other than a comment on a member of an open review batch releases it from the batch as `reviewed_alone`, so the batch no longer holds it back, and a batch with no member left to review closes.
     pub async fn submit_review(
         &self,
         actor: &Actor,
@@ -74,6 +75,13 @@ impl ReviewService {
                     .await?
                     .ok_or(StoreError::Corrupt("proposal_versions.version"))?;
                 require_version(proposal, version, current.version)?;
+                let by = actor.event_actor();
+                // A comment gives no verdict, so the member stays for the batch's review.
+                let released_from = if verdict == Verdict::Comment {
+                    None
+                } else {
+                    release_reviewed_alone(tx, &mut buffer, &by, proposal, now).await?
+                };
                 let record = ReviewRecord {
                     row: &row,
                     version_id: current.version_id,
@@ -82,6 +90,7 @@ impl ReviewService {
                     body: &body,
                     comments: &comments,
                     batch: None,
+                    released_from,
                     batch_comments: &[],
                     scope: scope.as_ref(),
                 };
@@ -117,6 +126,8 @@ pub(super) struct ReviewRecord<'a> {
     pub body: &'a str,
     pub comments: &'a [CommentInput],
     pub batch: Option<ReviewBatchId>,
+    /// The open batch that a verdict given alone released the proposal from, named on `review.submitted` as `released_from_batch`.
+    pub released_from: Option<ReviewBatchId>,
     pub batch_comments: &'a [BatchCommentLink],
     /// fold's suggestion for an agent's review of a revised version, read before the command's transaction; `None` for a version reviewed whole. A human's review ignores it.
     pub scope: Option<&'a SuggestedScope>,
@@ -191,6 +202,9 @@ pub(super) async fn record_review(
     });
     if let Some(batch) = record.batch {
         data["batch"] = json!(batch.to_string());
+    }
+    if let Some(batch) = record.released_from {
+        data["released_from_batch"] = json!(batch.to_string());
     }
     if let Some(scope) = &scope {
         data["scope"] = json!(scope.scope.as_str());

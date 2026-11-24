@@ -234,6 +234,45 @@ async fn filters_by_type_task_and_proposal() {
 }
 
 #[tokio::test]
+async fn newest_for_proposal_reads_the_proposal_and_types_newest_first_before_a_seq() {
+    let project = TestProject::new().await;
+    let proposal = ProposalId::from_number(7).unwrap();
+    let other = ProposalId::from_number(8).unwrap();
+    append_all(
+        &project,
+        vec![
+            new_event(types::CHECKS_FINISHED).proposal(proposal),
+            new_event(types::REVIEW_SUBMITTED).proposal(proposal),
+            new_event(types::INTEGRATION_CONFLICTED).proposal(other),
+            new_event(types::INTEGRATION_CONFLICTED).proposal(proposal),
+            new_event(types::CHECKS_FINISHED).proposal(proposal),
+            new_event(types::MAIN_ADVANCED),
+        ],
+    )
+    .await;
+    let pool = project.store().read();
+    let handoffs = [types::INTEGRATION_CONFLICTED, types::CHECKS_FINISHED];
+    let seqs = |before: Option<u64>, limit: usize| async move {
+        events::newest_for_proposal(pool, proposal, &handoffs, before, limit)
+            .await
+            .unwrap()
+            .iter()
+            .map(|e| e.seq)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(seqs(None, 100).await, vec![5, 4, 1]);
+    assert_eq!(seqs(None, 2).await, vec![5, 4]);
+    assert_eq!(seqs(Some(4), 100).await, vec![1]);
+    assert!(seqs(Some(1), 100).await.is_empty());
+    assert!(
+        events::newest_for_proposal(pool, proposal, &[], None, 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn an_event_for_a_task_without_a_row_is_accepted() {
     let project = TestProject::new().await;
     let tasks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE number = 12")
@@ -699,6 +738,98 @@ async fn read_reaching_wakes_only_for_an_unread_message_the_worker_did_not_send(
         [seqs[0], seqs[4], seqs[5]],
         "a message delivered after the wait started still wakes it"
     );
+}
+
+/// Worker 1 of agent 1 and three messages to it from ana, with their `message.sent` seqs: m-1 a notice delivered and acknowledged at 5, m-2 delivered at 2 and acknowledged at 3, m-3 neither.
+#[cfg(test)]
+async fn acknowledged_rows(project: &TestProject) -> Vec<u64> {
+    exec(
+        project,
+        "INSERT INTO agents (id, name, created_at) VALUES (1, 'be', 0);
+         INSERT INTO workers (id, agent_id, name, parent_worker_id, created_at)
+         VALUES (1, 1, 'be', NULL, 0);
+         INSERT INTO messages (number, thread_id, sender_kind, sender_human, body, created_at)
+         VALUES (1, 1, 'human', 'ana', 'given whole', 0), (2, 2, 'human', 'ana', 'old', 0),
+                (3, 3, 'human', 'ana', 'new', 0);
+         INSERT INTO message_recipients (message_id, worker_id, addressed_as, delivered_at, acked_at)
+         SELECT m.id, 1, 'worker',
+                CASE m.number WHEN 1 THEN 5 WHEN 2 THEN 2 END,
+                CASE m.number WHEN 1 THEN 5 WHEN 2 THEN 3 END
+         FROM messages m;",
+    )
+    .await;
+    let message = |n: u32| MessageId::from_number(n).unwrap();
+    append_all(
+        project,
+        (1..=3)
+            .map(|n| by(types::MESSAGE_SENT, "human:ana").message(message(n)))
+            .collect(),
+    )
+    .await
+}
+
+/// The seqs that a wait of worker 1 started at `since` keeps, by `read_reaching` and by `waiting_messages`, which must agree.
+#[cfg(test)]
+async fn woken_since(project: &TestProject, seqs: &[u64], since: i64) -> Vec<u64> {
+    let wake = events::MessageWake {
+        event_type: types::MESSAGE_SENT,
+        worker_id: 1,
+        since: Timestamp::from_millis(since).unwrap(),
+    };
+    let filter = EventFilter {
+        types: vec![types::PROPOSAL_OPENED],
+        ..EventFilter::default()
+    };
+    let reach = events::Reach {
+        wake: Some(wake),
+        ..reach(1)
+    };
+    let read: Vec<u64> = events::read_reaching(project.store().read(), 0, &filter, reach, 10)
+        .await
+        .unwrap()
+        .iter()
+        .map(|event| event.seq)
+        .collect();
+    let waiting = events::waiting_messages(project.store().read(), seqs, wake)
+        .await
+        .unwrap();
+    let from_waiting: Vec<u64> = waiting
+        .iter()
+        .map(|id| seqs[id.number() as usize - 1])
+        .collect();
+    assert_eq!(read, from_waiting, "both queries apply the same wake rule");
+    read
+}
+
+#[tokio::test]
+async fn a_message_acknowledged_inside_the_wait_still_wakes_it() {
+    let project = TestProject::new().await;
+    let seqs = acknowledged_rows(&project).await;
+    let woken = woken_since(&project, &seqs, 4).await;
+    assert!(
+        woken.contains(&seqs[0]),
+        "a notice that gave the message whole during the wait waits in the session until the wait returns: {woken:?}"
+    );
+    assert!(woken_since(&project, &seqs, 5).await.contains(&seqs[0]));
+}
+
+#[tokio::test]
+async fn a_message_acknowledged_before_the_wait_does_not_wake_it() {
+    let project = TestProject::new().await;
+    let seqs = acknowledged_rows(&project).await;
+    assert!(!woken_since(&project, &seqs, 4).await.contains(&seqs[1]));
+    assert!(
+        !woken_since(&project, &seqs, 6).await.contains(&seqs[0]),
+        "a later wait never returns again for a message a notice gave in full"
+    );
+}
+
+#[tokio::test]
+async fn an_unacknowledged_message_wakes_the_wait() {
+    let project = TestProject::new().await;
+    let seqs = acknowledged_rows(&project).await;
+    assert_eq!(woken_since(&project, &seqs, 6).await, [seqs[2]]);
+    assert_eq!(woken_since(&project, &seqs, 4).await, [seqs[0], seqs[2]]);
 }
 
 #[tokio::test]

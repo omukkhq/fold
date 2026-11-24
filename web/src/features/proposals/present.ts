@@ -1,5 +1,6 @@
 import type {
   ComparisonTotals,
+  ConflictedReason,
   HumanReviewMark,
   ProposalDetail,
   ProposalSummary,
@@ -9,6 +10,12 @@ import type {
   Verdict,
 } from "@/api/proposals";
 import type { WorkerList } from "@/api/workers";
+import {
+  laneFailure,
+  laneFailureLine,
+  laneText,
+  type WithLane,
+} from "./laneState";
 import { bareName, isHumanName, reviewerActor } from "@/people/names";
 import {
   actorSegment,
@@ -22,6 +29,7 @@ export type PillTone = "danger" | "human" | "approved" | "neutral" | "done";
 
 export type PillIcon =
   | "conflict"
+  | "checks"
   | "changes"
   | "human"
   | "approved"
@@ -80,6 +88,8 @@ export interface PillContext {
   conflictMain?: string | null;
   /** The detail header's wording; the list's otherwise. */
   long?: boolean;
+  /** Why the proposal is conflicted, when the screen reads it apart from the row (the detail carries it beside the summary). */
+  reason?: ConflictedReason | null;
 }
 
 /** `Integrated with batch rb-3 as r8`, with each part the screen knows. */
@@ -94,10 +104,7 @@ export function integratedText(
 }
 
 /** The review state as the summary states it: the latest verdict on the current version and whether the human review mark is met. */
-export function reviewPill(
-  p: ProposalSummary,
-  context: PillContext = {},
-): Pill {
+export function reviewPill(p: WithLane, context: PillContext = {}): Pill {
   const { revision = null, batch = null, conflictMain = null } = context;
   const long = context.long === true;
   if (p.state === "integrated") {
@@ -111,6 +118,16 @@ export function reviewPill(
     return { tone: "neutral", icon: "closed", text: "Closed" };
   }
   const back = long ? " · back with the author" : "";
+  const failure = laneFailure(context.reason ?? p.conflicted_reason);
+  if (p.conflicted && failure !== null) {
+    const segments = laneFailureLine(failure);
+    return {
+      tone: "danger",
+      icon: "checks",
+      text: segmentsText(segments),
+      segments,
+    };
+  }
   if (p.conflicted) {
     const onto = long && conflictMain ? ` with main ${conflictMain}` : "";
     return {
@@ -165,11 +182,13 @@ export const PILL_CLASSES: Record<PillTone, string> = {
  * The list's one state chip: the review state and whose turn it is, such as `Changes requested · waits for @web-7`. Gold is only for a proposal that waits for the signed-in human (`waitsForYou`); a review that waits for someone else is quiet, and an integrated or closed proposal shows its end state.
  */
 export function listPill(
-  p: ProposalSummary,
+  p: WithLane,
   context: { revision?: string | null; waitsForYou?: boolean } = {},
 ): Pill {
   const pill = reviewPill(p, { revision: context.revision ?? null });
   if (p.state !== "open") return pill;
+  // A lane check failure waits for the reviewer that fixes it, which the pill names itself; it is not a wait on a person.
+  if (p.conflicted && pill.icon === "checks") return pill;
   const head = pill.icon === "human" ? "Agent approved" : pill.text;
   if (context.waitsForYou === true) {
     return { tone: "human", icon: pill.icon, text: `${head} · waits for you` };
@@ -188,8 +207,10 @@ export function listPill(
 }
 
 /** The list's line under a proposal's title, after its task: the version, the review claim of an open proposal and the human review mark. */
-export function listMeta(p: ProposalSummary): Segments {
+export function listMeta(p: WithLane): Segments {
   const parts: Segments[] = [[versionText(p)]];
+  const lane = laneText(p.lane);
+  if (p.state === "open" && lane !== null) parts.push([lane]);
   if (p.state === "open") parts.push(claimLine(p));
   if (p.human_review) {
     parts.push(

@@ -15,6 +15,7 @@ use crate::services::agents::claude::{ClaudeInput, OutgoingRequest};
 use crate::services::agents::workers::code_of;
 use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
+use crate::services::reviews::{HeldBatch, held_open_batches, tell_batch_holder};
 
 /// How long a stop waits for the exit after SIGKILL.
 const KILL_WAIT: Duration = Duration::from_secs(10);
@@ -282,11 +283,11 @@ impl Supervisor {
         while stops.join_next().await.is_some() {}
     }
 
-    /// The short-lived workers whose work `event` finished: a task worker once no bound task awaits its work (see [`agents::tasks_awaiting_proposal`]), checked when it opens a proposal, sends a new version or reports a task without a proposal and when a bound task is archived; a task worker whose bound task is Done, by an integration or a completion, once it holds no other claim; a reviewer once every bound proposal has a verdict or is closed or integrated.
+    /// The short-lived workers whose work `event` finished: a task worker once no bound task awaits its work (see [`agents::tasks_awaiting_proposal`]), checked when it opens a proposal, sends a new version or reports a task without a proposal and when a bound task is archived; a task worker whose bound task is Done, by an integration or a completion, once it holds no other claim; a reviewer once every bound proposal has a verdict or is closed or integrated and it holds no open batch with a member left, checked on its proposals' verdicts and ends and on a submitted or closed batch. A reviewer that is done but for such a batch is in `held`, with the batch, so fold tells it to send the batch's review or take the members out.
     pub(super) async fn done_workers(
         &self,
         event: &fold_core::Event,
-    ) -> Result<Vec<AgentName>, StoreError> {
+    ) -> Result<DoneWorkers, StoreError> {
         let kind = event.event_type;
         let read = self.inner.store.read();
         let mut done = Vec::new();
@@ -330,8 +331,8 @@ impl Supervisor {
             && let Some(proposal) = event.proposal
         {
             agents::reviewers_of_proposal(read, proposal).await?
-        } else if kind == types::REVIEW_BATCH_SUBMITTED {
-            // A batch review names its batch, not each member, so every running reviewer is checked.
+        } else if kind == types::REVIEW_BATCH_SUBMITTED || kind == types::REVIEW_BATCH_CLOSED {
+            // A batch event names its batch, not each member, so every running reviewer is checked.
             let mut conn = read.acquire().await.map_err(StoreError::from)?;
             agents::list_running_worker_processes(&mut conn)
                 .await?
@@ -349,12 +350,41 @@ impl Supervisor {
         };
         let ids: Vec<i64> = reviewers.iter().map(|reviewer| reviewer.id).collect();
         let missing = agents::proposals_without_verdict(read, &ids).await?;
+        let batches = if reviewers.is_empty() {
+            Vec::new()
+        } else {
+            let mut conn = read.acquire().await.map_err(StoreError::from)?;
+            held_open_batches(&mut conn).await?
+        };
+        let mut held = Vec::new();
         for reviewer in reviewers {
-            if missing.get(&reviewer.id) == Some(&0) && !done.contains(&reviewer.agent) {
+            if missing.get(&reviewer.id) != Some(&0) || done.contains(&reviewer.agent) {
+                continue;
+            }
+            let own: Vec<HeldBatch> = batches
+                .iter()
+                .filter(|batch| batch.holder.belongs_to(&reviewer.agent))
+                .cloned()
+                .collect();
+            if own.is_empty() {
                 done.push(reviewer.agent);
+            } else {
+                held.extend(own);
             }
         }
-        Ok(done)
+        Ok(DoneWorkers { stop: done, held })
+    }
+
+    /// Tells the holder of each batch in `held` why fold keeps it running; see [`Supervisor::done_workers`].
+    pub(super) async fn tell_batch_holders(&self, held: &[HeldBatch]) {
+        for batch in held {
+            let now = self.inner.clock.now();
+            if let Err(error) =
+                tell_batch_holder(&self.inner.store, &self.inner.bus, batch, now).await
+            {
+                tracing::warn!(batch = %batch.batch, code = error.log_code(), "could not tell a reviewer about the open batch it holds");
+            }
+        }
     }
 
     /// Stops every short-lived worker that has been idle for its role's `idle_minutes` at `now`, except one whose turn waits for the network, a usage limit or a working login, and except while the project's agents are paused: a resume gives each worker a new idle time. A worker is stopped only while it is still idle since the same moment, so one that took a turn after the rows were read keeps running. A worker that cannot be stopped is logged and the sweep goes on. Returns the agents it stopped.
@@ -448,6 +478,11 @@ impl Supervisor {
             let missing =
                 agents::proposals_without_verdict(read, &of_role(fold_core::Role::Reviewer))
                     .await?;
+            let mut conn = read.acquire().await.map_err(StoreError::from)?;
+            let batches = held_open_batches(&mut conn).await?;
+            drop(conn);
+            let holds_batch =
+                |agent: &AgentName| batches.iter().any(|batch| batch.holder.belongs_to(agent));
             Ok::<_, StoreError>(
                 rows.into_iter()
                     .filter(|row| {
@@ -457,6 +492,8 @@ impl Supervisor {
                                 held.get(&row.id)
                             }
                             fold_core::Role::TaskWorker => waiting.get(&row.id),
+                            // A reviewer that holds an open batch with a member left is told so by the event that would stop it; here it only keeps running.
+                            fold_core::Role::Reviewer if holds_batch(&row.agent) => None,
                             fold_core::Role::Reviewer => missing.get(&row.id),
                             fold_core::Role::AreaLead
                             | fold_core::Role::ReviewLead
@@ -481,6 +518,13 @@ impl Supervisor {
             ),
         }
     }
+}
+
+/// What an event finished: the workers to stop, and the open batches whose holders are done but for them.
+#[derive(Debug, Default)]
+pub(super) struct DoneWorkers {
+    pub stop: Vec<AgentName>,
+    pub held: Vec<HeldBatch>,
 }
 
 /// Sends `signal` to the process group of `run`, when its pid is known.
@@ -550,6 +594,8 @@ pub(super) fn stopped_event(
 ) -> Result<NewEvent, fold_core::EventError> {
     NewEvent::new(types::WORKER_STOPPED, EventActor::fold())?.data(json!({
         "agent": row.agent.as_str(),
+        "role": row.role.as_str(),
+        "area": row.area.as_ref().map(fold_core::AreaName::as_str),
         "exit_code": code,
         "turns": row.turns,
         "cost_micro_usd": row.cost_micro_usd,

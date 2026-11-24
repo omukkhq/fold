@@ -360,9 +360,23 @@ async fn acceptance_22_a_message_to_a_reviewer_owed_a_new_version_resumes_it_for
     let runs = until_runs(&fake, REVIEWER, 3).await;
     let turn = &runs[2].stdin[1];
     assert!(
-        turn.contains("for a message") && turn.contains("m-1") && turn.contains("m-2"),
+        turn.contains("for a message") && turn.contains("m-2"),
         "{turn}"
     );
+    // A notice can give m-1 whole to the resumed reviewer before it stops, and then m-1 counts as read and is owed no more.
+    if !turn.contains("m-1") {
+        let acked: Option<i64> = sqlx::query_scalar(
+            "SELECT r.acked_at FROM message_recipients r
+             JOIN messages m ON m.id = r.message_id
+             JOIN workers w ON w.id = r.worker_id
+             WHERE m.number = 1 AND w.name = ?1",
+        )
+        .bind(REVIEWER)
+        .fetch_one(harness.handle.store.read())
+        .await
+        .unwrap();
+        assert!(acked.is_some(), "{turn}");
+    }
 }
 
 /// Acceptance 22: a reviewer whose session is gone at a daemon start and whose new session the reviewer limit refuses leaves its version to nobody, so fold tells the review lead which version waits for a review.
@@ -404,19 +418,17 @@ async fn acceptance_22_a_reviewer_that_cannot_start_in_a_new_session_leaves_its_
     until_runs(&fake, REVIEWER, 2).await;
     until_state(&harness, REVIEWER, WorkerState::Failed).await;
     harness.connect(LEAD).await;
+    // A push can give the note whole before the inbox is read, so it is read from every message to the lead.
     let note = eventually(WAIT, async || {
-        let inbox = harness.call(LEAD, "get_inbox", json!({})).await;
-        inbox["messages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|message| message["from"] == "fold")
-            .cloned()
-            .ok_or(inbox)
+        let notes = harness.fold_messages(LEAD).await;
+        notes
+            .into_iter()
+            .find(|body| body.starts_with("@reviewer lost its session"))
+            .ok_or(())
     })
     .await;
     assert_eq!(
-        note["body"],
+        note,
         "@reviewer lost its session and the reviewer limit refuses it a new one now, so P-1 v1 waits for a review. Give it to a reviewer with start_worker when a place is free; the start takes over the claim."
     );
     assert_eq!(fake.runs_of(REVIEWER).len(), 2, "no new session");

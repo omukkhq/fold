@@ -35,7 +35,7 @@ pub fn lease_start(renewed_at: Timestamp, runs: HolderRuns, now: Timestamp) -> T
 /// What one claim of a holder waits for from others, as its lease sees it. The holder makes no calls while it waits, and a person has nothing to do about its claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ClaimWait {
-    /// An implementation claim whose task has an open proposal that waits on reviewers or the integration: not back with its author by requested changes, a conflict or failed checks.
+    /// An implementation claim whose task has an open proposal that waits on reviewers or the integration: not back with its author by requested changes or failed integration checks. A conflict at integration waits on the reviewer that fixes it, so it counts as sent.
     pub sent: bool,
     /// An implementation claim whose task has an ask that waits for a person.
     pub asks_person: bool,

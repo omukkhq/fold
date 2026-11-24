@@ -33,7 +33,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { DurableEvent } from "../../api/events";
-import { isHumanName } from "../../people/names";
+import { atName, isHumanName } from "../../people/names";
 import { codeData } from "../../format/codeText";
 import { COLUMNS } from "../board/columns";
 import { limitWords } from "../../live/turnWaits";
@@ -152,6 +152,19 @@ function batchIntegratedText(event: DurableEvent): string {
     default:
       return `${batch} had no member to integrate together`;
   }
+}
+
+/** The line of an ended check run. A failed run of a serial lane member says which lane moved and who fixes it, since the proposal is not a merge conflict. */
+function checksFinishedText(event: DurableEvent): string {
+  const state = text(event.data.state);
+  const lane = text(event.data.lane);
+  if (lane !== null && state === "failed") {
+    const fixer = text(event.data.fixer);
+    const who = fixer === null ? "a reviewer" : atName(fixer);
+    return `integration checks of ${event.proposal ?? taskOf(event)} failed after lane ${lane} moved; ${who} fixes it`;
+  }
+  const ended = `ended the checks of ${taskOf(event)}`;
+  return state === null ? ended : `${ended}: ${state.replaceAll("_", " ")}`;
 }
 
 function planOf(event: DurableEvent): string {
@@ -279,6 +292,37 @@ const STORED_ROLES: ReadonlyMap<string, string> = new Map([
 /** A role with spaces, such as `task worker`. */
 function roleText(role: string): string {
   return (STORED_ROLES.get(role) ?? role).replaceAll("_", " ");
+}
+
+/** The worker a queued start is for: the name its starter gave, else its role. */
+function queuedWorkerOf(event: DurableEvent): string {
+  const name = text(event.data.name);
+  if (name !== null) {
+    return name;
+  }
+  const role = text(event.data.role);
+  return role === null ? "a worker" : `a ${roleText(role)}`;
+}
+
+function startQueuedText(event: DurableEvent): string {
+  const position = count(event.data.position);
+  const where = position === null ? "" : ` at place ${String(position)}`;
+  return `queued the start of ${queuedWorkerOf(event)}${where}`;
+}
+
+const QUEUE_DROP_REASONS: ReadonlyMap<string, string> = new Map([
+  ["task_claimed", "another worker claimed its task"],
+  ["task_done", "its task is Done"],
+  ["task_archived", "its task was archived"],
+  ["proposal_ended", "its proposal ended"],
+  ["cancelled", "its start no longer applies"],
+]);
+
+function queuedStartDroppedText(event: DurableEvent): string {
+  const reason = text(event.data.reason);
+  const why = reason === null ? undefined : QUEUE_DROP_REASONS.get(reason);
+  const tail = why === undefined ? "" : `: ${why}`;
+  return `dropped the queued start of ${queuedWorkerOf(event)}${tail}`;
 }
 
 function startedText(event: DurableEvent): string {
@@ -822,6 +866,10 @@ const SPECS: Record<EventType, Spec> = {
     icon: X,
     text: (e) => `closed ${requestOf(e)}`,
   },
+  "request.escalated": {
+    icon: MessageSquare,
+    text: (e) => `escalated ${requestOf(e)}`,
+  },
   "area.defined": {
     icon: Tag,
     text: (e) => {
@@ -971,12 +1019,7 @@ const SPECS: Record<EventType, Spec> = {
   },
   "checks.finished": {
     icon: ListChecks,
-    text: (e) => {
-      const state = text(e.data.state);
-      return state === null
-        ? `ended the checks of ${taskOf(e)}`
-        : `ended the checks of ${taskOf(e)}: ${state.replaceAll("_", " ")}`;
-    },
+    text: checksFinishedText,
   },
   "integration.queued": {
     icon: ListChecks,
@@ -1013,6 +1056,8 @@ const SPECS: Record<EventType, Spec> = {
     icon: Pause,
     text: (e) => `parked ${workerOf(e)} to wait for its go`,
   },
+  "worker.start_queued": { icon: ListChecks, text: startQueuedText },
+  "worker.queued_start_dropped": { icon: X, text: queuedStartDroppedText },
   "review.plan_created": { icon: Hourglass, text: planCreatedText },
   "review.plan_changed": {
     icon: Hourglass,

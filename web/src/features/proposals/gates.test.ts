@@ -372,3 +372,30 @@ describe("waitingSummary", () => {
     );
   });
 });
+
+describe("waitingSummary of a conflicted proposal", () => {
+  it("says a merge report went to the author", () => {
+    const text = waitingSummary(proposal({ conflicted: true })) ?? "";
+    expect(text).toContain("fold sent the report to");
+  });
+
+  it("names the lane and the fixer for a lane check failure", () => {
+    const text =
+      waitingSummary(
+        proposal(
+          { conflicted: true },
+          {
+            conflicted_reason: {
+              kind: "lane_checks_failed",
+              lane: "migrations",
+              run: "cr-4",
+              fixer: "reviewer",
+            },
+          },
+        ),
+      ) ?? "";
+    expect(text).toContain("after lane migrations moved");
+    expect(text).toContain("@reviewer fixes it");
+    expect(text).not.toContain("fold sent the report");
+  });
+});

@@ -73,7 +73,7 @@ async fn acceptance_21_a_human_asks_the_author_about_lines_of_the_diff() {
                "excerpt": "export const b = 2;\nexport const c = 3;", "excerpt_cut": false})
     );
 
-    // A wait that the question ends carries it with the quoted lines, so the author needs no inbox read; the inbox still lists it until it is acknowledged.
+    // A wait that the question ends carries it with the quoted lines, so the author needs no inbox read.
     let woke = h
         .call(
             "frontend",
@@ -89,25 +89,27 @@ async fn acceptance_21_a_human_asks_the_author_about_lines_of_the_diff() {
         "{carried}"
     );
 
-    // The author reads the question with the lines in its inbox and in the thread.
+    // The wait gave the question whole, so it counts as read; the author reads it with the lines in the thread.
     let inbox = h.call("frontend", "get_inbox", json!({})).await;
-    let item = inbox["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|message| message["id"] == question.as_str())
-        .unwrap()
-        .clone();
+    assert!(
+        inbox["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|message| message["id"] != question.as_str()),
+        "{inbox}"
+    );
+    let thread = h
+        .call("frontend", "get_thread", json!({"thread": question}))
+        .await;
+    let item = &thread["messages"][0];
+    assert_eq!(item["id"], question.as_str());
     assert_eq!(item["proposal"], proposal.as_str());
     assert_eq!(
         item["lines"],
         json!({"version": 1, "path": FILE, "side": "new", "start_line": 2, "end_line": 3,
                "excerpt": "export const b = 2;\nexport const c = 3;"})
     );
-    let thread = h
-        .call("frontend", "get_thread", json!({"thread": question}))
-        .await;
-    assert_eq!(thread["messages"][0]["lines"], item["lines"]);
 
     // The question writes no review, verdict or comment and leaves the turn and the status as they were.
     assert_eq!(review_state(&h, &proposal, &task).await, before);

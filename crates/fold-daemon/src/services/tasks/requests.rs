@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use fold_core::events::types;
 use fold_core::messages::{line_excerpt, text_lines};
 use fold_core::object::{ObjectHash, ObjectKind};
@@ -9,9 +7,10 @@ use fold_core::requests::{
     request_text, request_title, validate_draft,
 };
 use fold_core::reviews::Side;
+use fold_core::tasks::{PlanRef, PlannedTask};
 use fold_core::tree::EntryKind;
 use fold_core::{
-    Actor, DependencyOrigin, FoldError, IdKind, MessageId, NewEvent, ProposalId, RequestId,
+    Actor, AreaName, EventActor, FoldError, IdKind, MessageId, NewEvent, ProposalId, RequestId,
     TaskDescription, TaskId, TaskKind, TaskTitle, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::tasks::requests::{self, NewAttachment, NewRequest, RequestRow};
@@ -23,10 +22,9 @@ use fold_vcs::browse;
 use fold_vcs::objects::ObjectStore;
 use serde_json::json;
 
-use super::{
-    CreateTask, TaskError, TaskService, add_edge_in_tx, create_in_tx, recompute, require_labels,
-    worker_row,
-};
+use super::plans::{PlanGate, insert_plan_in_tx};
+use super::{TaskError, TaskService, areas_of, require_labels, task_not_found, worker_row};
+use crate::services::agents::starter_of;
 use crate::services::events::EventBuffer;
 use crate::services::page_limit;
 use crate::support::blocking;
@@ -73,6 +71,10 @@ pub struct RequestView {
     pub body: String,
     pub state: RequestState,
     pub requester: Requester,
+    /// The area whose lead hears of the request first; `None` for a request in no area.
+    pub area: Option<AreaName>,
+    /// When fold told the main agent and every area lead of the request because nobody claimed it in time.
+    pub escalated_at: Option<Timestamp>,
     pub drafter: Option<WorkerName>,
     pub drafter_since: Option<Timestamp>,
     pub close_reason: Option<String>,
@@ -97,6 +99,8 @@ impl From<RequestRow> for RequestView {
             body: row.body,
             state: row.state,
             requester: row.requester,
+            area: row.area,
+            escalated_at: row.escalated_at,
             drafter,
             drafter_since,
             close_reason: row.close_reason,
@@ -172,8 +176,20 @@ impl TaskService {
         body: &str,
         attachments: Vec<NewRequestAttachment>,
     ) -> Result<RequestView, TaskError> {
+        self.create_request_in(actor, body, attachments, None).await
+    }
+
+    /// [`TaskService::create_request`] in `area`, whose lead hears of the request first; without `area`, the area of the requester's worker, and none for a human, the main agent or a worker outside an area. An area that does not exist is `area_not_found`.
+    pub async fn create_request_in(
+        &self,
+        actor: &Actor,
+        body: &str,
+        attachments: Vec<NewRequestAttachment>,
+        area: Option<AreaName>,
+    ) -> Result<RequestView, TaskError> {
         let requester = policy::can_create_request(actor).map_err(FoldError::from)?;
-        self.create(actor, requester, body, attachments, None).await
+        self.create(actor, requester, body, attachments, None, area)
+            .await
     }
 
     /// Creates an `open` request about lines a human selected in a revision of main or in one side of a proposal version, the same request as [`TaskService::create_request`] makes with the code location added. The path must be a relative, normalised path of a text file in that tree (`invalid_path`; `unknown_comment_path` with the reason `missing`, `not_a_file`, `binary` or `too_large`), and the lines must exist there (`invalid_comment_range`); the request keeps a short excerpt of them, read from the tree.
@@ -185,7 +201,7 @@ impl TaskService {
     ) -> Result<RequestView, TaskError> {
         let requester = policy::can_create_request(actor).map_err(FoldError::from)?;
         let code = self.code_ref(selection).await?;
-        self.create(actor, requester, body, Vec::new(), Some(code))
+        self.create(actor, requester, body, Vec::new(), Some(code), None)
             .await
     }
 
@@ -196,6 +212,7 @@ impl TaskService {
         body: &str,
         attachments: Vec<NewRequestAttachment>,
         code: Option<CodeRef>,
+        area: Option<AreaName>,
     ) -> Result<RequestView, TaskError> {
         let body = request_text(body, "body", false)?.unwrap_or_default();
         let facts: Vec<AttachmentFacts<'_>> = attachments
@@ -223,11 +240,13 @@ impl TaskService {
         let id = self
             .store
             .write(async |tx| {
+                let area = request_area(tx, actor, area.clone()).await?;
                 let id = next_request_id(tx).await?;
                 let new = NewRequest {
                     number: id,
                     body: &body,
                     requester: &requester,
+                    area: area.as_ref(),
                     now,
                 };
                 requests::insert(tx, &new).await?;
@@ -243,7 +262,14 @@ impl TaskService {
                     };
                     requests::insert_attachment(tx, id, &attachment, now).await?;
                 }
-                let mut data = json!({"request": id.to_string(), "attachments": hashes.len()});
+                let mut data = json!({
+                    "request": id.to_string(),
+                    "attachments": hashes.len(),
+                    "requester": requester.label(),
+                });
+                if let Some(area) = &area {
+                    data["area"] = json!(area.as_str());
+                }
                 if let Some(code) = &code {
                     requests::insert_code_ref(tx, id, code).await?;
                     match code.anchor {
@@ -407,7 +433,10 @@ impl TaskService {
                             ("request", json!(request.to_string())),
                             ("holder", json!(drafter.worker.as_str())),
                         ])
-                        .with_hint("call list_requests to pick another request")
+                        .with_hint(format!(
+                            "{} drafts it: call send_message to {} with request {request} to add what you know, or call list_requests to pick another request",
+                            drafter.worker, drafter.worker
+                        ))
                         .into());
                     }
                     data["taken_over"] = json!(true);
@@ -422,6 +451,52 @@ impl TaskService {
             .await?;
         self.bus.publish(buffer);
         self.request_view(request).await
+    }
+
+    /// Tells the main agent and every area lead of each request in an area that nobody claimed within `escalate_minutes` of its creation, or of the end of the latest pause when that is later, at the clock's `now`: one `request.escalated` by fold per request, with its requester and area, in the write that marks it escalated. While the project's agents are paused no lead can claim, so nothing is escalated. A request is escalated once, so a repeated run tells nobody again; one that a drafter claimed or that closed since the read is left alone. Returns how many requests it escalated.
+    pub async fn escalate_due_requests(&self, escalate_minutes: u64) -> Result<usize, TaskError> {
+        let now = self.clock.now();
+        let wait = std::time::Duration::from_secs(escalate_minutes.saturating_mul(60));
+        let Some(before) = now.checked_sub(wait) else {
+            return Ok(0);
+        };
+        let pause = agents::pause_state(self.store.read()).await?;
+        if pause.is_paused() || pause.resumed_at.is_some_and(|resumed| resumed >= before) {
+            return Ok(0);
+        }
+        let due = requests::waiting_area_requests(self.store.read(), before).await?;
+        let mut escalated = 0;
+        for waiting in due {
+            let mut buffer = EventBuffer::new();
+            let done =
+                self.store
+                    .write(async |tx| {
+                        if agents::pause_state(tx.conn()).await?.is_paused() {
+                            return Ok::<_, TaskError>(false);
+                        }
+                        let Some(row) = requests::fetch(tx.conn(), waiting.id).await? else {
+                            return Ok::<_, TaskError>(false);
+                        };
+                        if row.state != RequestState::Open || row.drafter.is_some() {
+                            return Ok(false);
+                        }
+                        if !requests::mark_escalated(tx, waiting.id, now).await? {
+                            return Ok(false);
+                        }
+                        let event = NewEvent::new(types::REQUEST_ESCALATED, EventActor::fold())?
+                            .data(json!({
+                                "request": waiting.id.to_string(),
+                                "requester": row.requester.label(),
+                                "area": waiting.area.as_str(),
+                            }))?;
+                        buffer.append(tx, &event, now).await?;
+                        Ok(true)
+                    })
+                    .await?;
+            self.bus.publish(buffer);
+            escalated += usize::from(done);
+        }
+        Ok(escalated)
     }
 
     /// Gives the request up. A `drafting` request returns to `open`; a request with a draft keeps its state for the next drafter or the requester.
@@ -508,6 +583,7 @@ impl TaskService {
                     .filter_map(|card| card.label.clone())
                     .collect();
                 require_labels(tx, &labels).await?;
+                require_card_tasks(tx, actor, checked.cards()).await?;
                 let note = match &draft.note {
                     Some(note) => request_text(note, "note", true)?,
                     None => None,
@@ -577,7 +653,7 @@ impl TaskService {
         self.request_view(request).await
     }
 
-    /// The requester approves the latest draft version: one task per card, created by the same rules as `create_task` and linked to the request, one direct dependency per edge by the same rules as `add_dependency`, a recompute seeded with the new tasks so each lands in its calculated column, and `request.approved` naming the tasks, all in one transaction. A version other than the latest is `stale_version`.
+    /// The requester approves the latest draft version: one task per card with the card's kind, created by the insertion of `create_task_plan` and linked to the request, one direct dependency per edge and per needed existing task by the same rules as `add_dependency`, a recompute seeded with the new tasks so each lands in its calculated column, and `request.approved` naming the tasks, all in one transaction. A version other than the latest is `stale_version`.
     pub async fn approve_request_draft(
         &self,
         actor: &Actor,
@@ -598,41 +674,16 @@ impl TaskService {
                     .into_iter()
                     .find(|draft| draft.version == expected_version)
                     .ok_or(StoreError::Corrupt("request_drafts.version"))?;
-                let mut by_key: BTreeMap<&str, TaskId> = BTreeMap::new();
-                let mut created = Vec::with_capacity(draft.cards.len());
-                for card in &draft.cards {
-                    let input = CreateTask {
-                        title: TaskTitle::parse(&card.title)
-                            .map_err(|_| StoreError::Corrupt("request_draft_cards.title"))?,
-                        description: TaskDescription::new(card.description.clone()),
-                        labels: card.label.iter().cloned().collect(),
-                    };
-                    let task =
-                        create_in_tx(tx, &mut buffer, actor, &input, TaskKind::Proposal, now)
-                            .await?;
-                    requests::set_task_request(tx, task, request).await?;
-                    by_key.insert(&card.key, task);
-                    created.push(task);
+                let plan = draft_plan(&draft.cards, &draft.edges)?;
+                let created: Vec<TaskId> =
+                    insert_plan_in_tx(tx, &mut buffer, actor, PlanGate::ApprovedDraft, &plan, now)
+                        .await?
+                        .into_iter()
+                        .map(|(_, task)| task)
+                        .collect();
+                for task in &created {
+                    requests::set_task_request(tx, *task, request).await?;
                 }
-                for edge in &draft.edges {
-                    let (Some(&dependent), Some(&prerequisite)) = (
-                        by_key.get(edge.dependent.as_str()),
-                        by_key.get(edge.prerequisite.as_str()),
-                    ) else {
-                        return Err(StoreError::Corrupt("request_draft_edges.key").into());
-                    };
-                    add_edge_in_tx(
-                        tx,
-                        &mut buffer,
-                        dependent,
-                        prerequisite,
-                        DependencyOrigin::Direct,
-                        actor,
-                        now,
-                    )
-                    .await?;
-                }
-                buffer.extend(recompute(tx, &created, now).await?.events);
                 requests::set_state(tx, request, next, now).await?;
                 let names: Vec<String> = created.iter().map(TaskId::to_string).collect();
                 let drafter = row.drafter.as_ref().map(|drafter| drafter.worker.as_str());
@@ -859,6 +910,30 @@ impl Role {
     }
 }
 
+/// The area of a new request: the one the requester named, which must exist, else the area of the requester's worker. A human, the main agent and a worker outside an area make a request in no area.
+async fn request_area(
+    tx: &mut WriteTx,
+    actor: &Actor,
+    named: Option<AreaName>,
+) -> Result<Option<AreaName>, TaskError> {
+    if let Some(area) = named {
+        if agents::find_area(tx.conn(), &area).await?.is_none() {
+            return Err(FoldError::new(codes::AREA_NOT_FOUND, format!("area {area} does not exist"))
+                .with_details([("area", json!(area.as_str()))])
+                .with_hint("leave area out to use the area of your worker, or name an area that list_agents shows")
+                .into());
+        }
+        return Ok(Some(area));
+    }
+    let Actor::Agent(agent) = actor else {
+        return Ok(None);
+    };
+    Ok(agents::find_worker_process(tx.conn(), &agent.agent)
+        .await?
+        .filter(|process| process.role != fold_core::roles::Role::Main)
+        .and_then(|process| process.area))
+}
+
 async fn next_request_id(tx: &mut WriteTx) -> Result<RequestId, TaskError> {
     let number = counters::allocate(tx, IdKind::Request).await?;
     Ok(RequestId::from_number(number).ok_or(StoreError::Corrupt("counters.next"))?)
@@ -1001,4 +1076,56 @@ fn version_refusal(proposal: ProposalId, version: u32) -> TaskError {
     ])
     .with_hint("call list_proposals for the proposals and get_proposal for the versions of one")
     .into()
+}
+
+/// The plan an approved draft creates: each card a task of its kind and label, needing its existing tasks and, through the edges, the cards before it. The kind gate ran when the version was written.
+fn draft_plan(cards: &[DraftCard], edges: &[DraftEdge]) -> Result<Vec<PlannedTask>, TaskError> {
+    cards
+        .iter()
+        .map(|card| {
+            let mut needs: Vec<PlanRef> =
+                card.needs.iter().copied().map(PlanRef::Existing).collect();
+            needs.extend(
+                edges
+                    .iter()
+                    .filter(|edge| edge.dependent == card.key)
+                    .map(|edge| PlanRef::Key(edge.prerequisite.clone())),
+            );
+            Ok(PlannedTask {
+                key: card.key.clone(),
+                title: TaskTitle::parse(&card.title)
+                    .map_err(|_| StoreError::Corrupt("request_draft_cards.title"))?,
+                description: TaskDescription::new(card.description.clone()),
+                labels: card.label.iter().cloned().collect(),
+                kind: card.kind,
+                needs,
+                parent: None,
+                human_review: None,
+                hold: None,
+                checklist: Vec::new(),
+                main_approves: false,
+            })
+        })
+        .collect()
+}
+
+/// Every existing task a card needs must exist, and a card of a kind without a proposal is written only by whoever may create such a task in the card's area, the same gate as `create_task` with a kind. Approval then creates the tasks as written.
+async fn require_card_tasks(
+    tx: &mut WriteTx,
+    actor: &Actor,
+    cards: &[DraftCard],
+) -> Result<(), TaskError> {
+    for card in cards {
+        for need in &card.needs {
+            if fold_store::tasks::fetch(tx.conn(), *need).await?.is_none() {
+                return Err(task_not_found(*need));
+            }
+        }
+        if card.kind != TaskKind::Proposal {
+            let starter = starter_of(tx, actor).await?;
+            let areas = areas_of(tx, &card.label.iter().cloned().collect::<Vec<_>>()).await?;
+            policy::can_choose_no_proposal(&starter, &areas).map_err(FoldError::from)?;
+        }
+    }
+    Ok(())
 }

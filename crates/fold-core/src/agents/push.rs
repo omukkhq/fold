@@ -3,12 +3,19 @@ use std::collections::BTreeSet;
 use crate::agents::roles::{CLAUDE_NOT_FOUND, FLD_MISSING, MCP_UNAVAILABLE};
 use crate::agents::{AgentName, AreaName};
 use crate::events::{Event, types};
-use crate::ids::{MessageId, ProposalId, RequestId, TaskId};
+use crate::ids::{MessageId, ProposalId, RequestId, ReviewBatchId, TaskId};
 use crate::reviews::plans::PlanCandidate;
+use crate::tasks::requests::Requester;
 use crate::tasks::status::TaskStatus;
 
 /// The longest notice text, one line of ids and the next tool. A notice whose next tool is `get_inbox` carries the messages the agent has not seen yet in place of that call, up to [`crate::carry::MAX_CARRIED_LEN`]; see [`Notice::carrier_head`].
 pub const MAX_NOTICE_LEN: usize = 200;
+
+/// The longest notice of a new or escalated request, which also names its requester, its area and up to [`MAX_REQUEST_EXCERPT_CHARS`] characters of its body, so the lead can tell from the notice alone whether the request is its own.
+pub const MAX_REQUEST_NOTICE_LEN: usize = 1024;
+
+/// The most characters of a request's body that its notice repeats.
+pub const MAX_REQUEST_EXCERPT_CHARS: usize = 200;
 
 /// The next tool of a notice that the daemon sends with the unread messages in place of naming the tool.
 pub const CARRIER_TOOL: &str = "get_inbox";
@@ -34,8 +41,10 @@ pub struct PushContext {
     pub requester: Option<AgentName>,
     /// The agent of the worker drafting the event's request.
     pub drafter: Option<AgentName>,
-    /// For a task that turned ready, the leads of the areas whose label it carries; for a new request, the lead of every area.
+    /// For a task that turned ready, the leads of the areas whose label it carries; for a new or escalated request, the lead of every area.
     pub area_leads: BTreeSet<AgentName>,
+    /// For a new request in an area, the lead of that area; `None` while the area has no lead.
+    pub request_area_lead: Option<AgentName>,
     /// For a task that turned ready, the areas whose label it carries, led or not; for `task.updated`, only the areas of the labels the edit added.
     pub areas: BTreeSet<AreaName>,
     /// Every agent tagged `main`.
@@ -48,6 +57,8 @@ pub struct PushContext {
     pub main_task: bool,
     /// For `worker.stopped` and `worker.failed` of a reviewer, the open proposals whose review claim it still holds, whose newest version has no verdict and for which fold owes it no resume; empty while the project is paused, because the resume of the pause runs the reviewer again.
     pub unreviewed: Vec<ProposalId>,
+    /// For `worker.stopped` and `worker.failed` of a reviewer, the open review batches it holds that still have a member, which no reviewer sends now; empty while the project is paused, as `unreviewed` is.
+    pub held_batches: Vec<ReviewBatchId>,
     /// For `proposal.opened`, `proposal.version_added` and `proposal.review_again_requested`, the event's proposal waits in a review plan, whose own notices tell the review lead when to start its reviewer.
     pub planned: bool,
     /// For `proposal.opened`, and for `proposal.version_added` without a review claim, of a proposal that waits in no review plan: the related open proposals that can be reviewed with it and the related tasks that a plan for it can wait for, strongest link first; empty once the proposal has a verdict.
@@ -77,7 +88,6 @@ pub fn is_pushed(event: &Event) -> bool {
     [
         types::PROPOSAL_OPENED,
         types::REVIEW_SUBMITTED,
-        types::INTEGRATION_CONFLICTED,
         types::TASK_STATUS_CHANGED,
         types::TASK_UPDATED,
         types::MESSAGE_SENT,
@@ -114,6 +124,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::FOLDER_AGENT_CHANGED,
         types::WORKER_STALLED,
         types::CLAIM_STALE,
+        types::REQUEST_ESCALATED,
     ]
     .contains(&event.event_type)
 }
@@ -508,14 +519,6 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
             _ => None,
         };
     }
-    if kind == types::INTEGRATION_CONFLICTED {
-        let proposal = event.proposal?;
-        return Some((
-            ctx.author.iter().cloned().collect(),
-            format!("{proposal} conflicts with main"),
-            "sync_workspace",
-        ));
-    }
     if kind == types::TASK_STATUS_CHANGED {
         let task = event.task?;
         let to = event.data.get("to").and_then(serde_json::Value::as_str)?;
@@ -671,12 +674,12 @@ fn unreachable_worker_rule(
     Some((agents, text, "list_workers"))
 }
 
-/// A reviewer that ended with versions that have no verdict, which fold does not resume it for, reaches the review lead: fold resumes a reviewer once for each version, and the claim it keeps hides the versions from the review lead's notices. `start_worker` takes over the claim of a reviewer that has ended.
+/// A reviewer that ended with versions that have no verdict, which fold does not resume it for, or with open batches that still have members, reaches the review lead: fold resumes a reviewer once for each version, the claim it keeps hides the versions from the review lead's notices, and nobody sends the review of its batches. `start_worker` takes over the claim of a reviewer that has ended, and takes each proposal it names out of the ended reviewer's batch.
 fn ended_reviewer_rule(
     event: &Event,
     ctx: &PushContext,
 ) -> Option<(Vec<AgentName>, String, &'static str)> {
-    if ctx.unreviewed.is_empty() {
+    if ctx.unreviewed.is_empty() && ctx.held_batches.is_empty() {
         return None;
     }
     let agent = event
@@ -684,10 +687,49 @@ fn ended_reviewer_rule(
         .get("agent")
         .and_then(serde_json::Value::as_str)?;
     let proposals: Vec<String> = ctx.unreviewed.iter().map(ToString::to_string).collect();
-    let text = format!(
-        "{agent} ended with no verdict on {}; a reviewer you start takes over its claim",
-        listed(&proposals, proposals.len(), "proposal", "proposals", true)
-    );
+    let batches: Vec<String> = ctx.held_batches.iter().map(ToString::to_string).collect();
+    let compose = |spelled: bool| {
+        let unreviewed = format!(
+            "with no verdict on {}",
+            listed(
+                &proposals,
+                proposals.len(),
+                "proposal",
+                "proposals",
+                spelled
+            )
+        );
+        let list = listed(
+            &batches,
+            batches.len(),
+            "open batch",
+            "open batches",
+            spelled,
+        );
+        let held = if list != batches.join(", ") {
+            format!("holding {list}")
+        } else if batches.len() == 1 {
+            format!("holding the open batch {list}")
+        } else {
+            format!("holding open batches {list}")
+        };
+        match (proposals.is_empty(), batches.is_empty()) {
+            (_, true) => {
+                format!("{agent} ended {unreviewed}; a reviewer you start takes over its claim")
+            }
+            (true, false) => format!(
+                "{agent} ended {held}; a reviewer you start with its members takes them over"
+            ),
+            (false, false) => format!(
+                "{agent} ended {held} and {unreviewed}; a reviewer you start takes over its claims and members"
+            ),
+        }
+    };
+    // "fold: " and ". Call start_worker." frame the text.
+    let budget = MAX_NOTICE_LEN - "fold: . Call start_worker.".len();
+    let text = Some(compose(true))
+        .filter(|text| text.len() <= budget)
+        .unwrap_or_else(|| compose(false));
     let leads = ctx
         .review_leads
         .iter()
@@ -821,7 +863,7 @@ fn ready_route(task: TaskId, ctx: &PushContext) -> (Vec<AgentName>, String, &'st
     )
 }
 
-/// A request asks the main agent and every area lead to claim it, so whoever finds it relevant drafts it, and each later step goes to whoever acts next: the requester's agent reads a draft, the drafter's agent revises it or starts the approved tasks. A human requester reads the web, so nothing is pushed to one.
+/// A new request in an area asks only that area's lead to claim it, so the other agents do not wake for work that is not theirs. A request in no area, one whose area has no lead or whose lead made it, and an escalated one, which nobody claimed in time, ask the main agent and every area lead, so whoever finds it relevant drafts it. Each later step goes to whoever acts next: the requester's agent reads a draft, the drafter's agent revises it or starts the approved tasks. A human requester reads the web, so nothing is pushed to one.
 fn request_rule(
     event: &Event,
     ctx: &PushContext,
@@ -829,6 +871,7 @@ fn request_rule(
     let kind = event.event_type;
     if ![
         types::REQUEST_CREATED,
+        types::REQUEST_ESCALATED,
         types::REQUEST_DRAFT_SUBMITTED,
         types::REQUEST_CHANGES_REQUESTED,
         types::REQUEST_APPROVED,
@@ -839,9 +882,30 @@ fn request_rule(
     }
     let request = request_of(event)?;
     let drafter = || ctx.drafter.iter().cloned().collect();
-    if kind == types::REQUEST_CREATED {
-        let agents = ctx.main_agents.union(&ctx.area_leads).cloned().collect();
-        return Some((agents, format!("{request} created"), "claim_request"));
+    if kind == types::REQUEST_CREATED || kind == types::REQUEST_ESCALATED {
+        let area = event
+            .data
+            .get("area")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|area| AreaName::parse(area).ok());
+        let agents = match (&area, &ctx.request_area_lead) {
+            (Some(_), Some(lead))
+                if kind == types::REQUEST_CREATED && event.actor.agent() != Some(lead.as_str()) =>
+            {
+                vec![lead.clone()]
+            }
+            _ => ctx.main_agents.union(&ctx.area_leads).cloned().collect(),
+        };
+        let head = if kind == types::REQUEST_CREATED {
+            format!("{request} created")
+        } else {
+            format!("{request} escalated (nobody claimed it in time)")
+        };
+        return Some((
+            agents,
+            request_text(head, event, area.as_ref()),
+            "claim_request",
+        ));
     }
     if kind == types::REQUEST_DRAFT_SUBMITTED {
         let role = event.data.get("role").and_then(serde_json::Value::as_str)?;
@@ -877,6 +941,59 @@ fn request_rule(
         })
         .unwrap_or_default();
     Some((drafter(), approved_text(request, &tasks), "get_ready_tasks"))
+}
+
+/// The notice text of a new or escalated request: `head`, then the requester, the area and the body excerpt that the daemon wrote into the event, each only when present. The excerpt is one line without its closing full stops, which the notice adds, of at most [`MAX_REQUEST_EXCERPT_CHARS`] characters, cut shorter when the whole notice would pass [`MAX_REQUEST_NOTICE_LEN`].
+fn request_text(head: String, event: &Event, area: Option<&AreaName>) -> String {
+    let mut text = head;
+    if let Some(requester) = event
+        .data
+        .get("requester")
+        .and_then(serde_json::Value::as_str)
+        .and_then(Requester::parse)
+    {
+        text.push_str(&format!(" by {}", requester.label()));
+    }
+    if let Some(area) = area {
+        text.push_str(&format!(" in area {area}"));
+    }
+    let Some(excerpt) = event
+        .data
+        .get("excerpt")
+        .and_then(serde_json::Value::as_str)
+        .map(|excerpt| one_line(excerpt).trim_end_matches('.').to_owned())
+        .filter(|excerpt| !excerpt.is_empty())
+    else {
+        return text;
+    };
+    // "fold: ", ": ", "…" and ". Call claim_request." around the text and the excerpt.
+    let room =
+        MAX_REQUEST_NOTICE_LEN.saturating_sub(text.len() + "fold: : …. Call claim_request.".len());
+    let mut clipped = String::new();
+    let mut cut = false;
+    for (taken, ch) in excerpt.chars().enumerate() {
+        if taken == MAX_REQUEST_EXCERPT_CHARS || clipped.len() + ch.len_utf8() > room {
+            cut = true;
+            break;
+        }
+        clipped.push(ch);
+    }
+    if cut {
+        clipped.push('…');
+    }
+    text.push_str(": ");
+    text.push_str(&clipped);
+    text
+}
+
+/// `text` as one line that a session push can post: each run of control characters and spaces becomes one space, and a cross-session envelope tag loses its opening bracket.
+fn one_line(text: &str) -> String {
+    text.split(|ch: char| ch.is_control() || ch.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace("</cross-session-message", "‹/cross-session-message")
+        .replace("<cross-session-message", "‹cross-session-message")
 }
 
 /// The longest task list an approval notice spells out; a longer draft is counted instead, so the notice stays within [`MAX_NOTICE_LEN`].
@@ -1188,12 +1305,14 @@ mod tests {
             requester: Some(name("frontend")),
             drafter: Some(name("backend")),
             area_leads: BTreeSet::new(),
+            request_area_lead: None,
             areas: BTreeSet::new(),
             main_agents: BTreeSet::new(),
             held_from_agents: false,
             starter: None,
             main_task: false,
             unreviewed: Vec::new(),
+            held_batches: Vec::new(),
             planned: false,
             plan_candidates: Vec::new(),
         }
@@ -1627,16 +1746,10 @@ mod tests {
     }
 
     #[test]
-    fn a_conflict_reaches_the_author() {
+    fn a_conflict_pushes_nothing_to_the_author() {
         let event = event(types::INTEGRATION_CONFLICTED, "lead");
-        assert_eq!(
-            sent(&notice_for(&event, &ctx())),
-            vec![row(
-                "frontend",
-                "fold: P-3 conflicts with main. Call sync_workspace.",
-                "sync_workspace"
-            )]
-        );
+        assert!(!is_pushed(&event));
+        assert!(notice_for(&event, &ctx()).is_empty());
     }
 
     #[test]
@@ -2189,6 +2302,103 @@ mod tests {
     }
 
     #[test]
+    fn a_reviewer_that_ends_holding_an_open_batch_tells_the_review_leads() {
+        let batch = |number| ReviewBatchId::from_number(number).unwrap();
+        let holding = PushContext {
+            held_batches: vec![batch(2)],
+            ..ctx()
+        };
+        let text = "fold: reviewer-1 ended holding the open batch rb-2; a reviewer you start with its members takes them over. Call start_worker.";
+        for kind in [types::WORKER_STOPPED, types::WORKER_FAILED] {
+            let event = with_data(event(kind, "fold"), json!({"agent": "reviewer-1"}));
+            assert_eq!(
+                sent(&notice_for(&event, &holding)),
+                vec![
+                    row("frontend", text, "start_worker"),
+                    row("lead", text, "start_worker"),
+                    row("review", text, "start_worker"),
+                ],
+                "{kind}"
+            );
+        }
+        // A reviewer that holds no open batch and left no version without a verdict tells nobody.
+        let stopped = with_data(
+            event(types::WORKER_STOPPED, "fold"),
+            json!({"agent": "reviewer-1"}),
+        );
+        assert!(notice_for(&stopped, &ctx()).is_empty());
+        // The holder that ends is never told of itself.
+        let lead_stops = with_data(
+            event(types::WORKER_STOPPED, "fold"),
+            json!({"agent": "lead"}),
+        );
+        assert!(
+            sent(&notice_for(&lead_stops, &holding))
+                .iter()
+                .all(|(agent, _, _)| agent != "lead")
+        );
+    }
+
+    #[test]
+    fn an_ended_batch_holder_with_unreviewed_proposals_gets_one_joined_notice() {
+        let batch = |number| ReviewBatchId::from_number(number).unwrap();
+        let proposal = |number| ProposalId::from_number(number).unwrap();
+        let both = PushContext {
+            review_leads: [name("lead")].into_iter().collect(),
+            unreviewed: vec![proposal(3), proposal(5)],
+            held_batches: vec![batch(2), batch(4)],
+            ..ctx()
+        };
+        let stopped = with_data(
+            event(types::WORKER_STOPPED, "fold"),
+            json!({"agent": "reviewer-1"}),
+        );
+        assert_eq!(
+            sent(&notice_for(&stopped, &both)),
+            vec![row(
+                "lead",
+                "fold: reviewer-1 ended holding open batches rb-2, rb-4 and with no verdict on P-3, P-5; a reviewer you start takes over its claims and members. Call start_worker.",
+                "start_worker"
+            )]
+        );
+        // Long names and lists fall back to counts, so the notice stays one short line.
+        let long = PushContext {
+            review_leads: [name("lead")].into_iter().collect(),
+            unreviewed: (0..12).map(|n| proposal(u32::MAX - n)).collect(),
+            held_batches: (0..12).map(|n| batch(u32::MAX - n)).collect(),
+            ..ctx()
+        };
+        let agent = "r".repeat(32);
+        let stopped = with_data(
+            event(types::WORKER_STOPPED, "fold"),
+            json!({"agent": agent}),
+        );
+        let notices = notice_for(&stopped, &long);
+        assert_eq!(notices.len(), 1);
+        assert!(
+            notices[0].text.len() <= MAX_NOTICE_LEN,
+            "{}",
+            notices[0].text
+        );
+        assert!(
+            notices[0]
+                .text
+                .contains("holding 12 open batches and with no verdict on 12 proposals")
+        );
+        let one = PushContext {
+            unreviewed: Vec::new(),
+            held_batches: vec![batch(u32::MAX)],
+            ..long
+        };
+        let longest = with_data(
+            event(types::WORKER_STOPPED, "fold"),
+            json!({"agent": "r".repeat(32)}),
+        );
+        let notices = notice_for(&longest, &one);
+        assert!(notices[0].text.len() <= MAX_NOTICE_LEN);
+    }
+
+    #[test]
     fn a_worker_that_cannot_reach_the_model_tells_the_main_agent_and_its_starter() {
         let mut ctx = ctx();
         ctx.main_agents = [name("main")].into_iter().collect();
@@ -2296,7 +2506,6 @@ mod tests {
         for kind in [
             types::PROPOSAL_OPENED,
             types::REVIEW_SUBMITTED,
-            types::INTEGRATION_CONFLICTED,
             types::TASK_STATUS_CHANGED,
             types::MESSAGE_SENT,
             types::PROPOSAL_VERSION_ADDED,
@@ -2636,6 +2845,141 @@ mod tests {
         assert!(
             notice_for(&by_human, &ctx()).is_empty(),
             "without a main agent or an area lead nobody is asked"
+        );
+    }
+
+    fn area_request_ctx(lead: Option<&str>) -> PushContext {
+        PushContext {
+            main_agents: [name("main")].into_iter().collect(),
+            area_leads: [name("api-lead"), name("web-lead")].into_iter().collect(),
+            request_area_lead: lead.map(name),
+            ..ctx()
+        }
+    }
+
+    #[test]
+    fn a_new_request_in_an_area_reaches_only_that_areas_lead() {
+        let created = request_event(
+            types::REQUEST_CREATED,
+            "web-worker",
+            json!({"request": "RQ-4", "requester": "web-worker", "area": "web", "excerpt": "The board\nflickers."}),
+        );
+        assert_eq!(
+            sent(&notice_for(&created, &area_request_ctx(Some("web-lead")))),
+            vec![row(
+                "web-lead",
+                "fold: RQ-4 created by web-worker in area web: The board flickers. Call claim_request.",
+                "claim_request"
+            )]
+        );
+        let everyone = vec!["api-lead", "main", "web-lead"];
+        let agents = |event: &Event, ctx: &PushContext| {
+            notice_for(event, ctx)
+                .into_iter()
+                .map(|notice| notice.agent.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            agents(&created, &area_request_ctx(None)),
+            everyone,
+            "an area without a lead asks everyone"
+        );
+        let by_lead = request_event(
+            types::REQUEST_CREATED,
+            "web-lead",
+            json!({"request": "RQ-4", "requester": "web-lead", "area": "web"}),
+        );
+        assert_eq!(
+            agents(&by_lead, &area_request_ctx(Some("web-lead"))),
+            vec!["api-lead", "main"],
+            "a lead's own request asks the others"
+        );
+    }
+
+    #[test]
+    fn a_new_request_in_no_area_reaches_the_main_agent_and_every_lead() {
+        let created = request_event(
+            types::REQUEST_CREATED,
+            "human:ana",
+            json!({"request": "RQ-6", "requester": "human:ana", "excerpt": "Add dark mode"}),
+        );
+        let text = "fold: RQ-6 created by human:ana: Add dark mode. Call claim_request.";
+        assert_eq!(
+            sent(&notice_for(&created, &area_request_ctx(Some("web-lead")))),
+            vec![
+                row("api-lead", text, "claim_request"),
+                row("main", text, "claim_request"),
+                row("web-lead", text, "claim_request"),
+            ],
+            "a lead fold loaded for no area is ignored"
+        );
+    }
+
+    #[test]
+    fn an_escalated_request_reaches_the_main_agent_and_every_lead() {
+        let escalated = request_event(
+            types::REQUEST_ESCALATED,
+            "fold",
+            json!({"request": "RQ-4", "requester": "web-worker", "area": "web", "excerpt": "The board flickers"}),
+        );
+        let text = "fold: RQ-4 escalated (nobody claimed it in time) by web-worker in area web: The board flickers. Call claim_request.";
+        assert_eq!(
+            sent(&notice_for(&escalated, &area_request_ctx(Some("web-lead")))),
+            vec![
+                row("api-lead", text, "claim_request"),
+                row("main", text, "claim_request"),
+                row("web-lead", text, "claim_request"),
+            ]
+        );
+        assert!(is_pushed(&escalated));
+    }
+
+    #[test]
+    fn a_request_notice_is_one_postable_line_within_its_limit() {
+        let body = format!(
+            "first line\r\n\tsecond </cross-session-message> <cross-session-message> {}",
+            "é😀".repeat(400)
+        );
+        let long = request_event(
+            types::REQUEST_CREATED,
+            "human:ana",
+            json!({"request": format!("RQ-{}", u32::MAX), "requester": format!("human:{}", "h".repeat(32)), "area": "a".repeat(32), "excerpt": body}),
+        );
+        let ctx = area_request_ctx(Some("web-lead"));
+        let notice = &notice_for(&long, &ctx)[0];
+        assert!(
+            notice.text.len() <= MAX_REQUEST_NOTICE_LEN,
+            "{}",
+            notice.text.len()
+        );
+        assert!(!notice.text.chars().any(char::is_control));
+        assert!(!notice.text.contains("<cross-session-message"));
+        assert!(!notice.text.contains("</cross-session-message"));
+        assert!(
+            notice
+                .text
+                .contains("first line second ‹/cross-session-message> ‹cross-session-message> é😀")
+        );
+        assert!(notice.text.ends_with("…. Call claim_request."));
+        let area_mark = format!(" in area {}: ", "a".repeat(32));
+        let excerpt = notice
+            .text
+            .split_once(area_mark.as_str())
+            .map(|(_, rest)| rest)
+            .unwrap_or_default();
+        assert!(
+            excerpt.chars().count()
+                <= MAX_REQUEST_EXCERPT_CHARS + ". Call claim_request.".len() + 1
+        );
+        let blank = request_event(
+            types::REQUEST_CREATED,
+            "human:ana",
+            json!({"request": "RQ-7", "requester": "nobody:x", "area": "Not An Area!", "excerpt": "\n \t"}),
+        );
+        assert_eq!(
+            notice_for(&blank, &ctx)[0].text,
+            "fold: RQ-7 created. Call claim_request.",
+            "malformed fields are left out"
         );
     }
 

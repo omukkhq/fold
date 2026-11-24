@@ -77,6 +77,19 @@ describe("memberRows", () => {
     expect(rows[2]).toMatchObject({ title: null, author: null });
     expect(conflictedMembers(rows)).toEqual(["P-5"]);
 
+    const lane = memberRows(batch({ members: [member("P-8")] }), [
+      {
+        ...proposalSummary("P-8", { conflicted: true }),
+        conflicted_reason: {
+          kind: "lane_checks_failed",
+          lane: "migrations",
+          run: "cr-4",
+          fixer: null,
+        },
+      },
+    ]);
+    expect(lane[0]?.verdict).toBe("reviewing");
+
     const closed = memberRows(
       batch({
         state: "submitted",

@@ -59,7 +59,10 @@ async fn acceptance_39_a_new_request_ends_a_leads_wait_and_reaches_a_main_agent_
     assert!(!lead.to_string().contains(body), "ids, never the text");
     assert_eq!(
         lead_inbox.next().await,
-        wire(TOKEN, "fold: RQ-1 created. Call claim_request.")
+        wire(
+            TOKEN,
+            "fold: RQ-1 created by human:ana: The board needs a search. Call claim_request."
+        )
     );
     assert_eq!(
         reviewer,

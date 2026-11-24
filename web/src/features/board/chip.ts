@@ -10,13 +10,13 @@ import {
   Hand,
   Hourglass,
   KeyRound,
-  ListChecks,
+  LoaderCircle,
   MessageCircle,
   OctagonAlert,
   UserCheck,
   type LucideIcon,
 } from "lucide-react";
-import type { BoardCard, LiveCheckRun } from "@/api/board";
+import type { BoardCard } from "@/api/board";
 import type { ChipTone } from "@/components/badge/chips";
 import { planWaitLabel } from "@/features/proposals/planWait";
 import type { WorkerActivity } from "@/live/workerActivity";
@@ -28,6 +28,7 @@ import {
   leadCheckMark,
   needsText,
 } from "./card";
+import { checkRunLabel, type CheckRunView } from "./checkRun";
 
 export interface CardChip {
   tone: ChipTone;
@@ -88,7 +89,7 @@ function activityChip(activity: WorkerActivity): CardChip {
  */
 export function cardChip(
   card: ChipCard,
-  run: LiveCheckRun | null = null,
+  run: CheckRunView | null = null,
   activity: WorkerActivity | null = null,
 ): CardChip | null {
   if (card.status === "done") {
@@ -108,7 +109,7 @@ export function cardChip(
     return { tone: "bad", icon: OctagonAlert, text: blocked };
   }
   if (run !== null) {
-    return { tone: "neutral", icon: ListChecks, text: "Running checks" };
+    return { tone: "neutral", icon: LoaderCircle, text: checkRunLabel(run) };
   }
   const stale: CardChip = {
     tone: "warn",

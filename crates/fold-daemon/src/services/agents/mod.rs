@@ -54,11 +54,12 @@ pub use presence::SeenPresence;
 #[cfg(feature = "dev-launcher")]
 pub use workers::{DEV_STUB_COMMAND, DEV_STUB_DIR};
 pub use workers::{
-    Launcher, MCP_RETRY_TURN, PAUSE_TURN, PauseState, ProjectAccount, RESTART_TURN, StartWorker,
-    StartedWorker, StopTimeouts, StreamFacts, Supervisor, WorkerLimitsChanged, WorkerStreams,
-    new_session_id,
+    Launcher, MCP_RETRY_TURN, PAUSE_TURN, PauseState, ProjectAccount, QueueEntry,
+    QueuedWorkerStart, RESTART_TURN, RestartOutcome, StartOutcome, StartWorker, StartedWorker,
+    StopTimeouts, StreamFacts, Supervisor, WorkerLimitsChanged, WorkerStreams,
+    follow_queued_starts, new_session_id,
 };
-pub(crate) use workers::{code_of, starter_of};
+pub(crate) use workers::{code_of, named_area, starter_of};
 
 #[derive(Debug, Error)]
 pub enum AgentError {

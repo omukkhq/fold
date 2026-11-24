@@ -37,6 +37,11 @@ timeout = "2h"
 name = "build"
 run = "cargo build --workspace"
 stage = ["proposal", "integration"]
+
+# Proposals that change these paths integrate one at a time.
+[[serial]]
+name = "migrations"
+paths = ["crates/store/migrations/**", "Cargo.lock"]
 ```
 
 Keys. Every key is known, and a misspelt key refuses the whole file with `checks_file_invalid`, whose message names the line or the check:
@@ -50,16 +55,20 @@ Keys. Every key is known, and a misspelt key refuses the whole file with `checks
   - `stage`: optional, `proposal` (the default), `integration`, or a list such as `["proposal", "integration"]` to run the check in both stages under one name. A string is a list of one. An empty list, an unknown name or a repeated name refuses the file.
   - `timeout`: optional, a whole number with `s`, `m` or `h`, such as `"90s"`, `"10m"` or `"2h"`, from 1s to 24h. The default is 30 minutes. fold stops a command's whole process group at its timeout (`timed_out`), and at its end, so a server that a test started ends with it.
 
+- `[[serial]]`, at most 16, each an integration lane with:
+  - `name`: 1 to 64 letters, digits, `_`, `-` or `.`, unique among the lanes.
+  - `paths`: 1 to 64 globs of 1 to 500 characters each, relative to the root without empty, `.` or `..` segments. `*` and `?` match inside one segment, and `**`, only as a whole segment, matches any number of segments. A path that matches the globs of several lanes belongs to the first of them in the file.
+
 The file is at most 256 KiB. Prefer one check per tool or part of the repository with a `files` pattern, so a change of the docs runs no test suite.
 
 Stages:
 
 - `proposal` checks run on the files of a version before fold makes it. A task worker asks with `run_checks(task)`; `create_proposal` and `update_proposal` run them when no passed run of the same files on the same base stands, and answer with `checks` `running` and a run id; a reviewer's `submit_review_fix` runs them in its review checkout. They run in the author's task workspace or the reviewer's checkout, and the changed paths are those of the change against the workspace's base. A version comes into being only when the required checks pass. A human's edit in the web app, `fld record` and `submit_main_change` run no proposal checks.
-- `integration` checks run on the merged tree, after the approvals and before fold publishes the revision, under the project's integration lock, so main cannot move meanwhile. They run in `.fold/checks/main`, fold's own copy of main that keeps what the setup installs between runs and follows main after every revision. Only the integration checks whose pattern matches a path the merge changes on main run. A failure publishes nothing and sends the proposal back to its author, whose task worker fold resumes. `fld record` and `submit_main_change` run no integration checks.
+- `integration` checks run on the merged tree, after the approvals and before fold publishes the revision, under the project's integration lock, so main cannot move meanwhile. They run in `.fold/checks/main`, fold's own copy of main that keeps what the setup installs between runs and follows main after every revision. Only the integration checks whose pattern matches a path the merge changes on main run. A failure publishes nothing and sends the proposal back to its author, whose task worker fold resumes, except a lane failure as Queue and load says. A conflict of the merge goes to the reviewer that approved the version, never to the author. `fld record` and `submit_main_change` run no integration checks.
 
 Runs and results. A run is `running`, then `passed`, `failed` or `stopped`; each command is `passed`, `failed`, `timed_out`, `skipped` or `not_run`. A failed or stopped run names its reason: `check_failed`, `setup_failed`, `checks_file_invalid`, `files_changed` (a check or an edit changed the recorded files during the run, so put what a check writes in `.gitignore`), `workspace_changed`, `refused` (the command the run waited for is refused now), `daemon_stopped`, `superseded` (an integration started again on a newer state) or `fold_failed` (fold itself could not run the checks; the run says nothing of the change, and the proposal keeps its version and approvals). fold sends the result as a message from fold to the worker that asked, with the failed checks and the end of the first failed log; `get_check_run(run)` returns the whole run with each log's last 64 KiB, and `get_proposal` lists the runs of a version in `checks`. The events are `checks.started` and `checks.finished`.
 
-Queue and load. One run at a time goes in a workspace; a second gets `checks_running`. Integrations of a project wait in a queue in the order they were asked for. All projects of the daemon share at most half the processors' worth of check runs at once.
+Queue and load. One run at a time goes in a workspace; a second gets `checks_running`. Integrations of a project wait in a queue in the order they were asked for. An open proposal whose current version changes a path of a `[[serial]]` lane of main's file is a member of that lane. The members of a lane integrate one at a time, in the order of their first approval on any version, then by proposal number; a member without an approval waits behind every approved one. Only the front member integrates: `integrate_proposal` refuses another with `invalid_request`, the reason `lane_held` and its `lane` and `position`, and automatic and batch integrations wait the same way. `get_proposal`, `list_proposals` and `list_workers` show each member's lane and position. When a member conflicts or fails its integration checks after main changed a lane path since its version's base, the failure goes to the reviewer that approved the version, with a note that the lane moved. fold runs the queue and the lanes itself; no agent orders, holds or retries them by hand. All projects of the daemon share at most half the processors' worth of check runs at once.
 
 Changing the checks. A proposal version that adds, changes or removes `fold-checks.toml` gives its task the human review mark when it has none, so a human approves every change of the checks and no agent can weaken one without the user. Write the first file as a task of the area `main` or as a main workspace change with the user's OK (`submit_main_change`, where that OK is the approval). When main's own file is not valid, fold holds every integration, sends `integration.held` and lists the problem in Needs you under Project; a revision of main that fixes it, from `submit_main_change`, `fld record` or a proposal that fixes the file, lets the held integrations go on.
 
@@ -76,6 +85,7 @@ auto_checkpoints_kept = 20           # automatic checkpoints each workspace keep
 max_file_bytes = 52428800            # a larger file keeps its recorded version and gives a warning
 stall_minutes = 5                    # a worker that fold runs counts as stalled after this long with no open tool call and no output; a session fold does not run, after this long without a file change; never while its workspace runs checks or its worker waits for a person's answer, and counted from the end of its last run, a person's answer or a worker start
 closed_workspace_days = 14           # how long `fld gc` keeps the checkpoints of a closed workspace, a record only; also how long a closed workspace's directory waits for its owner, and a finished worker's folder stays; at least 1, since fold refuses 0, so an owner that still runs keeps a closed directory for at least a day
+request_escalate_minutes = 10        # a new request in an area goes first to that area's lead; after this long without a claim, fold tells the main agent and every area lead of it
 account = "work-a"                   # optional: the host account whose Claude subscription the project's workers and main agent use; `fld account use` writes it, and without it they use default, Claude Code's own login
 
 [git]
@@ -104,7 +114,7 @@ idle_minutes = 15                    # task_worker and reviewer only: an idle wo
 mcp = ["fold", "pencil"]             # the servers the role may load: fold and servers of the project's .mcp.json
 
 [roles.review_lead]
-handoff_at = 50                      # area_lead, review_lead and main only: the percent of the context window past which fold refreshes the lead through a hand-off note; without it, 85% of the window below 220k tokens and 60% from 220k
+handoff_at = 50                      # area_lead, review_lead and main only: the percent of the context window past which fold refreshes the lead through a hand-off note; without it, 40% for the review lead, and for the others 85% of the window below 220k tokens and 60% from 220k
 ```
 
 - The top-level numbers must be whole numbers above 0. A worker limit has no upper bound, and 0 lets no worker of its role start; the leads are outside the limits, and a lower limit never stops a running worker.

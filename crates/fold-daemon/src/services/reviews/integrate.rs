@@ -33,6 +33,7 @@ use super::checks::{
     fold_failed_refusal, next_version_run,
 };
 use super::conflicts::FoundConflict;
+use super::lanes::lane_held_refusal;
 use super::notify;
 use super::proposals::{Retirement, proposal_not_found, retire_proposal};
 use super::verdicts::update_refusal;
@@ -277,7 +278,7 @@ pub(super) fn decide(
 }
 
 impl ReviewService {
-    /// Integrates the current version of an open proposal onto main, by an agent that decides reviews (the main agent, the review lead or a reviewer) and is not the author's agent, or by a named human, who approves in the same action. `expected_version` is the version the caller saw; another current version refuses with `stale_version`. A refusal by the open, version or caller gate, or of a human on a marked task whose version no reviewer agent approved (`agent_approval_required`), writes nothing; a refusal by the approval, human review or prerequisite gate records a `refused` integration and `integration.refused`, then returns the gate's error. A clean merge moves main by compare-and-swap, records the integration, completes the task, retires the proposal, archives its workspaces and releases its claims in one transaction. A conflicting merge publishes nothing: it records a `conflicted` integration with its report, flags the proposal, tells the author's worker and returns the task to In Progress, then returns the conflicts.
+    /// Integrates the current version of an open proposal onto main, by an agent that decides reviews (the main agent, the review lead or a reviewer) and is not the author's agent, or by a named human, who approves in the same action. `expected_version` is the version the caller saw; another current version refuses with `stale_version`. A refusal by the open, version or caller gate, or of a human on a marked task whose version no reviewer agent approved (`agent_approval_required`), writes nothing; a refusal by the approval, human review or prerequisite gate records a `refused` integration and `integration.refused`, then returns the gate's error. A clean merge moves main by compare-and-swap, records the integration, completes the task, retires the proposal, archives its workspaces and releases its claims in one transaction. A conflicting merge publishes nothing: it records a `conflicted` integration with its report and flags the proposal, gives the conflict to the reviewer agent that approved the version, or tells the review lead when there is none, and leaves the task in Review, then returns the conflicts. The author gets no conflict notice.
     pub async fn integrate_proposal(
         &self,
         actor: &Actor,
@@ -297,6 +298,9 @@ impl ReviewService {
             }
             if row.integration_queued {
                 return Err(already_queued_refusal(proposal, row.current_version).into());
+            }
+            if let Some(place) = self.lane_hold(proposal).await? {
+                return Err(lane_held_refusal(&place).into());
             }
             let mut conn = self
                 .store
@@ -339,7 +343,7 @@ impl ReviewService {
         Ok(facts.is_some_and(|facts| decide(&facts, &caller, expected_version).is_ok()))
     }
 
-    /// Stores the request of the current version with `integration.queued`, then integrates in the background after the integrations ahead of it, in the order they were asked. A second request while one of the same version waits is refused at once. The stored request is what a daemon start serves again when a stop cut the queue short. A refusal or a conflict that the queue meets by then goes to the integrating agent as a message from fold, beside the conflict report the author gets; a success and failed checks send their own messages.
+    /// Stores the request of the current version with `integration.queued`, then integrates in the background after the integrations ahead of it, in the order they were asked. A second request while one of the same version waits is refused at once. The stored request is what a daemon start serves again when a stop cut the queue short. A refusal or a conflict that the queue meets by then goes to the integrating agent as a message from fold, beside the conflict report the reviewer that fixes it gets; a success and failed checks send their own messages.
     async fn queue_integration(
         &self,
         actor: &Actor,
@@ -593,7 +597,7 @@ impl ReviewService {
         )
     }
 
-    /// Integrates, as fold, every open proposal whose current version is ready: an agent that decides reviews or a human approved it, the latest verdict asks for no changes, a marked task has a human approval the mark accepts, and every prerequisite is Done. Each integration is the same procedure a deciding agent runs. A submitted review batch whose members all have their final state takes its turn first, its ready members together; the members a batch holds back, while it is open or waits for a member, are left to it. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag, and one whose update or reviewer's fix runs the checks of its next version waits for that run to end. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
+    /// Integrates, as fold, every open proposal whose current version is ready: an agent that decides reviews or a human approved it, the latest verdict asks for no changes, a marked task has a human approval the mark accepts, and every prerequisite is Done. Each integration is the same procedure a deciding agent runs. A submitted review batch whose members all have their final state takes its turn first, its ready members together; the members a batch holds back, while it is open or waits for a member, are left to it. A member of a lane behind its front waits, so the members of a lane integrate one at a time in the order of their first approval, each on the main its predecessor made. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag, and one whose update or reviewer's fix runs the checks of its next version waits for that run to end. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
     pub async fn integrate_ready(&self) -> Result<Vec<AutomaticIntegration>, ReviewError> {
         let mut done = Vec::new();
         let mut passed = HashSet::new();
@@ -642,7 +646,7 @@ impl ReviewService {
         Ok(done)
     }
 
-    /// The lowest-numbered open proposal outside `passed` and outside `held`, the members a review batch holds back to integrate together, that is not flagged with a conflict or failed integration checks, whose integration checks fold did not fail to run on this version and main, and that passes every gate for the automatic caller, with its current version.
+    /// The lowest-numbered open proposal outside `passed` and outside `held`, the members a review batch holds back to integrate together and the members of a lane behind its front, that is not flagged with a conflict or failed integration checks, whose integration checks fold did not fail to run on this version and main, and that passes every gate for the automatic caller, with its current version.
     async fn next_ready(
         &self,
         passed: &HashSet<ProposalId>,
@@ -955,6 +959,10 @@ impl ReviewService {
                 | GateRefusal::AgentApprovalRequired => FoldError::from(refusal).into(),
             });
         }
+        // Only the front member of a lane integrates, whoever asks and by whichever path.
+        if let Some(place) = self.lane_hold(proposal).await? {
+            return Err(lane_held_refusal(&place).into());
+        }
         Ok(Plan {
             base_tree: facts.target.base_tree,
             other_tree: facts.target.tree,
@@ -1106,7 +1114,7 @@ fn record_plan(actor: &Actor, record: &RecordIntegration) -> Result<Plan, Step> 
 }
 
 /// The caller of a stored queue request: a named human or an agent's worker. Its rights are read again from the database when its turn comes, so no tag is carried.
-pub(super) fn queued_actor(label: &str) -> Option<Actor> {
+pub(crate) fn queued_actor(label: &str) -> Option<Actor> {
     let actor = EventActor::parse(label).ok()?;
     if let Some(name) = actor.human_name() {
         return HumanName::parse(name).ok().map(Actor::human);

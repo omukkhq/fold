@@ -1,9 +1,10 @@
 #![cfg(test)]
 
 use crate::common::acceptance::{
-    AGENTS, Harness, TOKEN, ids, message_notice, proposal_notice, ready_notice, wire,
+    AGENTS, Harness, TOKEN, WAIT, ids, message_notice, proposal_notice, ready_notice, wire,
 };
 use fold_core::AgentName;
+use fold_store::testing::eventually;
 use serde_json::json;
 
 /// Acceptance 2, fold messages: a reply joins its parent's thread, and an acknowledged message leaves the inbox.
@@ -99,7 +100,11 @@ async fn acceptance_2_wait_for_events_returns_when_a_message_for_the_waiting_age
     assert_eq!(events[0]["actor"], "frontend");
     assert_eq!(events[0]["data"]["message"], sent.as_str());
     assert_eq!(events[0]["data"]["recipients"], json!(["review"]));
-    assert_eq!(harness.inbox("review").await, [sent]);
+    assert_eq!(
+        harness.inbox("review").await,
+        Vec::<String>::new(),
+        "the wait gave the message whole, so it counts as read"
+    );
 }
 
 /// Acceptance 2, session push: a message wakes an idle session through the inbox socket its session-start hook registered; an agent without a registered socket gets nothing pushed and still finds the message in its inbox.
@@ -134,7 +139,11 @@ async fn acceptance_2_the_push_wakes_an_idle_session_and_skips_an_agent_without_
         wire(TOKEN, &message_notice(&sentinel, "frontend", "second"))
     );
     assert_eq!(harness.inbox("backend").await, [unpushed]);
-    assert_eq!(harness.inbox("review").await, [first, sentinel]);
+    eventually(WAIT, async || {
+        let inbox = harness.inbox("review").await;
+        if inbox.is_empty() { Ok(()) } else { Err(inbox) }
+    })
+    .await;
 }
 
 /// Acceptance 2, session push: a proposal opened while `review` is idle wakes it through its inbox socket with a notice naming `start_worker`, because `review` is the review lead, which gives the review to a reviewer. The author's own agent hears nothing about its proposal; as the lead of the task's area it heard that the task was ready.

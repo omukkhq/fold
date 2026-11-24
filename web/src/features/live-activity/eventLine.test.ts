@@ -167,6 +167,27 @@ describe("eventLine", () => {
         wait_for: "my go",
       }),
     ).toBe("parked web-worker to wait for its go");
+    expect(
+      line("worker.start_queued", { role: "task_worker", position: 2 }),
+    ).toBe("queued the start of a task worker at place 2");
+    expect(line("worker.start_queued", { name: "web-worker" })).toBe(
+      "queued the start of web-worker",
+    );
+    expect(line("worker.start_queued")).toBe("queued the start of a worker");
+    expect(
+      line("worker.queued_start_dropped", {
+        name: "web-worker",
+        reason: "task_claimed",
+      }),
+    ).toBe(
+      "dropped the queued start of web-worker: another worker claimed its task",
+    );
+    expect(
+      line("worker.queued_start_dropped", {
+        role: "reviewer",
+        reason: "unknown",
+      }),
+    ).toBe("dropped the queued start of a reviewer");
     expect(line("workspace.created", { kind: "review", version: 2 })).toBe(
       "checked out P-4 v2 in ws-9",
     );
@@ -266,6 +287,9 @@ describe("eventLine", () => {
     ).toBe("approved RQ-4 as T-12, T-13");
     expect(line("request.approved")).toBe("approved a request");
     expect(line("request.closed", { request: "RQ-4" })).toBe("closed RQ-4");
+    expect(line("request.escalated", { request: "RQ-4" })).toBe(
+      "escalated RQ-4",
+    );
     expect(
       line("review.batch_created", {
         batch: "rb-3",
@@ -952,5 +976,45 @@ describe("eventLine", () => {
       "human_change.recorded",
       "review.batch_integrated",
     ]);
+  });
+});
+
+describe("checks.finished of a serial lane member", () => {
+  it("names the lane and the fixer when the checks failed", () => {
+    expect(
+      eventLine(
+        event("checks.finished", {
+          data: { state: "failed", lane: "migrations", fixer: "reviewer" },
+        }),
+      ).text,
+    ).toBe(
+      "integration checks of P-4 failed after lane migrations moved; @reviewer fixes it",
+    );
+  });
+
+  it("says a reviewer fixes it when no fixer is named, and falls back to the task", () => {
+    expect(
+      eventLine(
+        event("checks.finished", {
+          proposal: null,
+          data: { state: "failed", lane: "migrations" },
+        }),
+      ).text,
+    ).toBe(
+      "integration checks of T-12 failed after lane migrations moved; a reviewer fixes it",
+    );
+  });
+
+  it("keeps the plain line for a passed run of a lane and for a run without a lane", () => {
+    expect(
+      eventLine(
+        event("checks.finished", {
+          data: { state: "passed", lane: "migrations" },
+        }),
+      ).text,
+    ).toBe("ended the checks of T-12: passed");
+    expect(
+      eventLine(event("checks.finished", { data: { state: "failed" } })).text,
+    ).toBe("ended the checks of T-12: failed");
   });
 });

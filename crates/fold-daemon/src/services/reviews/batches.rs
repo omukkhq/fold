@@ -155,6 +155,100 @@ pub(crate) async fn take_out_of_ended_batch(
     Ok(())
 }
 
+/// An open batch with the members that have not left it, for the worker that holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HeldBatch {
+    pub batch: ReviewBatchId,
+    pub holder: WorkerName,
+    /// The task of the first open member in merge order, which a message about the batch is linked to.
+    pub task: TaskId,
+    pub members: Vec<ProposalId>,
+}
+
+/// Every open batch that still has a member, in number order. A holder of one of them has a batch review to send or members to take out.
+pub(crate) async fn held_open_batches(
+    conn: &mut fold_store::SqliteConnection,
+) -> Result<Vec<HeldBatch>, StoreError> {
+    let mut held = Vec::new();
+    for row in batches::list_batches(&mut *conn, true).await? {
+        let open: Vec<MemberRow> = batches::members(&mut *conn, row.id)
+            .await?
+            .into_iter()
+            .filter(MemberRow::is_open)
+            .collect();
+        let Some(first) = open.first() else {
+            continue;
+        };
+        held.push(HeldBatch {
+            batch: row.id,
+            holder: row.holder,
+            task: first.task,
+            members: open.iter().map(|member| member.proposal).collect(),
+        });
+    }
+    Ok(held)
+}
+
+/// Tells the holder of `held`, a reviewer that has nothing else to review, that fold keeps it running until the batch is submitted or has no member left, with one message from fold linked to the batch's first open member.
+pub(crate) async fn tell_batch_holder(
+    store: &Store,
+    bus: &crate::services::events::EventBus,
+    held: &HeldBatch,
+    now: Timestamp,
+) -> Result<(), ReviewError> {
+    let body = fold_core::MessageBody::parse(holder_text(held))?;
+    let to = fold_core::Recipient {
+        target: fold_core::Target::Worker(held.holder.clone()),
+        addressed_as: fold_core::AddressedAs::Worker,
+    };
+    let mut buffer = EventBuffer::new();
+    store
+        .write(async |tx| {
+            crate::services::messages::send_from_fold_in_tx(
+                tx,
+                &mut buffer,
+                vec![to],
+                (held.task, None),
+                &body,
+                now,
+            )
+            .await
+            .map_err(ReviewError::from)
+        })
+        .await?;
+    bus.publish(buffer);
+    Ok(())
+}
+
+fn holder_text(held: &HeldBatch) -> String {
+    let members: Vec<String> = held.members.iter().map(ToString::to_string).collect();
+    format!(
+        "You hold the open review batch {} with {}, so fold does not stop you. Send its review with submit_batch_review, or take each member out with remove_from_batch.",
+        held.batch,
+        members.join(", ")
+    )
+}
+
+/// Releases `proposal` from its open batch as `reviewed_alone`, inside the caller's write, because it gets a verdict on its own: from then on the batch neither reviews nor holds it, so an approval integrates it by the rules of a proposal alone. The holder's review claim stays, because the holder's verdict is the one that stands. The batch's checkout holds a member the batch lacks, so it is archived, and a batch with no member left to review closes. Returns the batch it left, or `None` when it was in none.
+pub(super) async fn release_reviewed_alone(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    by: &EventActor,
+    proposal: ProposalId,
+    now: Timestamp,
+) -> Result<Option<ReviewBatchId>, ReviewError> {
+    let Some(batch) = batches::open_batch_of(tx.conn(), proposal).await? else {
+        return Ok(None);
+    };
+    if !batches::release_member_reviewed_alone(tx, batch, proposal, now).await? {
+        return Ok(None);
+    }
+    if !close_when_done(tx, buffer, by, batch, now).await? {
+        archive_checkout(tx, buffer, by, batch, ArchiveReason::BatchChanged, now).await?;
+    }
+    Ok(Some(batch))
+}
+
 /// Readies the review claims of `proposals` for the new reviewer `worker` that the review lead `starter` starts, inside the caller's write, before the start takes them: a claim whose holder is a worker that has ended is taken over with `claim.taken_over`, and the proposal leaves that worker's open batch; a claim whose lease ran out is left for the take-over of `claim_review`. A claim that the starter's own agent holds, or that a running holder holds with a valid lease, refuses the start with `already_claimed`.
 pub(crate) async fn free_reviews_for_start(
     tx: &mut WriteTx,
@@ -793,6 +887,7 @@ impl ReviewService {
                         body: verdict.body.trim(),
                         comments,
                         batch: Some(batch),
+                        released_from: None,
                         batch_comments: links.get(&member.proposal).unwrap_or(&no_links),
                         scope: scopes.get(&member.proposal),
                     };

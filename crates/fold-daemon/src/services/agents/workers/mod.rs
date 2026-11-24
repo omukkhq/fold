@@ -29,6 +29,7 @@ mod limits;
 mod output;
 mod pause;
 mod process;
+mod queue;
 mod streams;
 
 pub use account::ProjectAccount;
@@ -38,6 +39,9 @@ pub use pause::PauseState;
 pub use process::{DEV_STUB_COMMAND, DEV_STUB_DIR};
 pub use process::{
     Launcher, MCP_RETRY_TURN, PAUSE_TURN, Park, RESTART_TURN, StopTimeouts, Supervisor,
+};
+pub use queue::{
+    QueueEntry, QueuedWorkerStart, RestartOutcome, StartOutcome, follow_queued_starts,
 };
 pub use streams::{StreamFacts, WorkerStreams};
 
@@ -57,7 +61,7 @@ pub struct StartWorker {
     /// The scopes the review lead chooses for the reviews of some of a reviewer's proposals; the others follow fold's suggestion.
     pub scopes: Vec<ScopeChoice>,
     pub model: Option<String>,
-    /// Content from the starter for the worker's first turn; it is never stored or logged.
+    /// Content from the starter for the worker's first turn; it is stored only while a queued start waits, and never logged.
     pub instructions: Option<String>,
 }
 
@@ -146,10 +150,23 @@ pub(super) fn is_paused_refusal(error: &AgentError) -> bool {
 }
 
 fn area_not_found(area: &AreaName) -> AgentError {
+    area_missing(area).into()
+}
+
+fn area_missing(area: &AreaName) -> FoldError {
     FoldError::new(codes::AREA_NOT_FOUND, format!("area {area} does not exist"))
         .with_details([("area", json!(area.as_str()))])
-        .with_hint("the main agent defines it with define_area")
-        .into()
+        .with_hint("call list_workers to see the areas")
+}
+
+/// The area `name` for a read that a caller scopes to one area, or `area_not_found`.
+pub(crate) async fn named_area<E: From<StoreError> + From<FoldError>>(
+    pool: &fold_store::SqlitePool,
+    name: &AreaName,
+) -> Result<AreaRow, E> {
+    agents::find_area(pool, name)
+        .await?
+        .ok_or_else(|| area_missing(name).into())
 }
 
 /// What a start's transaction gave the new worker besides its claims: the workspaces it adopted, whose live owner changes after the commit, and the batch made of its proposals.
@@ -304,6 +321,16 @@ impl AgentService {
         Ok(areas)
     }
 
+    /// [`AgentService::list_areas`], or only the area `area` when it is given; an unknown area is `area_not_found`.
+    pub async fn list_areas_in(&self, area: Option<&AreaName>) -> Result<Vec<AreaRow>, AgentError> {
+        match area {
+            None => self.list_areas().await,
+            Some(name) => Ok(vec![
+                named_area::<AgentError>(self.store.read(), name).await?,
+            ]),
+        }
+    }
+
     /// The project's worker settings from `.fold/config.toml`, or its defaults when there is no file; `None` when the service knows no project folder or the file does not parse, so a list still answers.
     pub async fn worker_config(&self) -> Option<ProjectConfig> {
         load_config(self.config_paths()?).await.ok()
@@ -363,6 +390,20 @@ impl AgentService {
         Ok(agents::list_worker_processes(&mut conn).await?)
     }
 
+    /// [`AgentService::list_workers`], or only the workers of the area `area` when it is given; an unknown area is `area_not_found`.
+    pub async fn list_workers_in(
+        &self,
+        area: Option<&AreaName>,
+    ) -> Result<Vec<WorkerProcessRow>, AgentError> {
+        let Some(name) = area else {
+            return self.list_workers().await;
+        };
+        named_area::<AgentError>(self.store.read(), name).await?;
+        let mut workers = self.list_workers().await?;
+        workers.retain(|worker| worker.area.as_ref() == Some(name));
+        Ok(workers)
+    }
+
     pub async fn get_worker(&self, agent: &AgentName) -> Result<WorkerProcessRow, AgentError> {
         let mut conn = self
             .store
@@ -406,6 +447,16 @@ impl AgentService {
         &self,
         actor: &Actor,
         request: StartWorker,
+    ) -> Result<StartedWorker, AgentError> {
+        self.start_worker_with(actor, request, None).await
+    }
+
+    /// [`AgentService::start_worker`] that, with `queued`, runs the queued start of that row id: the row ends `started` in the start's transaction, which a start that ended already refuses, the start lets the owed resumes go first whoever queued it, `worker.started` says `queued`, and its starter gets a notice in the same transaction.
+    pub(super) async fn start_worker_with(
+        &self,
+        actor: &Actor,
+        request: StartWorker,
+        queued: Option<i64>,
     ) -> Result<StartedWorker, AgentError> {
         let supervisor = self.supervisor()?.clone();
         let role = request.role.ok_or_else(|| {
@@ -500,12 +551,19 @@ impl AgentService {
                     }
                     Role::Reviewer | Role::Main => {}
                 }
+                let turn = match queued {
+                    Some(_) => limits::Turn::Owed {
+                        agent: None,
+                        tool: "start_worker",
+                    },
+                    None => limits::Turn::of(actor, "start_worker"),
+                };
                 limits::check_running(
                     tx,
                     limits,
                     role,
                     area_row.as_ref().map(|area| (area.id, &area.name)),
-                    limits::Turn::of(actor, "start_worker"),
+                    turn,
                 )
                 .await?;
                 let name = match &request.name {
@@ -549,6 +607,9 @@ impl AgentService {
                     },
                 )
                 .await?;
+                if let Some(queued) = queued {
+                    queue::mark_started(tx, queued, id, now).await?;
+                }
                 for task in &request.tasks {
                     agents::bind_task(tx, id, *task).await?;
                 }
@@ -572,7 +633,7 @@ impl AgentService {
                 {
                     agents::set_area_lead(tx, area.id, agent_id).await?;
                 }
-                let event = NewEvent::new(types::WORKER_STARTED, by.clone())?.data(json!({
+                let mut data = json!({
                     "agent": name.as_str(),
                     "role": role.as_str(),
                     "area": area.as_ref().map(AreaName::as_str),
@@ -580,8 +641,24 @@ impl AgentService {
                     "proposals": proposals.iter().map(ToString::to_string).collect::<Vec<_>>(),
                     "plan": request.plan.map(|plan| plan.to_string()),
                     "model": model,
-                }))?;
+                });
+                if queued.is_some() {
+                    data["queued"] = json!(true);
+                }
+                let event = NewEvent::new(types::WORKER_STARTED, by.clone())?.data(data)?;
                 buffer.append(tx, &event, now).await?;
+                if queued.is_some() {
+                    queue::tell_started_in_tx(
+                        tx,
+                        &mut buffer,
+                        &by,
+                        &name,
+                        &request.tasks,
+                        &proposals,
+                        now,
+                    )
+                    .await?;
+                }
                 let worker = WorkerRow {
                     id: worker_id,
                     agent_id,

@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use crate::common::intents::Covering as _;
-use crate::common::roles::give_role;
+use crate::common::roles::{give_review_claim, give_role};
 use crate::reviews_support::{Fixture, LIB, README, by, human, names, p, refusal, t, ws};
 use fold_core::events::types;
 use fold_core::merge::{Conflict, ConflictReport, ReportEntryKind, ReportKind};
@@ -83,10 +83,11 @@ async fn approve(fx: &Fixture, actor: &Actor) {
         .unwrap();
 }
 
-/// `P-1` approved by the reviewer `review`, with main moved to `r2` so that its `src/lib.rs` conflicts. Returns the reviewer.
+/// `P-1` approved by the reviewer `review`, which holds its review claim, with main moved to `r2` so that its `src/lib.rs` conflicts. Returns the reviewer.
 async fn conflicting(fx: &Fixture) -> Actor {
     fx.proposal().await;
     let review = reviewer(fx).await;
+    claim_for_review(fx).await;
     approve(fx, &review).await;
     move_main(
         fx,
@@ -94,6 +95,17 @@ async fn conflicting(fx: &Fixture) -> Actor {
     )
     .await;
     review
+}
+
+/// Registers `review-lead` as the project's review lead.
+async fn review_lead(fx: &Fixture) {
+    crate::reviews_support::register(&fx.agents, "review-lead", &[]).await;
+    give_role(fx.project.store(), "review-lead", Role::ReviewLead, None).await;
+}
+
+async fn claim_for_review(fx: &Fixture) {
+    use fold_core::Clock as _;
+    give_review_claim(fx.project.store(), "review", p(1), fx.project.clock().now()).await;
 }
 
 async fn integrate_conflicted(fx: &Fixture, review: &Actor) -> Vec<Conflict> {
@@ -151,7 +163,7 @@ async fn conflicting_integration_publishes_nothing() {
 }
 
 #[tokio::test]
-async fn conflict_marks_the_proposal_and_returns_the_task_to_in_progress() {
+async fn conflict_marks_the_proposal_and_keeps_the_task_in_review_with_the_reviewer() {
     let fx = Fixture::new().await;
     let review = conflicting(&fx).await;
     assert_eq!(fx.status(1).await, TaskStatus::Review);
@@ -160,9 +172,9 @@ async fn conflict_marks_the_proposal_and_returns_the_task_to_in_progress() {
 
     let summary = detail(&fx, None).await.summary;
     assert!(summary.conflicted);
-    assert_eq!(summary.turn, Some(Turn::WithAuthor));
+    assert_eq!(summary.turn, Some(Turn::WithReviewer));
     assert_eq!(summary.current_version, 1);
-    assert_eq!(fx.status(1).await, TaskStatus::InProgress);
+    assert_eq!(fx.status(1).await, TaskStatus::Review);
 }
 
 #[tokio::test]
@@ -222,14 +234,7 @@ async fn conflict_writes_one_integrations_row_with_the_report() {
     );
 
     let events = fx.events_after(seq).await;
-    assert_eq!(
-        names(&events),
-        [
-            types::INTEGRATION_CONFLICTED.as_str(),
-            types::MESSAGE_SENT.as_str(),
-            types::TASK_STATUS_CHANGED.as_str(),
-        ]
-    );
+    assert_eq!(names(&events), [types::INTEGRATION_CONFLICTED.as_str()]);
     let conflicted = &events[0];
     assert_eq!(conflicted.task, Some(t(1)));
     assert_eq!(conflicted.proposal, Some(p(1)));
@@ -242,6 +247,8 @@ async fn conflict_writes_one_integrations_row_with_the_report() {
             "version": 1,
             "main_revision": "r2",
             "files": 1,
+            "fixer": "review",
+            "lane": null,
         })
     );
     assert!(
@@ -252,9 +259,29 @@ async fn conflict_writes_one_integrations_row_with_the_report() {
 }
 
 #[tokio::test]
-async fn author_agent_gets_a_message_with_paths_only() {
+async fn the_approving_reviewer_takes_the_conflict_and_nobody_gets_a_message() {
     let fx = Fixture::new().await;
+    review_lead(&fx).await;
     let review = conflicting(&fx).await;
+
+    integrate_conflicted(&fx, &review).await;
+
+    assert_eq!(fx.count("SELECT COUNT(*) FROM messages").await, 0);
+}
+
+/// A reviewer that approved the version but lost its review claim cannot fix the conflict, so the review lead gets a notice from fold with the paths and no content; the author gets nothing.
+#[tokio::test]
+async fn without_the_review_claim_the_review_lead_gets_a_notice_with_paths_only() {
+    let fx = Fixture::new().await;
+    review_lead(&fx).await;
+    fx.proposal().await;
+    let review = reviewer(&fx).await;
+    approve(&fx, &review).await;
+    move_main(
+        &fx,
+        &[("src/lib.rs", MAIN_LIB.as_bytes()), ("README.md", README)],
+    )
+    .await;
 
     integrate_conflicted(&fx, &review).await;
 
@@ -267,7 +294,7 @@ async fn author_agent_gets_a_message_with_paths_only() {
              JOIN workers w ON w.id = mr.worker_id
              WHERE m.sender_kind = 'fold' AND m.sender_worker_id IS NULL
                AND t.number = 1 AND p.number = 1
-               AND w.name = 'frontend' AND mr.addressed_as = 'worker'",
+               AND w.name = 'review-lead' AND mr.addressed_as = 'agent'",
         )
         .await,
         1
@@ -275,11 +302,11 @@ async fn author_agent_gets_a_message_with_paths_only() {
     assert_eq!(fx.count("SELECT COUNT(*) FROM message_recipients").await, 1);
     let body = fx.text("SELECT body FROM messages").await.unwrap();
     for wanted in [
-        "P-1 v1",
-        "r2",
+        "P-1 v1 for T-1 conflicts with main at r2",
+        "No reviewer that approved v1 holds the review claim of P-1",
         "(1): src/lib.rs.",
-        "get_proposal",
-        "sync_workspace",
+        "start_worker",
+        "create_review_checkout",
     ] {
         assert!(body.contains(wanted), "{wanted:?} missing from {body:?}");
     }
@@ -344,7 +371,7 @@ async fn update_proposal_refuses_while_markers_remain() {
     let summary = detail(&fx, None).await.summary;
     assert_eq!(summary.current_version, 1);
     assert!(summary.conflicted);
-    assert_eq!(fx.status(1).await, TaskStatus::InProgress);
+    assert_eq!(fx.status(1).await, TaskStatus::Review);
 }
 
 #[tokio::test]
@@ -390,6 +417,7 @@ async fn binary_and_delete_versus_edit_conflicts_are_reported_by_kind() {
         .detail()
         .unwrap();
     let review = reviewer(&fx).await;
+    claim_for_review(&fx).await;
     approve(&fx, &review).await;
     move_main(
         &fx,
@@ -430,9 +458,8 @@ async fn binary_and_delete_versus_edit_conflicts_are_reported_by_kind() {
     assert_eq!(sides(1), (file, None, file));
     assert_eq!(sides(2), (None, file, file));
     assert!(report.files.iter().all(|file| file.hunks.is_empty()));
-    let body = fx.text("SELECT body FROM messages").await.unwrap();
-    assert!(body.contains("(3): README.md, src/lib.rs, src/new.rs."));
-    assert_eq!(fx.status(1).await, TaskStatus::InProgress);
+    assert_eq!(fx.count("SELECT COUNT(*) FROM messages").await, 0);
+    assert_eq!(fx.status(1).await, TaskStatus::Review);
 }
 
 /// A proposal closed after the merge found the conflict and before it was recorded makes the record step write nothing and the procedure start again, whose open gate then refuses. No conflicted row, flag, message or event is left behind, and main stays where it was.

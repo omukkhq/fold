@@ -27,11 +27,10 @@ use crate::services::events::EventBuffer;
 use crate::services::messages::tell_lead_in_tx;
 use crate::services::projects::load_config;
 
-/// Why fold resumes a task worker: a review asked for changes, the proposal conflicts with main at integration, or its integration checks failed.
+/// Why fold resumes a task worker: a review asked for changes, or its integration checks failed. A conflict at integration goes to the reviewer that approved the version, never to the author.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Reason {
     Changes,
-    Conflict,
     Checks,
 }
 
@@ -39,7 +38,6 @@ impl Reason {
     fn as_str(self) -> &'static str {
         match self {
             Reason::Changes => "changes",
-            Reason::Conflict => "conflict",
             Reason::Checks => "checks",
         }
     }
@@ -161,7 +159,9 @@ pub(super) fn resume_items(event: &Event) -> Vec<ResumeItem> {
         let failed_at_integration = data.get("stage").and_then(Value::as_str)
             == Some("integration")
             && data.get("state").and_then(Value::as_str) == Some("failed");
-        if !failed_at_integration {
+        // A lane member's failure after its lane moved goes to its reviewer, not its author.
+        let lane_handoff = data.get("lane").and_then(Value::as_str).is_some();
+        if !failed_at_integration || lane_handoff {
             return Vec::new();
         }
         return event
@@ -171,18 +171,6 @@ pub(super) fn resume_items(event: &Event) -> Vec<ResumeItem> {
                 proposal,
                 version,
                 reason: Reason::Checks,
-            })
-            .into_iter()
-            .collect();
-    }
-    if kind == types::INTEGRATION_CONFLICTED {
-        return event
-            .proposal
-            .zip(version(&event.data))
-            .map(|(proposal, version)| ResumeItem {
-                proposal,
-                version,
-                reason: Reason::Conflict,
             })
             .into_iter()
             .collect();
@@ -205,8 +193,6 @@ enum Section {
         reviews: Vec<ReviewRow>,
         comments: Vec<CommentRow>,
     },
-    /// The author message of the stored conflict report.
-    Conflict(Option<String>),
     /// What failed in the latest failed integration run of the version.
     Checks(Option<String>),
 }
@@ -329,7 +315,7 @@ impl Supervisor {
         }
     }
 
-    /// Resumes the authors of every requested change and conflict that no start of theirs has served yet, such as one the worker limits refused.
+    /// Resumes the authors of every requested change and failed integration check run that no start of theirs has served yet, such as one the worker limits refused.
     pub(super) async fn resume_pending(self) {
         let pending = match agents::pending_resumes(
             self.inner.store.read(),
@@ -350,7 +336,6 @@ impl Supervisor {
         for owed in pending {
             for (reason, due) in [
                 (Reason::Changes, owed.changes),
-                (Reason::Conflict, owed.conflict),
                 (Reason::Checks, owed.checks),
             ] {
                 if due {
@@ -518,7 +503,7 @@ impl Supervisor {
         Ok(events)
     }
 
-    /// Tells each running task worker about the requested changes and conflicts recorded since its process started, from the stored reviews and integrations. The watcher calls it after it fell behind the bus, when the events that would have reached the task worker as notices may be lost.
+    /// Tells each running task worker about the requested changes and failed integration checks recorded since its process started, from the stored reviews and integrations. The watcher calls it after it fell behind the bus, when the events that would have reached the task worker as notices may be lost.
     pub(super) async fn notify_running_authors(&self) {
         for (agent, found) in self.owed_to_running().await {
             if let Some(run) = lock(&self.inner.running).get(&agent) {
@@ -527,7 +512,7 @@ impl Supervisor {
         }
     }
 
-    /// The requested changes and conflicts recorded since each working or idle task worker's process started, by task worker: the work its notices would have told it of.
+    /// The requested changes and failed integration checks recorded since each working or idle task worker's process started, by task worker: the work its notices would have told it of.
     pub(super) async fn owed_to_running(&self) -> BTreeMap<AgentName, Vec<Found>> {
         let mut owed = BTreeMap::new();
         let pending = match agents::pending_resumes(
@@ -549,7 +534,6 @@ impl Supervisor {
         for owed in pending {
             for (reason, due) in [
                 (Reason::Changes, owed.changes),
-                (Reason::Conflict, owed.conflict),
                 (Reason::Checks, owed.checks),
             ] {
                 if due {
@@ -581,7 +565,7 @@ impl Supervisor {
         owed
     }
 
-    /// The requested changes and conflicts that a task worker, caught by a pause before its process read its first turn, still owes on the open proposals of its bound tasks. Only a new version clears them, so the proposals' state says what the unread turn held, whatever the row's `started_at`.
+    /// The requested changes and failed integration checks that a task worker, caught by a pause before its process read its first turn, still owes on the open proposals of its bound tasks. Only a new version clears them, so the proposals' state says what the unread turn held, whatever the row's `started_at`.
     pub(super) async fn owed_to_unstarted(
         &self,
         row: &agents::WorkerProcessRow,
@@ -603,7 +587,6 @@ impl Supervisor {
             }
             for (reason, due) in [
                 (Reason::Changes, proposal.changes_requested),
-                (Reason::Conflict, proposal.conflicted),
                 (Reason::Checks, proposal.checks_failed),
             ] {
                 if due {
@@ -864,11 +847,6 @@ impl Supervisor {
                     .collect(),
                 comments: reviews::list_comments(read, item.proposal, Some(item.version)).await?,
             },
-            Reason::Conflict => Section::Conflict(
-                reviews::conflict_report(read, item.proposal, item.version)
-                    .await?
-                    .map(|report| report.author_message()),
-            ),
             Reason::Checks => {
                 let runs =
                     checks::runs_of_version(read, row.task, item.proposal, item.version).await?;
@@ -1137,12 +1115,6 @@ fn section_text(found: &Found) -> String {
                 "{proposal} v{version} for {task}: its integration checks failed, so fold did not integrate it. {place}\n{detail}\nFix the work, run_checks if the project has proposal checks, then call update_proposal for {proposal} to send v{next}."
             )
         }
-        Section::Conflict(message) => {
-            let detail = message.clone().unwrap_or_else(|| {
-                format!("{proposal} v{version} conflicts with main. Call get_proposal to read the conflict report, then sync_workspace to merge main into your workspace, resolve each conflicted path and call update_proposal.")
-            });
-            format!("{proposal} v{version} for {task}: conflicts with main. {place}\n{detail}")
-        }
     }
 }
 
@@ -1171,7 +1143,7 @@ mod tests {
     }
 
     #[test]
-    fn requested_changes_and_conflicts_resume_and_a_batch_counts_once() {
+    fn requested_changes_resume_a_conflict_does_not_and_a_batch_counts_once() {
         let single = event(
             types::REVIEW_SUBMITTED,
             Some(3),
@@ -1220,15 +1192,7 @@ mod tests {
             Some(7),
             json!({"version": 1, "files": 2}),
         );
-        assert_eq!(resume_items(&conflict)[0].reason, Reason::Conflict);
-        assert!(
-            resume_items(&event(
-                types::INTEGRATION_CONFLICTED,
-                None,
-                json!({"version": 1})
-            ))
-            .is_empty()
-        );
+        assert!(resume_items(&conflict).is_empty());
         assert!(resume_items(&event(types::PROPOSAL_OPENED, Some(7), json!({}))).is_empty());
     }
 
@@ -1330,28 +1294,6 @@ mod tests {
         );
         assert!(turn.ends_with(STOP_LINE), "{turn}");
 
-        let conflict = Found {
-            item: ResumeItem {
-                proposal: proposal(4),
-                version: 2,
-                reason: Reason::Conflict,
-            },
-            task,
-            workspace: None,
-            section: Section::Conflict(None),
-        };
-        let text = section_text(&conflict);
-        assert!(
-            text.contains("P-4 v2 for T-1: conflicts with main"),
-            "{text}"
-        );
-        assert!(text.contains("T-1 has no active task workspace"), "{text}");
-        assert!(text.contains("sync_workspace"), "{text}");
-        let reported = Found {
-            section: Section::Conflict(Some("the stored report".to_owned())),
-            ..conflict
-        };
-        assert!(section_text(&reported).ends_with("the stored report"));
         let fresh = fresh_instructions(&found_turn_parts(&[changes]));
         assert!(fresh.starts_with("Your earlier session is gone"), "{fresh}");
         assert!(fresh.contains("P-3 v1 for T-1"), "{fresh}");
@@ -1400,6 +1342,7 @@ mod tests {
         for data in [
             json!({"stage": "integration", "state": "passed", "version": 3}),
             json!({"stage": "proposal", "state": "failed", "version": null}),
+            json!({"stage": "integration", "state": "failed", "version": 3, "lane": "m"}),
         ] {
             assert!(resume_items(&event(types::CHECKS_FINISHED, Some(6), data)).is_empty());
         }

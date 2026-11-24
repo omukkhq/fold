@@ -22,6 +22,7 @@ use questions::Waiter;
 use watch::watch_done;
 
 mod account;
+mod conflict;
 mod fresh;
 mod gate;
 mod launch;
@@ -207,8 +208,8 @@ struct Inner {
     message_starts: Mutex<HashSet<AgentName>>,
     /// Who runs the main agent now: the interactive main sessions and a start of the supervised main.
     main_gate: Mutex<main::MainGate>,
-    /// While a start of the supervised main is under way, the turns that came meanwhile, for its process.
-    main_waking: Mutex<Option<Vec<String>>>,
+    /// While a start of the supervised main is under way, the starts that came meanwhile.
+    main_waking: Mutex<Option<main::MainWaking>>,
     /// Wakes the project's removal of closed workspace directories, which follows only stored events: the supervised main's turn ends with none, and its closed workspaces become due once it is idle.
     cleanup_due: Mutex<Option<Arc<tokio::sync::Notify>>>,
     /// The workers' tool calls that can write files, which place a change of the project folder in a worker's call.
@@ -221,6 +222,8 @@ struct Inner {
     switch_turns: Mutex<HashMap<AgentName, Vec<String>>>,
     /// The turns fold owes workers whose last turn ended for a cause outside them.
     owed: Mutex<waits::OwedTurns>,
+    /// The context window of each model, as the last result that named it reported it. A wait inside a turn has no result of its own to size the context by.
+    windows: Mutex<HashMap<String, u64>>,
 }
 
 impl Drop for Inner {
@@ -292,6 +295,7 @@ impl Supervisor {
                 switching: Mutex::new(HashSet::new()),
                 switch_turns: Mutex::default(),
                 owed: Mutex::default(),
+                windows: Mutex::default(),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();

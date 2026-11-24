@@ -416,15 +416,26 @@ describe("DiffViewer", () => {
       const user = userEvent.setup();
       render(<Harness fileDiff={long} fileText={TEXT} />);
       await user.click(button("Show lines 34–53"));
-      const first = cell(/^Unchanged line, old 34, new 34: l34$/);
-      expect(document.activeElement).toBe(first);
+      await waitFor(
+        () => {
+          expect(document.activeElement).toBe(
+            cell(/^Unchanged line, old 34, new 34: l34$/),
+          );
+        },
+        { timeout: 2000 },
+      );
       expect(cell(/^Unchanged line, old 53, new 53: l53$/)).toBeTruthy();
       expect(button("Show all 3 unchanged lines")).toBeTruthy();
       expect(screen.queryByText("@@ −57,6 +57,7 @@")).toBeNull();
       await user.click(button("Show all 18 unchanged lines"));
       expect(cell(/^Unchanged line, old 80, new 81: l80$/)).toBeTruthy();
-      expect(document.activeElement).toBe(
-        cell(/^Unchanged line, old 63, new 64: l63$/),
+      await waitFor(
+        () => {
+          expect(document.activeElement).toBe(
+            cell(/^Unchanged line, old 63, new 64: l63$/),
+          );
+        },
+        { timeout: 2000 },
       );
     });
 

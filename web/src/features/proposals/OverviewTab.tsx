@@ -53,6 +53,7 @@ import {
 } from "./history";
 import { IdLink } from "@/components/id/IdLink";
 import type { IntegrationView } from "./integration";
+import { laneFailure } from "./laneState";
 import {
   NO_INTENT,
   checkedBy,
@@ -145,6 +146,7 @@ function IntegrationCard({
   const summary = proposal.summary;
   const waiting = waitingSummary(proposal);
   const checksNote = queued ?? checksFailedNote(summary);
+  const laneRun = laneFailure(proposal.conflicted_reason)?.run ?? null;
   return (
     <section
       aria-label="Integration"
@@ -220,6 +222,21 @@ function IntegrationCard({
           <span data-checks-failed={summary.checks_failed}>{checksNote}</span>
         </Notice>
       ) : null}
+      {laneRun === null ? null : (
+        <Notice icon={ListChecks} tone="danger">
+          <span data-lane-failure={laneRun}>
+            Failed check run{" "}
+            <IdLink
+              href={detailHref(slug, summary.id, {
+                tab: "checks",
+                run: laneRun,
+              })}
+            >
+              {laneRun}
+            </IdLink>
+          </span>
+        </Notice>
+      )}
       {proposal.conflict ? (
         <ConflictBlock report={proposal.conflict} proposal={proposal} />
       ) : null}

@@ -1122,6 +1122,119 @@ async fn a_reviewer_stops_once_its_batch_review_gives_every_proposal_a_verdict()
     );
 }
 
+/// Two proposals of the main agent; a human approves `P-2` before the review lead gives both to one reviewer, which gets them as the batch `rb-1`, then the reviewer approves `P-1` alone. Every bound proposal then has a verdict, but `P-2` is still in the open batch. Returns the fake and the harness with the review lead and the reviewer connected.
+async fn a_reviewer_done_but_for_its_batch() -> (FakeClaude, Harness) {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    for title in ["Draw the page", "Serve the page"] {
+        let task = harness.create_task(MAIN, title).await;
+        let work = harness.start_work(MAIN, &task).await;
+        std::fs::write(work.dir.join(format!("{task}.txt")), "part\n").unwrap();
+        harness.propose(MAIN, &work, title).await;
+    }
+    let human = Actor::Human {
+        name: HumanName::parse("ana").unwrap(),
+    };
+    harness
+        .handle
+        .reviews(&harness.state.registry)
+        .submit_review(
+            &human,
+            "P-2".parse().unwrap(),
+            1,
+            fold_core::reviews::Verdict::Approve,
+            "fine",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    harness
+        .call(MAIN, "start_worker", json!({"role": "review_lead"}))
+        .await;
+    harness.connect("review-lead").await;
+    harness
+        .call(
+            "review-lead",
+            "start_worker",
+            json!({"role": "reviewer", "proposals": ["P-1", "P-2"]}),
+        )
+        .await;
+    until_state(&harness, "reviewer", WorkerState::Idle).await;
+    until_state(&harness, "review-lead", WorkerState::Idle).await;
+    harness.connect("reviewer").await;
+    harness
+        .call(
+            "reviewer",
+            "submit_review",
+            json!({"id": "P-1", "version": 1, "verdict": "approve", "body": "fine"}),
+        )
+        .await;
+    (fake, harness)
+}
+
+#[tokio::test]
+async fn a_reviewer_that_holds_an_open_batch_is_told_and_stops_once_the_batch_is_empty() {
+    let (_fake, harness) = a_reviewer_done_but_for_its_batch().await;
+    let told = eventually(WAIT, async || {
+        let messages = harness.fold_messages("reviewer").await;
+        messages
+            .into_iter()
+            .find(|body| body.contains("rb-1"))
+            .ok_or(())
+    })
+    .await;
+    assert_eq!(
+        told,
+        "You hold the open review batch rb-1 with P-2, so fold does not stop you. Send its review with submit_batch_review, or take each member out with remove_from_batch."
+    );
+    assert_ne!(
+        worker(&harness, "reviewer").await.state,
+        WorkerState::Stopped
+    );
+
+    let removed = harness
+        .call(
+            "reviewer",
+            "remove_from_batch",
+            json!({"id": "rb-1", "proposal": "P-2"}),
+        )
+        .await;
+    assert_eq!(removed["state"], "closed", "{removed}");
+    until_state(&harness, "reviewer", WorkerState::Stopped).await;
+}
+
+#[tokio::test]
+async fn the_review_lead_hears_when_the_holder_of_an_open_batch_stops() {
+    let (fake, harness) = a_reviewer_done_but_for_its_batch().await;
+    eventually(WAIT, async || {
+        let messages = harness.fold_messages("reviewer").await;
+        if messages.iter().any(|body| body.contains("rb-1")) {
+            Ok(())
+        } else {
+            Err(messages)
+        }
+    })
+    .await;
+    harness
+        .call("review-lead", "stop_worker", json!({"name": "reviewer"}))
+        .await;
+    until_state(&harness, "reviewer", WorkerState::Stopped).await;
+    eventually(WAIT, async || {
+        let heard = fake
+            .runs_of("review-lead")
+            .into_iter()
+            .flat_map(|run| run.stdin)
+            .any(|line| {
+                line.contains(
+                    "reviewer ended holding the open batch rb-1; a reviewer you start with its members takes them over. Call start_worker.",
+                )
+            });
+        if heard { Ok(()) } else { Err(()) }
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn an_archived_task_stops_its_task_worker_at_once() {
     let fake = FakeClaude::new("result");

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO worker_start_queue_tasks (queued_start_id, position, task_id)\n             SELECT ?, ?, id FROM tasks WHERE number = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "b0308e830fd64acb6d4b26921f0c4b2075d1caa4d2a243c0b72adc6007f2fe34"
+}

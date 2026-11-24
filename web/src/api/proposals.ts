@@ -25,6 +25,11 @@ export type GateStatus = Schemas["GateStatusKind"];
 /** One gate as the daemon decided it for the signed-in human integrating the version. */
 export type Gate = Schemas["ProposalGate"];
 export type ConflictKind = Schemas["ConflictKind"];
+/** Why a proposal is `conflicted`: a merge conflict with main, or failed integration checks of a serial lane member. */
+export type ConflictedReason = Schemas["ConflictedReason"];
+/** Where an open member of a serial lane stands. */
+export type ProposalLane = Schemas["ProposalLane"];
+export type ListedProposal = Schemas["ListedProposal"];
 export type ConflictEntry = Schemas["ConflictEntry"];
 export type ConflictHunk = Schemas["ConflictHunk"];
 export type ConflictFile = Schemas["ConflictFile"];

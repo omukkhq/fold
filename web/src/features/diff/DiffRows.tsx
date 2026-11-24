@@ -147,15 +147,7 @@ export function DiffRows({
   const stop = tabStop(state.cursor, points);
   const syntax = diffSyntax(rows, languageForPath(path));
   const tokens = useHighlight(syntax.request);
-  // A control the reader used goes away with the lines it showed, so focus moves to the first of them.
-  const focusAfter = useRef<string | null>(null);
-  useEffect(() => {
-    const key = focusAfter.current;
-    if (key === null) return;
-    focusAfter.current = null;
-    cells.current.get(key)?.focus();
-  });
-  // A new object each time, so asking twice for the same line focuses it twice.
+  // A control the reader used goes away with the lines it showed, so focus moves to the first of them. The request is state, so it commits with the new lines. A new object each time, so asking twice for the same line focuses it twice.
   const [focusRequest, setFocusRequest] = useState<{ key: string } | null>(
     null,
   );
@@ -175,7 +167,7 @@ export function DiffRows({
   function expand(row: GapRow, how: ExpandHow) {
     if (!onGap) return;
     const line = onGap(row, how);
-    focusAfter.current = pointKey({ side: "new", line });
+    setFocusRequest({ key: pointKey({ side: "new", line }) });
   }
 
   function gap(row: GapRow) {

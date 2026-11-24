@@ -4,6 +4,7 @@ import {
   formatAsOf,
   formatAsOfMinute,
   formatClock,
+  formatDateTime,
   formatQuiet,
   formatSince,
 } from "./time";
@@ -92,5 +93,13 @@ describe("formatClock", () => {
   it("prints the local hour and minute without the day", () => {
     expect(formatClock(new Date(2026, 0, 2, 7, 5, 59).getTime())).toBe("07:05");
     expect(formatClock(new Date(2025, 11, 31, 23, 59).getTime())).toBe("23:59");
+  });
+});
+
+describe("formatDateTime", () => {
+  it("prints the date, year and local time to the second", () => {
+    expect(formatDateTime(new Date(2026, 9, 4, 7, 5, 9).getTime())).toBe(
+      "Oct 4, 2026, 07:05:09",
+    );
   });
 });

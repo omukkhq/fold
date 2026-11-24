@@ -107,6 +107,12 @@ function seed() {
             size: 18 * 1024,
             position: 1,
           },
+          {
+            name: "mockup.png",
+            media_type: "image/png",
+            size: 40 * 1024,
+            position: 2,
+          },
         ],
         drafts: [
           requestDraft(1, {
@@ -350,12 +356,28 @@ function routes() {
   );
 }
 
+/** jsdom has no object URLs, so each test gets these two stand-ins. */
+const create = vi.fn<(file: File) => string>();
+const revoke = vi.fn<(url: string) => void>();
+
 beforeEach(() => {
   seed();
   routes();
+  create.mockReset().mockReturnValue("blob:picked");
+  revoke.mockReset();
+  Object.defineProperty(URL, "createObjectURL", {
+    value: create,
+    configurable: true,
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    value: revoke,
+    configurable: true,
+  });
   vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
 });
 afterEach(() => {
+  Reflect.deleteProperty(URL, "createObjectURL");
+  Reflect.deleteProperty(URL, "revokeObjectURL");
   daemon.reset();
   cleanup();
   vi.restoreAllMocks();
@@ -602,6 +624,30 @@ describe("New request dialog", () => {
     ]);
   });
 
+  it("previews a picked image from its object URL and revokes the URL when the file is removed", async () => {
+    create.mockReturnValue("blob:mockup");
+    const dialog = await open();
+    fireEvent.change(within(dialog).getByLabelText("Attach files"), {
+      target: {
+        files: [
+          new File(["x"], "mockup.png", { type: "image/png" }),
+          new File(["a"], "sample.csv", { type: "text/csv" }),
+        ],
+      },
+    });
+    const list = within(dialog).getByRole("list", { name: "Attached files" });
+    const thumb = await within(list).findByRole("img", { name: "mockup.png" });
+    expect(thumb.getAttribute("src")).toBe("blob:mockup");
+    expect(within(list).getAllByRole("img")).toHaveLength(1);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(revoke).not.toHaveBeenCalled();
+    await userEvent.click(
+      within(list).getByRole("button", { name: "Remove mockup.png" }),
+    );
+    expect(revoke).toHaveBeenCalledWith("blob:mockup");
+    expect(within(list).queryByRole("img")).toBeNull();
+  });
+
   it("refuses a file over 10 MiB before any upload", async () => {
     const dialog = await open();
     await userEvent.type(
@@ -702,6 +748,10 @@ describe("Request detail", () => {
         .getByRole("link", { name: "Download sample.csv" })
         .getAttribute("href"),
     ).toBe("/api/v1/projects/demo/requests/RQ-4/attachments/1");
+    expect(within(body).queryByRole("img", { name: "sample.csv" })).toBeNull();
+    expect(
+      within(body).queryByRole("button", { name: "Open sample.csv" }),
+    ).toBeNull();
     expect(screen.getByText("Version 2 of 2")).toBeTruthy();
     expect(screen.getByText("PDF download")).toBeTruthy();
     expect(screen.getByText("· CSV download needs Query")).toBeTruthy();
@@ -717,6 +767,29 @@ describe("Request detail", () => {
       name: "Clarification thread",
     });
     expect(within(thread).getByText(/Archived tasks too\?/)).toBeTruthy();
+  });
+
+  it("opens the full image from a thumbnail in a dialog that Escape closes", async () => {
+    renderAt("/p/demo/requests/RQ-4");
+    const body = await screen.findByRole("region", { name: "Request" });
+    const thumb = within(body).getByRole("img", { name: "mockup.png" });
+    expect(thumb.getAttribute("src")).toBe(
+      "/api/v1/projects/demo/requests/RQ-4/attachments/2",
+    );
+    await userEvent.click(
+      within(body).getByRole("button", { name: "Open mockup.png" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "mockup.png" });
+    expect(
+      within(dialog)
+        .getByRole("img", { name: "mockup.png" })
+        .getAttribute("src"),
+    ).toBe("/api/v1/projects/demo/requests/RQ-4/attachments/2");
+    expect(within(dialog).getByRole("button", { name: "Close" })).toBeTruthy();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
   });
 
   it("shows the lines a request was made on, quoted, with a link back to them", async () => {
@@ -1019,6 +1092,47 @@ describe("Request detail", () => {
     });
     expect(await screen.findByText("Version 2 of 2")).toBeTruthy();
     expect(screen.getByText("Gutter colour")).toBeTruthy();
+  });
+
+  it("shows each draft card's kind and the existing tasks it needs, with no edit control for them", async () => {
+    update("RQ-3", (d) => ({
+      ...d,
+      drafts: [
+        requestDraft(1, {
+          cards: [
+            { ...card("c1", "Code card"), kind: "proposal" },
+            { ...card("c2", "Report card"), kind: "no_proposal" },
+            {
+              ...card("c3", "Person card"),
+              kind: "human",
+              needs: ["T-12", "T-14"],
+            },
+          ],
+          edges: [],
+        }),
+      ],
+    }));
+    renderAt("/p/demo/requests/RQ-3");
+    const [code, report, person] = await screen
+      .findAllByRole("listitem")
+      .then((items) => items.filter((i) => i.textContent.includes("card")));
+    expect(within(code as HTMLElement).queryByText("no proposal")).toBeNull();
+    expect(within(code as HTMLElement).queryByText("human task")).toBeNull();
+    expect(within(code as HTMLElement).queryByText("Needs")).toBeNull();
+    expect(within(report as HTMLElement).getByText("no proposal")).toBeTruthy();
+    expect(within(report as HTMLElement).queryByText("Needs")).toBeNull();
+    const human = person as HTMLElement;
+    expect(within(human).getByText("human task")).toBeTruthy();
+    const needs = within(human).getByLabelText("Tasks c3 needs");
+    expect(
+      within(needs)
+        .getAllByRole("link")
+        .map((a) => [a.textContent, a.getAttribute("href")]),
+    ).toEqual([
+      ["T-12", "/p/demo/t/T-12"],
+      ["T-14", "/p/demo/t/T-14"],
+    ]);
+    expect(within(human).queryAllByRole("textbox")).toEqual([]);
   });
 
   it("sends a thread message that changes nothing on the request", async () => {

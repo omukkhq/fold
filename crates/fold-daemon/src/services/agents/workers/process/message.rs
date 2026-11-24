@@ -24,7 +24,7 @@ use crate::services::projects::load_config;
 const ENDED: [WorkerState; 2] = [WorkerState::Stopped, WorkerState::Failed];
 
 /// The failure reason of a worker whose session a start for a message found gone.
-const SESSION_LOST: &str = "session_lost";
+pub(super) const SESSION_LOST: &str = "session_lost";
 
 impl Supervisor {
     /// Starts each stopped or failed worker again that has a message to answer; see [`Supervisor::answer_messages`]. A paused project leaves the messages owed, and the resume of the pause serves them.
@@ -154,7 +154,7 @@ impl Supervisor {
         }
     }
 
-    /// Whether a resume of the worker of `row` for its own work is owed: for a task worker requested changes, a conflict, failed checks or a send-back that no start has served, for a reviewer a new version of a proposal whose review claim it holds (see [`agents::reviews_owed_to_ended_reviewers`]).
+    /// Whether a resume of the worker of `row` for its own work is owed: for a task worker requested changes, failed integration checks or a send-back that no start has served, for a reviewer a new version of a proposal whose review claim it holds (see [`agents::reviews_owed_to_ended_reviewers`]).
     async fn owes_own_resume(&self, row: &WorkerProcessRow) -> Result<bool, AgentError> {
         let read = self.inner.store.read();
         let agent = &row.agent;
@@ -170,7 +170,7 @@ impl Supervisor {
         Ok(agents::pending_resumes(read, &ENDED)
             .await?
             .iter()
-            .any(|owed| owed.agent == *agent && (owed.changes || owed.conflict || owed.checks))
+            .any(|owed| owed.agent == *agent && (owed.changes || owed.checks))
             || reports::owed_send_backs(read, &ENDED)
                 .await?
                 .iter()
@@ -200,7 +200,7 @@ impl Supervisor {
     /// A session got its turn about `owed`: the delivery line shows the message waiting for the worker, as for a running worker, until the worker reads its inbox.
     pub(super) async fn record_told(&self, agent: &AgentName, owed: &OwedMessage) {
         let now = self.inner.clock.now();
-        match record_pushed(&self.inner.store, agent, &[owed.message], &[], now).await {
+        match record_pushed(&self.inner.store, agent, &[owed.message], &[], &[], now).await {
             Ok(first) if first.is_empty() => {}
             Ok(_) => {
                 let event = LiveEvent::new(

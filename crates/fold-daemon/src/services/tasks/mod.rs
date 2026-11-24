@@ -47,7 +47,7 @@ pub use claims::{ClaimView, Claimed, renew_leases};
 pub use dependencies::{Edge, add_edge_in_tx};
 pub use fold_core::reviews::HumanReviewMark;
 pub(crate) use hold::agent_refusal;
-pub use hold::{HumanTaskRights, human_task_rights};
+pub use hold::{HOLD_NAMES_TASK_HINT, HumanTaskRights, human_task_rights, reason_names_task};
 pub use lead_checks::{MAX_NOTE_CHARS, REPORT_LIMIT, ReportView};
 pub(crate) use lead_checks::{areas_of, proposal_kind_refusal};
 pub(crate) use leases::Holders;
@@ -67,9 +67,9 @@ pub fn can_change_human_review(actor: &Actor) -> bool {
 }
 
 pub use views::{
-    Activity, BOARD_DONE_LIMIT, Board, BoardCard, BoardColumn, CardProposal, ChangesetSummary,
-    ChecklistCounts, DetailChecklist, DetailEdge, DetailItem, GraphTask, HISTORY_LIMIT, TaskDetail,
-    TaskGraph, TaskIntegration, TaskProposal, TaskRef, WorkspaceInfo,
+    Activity, BOARD_DONE_LIMIT, Board, BoardCard, BoardColumn, CardCheckRun, CardProposal,
+    ChangesetSummary, ChecklistCounts, DetailChecklist, DetailEdge, DetailItem, GraphTask,
+    HISTORY_LIMIT, TaskDetail, TaskGraph, TaskIntegration, TaskProposal, TaskRef, WorkspaceInfo,
 };
 
 /// Refusals carry a stable code; anything else is a database failure.

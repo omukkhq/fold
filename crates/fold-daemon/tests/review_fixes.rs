@@ -247,7 +247,13 @@ async fn a_fix_in_the_checkout_becomes_the_reviewers_next_version_and_waits_in_t
     );
     assert_eq!(detail.task_status, TaskStatus::Review);
 
-    let appended = scene.events_after(before).await;
+    // The project's commit writer runs on its own task from the open, so its `git.*` events can land after `before`.
+    let appended: Vec<fold_core::Event> = scene
+        .events_after(before)
+        .await
+        .into_iter()
+        .filter(|event| !event.event_type.as_str().starts_with("git."))
+        .collect();
     let kinds: Vec<&str> = appended.iter().map(|e| e.event_type.as_str()).collect();
     assert_eq!(
         kinds,

@@ -1056,3 +1056,107 @@ async fn a_label_name_with_a_slash_and_a_space_travels_percent_encoded() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(view["labels"], json!([]));
 }
+
+/// The board card shows a running integration run of the task's proposal with its stage, read from the store, and leaves it out once the run ended.
+#[tokio::test]
+async fn the_board_card_shows_a_running_integration_run_until_it_ends() {
+    let opened = crate::proposal_tools_support::Fixture::new().await;
+    let frontend = opened.agent("frontend").await;
+    let gate = tempfile::tempdir().unwrap();
+    let go = gate.path().join("go");
+    opened
+        .workspaces()
+        .create_workspace(&frontend, crate::proposal_tools_support::t(1))
+        .await
+        .unwrap();
+    opened.write(
+        1,
+        "fold-checks.toml",
+        &format!(
+            "[[check]]\nname = \"e2e\"\nrun = \"until [ -e '{}' ]; do sleep 0.05; done\"\nstage = \"integration\"\n",
+            go.display()
+        ),
+    );
+    opened.write(1, "src/lib.rs", "pub fn y() {}\n");
+    let reviews = opened.reviews();
+    {
+        use crate::common::intents::Covering as _;
+        reviews
+            .create_proposal_covering(&frontend, crate::proposal_tools_support::t(1), "Gate", None)
+            .await
+            .unwrap()
+            .detail()
+            .expect("no proposal check");
+    }
+    let agents = opened.agents();
+    let mut session = agents.start_session(1).await.unwrap();
+    agents
+        .register_agent(&mut session, &AgentName::parse("review").unwrap(), &[])
+        .await
+        .unwrap();
+    crate::common::roles::give_role(
+        &opened.handle.store,
+        "review",
+        fold_core::roles::Role::Reviewer,
+        None,
+    )
+    .await;
+    let reviewer = agents.actor(&session).await.unwrap();
+    let proposal = fold_core::ProposalId::from_number(1).unwrap();
+    reviews
+        .submit_review(
+            &reviewer,
+            proposal,
+            1,
+            fold_core::reviews::Verdict::Approve,
+            "ok",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    reviews
+        .integrate_proposal(
+            &crate::proposal_tools_support::human("tanim"),
+            proposal,
+            Some(1),
+        )
+        .await
+        .unwrap();
+    let fx = Fixture {
+        project: opened.project,
+        state: opened.state,
+        handle: opened.handle,
+    };
+    let card = async || {
+        let board = fx.ok(Method::GET, "/board", None).await;
+        board["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|column| column["cards"].as_array().unwrap().clone())
+            .find(|card| card["task"] == "T-1")
+            .expect("T-1 is on the board")
+    };
+    let going = fold_store::testing::eventually(Duration::from_secs(30), async || {
+        let card = card().await;
+        match &card["check_run"] {
+            Value::Null => Err(card),
+            run => Ok(run.clone()),
+        }
+    })
+    .await;
+    assert_eq!(going["stage"], "integration");
+    assert_eq!(going["purpose"], "integrate");
+    assert_eq!(going["proposal"], "P-1");
+    assert!(going["run"].as_str().unwrap().starts_with("cr-"));
+    std::fs::write(&go, "").unwrap();
+    fold_store::testing::eventually(Duration::from_secs(30), async || {
+        let card = card().await;
+        match card["status"].as_str() {
+            Some("done") => Ok(card),
+            _ => Err(card),
+        }
+    })
+    .await;
+    assert_eq!(card().await["check_run"], Value::Null);
+}

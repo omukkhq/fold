@@ -65,6 +65,39 @@ describe("GitStatus", () => {
     expect(screen.queryByText("No remote. Add one:")).toBeNull();
   });
 
+  it("gives a long revision id and the commit each their own space", async () => {
+    stubFetch({
+      "GET /api/v1/projects/demo/git": {
+        body: {
+          repository: "/home/ana/ledger",
+          branch: "main",
+          remotes: [
+            {
+              name: "backup",
+              location: "/mnt/backup/ledger.git",
+              branch: "trunk",
+              push_on_integrate: true,
+              pushed: { revision: "r12345", commit: "7f541c5aa0", at: 1 },
+              failed: null,
+            },
+          ],
+        },
+      },
+    });
+    show();
+    const status = await screen.findByText("pushed r12345");
+    expect(status.className).toContain("tabular-nums");
+    expect(status.className).toContain("min-w-0");
+    expect(status.className).toContain("truncate");
+    expect(status.getAttribute("title")).toBe("pushed r12345");
+    const copy = screen.getByRole("button", { name: "Copy commit 7f541c5" });
+    expect(copy.className).toContain("font-mono");
+    const cell = copy.parentElement;
+    expect(cell?.className).toContain("shrink-0");
+    expect(cell?.className).not.toMatch(/\bw-/);
+    expect(cell?.contains(status)).toBe(false);
+  });
+
   it("shows nothing until the read arrives", () => {
     stubFetch({ "GET /api/v1/projects/demo/git": { body: {} } });
     show();

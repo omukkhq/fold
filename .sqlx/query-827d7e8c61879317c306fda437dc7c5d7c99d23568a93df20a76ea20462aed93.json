@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT a.name AS \"area?: String\", MAX(q.ended_at) AS \"ended_at!: i64\"\n           FROM worker_start_queue q\n           LEFT JOIN areas a ON a.id = q.area_id\n           WHERE q.outcome = 'started'\n           GROUP BY q.area_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "area?: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "areas",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "ended_at!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "827d7e8c61879317c306fda437dc7c5d7c99d23568a93df20a76ea20462aed93"
+}

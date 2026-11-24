@@ -132,7 +132,20 @@ impl Harness {
         harness
     }
 
+    /// [`Harness::start_with_launcher`] whose `r1` and project folder also hold `files`, such as a `fold-checks.toml` that main has from the start.
+    pub async fn start_with_files(launcher: Launcher, files: &[(&str, &str)]) -> Self {
+        Self::start_on_with(TestProject::new().await, launcher, files).await
+    }
+
     async fn start_on(project: TestProject, launcher: Launcher) -> Self {
+        Self::start_on_with(project, launcher, &[]).await
+    }
+
+    async fn start_on_with(
+        project: TestProject,
+        launcher: Launcher,
+        files: &[(&str, &str)],
+    ) -> Self {
         let objects = ObjectStore::open(&project.paths().fold_dir()).unwrap();
         let mut tree = FlatTree::new();
         tree.insert(
@@ -142,6 +155,18 @@ impl Harness {
                 hash: objects.write(ObjectKind::Blob, b"# demo\n").unwrap(),
             },
         );
+        for (path, text) in files {
+            tree.insert(
+                path.as_bytes().to_vec(),
+                FlatEntry {
+                    kind: EntryKind::File,
+                    hash: objects.write(ObjectKind::Blob, text.as_bytes()).unwrap(),
+                },
+            );
+            let at = project.paths().root().join(path);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, text).unwrap();
+        }
         let tree = write_initial_tree(&objects, tree).unwrap();
         let revision = initial_revision(tree, project.now()).unwrap();
         let stored = write_revision(&objects, &revision).unwrap();
@@ -499,6 +524,22 @@ impl Harness {
     pub async fn send_with(&self, from: &str, arguments: Value) -> String {
         let sent = self.call(from, "send_message", arguments).await;
         sent["id"].as_str().unwrap().to_owned()
+    }
+
+    /// The bodies of every message from fold to `agent`'s workers, read or not, oldest first. A notice that a push or a wait gave whole counts as read, so `get_inbox` no longer lists it.
+    pub async fn fold_messages(&self, agent: &str) -> Vec<String> {
+        sqlx::query_scalar(
+            "SELECT m.body FROM messages m
+             JOIN message_recipients r ON r.message_id = m.id
+             JOIN workers w ON w.id = r.worker_id
+             JOIN agents a ON a.id = w.agent_id
+             WHERE a.name = ?1 AND m.sender_kind = 'fold'
+             ORDER BY m.number",
+        )
+        .bind(agent)
+        .fetch_all(self.handle.store.read())
+        .await
+        .unwrap()
     }
 
     /// The ids `get_inbox` returns to `agent`, oldest first.

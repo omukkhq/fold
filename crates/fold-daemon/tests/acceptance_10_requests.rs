@@ -58,7 +58,10 @@ async fn acceptance_10_a_human_request_becomes_two_tasks_through_a_drafted_and_r
     assert_eq!(created["request"]["requester"], "human:ana");
     assert_eq!(
         frontend.next().await,
-        wire(TOKEN, "fold: RQ-1 created. Call claim_request.")
+        wire(
+            TOKEN,
+            "fold: RQ-1 created by human:ana: I cannot find cards on a big board. The board of #T-1 needs a search. Call claim_request."
+        )
     );
 
     let read = h

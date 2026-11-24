@@ -5,6 +5,7 @@ use fold_core::merge::{
     ConflictReport, HunkSide, ReportEntry, ReportEntryKind, ReportFile, ReportHunk, ReportKind,
 };
 use fold_core::policy::{Gate, GateState, GateStatus};
+use fold_core::reviews::lanes::LanePlace;
 use fold_core::reviews::{
     Contracts, ProposalIntent, ReviewScope, ReviewScopeRecord, ScopeRule, Side, Verdict,
 };
@@ -29,7 +30,7 @@ use super::workspaces::{
 use crate::daemon::AppState;
 use crate::services::reviews::{
     self as service, ChangeRange, CheckoutTarget, CommentInput, CommentLocation,
-    IntegrationOutcome, ListedCheckout, ProposalFilter, ReviewService, Turn,
+    IntegrationOutcome, LaneListing, ListedCheckout, ProposalFilter, ReviewService, Turn,
     integration_conflicted,
 };
 
@@ -255,7 +256,7 @@ pub struct ProposalSummary {
     /// The worker that opened the proposal, named as its agent.
     pub author: String,
     pub state: ProposalStateView,
-    /// The latest integration of the current version conflicted with main.
+    /// The current version waits for a fix on main by its reviewer: its latest integration conflicted with main, or, for a member of a serial lane, its integration checks failed after another member moved the lane. The proposal detail and the list give the reason.
     pub conflicted: bool,
     /// The integration checks of the current version failed on its merge with main, so the proposal is with its author until a new version.
     pub checks_failed: bool,
@@ -314,10 +315,123 @@ impl From<service::ProposalSummary> for ProposalSummary {
     }
 }
 
+/// Where an open member of a serial lane of main's `fold-checks.toml` stands: a proposal whose current version changes a path of the lane. The members integrate one at a time in the order of their first approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ProposalLane {
+    #[schema(example = "migrations")]
+    pub name: String,
+    /// From 1 at the front, in the order of first approval; null before the proposal's first approval.
+    #[schema(required = true)]
+    pub position: Option<u32>,
+    /// The hold reason while a member ahead integrates first, such as `lane migrations, position 2`; null at the front.
+    #[schema(required = true, example = "lane migrations, position 2")]
+    pub held: Option<String>,
+}
+
+impl From<LanePlace> for ProposalLane {
+    fn from(place: LanePlace) -> Self {
+        Self {
+            held: place.reason(),
+            name: place.lane,
+            position: place.position,
+        }
+    }
+}
+
+/// Why an open proposal is `conflicted` on its current version, as its newest handoff to a fixer stored it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ConflictedReason {
+    /// The merge with main conflicted; `conflict` on the proposal detail holds the report.
+    MergeConflict {
+        /// The reviewer agent that fixes it; null when the review lead got the conflict to start a reviewer for it.
+        #[schema(required = true, example = "reviewer")]
+        fixer: Option<String>,
+    },
+    /// The integration checks failed on the merge with main after another member of the lane integrated, so the reviewer fixes the version on the new main, not the author.
+    LaneChecksFailed {
+        #[schema(example = "migrations")]
+        lane: String,
+        /// The failed integration check run.
+        #[schema(example = "cr-4")]
+        run: String,
+        /// The reviewer agent that fixes it; null when the review lead got the failure to start a reviewer for it.
+        #[schema(required = true, example = "reviewer")]
+        fixer: Option<String>,
+    },
+}
+
+impl From<service::ConflictedReason> for ConflictedReason {
+    fn from(reason: service::ConflictedReason) -> Self {
+        match reason {
+            service::ConflictedReason::MergeConflict { fixer } => Self::MergeConflict {
+                fixer: fixer.map(|agent| agent.to_string()),
+            },
+            service::ConflictedReason::LaneChecksFailed { lane, run, fixer } => {
+                Self::LaneChecksFailed {
+                    lane,
+                    run: run.to_string(),
+                    fixer: fixer.map(|agent| agent.to_string()),
+                }
+            }
+        }
+    }
+}
+
+/// A listed proposal with its lane and the reason of its conflict flag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ListedProposal {
+    #[serde(flatten)]
+    pub summary: ProposalSummary,
+    /// The serial lane the open proposal is a member of; null outside every lane.
+    #[schema(required = true)]
+    pub lane: Option<ProposalLane>,
+    /// Why the open proposal is `conflicted`; null when it is not.
+    #[schema(required = true)]
+    pub conflicted_reason: Option<ConflictedReason>,
+}
+
+impl From<LaneListing> for ProposalList {
+    fn from(listed: LaneListing) -> Self {
+        let LaneListing {
+            listing,
+            lanes,
+            mut conflicted,
+        } = listed;
+        let proposals = listing
+            .proposals
+            .into_iter()
+            .map(|summary| {
+                let id = summary.id;
+                ListedProposal {
+                    lane: lanes
+                        .iter()
+                        .find(|place| place.proposal == id)
+                        .cloned()
+                        .map(ProposalLane::from),
+                    conflicted_reason: conflicted
+                        .iter()
+                        .position(|(proposal, _)| *proposal == id)
+                        .map(|at| conflicted.swap_remove(at).1.into()),
+                    summary: summary.into(),
+                }
+            })
+            .collect();
+        Self {
+            proposals,
+            waiting_for_you: listing
+                .waiting_for_human
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct ProposalList {
     /// In number order.
-    pub proposals: Vec<ProposalSummary>,
+    pub proposals: Vec<ListedProposal>,
     /// The open proposals of the whole project, whatever the filter, whose current version waits for the signed-in human's review, in number order: the `human_review` items of Needs you that are theirs, which the Proposals screen marks. Empty when the request names no human.
     #[schema(example = json!(["P-3"]))]
     pub waiting_for_you: Vec<String>,
@@ -918,6 +1032,12 @@ pub struct ProposalDetail {
     /// The review plan the open proposal waits in; null when it waits in none.
     #[schema(required = true)]
     pub review_plan: Option<ReviewPlanWait>,
+    /// The serial lane the open proposal is a member of; null outside every lane.
+    #[schema(required = true)]
+    pub lane: Option<ProposalLane>,
+    /// Why the open proposal is `conflicted` on its current version; null when it is not.
+    #[schema(required = true)]
+    pub conflicted_reason: Option<ConflictedReason>,
 }
 
 impl From<service::ProposalView> for ProposalDetail {
@@ -974,6 +1094,8 @@ impl From<service::ProposalView> for ProposalDetail {
                 .collect(),
             update_run: view.update_run.map(checks::NextVersionRun::from),
             review_plan: view.review_plan.map(ReviewPlanWait::from),
+            lane: view.lane.map(ProposalLane::from),
+            conflicted_reason: view.conflicted_reason.map(ConflictedReason::from),
         }
     }
 }
@@ -1259,20 +1381,9 @@ pub async fn list_proposals(
         limit: None,
     };
     let listing = service(&state, &project)
-        .list_proposals_for(filter, human.as_ref().map(|Human(name)| name))
+        .list_proposals_in_lanes_for(filter, human.as_ref().map(|Human(name)| name))
         .await?;
-    Ok(Json(ProposalList {
-        proposals: listing
-            .proposals
-            .into_iter()
-            .map(ProposalSummary::from)
-            .collect(),
-        waiting_for_you: listing
-            .waiting_for_human
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
-    }))
+    Ok(Json(listing.into()))
 }
 
 /// One proposal as the requesting human sees it, with the gate report for that human integrating the selected version.

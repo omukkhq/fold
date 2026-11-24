@@ -121,6 +121,8 @@ pub enum ArchiveReason {
     BatchSubmitted,
     /// A batch checkout whose batch closed because no member was left to review.
     BatchClosed,
+    /// A review checkout of a conflicted version that its checkout merged onto main replaces.
+    ConflictMerged,
 }
 
 impl ArchiveReason {
@@ -133,6 +135,7 @@ impl ArchiveReason {
             ArchiveReason::BatchChanged => "batch_changed",
             ArchiveReason::BatchSubmitted => "batch_submitted",
             ArchiveReason::BatchClosed => "batch_closed",
+            ArchiveReason::ConflictMerged => "conflict_merged",
         }
     }
 }

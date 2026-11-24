@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM review_batch_members m\n               JOIN review_batches b ON b.id = m.batch_id\n               WHERE b.number = ? AND m.released_at IS NULL\n           ) AS \"found!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "found!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "24b74a34390c24d473fee799be042711d16facb917ffb767651ca4b083d923a7"
+}

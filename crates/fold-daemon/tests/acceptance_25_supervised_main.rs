@@ -78,7 +78,9 @@ async fn acceptance_25_a_request_is_handled_end_to_end_by_the_supervised_main() 
         "{first}"
     );
     assert!(
-        first.contains("RQ-1 created. Call claim_request."),
+        first.contains(
+            "RQ-1 created by human:ana: The board needs a search box. Call claim_request."
+        ),
         "{first}"
     );
     until_state(&h, MAIN, WorkerState::Idle).await;

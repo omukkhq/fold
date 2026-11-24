@@ -156,7 +156,6 @@
   --width-git-key: var(--width-git-key);
   --width-git-location: var(--width-git-location);
   --width-git-branch: var(--width-git-branch);
-  --width-git-commit: var(--width-git-commit);
   --width-inbox: var(--width-inbox);
   --width-agents: var(--width-agents);
   --width-menu: var(--width-menu);
@@ -169,6 +168,7 @@
   --width-dialog-narrow: var(--width-dialog-narrow);
   --width-label-input: var(--width-label-input);
   --width-switch-account: var(--width-switch-account);
+  --width-thumb: var(--width-thumb);
 
   /* The width from which the top bar shows its full row of tabs, the Agents control and the avatar. A breakpoint cannot read a variable, so the value is written here. */
   --breakpoint-wide: 90rem;
@@ -177,6 +177,7 @@
   --height-bar: var(--height-bar);
   --height-bar-compact: var(--height-bar-compact);
   --height-chart: var(--height-chart);
+  --height-thumb: var(--height-thumb);
 }
 
 @layer base {

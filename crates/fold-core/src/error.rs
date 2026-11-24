@@ -216,6 +216,7 @@ define_codes! {
     ACCOUNT_RESERVED = "account_reserved",
     ACCOUNT_TOKEN_REJECTED = "account_token_rejected",
     DIRECTORY_OTHER_FILESYSTEM = "directory_other_filesystem",
+    DATABASE_REPLACED = "database_replaced",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

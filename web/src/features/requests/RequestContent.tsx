@@ -21,7 +21,10 @@ import {
 } from "@/api/requests";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
+import { Dialog } from "@/components/overlay/Dialog";
+import { Thumbnail } from "@/components/thumbnail/Thumbnail";
 import { buttonClasses } from "@/components/button/buttonStyles";
+import { Chip } from "@/components/badge/Chip";
 import { Id } from "@/components/id/Id";
 import { IdText } from "@/components/text/IdText";
 import { recipientActors } from "@/features/messages/delivery";
@@ -33,6 +36,7 @@ import { focusRing } from "@/lib/focus";
 import { MessageComposer } from "@/mentions/MessageComposer";
 import type { Known } from "@/mentions/parse";
 import { messageSchema, type MessageValues } from "./compose";
+import { cardKindLabel, cardNeeds } from "./cardTasks";
 import type { Failure } from "./errors";
 import {
   authorLine,
@@ -46,6 +50,7 @@ import {
   threadSummary,
   versionText,
 } from "./present";
+import { isPreviewable } from "./preview";
 import { codeHref, codeText } from "./codeLocation";
 import { KindLabel } from "./RequestPills";
 import { projectPath } from "@/routes/paths";
@@ -139,12 +144,34 @@ function AttachmentRow({
   id: string;
   attachment: RequestAttachment;
 }) {
-  const Icon = attachment.media_type.startsWith("image/")
-    ? ImageIcon
-    : FileText;
+  const href = attachmentHref(slug, id, attachment.position);
+  const previewable = isPreviewable(attachment.media_type);
+  const Icon = previewable ? ImageIcon : FileText;
   return (
     <li className="flex max-w-measure items-center gap-10 rounded-m bg-surface py-8 pr-8 pl-12">
-      <Icon aria-hidden="true" size={16} className="shrink-0 text-text-2" />
+      {previewable ? (
+        <Dialog
+          title={attachment.name}
+          description={`${attachment.media_type} · ${formatSize(attachment.size)}`}
+          trigger={
+            <button
+              type="button"
+              aria-label={`Open ${attachment.name}`}
+              className={cn("shrink-0 rounded-m", focusRing)}
+            >
+              <Thumbnail src={href} name={attachment.name} />
+            </button>
+          }
+        >
+          <img
+            src={href}
+            alt={attachment.name}
+            className="max-h-(--height-preview) max-w-full object-contain"
+          />
+        </Dialog>
+      ) : (
+        <Icon aria-hidden="true" size={16} className="shrink-0 text-text-2" />
+      )}
       <span className="min-w-0 flex-1 truncate text-14 text-text">
         {attachment.name}
       </span>
@@ -152,7 +179,7 @@ function AttachmentRow({
         {formatSize(attachment.size)}
       </span>
       <a
-        href={attachmentHref(slug, id, attachment.position)}
+        href={href}
         download={attachment.name}
         aria-label={`Download ${attachment.name}`}
         className={cn(buttonClasses("quiet", "sm"), focusRing)}
@@ -296,24 +323,43 @@ export function DraftView({
           <span className="text-13 text-text-2">{authorLine(draft, now)}</span>
         </p>
         <ol className="flex flex-col gap-10">
-          {draft.cards.map((card) => (
-            <li
-              key={card.key}
-              className="flex flex-col gap-4 rounded-m bg-surface px-16 py-14"
-            >
-              <p className="flex items-baseline gap-10">
-                <span className="rounded-s bg-fill px-7 py-2 text-13 font-semibold text-text-2 tabular-nums">
-                  {card.key}
-                </span>
-                <span className="text-16 leading-tight font-semibold text-text">
-                  {card.title}
-                </span>
-              </p>
-              <Markdown mentions={{ slug, known }} document>
-                {card.description}
-              </Markdown>
-            </li>
-          ))}
+          {draft.cards.map((card) => {
+            const kind = cardKindLabel(card);
+            const needs = cardNeeds(card, slug);
+            return (
+              <li
+                key={card.key}
+                className="flex flex-col gap-4 rounded-m bg-surface px-16 py-14"
+              >
+                <p className="flex items-baseline gap-10">
+                  <span className="rounded-s bg-fill px-7 py-2 text-13 font-semibold text-text-2 tabular-nums">
+                    {card.key}
+                  </span>
+                  <span className="text-16 leading-tight font-semibold text-text">
+                    {card.title}
+                  </span>
+                  {kind === null ? null : <Chip>{kind}</Chip>}
+                </p>
+                {needs.length > 0 ? (
+                  <p
+                    aria-label={`Tasks ${card.key} needs`}
+                    className="flex flex-wrap items-baseline gap-6 text-13 text-text-2"
+                  >
+                    <span>Needs</span>
+                    {needs.map((need, index) => (
+                      <span key={need.id}>
+                        <Id href={need.href}>{need.id}</Id>
+                        {index < needs.length - 1 ? "," : ""}
+                      </span>
+                    ))}
+                  </p>
+                ) : null}
+                <Markdown mentions={{ slug, known }} document>
+                  {card.description}
+                </Markdown>
+              </li>
+            );
+          })}
         </ol>
       </Section>
       <Section title="Dependencies" note={edgesSummary(draft.edges.length)}>

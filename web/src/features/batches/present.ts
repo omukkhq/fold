@@ -1,4 +1,5 @@
-import type { ComparisonTotals, ProposalSummary } from "@/api/proposals";
+import type { ComparisonTotals } from "@/api/proposals";
+import { isMergeConflict, type WithLane } from "@/features/proposals/laneState";
 import type { ReviewBatch, ReviewBatchMember } from "@/api/reviews";
 import type { WorkerProcess } from "@/api/workers";
 import { reviewerActor } from "@/people/names";
@@ -51,18 +52,18 @@ export const VERDICT_TEXT: Record<VerdictKind, string> = {
 function verdictOf(
   batch: ReviewBatch,
   member: ReviewBatchMember,
-  summary: ProposalSummary | undefined,
+  summary: WithLane | undefined,
 ): VerdictKind {
   const given = batch.verdicts.find(
     (v) => v.proposal === member.proposal && v.version === member.version,
   );
   if (given) return VERDICTS[given.verdict];
-  if (summary?.conflicted && member.in_batch) return "conflict";
+  if (summary && isMergeConflict(summary) && member.in_batch) return "conflict";
   if (batch.state !== "open") return "none";
   return member.in_batch ? "reviewing" : "left";
 }
 
-function needsHumanOf(summary: ProposalSummary | undefined): string | null {
+function needsHumanOf(summary: WithLane | undefined): string | null {
   if (!summary?.human_review || summary.human_approved) return null;
   return reviewerActor(summary.human_review.reviewer) ?? "";
 }
@@ -70,7 +71,7 @@ function needsHumanOf(summary: ProposalSummary | undefined): string | null {
 /** One row per member in merge order, with the proposal's title and author from the proposal list. */
 export function memberRows(
   batch: ReviewBatch,
-  proposals: readonly ProposalSummary[],
+  proposals: readonly WithLane[],
 ): MemberRow[] {
   return [...batch.members]
     .sort((a, b) => a.position - b.position)

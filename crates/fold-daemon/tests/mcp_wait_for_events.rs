@@ -613,8 +613,11 @@ async fn a_filtered_wait_ends_for_a_new_message_to_the_waiter_only() {
         "the wait carries the message, so no get_inbox call is needed"
     );
     assert_eq!(woke.get("hint"), None, "{woke}");
-    let footer = reached.content.last().unwrap().as_text().unwrap();
-    assert!(footer.text.starts_with("fold: 1 unread"), "{}", footer.text);
+    assert_eq!(
+        unread_part(&reached),
+        None,
+        "the wait gave the message whole, so it counts as read"
+    );
     assert_eq!(fx.cursor(&backend).await, woke["next"].as_u64().unwrap());
     let missed = tokio::time::timeout(WAIT, missed).await.unwrap().unwrap();
     assert_eq!(body(&missed), json!({"timed_out": true}));
@@ -1390,6 +1393,130 @@ async fn a_message_that_a_push_notice_delivered_in_the_waits_first_millisecond_e
     );
 }
 
+/// The unread part of a result's footer, such as `2 unread`, or `None` when the footer counts no unread message.
+#[cfg(test)]
+fn unread_part(result: &CallToolResult) -> Option<String> {
+    let footer = result.content.last()?.as_text()?.text.clone();
+    footer
+        .strip_prefix("fold: ")?
+        .split(" · ")
+        .find(|part| part.ends_with(" unread"))
+        .map(str::to_owned)
+}
+
+#[cfg(test)]
+async fn acked_at(fx: &Fixture, message: MessageId) -> Option<i64> {
+    fx.millis(&format!(
+        "SELECT acked_at FROM message_recipients WHERE message_id = (SELECT id FROM messages WHERE number = {})",
+        message.number()
+    ))
+    .await
+}
+
+#[tokio::test]
+async fn a_push_that_gives_messages_whole_counts_them_as_read() {
+    let mut fx = Fixture::new().await;
+    let bus = fx.bus.clone();
+    let _push = start_push(&mut fx, &bus);
+    let dir = tempfile::tempdir().unwrap();
+    let backend = fx.connect("backend").await;
+    let first = send_as_human(&fx, "backend").await;
+    let before = call_raw(&backend, "get_events", json!({})).await;
+    assert_eq!(
+        unread_part(&before).as_deref(),
+        Some("1 unread"),
+        "no session took a notice yet"
+    );
+
+    let mut inbox = session_inbox(&fx, dir.path(), "backend").await;
+    let second = send_as_human(&fx, "backend").await;
+    let notice = tokio::time::timeout(WAIT, inbox.recv())
+        .await
+        .expect("a push notice within the wait")
+        .unwrap();
+    assert!(
+        notice.contains(&format!("[{first} from human:ana]")),
+        "{notice}"
+    );
+    assert!(
+        notice.contains(&format!("[{second} from human:ana]")),
+        "{notice}"
+    );
+    eventually(WAIT, async || {
+        match (acked_at(&fx, first).await, acked_at(&fx, second).await) {
+            (Some(_), Some(_)) => Ok(()),
+            other => Err(other),
+        }
+    })
+    .await;
+
+    let after = call_raw(&backend, "get_events", json!({})).await;
+    assert_eq!(unread_part(&after), None, "the footer count dropped");
+    assert_eq!(
+        call(&backend, "get_inbox", json!({})).await["messages"],
+        json!([])
+    );
+    let acknowledged = fx
+        .millis("SELECT COUNT(*) FROM events WHERE type = 'message.acknowledged'")
+        .await;
+    assert_eq!(
+        acknowledged,
+        Some(0),
+        "reading appends no acknowledgement event"
+    );
+}
+
+#[tokio::test]
+async fn a_push_that_cuts_a_message_leaves_it_unread_until_get_thread() {
+    let mut fx = Fixture::new().await;
+    let bus = fx.bus.clone();
+    let _push = start_push(&mut fx, &bus);
+    let dir = tempfile::tempdir().unwrap();
+    let backend = fx.connect("backend").await;
+    let mut inbox = session_inbox(&fx, dir.path(), "backend").await;
+    let long = "x".repeat(fold_core::agents::carry::MAX_CARRIED_LEN);
+    let sent = fx
+        .messages()
+        .send(
+            &ana(),
+            SendMessage {
+                to: Address::parse_all(&["backend"]).unwrap(),
+                body: MessageBody::parse(long).unwrap(),
+                task: None,
+                proposal: None,
+                reply_to: None,
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+    let notice = tokio::time::timeout(WAIT, inbox.recv())
+        .await
+        .expect("a push notice within the wait")
+        .unwrap();
+    assert!(
+        notice.contains(&format!("(cut: read {sent} whole with get_thread)")),
+        "{notice}"
+    );
+    eventually(WAIT, async || match delivered_and_pushed(&fx, sent).await {
+        (Some(_), Some(_)) => Ok(()),
+        other => Err(other),
+    })
+    .await;
+    assert_eq!(acked_at(&fx, sent).await, None, "a cut message is not read");
+    let before = call_raw(&backend, "get_events", json!({})).await;
+    assert_eq!(unread_part(&before).as_deref(), Some("1 unread"));
+
+    let thread = call_raw(&backend, "get_thread", json!({"thread": sent.to_string()})).await;
+    assert_eq!(body(&thread)["messages"][0]["id"], json!(sent.to_string()));
+    assert_eq!(
+        unread_part(&thread),
+        None,
+        "get_thread showed the message whole"
+    );
+    assert!(acked_at(&fx, sent).await.is_some());
+}
+
 #[cfg(test)]
 fn rq(number: u32) -> fold_core::RequestId {
     fold_core::RequestId::from_number(number).unwrap()
@@ -1572,4 +1699,66 @@ async fn a_stall_that_fold_tells_an_agent_ends_its_wait_whatever_it_waits_for_an
         fx.cursor(&lead).await,
         events::head_seq(fx.store().read()).await.unwrap()
     );
+}
+
+#[tokio::test]
+async fn a_stall_type_in_types_matches_only_the_stalls_fold_tells_the_waiter_of() {
+    let fx = Fixture::new().await;
+    let lead = fx.connect("frontend").await;
+    let stalled = |agent: &str, told: Value| {
+        new_event(types::WORKER_STALLED, "fold")
+            .data(json!({"agent": agent, "reason": "silent", "call": null, "minutes": 5, "told": told}))
+            .unwrap()
+    };
+    let stale = |worker: &str, told: Value| {
+        new_event(types::CLAIM_STALE, "fold")
+            .data(
+                json!({"kind": "implementation", "worker": worker, "renewed_at": 0, "told": told}),
+            )
+            .unwrap()
+    };
+    fx.commit(vec![
+        stalled("api-worker", json!(["backend"])),
+        stale("api-worker", json!(["backend"])),
+        stalled("web-worker", json!(["frontend"])),
+        stale("web-worker", json!(["frontend"])),
+    ])
+    .await;
+    let woken = call(
+        &lead,
+        "wait_for_events",
+        json!({"types": ["worker.stalled", "claim.stale"], "timeout_s": 1}),
+    )
+    .await;
+    let events = woken["events"].as_array().unwrap();
+    assert_eq!(events.len(), 2, "{woken}");
+    assert_eq!(events[0]["type"], "worker.stalled");
+    assert_eq!(events[0]["data"]["agent"], "web-worker");
+    assert_eq!(events[1]["type"], "claim.stale");
+    assert_eq!(events[1]["data"]["worker"], "web-worker");
+    assert_eq!(
+        fx.cursor(&lead).await,
+        events::head_seq(fx.store().read()).await.unwrap()
+    );
+}
+
+#[tokio::test]
+async fn an_undeclared_type_is_refused_with_the_declared_types_and_the_nearest_one() {
+    let fx = Fixture::new().await;
+    let session = fx.connect("frontend").await;
+    for tool in ["wait_for_events", "get_events"] {
+        let result = call_raw(&session, tool, json!({"types": ["proposal.created"]})).await;
+        let error = body(&result)["error"].clone();
+        assert_eq!(error["code"], json!("invalid_event_filter"), "{tool}");
+        assert_eq!(error["details"]["type"], "proposal.created");
+        assert_eq!(error["details"]["nearest"], "proposal.opened", "{error}");
+        let declared: Vec<&str> = error["details"]["declared"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|name| name.as_str().unwrap())
+            .collect();
+        let all: Vec<&str> = EventType::ALL.iter().map(|name| name.as_str()).collect();
+        assert_eq!(declared, all);
+    }
 }

@@ -1,6 +1,7 @@
 use fold_core::claims::is_stale;
 use fold_core::merge::{Conflict, ReportFile};
 use fold_core::policy::{GateState, IntegrateInput, ProposalFacts, gate_report};
+use fold_core::reviews::lanes::LanePlace;
 use fold_core::reviews::{deciding_approval, last_verdict_version};
 use fold_core::{
     Actor, ChangesetId, FoldError, ProposalId, ReviewBatchId, RevisionId, TaskDescription, TaskId,
@@ -16,6 +17,7 @@ pub use fold_store::reviews::ReviewRow as ReviewView;
 
 use super::checks::{CheckRunView, VersionRun, next_version_run};
 use super::claims::ReviewClaimView;
+use super::conflicts::{ConflictedReason, conflicted_reason};
 use super::integrate::caller_facts;
 use super::plans::{ProposalPlan, RelatedTaskView, proposal_plan, related_plan_tasks};
 use super::proposals::{ProposalDetail, proposal_detail, proposal_not_found};
@@ -75,6 +77,10 @@ pub struct ProposalView {
     pub related_tasks: Vec<RelatedTaskView>,
     /// The revision an integrated proposal became, and the review batch it integrated with, if any.
     pub integrated: Option<(RevisionId, Option<ReviewBatchId>)>,
+    /// The lane of main's `fold-checks.toml` that the open proposal's current version changes a path of, with its position; `None` outside every lane.
+    pub lane: Option<LanePlace>,
+    /// Why the open proposal is flagged `conflicted` on its current version; `None` when it is not.
+    pub conflicted_reason: Option<ConflictedReason>,
 }
 
 impl ReviewService {
@@ -119,6 +125,12 @@ impl ReviewService {
             Vec::new()
         };
         let integrated = reviews::batches::integrated_as(&mut *read, proposal).await?;
+        let summary = &detail.summary;
+        let conflicted_reason = if summary.state == ProposalState::Open && summary.conflicted {
+            conflicted_reason(&mut read, proposal, summary.current_version).await?
+        } else {
+            None
+        };
         read.commit().await.map_err(StoreError::from)?;
         let claim = match holder {
             Some(row) => Some(ReviewClaimView {
@@ -160,6 +172,11 @@ impl ReviewService {
             main_task: facts.main_task,
             prerequisites: &facts.prerequisites,
         });
+        let lane = self
+            .lane_places()
+            .await?
+            .into_iter()
+            .find(|place| place.proposal == proposal);
         let comparison = self
             .workspaces
             .compare_states(
@@ -191,6 +208,8 @@ impl ReviewService {
             review_plan,
             related_tasks,
             integrated,
+            lane,
+            conflicted_reason,
         })
     }
 }
@@ -234,5 +253,5 @@ pub fn integration_conflicted(proposal: ProposalId, conflicts: &[Conflict]) -> F
         ("proposal", json!(proposal.to_string())),
         ("files", json!(files)),
     ])
-    .with_hint("call get_proposal to read the conflict report; the author syncs the workspace and calls update_proposal")
+    .with_hint("call get_proposal to read the conflict report; the reviewer that approved the version fixes it in a review checkout merged onto main with submit_review_fix, or the review lead starts a reviewer for it")
 }

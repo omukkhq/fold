@@ -178,6 +178,8 @@ export function proposalDetail(
     checks: [],
     update_run: null,
     review_plan: null,
+    lane: null,
+    conflicted_reason: null,
     ...fields,
   };
 }

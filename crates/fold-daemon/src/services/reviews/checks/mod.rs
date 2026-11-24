@@ -690,6 +690,19 @@ pub(super) async fn end_run_in_tx(
     verdict: Verdict,
     now: Timestamp,
 ) -> Result<bool, ReviewError> {
+    end_run_with_in_tx(tx, buffer, run, results, verdict, &json!({}), now).await
+}
+
+/// [`end_run_in_tx`] with the keys of the object `extra` added to the data of `checks.finished`.
+pub(super) async fn end_run_with_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    run: &CheckRunRow,
+    results: &[CommandResult],
+    verdict: Verdict,
+    extra: &serde_json::Value,
+    now: Timestamp,
+) -> Result<bool, ReviewError> {
     let current = checks::get_run(tx.conn(), run.id).await?;
     if current.is_none_or(|row| row.state != RunState::Running) {
         return Ok(false);
@@ -721,14 +734,18 @@ pub(super) async fn end_run_in_tx(
     if let Some(proposal) = run.proposal {
         event = event.proposal(proposal);
     }
-    let event = event.data(json!({
+    let mut data = json!({
         "run": run.id.to_string(),
         "stage": run.stage.as_str(),
         "purpose": run.purpose.as_str(),
         "state": verdict.state.as_str(),
         "reason": verdict.reason.map(RunReason::as_str),
         "version": run.version,
-    }))?;
+    });
+    if let (Some(data), Some(extra)) = (data.as_object_mut(), extra.as_object()) {
+        data.extend(extra.clone());
+    }
+    let event = event.data(data)?;
     buffer.append(tx, &event, now).await?;
     Ok(true)
 }

@@ -1,14 +1,9 @@
-use std::fmt::Write as _;
-
 use serde::{Deserialize, Serialize};
 
 use super::{Conflict, ConflictHunk, ConflictKind};
 use crate::ids::{ProposalId, RevisionId};
 use crate::workspaces::object::ObjectHash;
 use crate::workspaces::tree::{EntryKind, FlatEntry};
-
-/// How many conflicting paths the author's message names before it counts the rest.
-const NAMED_PATHS: usize = 5;
 
 /// Why a version of a proposal could not be integrated: every path that conflicts between its base, main and the version. It is stored with the `conflicted` integration and read back as stored, so a reader never recomputes the merge.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,30 +164,6 @@ impl ConflictReport {
             trees,
             files,
         }
-    }
-
-    /// The message fold sends the author's agent. It names paths only, never file content or hunks, and the tools that lead to a new version.
-    pub fn author_message(&self) -> String {
-        let mut text = format!(
-            "{} v{} conflicts with main at {} and was not integrated.\nConflicting paths ({}): ",
-            self.proposal,
-            self.version,
-            self.main_revision,
-            self.files.len()
-        );
-        let named: Vec<&str> = self
-            .files
-            .iter()
-            .take(NAMED_PATHS)
-            .map(|file| file.path.as_str())
-            .collect();
-        text.push_str(&named.join(", "));
-        let rest = self.files.len().saturating_sub(NAMED_PATHS);
-        if rest > 0 {
-            let _ = write!(text, " and {rest} more");
-        }
-        text.push_str(".\nNext: call get_proposal to read the conflict report, then sync_workspace to merge main into your workspace. Resolve each conflicted path, then call update_proposal to send a new version for review.");
-        text
     }
 }
 
@@ -475,34 +446,5 @@ mod tests {
         let mut odd = text_conflict();
         odd.path = b"bad\xffname".to_vec();
         assert_eq!(report(&[odd]).files[0].path, "bad\u{fffd}name");
-    }
-
-    #[test]
-    fn the_author_message_names_five_paths_and_counts_the_rest() {
-        let conflicts: Vec<Conflict> = (1..=7)
-            .map(|n| {
-                conflict(
-                    &format!("f{n}"),
-                    ConflictKind::AddAdd,
-                    [None, file("1"), file("2")],
-                    Vec::new(),
-                )
-            })
-            .collect();
-        let message = report(&conflicts).author_message();
-        assert!(message.starts_with("P-3 v2 conflicts with main at r8"));
-        assert!(message.contains("Conflicting paths (7): f1, f2, f3, f4, f5 and 2 more."));
-        assert!(!message.contains("f6"));
-        assert!(message.contains("get_proposal"));
-        assert!(message.contains("sync_workspace"));
-    }
-
-    #[test]
-    fn the_author_message_holds_no_content() {
-        let message = report(&[text_conflict()]).author_message();
-        assert!(message.contains("Conflicting paths (1): src/lib.rs."));
-        for content in ["old", "mine", "main\n", "more"] {
-            assert!(!message.contains(content), "{content:?} in {message:?}");
-        }
     }
 }

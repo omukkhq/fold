@@ -58,7 +58,7 @@ pub fn owed_ahead<'a>(
     ahead
 }
 
-/// Refuses a start of a worker of `role` that would take a place an owed resume of the role waits for, so fold serves its owed resumes, in the order they became owed, before any other start. `running` and `in_area` are those of [`check_limits`], `owed` the owed resumes of `role`, and `starting` the worker that starts again, `None` for a new agent. The refusal is `worker_limit_reached` with the reason [`OWED_RESUME_WAITS`]; its hint names `tool`, the call to make again. A person's own start never comes here.
+/// Refuses a start of a worker of `role` that would take a place an owed resume of the role waits for, so fold serves its owed resumes, in the order they became owed, before any other start. `running` and `in_area` are those of [`check_limits`], `owed` the owed resumes of `role`, and `starting` the worker that starts again, `None` for a new agent. The refusal is `worker_limit_reached` with the reason [`OWED_RESUME_WAITS`]; its hint names `tool`, the call to make again with `queue: true`. A person's own start never comes here.
 pub fn check_owed_first(
     limits: WorkerLimits,
     role: Role,
@@ -109,7 +109,7 @@ pub fn check_owed_first(
     )
     .with_details(details)
     .with_hint(format!(
-        "fold resumes @{agent} first: wait with wait_for_events until it started and one more {role} stopped, then call {tool} again, or ask the main agent or a human to raise the {role} limit with set_worker_limits"
+        "fold resumes @{agent} first: call {tool} again with queue: true, and fold runs it when a place frees, then end the turn; or ask the main agent or a human to raise the {role} limit with set_worker_limits"
     )))
 }
 
@@ -214,7 +214,7 @@ mod tests {
         assert_eq!(
             refused.hint(),
             Some(
-                "fold resumes @b-worker first: wait with wait_for_events until it started and one more task_worker stopped, then call start_worker again, or ask the main agent or a human to raise the task_worker limit with set_worker_limits"
+                "fold resumes @b-worker first: call start_worker again with queue: true, and fold runs it when a place frees, then end the turn; or ask the main agent or a human to raise the task_worker limit with set_worker_limits"
             )
         );
         let full = check_owed_first(LIMITS, Role::TaskWorker, 2, None, &waiting, None, "x");

@@ -389,7 +389,7 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 72] = [
+const NON_TOOL_NAMES: [&str; 75] = [
     "next_offset",
     "file_count",
     "human_review",
@@ -460,6 +460,9 @@ const NON_TOOL_NAMES: [&str; 72] = [
     "agent_changed",
     "shared_changed",
     "owed_resume_waits",
+    "lane_held",
+    "request_escalate_minutes",
+    "reviewed_alone",
     "wait_for",
     "needs_person",
 ];
@@ -1148,12 +1151,14 @@ fn the_skill_sends_missing_work_back_and_new_work_to_a_request() {
 }
 
 #[test]
-fn the_review_lead_skill_groups_one_feature_and_plans_before_any_review_starts() {
+fn the_review_lead_skill_groups_only_linked_proposals_and_plans_first() {
     let skill = role_skill(Role::ReviewLead);
     for rule in [
-        "Group the proposals of one feature for one reviewer.",
-        "a request (`RQ-n`), a parent task or a dependency",
-        "code and its tests or docs, or the backend and the screen of one feature, even when their files differ: shared files are one sign, not the test.",
+        "3. Put proposals in one group, and so in one batch, only when they cannot work without each other; every other proposal gets its own review.",
+        "leaves the batch with the reason `reviewed_alone` and integrates on its own",
+        "one feature or one area alone is not a reason to group.",
+        "A shared request (`RQ-n`), parent task or dependency",
+        "code and its tests, or the backend and the screen of one change, even when their files differ: shared files are one sign, not the test.",
         "Before a review start that is not a plan's, read `get_task_graph` and decide; never start such a reviewer without it.",
         "`related_tasks` and `plan_hint` of `get_proposal(id)`",
         "call `create_review_plan(proposals[], tasks[])` at once, before any reviewer starts",
@@ -1165,6 +1170,7 @@ fn the_review_lead_skill_groups_one_feature_and_plans_before_any_review_starts()
         assert!(skill.contains(rule), "{rule}");
     }
     assert!(!skill.contains("their areas, files and dependencies"));
+    assert!(!skill.contains("then the open proposals of the same area"));
 }
 
 const SUBCOMMANDS: [&str; 15] = [
@@ -1516,8 +1522,9 @@ fn the_reference_shows_every_config_key_in_its_example() {
 #[test]
 fn the_reference_names_every_checks_key_and_run_state() {
     let top = checks_keys("");
-    assert_eq!(top, ["setup", "check"]);
+    assert_eq!(top, ["setup", "check", "serial"]);
     assert!(REFERENCE.contains("`[setup]`") && REFERENCE.contains("`[[check]]`"));
+    assert!(REFERENCE.contains("`[[serial]]`") && REFERENCE.contains("`paths`"));
     for key in checks_keys("[setup]\n")
         .into_iter()
         .chain(checks_keys("[[check]]\nname = \"a\"\nrun = \"b\"\n"))

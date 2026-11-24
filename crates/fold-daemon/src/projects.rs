@@ -15,9 +15,12 @@ use crate::jobs::{self, AutoCommit, ProjectTask};
 use crate::live::{LiveConfig, LiveState, WatchStart, follow_watch_owners};
 use crate::push::{self, PushTargets, PushTask};
 use crate::services::agents::environment::WorkerEnvironment;
-use crate::services::agents::{AgentService, Launcher, SeenPresence, Supervisor, code_of};
+use crate::services::agents::{
+    AgentService, Launcher, SeenPresence, Supervisor, code_of, follow_queued_starts,
+};
 use crate::services::events::EventBus;
 use crate::services::messages::MessageService;
+use crate::services::projects::closing::FolderLock;
 use crate::services::projects::{
     FoldSkills, GitAttention, ProjectError, RemoteContext, ToolWindows, keep_fold_skills_out,
     load_config,
@@ -88,6 +91,8 @@ pub struct ProjectHandle {
     stall_turns: ProjectTask,
     /// Gives each workspace its watch or its rest on the timer scan again after each start or end of a worker process or a session.
     watch_owners: ProjectTask,
+    /// Runs the queued worker starts when a place frees.
+    queued_starts: ProjectTask,
     /// The device and inode of the database file this handle opened. SQLite keeps reading a file that was deleted, so only this tells the handle's database from a new one at the same path.
     database_file: Option<(u64, u64)>,
 }
@@ -235,6 +240,19 @@ impl ProjectHandle {
             bus.subscribe(),
         ));
         let watch_owners = ProjectTask::spawn(follow_watch_owners(live.clone(), bus.subscribe()));
+        let presence = SeenPresence::new();
+        let queue_service = AgentService::new(store.clone(), bus.clone(), clock.clone())
+            .with_project_config(paths.clone())
+            .with_seen_presence(presence.clone())
+            .with_push_targets(push.clone())
+            .with_live(live.clone())
+            .with_workers(workers.clone())
+            .with_workspace_locks(workspace_locks.clone());
+        let queued_starts = ProjectTask::spawn(follow_queued_starts(
+            queue_service,
+            bus.clone(),
+            bus.subscribe(),
+        ));
         let workspace_cleanup = ProjectTask::spawn(follow_closed_workspaces(
             cleanup,
             bus.clone(),
@@ -248,7 +266,7 @@ impl ProjectHandle {
             store,
             clock,
             bus,
-            presence: SeenPresence::new(),
+            presence,
             tasks,
             integration: Arc::new(tokio::sync::Mutex::new(())),
             gc: tokio::sync::Mutex::new(()),
@@ -272,6 +290,7 @@ impl ProjectHandle {
             cleanup_due,
             stall_turns,
             watch_owners,
+            queued_starts,
             database_file,
         })
     }
@@ -366,6 +385,8 @@ impl ProjectHandle {
         if limited {
             shutdown::within(name, Some(&self.slug), limit, work).await
         } else {
+            #[cfg(feature = "failpoints")]
+            shutdown::hold_while("project_close_hold", name).await;
             Some(work.await)
         }
     }
@@ -378,6 +399,7 @@ impl ProjectHandle {
             self.workspace_cleanup.stopped(timeout),
             self.stall_turns.stopped(timeout),
             self.watch_owners.stopped(timeout),
+            self.queued_starts.stopped(timeout),
         );
     }
 
@@ -643,7 +665,13 @@ pub struct Projects {
     /// The notice settings of the host and its projects; `None` sends no notices.
     notify: Option<crate::services::projects::notify::NotifySettings>,
     folder_files: FolderFiles,
+    /// The folder of the project folders' locks that `fld init` shares; `None` closes a handle without one.
+    closing: Option<PathBuf>,
 }
+
+/// An init in another process holds the lock of the project folder, so the daemon leaves the folder's old handle as it is until the next look.
+#[derive(Debug)]
+struct InitRunning;
 
 impl Projects {
     #[must_use]
@@ -692,6 +720,28 @@ impl Projects {
     pub fn with_folder_files(mut self, files: FolderFiles) -> Self {
         self.folder_files = files;
         self
+    }
+
+    /// Takes the lock of a project folder in `dir` while it closes a handle whose `.fold/` or database went away, the lock that `fld init` waits for.
+    #[must_use]
+    pub fn with_closing_dir(mut self, dir: PathBuf) -> Self {
+        self.closing = Some(dir);
+        self
+    }
+
+    /// The lock of the project folder `root` for the close of its old handle, held until the store has closed, so an init of the folder waits for it. `Ok(None)` without a lock folder, or when the lock file cannot be opened, which closes as without one; [`InitRunning`] while an init holds it.
+    async fn close_lock(&self, slug: &str, root: &Path) -> Result<Option<FolderLock>, InitRunning> {
+        let Some(dir) = &self.closing else {
+            return Ok(None);
+        };
+        match FolderLock::try_take(dir, root).await {
+            Ok(Some(lock)) => Ok(Some(lock)),
+            Ok(None) => Err(InitRunning),
+            Err(error) => {
+                tracing::warn!(project = %slug, kind = %error.kind(), "could not take the lock of the project folder; the old handle closes without it");
+                Ok(None)
+            }
+        }
     }
 
     /// Keeps the notice settings of the host and its projects below `dir`.
@@ -764,8 +814,10 @@ impl Projects {
         if self.remove_locked(&row.slug, root).await {
             return Err(removed(&row.slug, root));
         }
-        if let Some(handle) = self.current(&row.slug).await {
-            return Ok((handle, false));
+        match self.current(&row.slug).await {
+            Ok(Some(handle)) => return Ok((handle, false)),
+            Ok(None) => {}
+            Err(InitRunning) => return Err(unopened(&row.slug, root).await),
         }
         // Read again under the open lock, which a removal holds too, so an open that read the row before a person removed it does not open the project again.
         if self.removed_by_person(&row.slug).await {
@@ -833,19 +885,20 @@ impl Projects {
         outcome.map(|handle| (handle, true))
     }
 
-    /// The open handle of `slug` while its database file is the one it opened. A handle whose file was deleted or replaced is closed, with its workers, and leaves the slot, so nothing of it runs on and the next open finds the folder as it is now. The caller holds `opening`.
-    async fn current(&self, slug: &str) -> Option<Arc<ProjectHandle>> {
+    /// The open handle of `slug` while its database file is the one it opened. A handle whose file was deleted or replaced is closed, with its workers, under the lock of its folder, and leaves the slot, so nothing of it runs on and the next open finds the folder as it is now; while an init holds that lock the handle stays, with [`InitRunning`]. The caller holds `opening`.
+    async fn current(&self, slug: &str) -> Result<Option<Arc<ProjectHandle>>, InitRunning> {
         let Some(Slot::Open(handle)) = self.slot(slug) else {
-            return None;
+            return Ok(None);
         };
         let file = handle.database_file().await;
         if file == DatabaseFile::Opened {
-            return Some(handle);
+            return Ok(Some(handle));
         }
+        let folder = self.close_lock(slug, handle.paths.root()).await?;
         tracing::warn!(project = %slug, missing = file == DatabaseFile::Missing, "project database was deleted or replaced; the open project closes");
         unpoisoned(self.slots.write()).remove(slug);
-        handle.close().await;
-        None
+        close_holding(handle, folder).await;
+        Ok(None)
     }
 
     fn mark_away(&self, slug: &str, away: bool) {
@@ -862,7 +915,7 @@ impl Projects {
         unpoisoned(self.away.read()).contains(slug)
     }
 
-    /// Removes the project `slug` at `root` from fold when the folder is there without `.fold/`, as after its fold data was deleted: the registry row goes in one registry write, and an open handle closes with its workers, live state, jobs and store and leaves the slot. A missing folder or a `.fold/` without its database removes nothing. A daemon state without a registry removes nothing. The caller holds `opening`. True when the project was removed.
+    /// Removes the project `slug` at `root` from fold when the folder is there without `.fold/`, as after its fold data was deleted: the registry row goes in one registry write, and an open handle closes with its workers, live state, jobs and store and leaves the slot, under the lock of the folder that an init waits for. While an init holds that lock, nothing is removed. A missing folder or a `.fold/` without its database removes nothing. A daemon state without a registry removes nothing. The caller holds `opening`. True when the project was removed.
     async fn remove_locked(&self, slug: &str, root: &Path) -> bool {
         let Some(registry) = &self.registry else {
             return false;
@@ -870,6 +923,10 @@ impl Projects {
         if project_folder(root).await != ProjectFolder::FoldMissing {
             return false;
         }
+        // Held until the old handle's store has closed; an init that holds it is making a new project here, which the next look finds.
+        let Ok(folder) = self.close_lock(slug, root).await else {
+            return false;
+        };
         let root_text = root.to_string_lossy();
         let deleted = registry
             .write(async |tx| -> Result<bool, fold_store::StoreError> {
@@ -902,7 +959,7 @@ impl Projects {
             if other { None } else { slots.remove(slug) }
         };
         if let Some(Slot::Open(handle)) = slot {
-            handle.close().await;
+            close_holding(handle, folder).await;
         }
         tracing::warn!(project = %slug, root = %root.display(), "the project folder has no .fold; fold removed the project");
         true
@@ -981,7 +1038,7 @@ impl Projects {
         if self.remove_locked(slug, handle.paths.root()).await {
             return true;
         }
-        if self.current(slug).await.is_some() {
+        if !matches!(self.current(slug).await, Ok(None)) {
             return false;
         }
         unpoisoned(self.slots.write()).insert(slug.to_owned(), Slot::Unavailable);
@@ -999,6 +1056,18 @@ impl Projects {
             }
         }
         closed
+    }
+}
+
+/// Closes `handle` and lets go of the lock of its folder only once its store has closed. The close runs in its own task, so a caller that is dropped, such as a request whose client went away or the live job at the daemon's stop, never lets go of the lock while the old store is still open; the lock goes with the process when the daemon ends first.
+async fn close_holding(handle: Arc<ProjectHandle>, folder: Option<FolderLock>) {
+    let slug = handle.slug.clone();
+    let closing = tokio::spawn(async move {
+        handle.close().await;
+        drop(folder);
+    });
+    if closing.await.is_err() {
+        tracing::error!(project = %slug, "the close of the old project handle ended early");
     }
 }
 

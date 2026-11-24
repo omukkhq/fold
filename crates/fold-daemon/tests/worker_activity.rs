@@ -84,6 +84,22 @@ async fn an_open_command_is_work_until_it_runs_twice_claude_codes_limit() {
     let fake = FakeClaude::new("bash_open");
     let harness = task_worker_for(&fake, &["Draw the page"], WorkerState::Working).await;
     let work = harness.start_work(TASK_WORKER, "T-1").await;
+    // The worker is working once its process starts; the call opens at the clock's time of the line after.
+    let agent = fold_core::AgentName::parse(TASK_WORKER).unwrap();
+    let opened = eventually(WAIT, async || {
+        match harness
+            .handle
+            .live
+            .streams()
+            .and_then(|streams| streams.facts(&agent))
+            .and_then(|facts| facts.open_call)
+        {
+            Some(call) => Ok(call.since),
+            None => Err(()),
+        }
+    })
+    .await;
+    assert_eq!(opened, harness.project.now());
 
     advance(&harness, 2 * MINUTE);
     let working = state(&harness, &work).await.view;

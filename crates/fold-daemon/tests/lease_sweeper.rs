@@ -956,7 +956,9 @@ async fn a_worker_that_waits_for_its_checks_stalls_only_a_window_after_the_run()
     let live = fx.handle.live.get(id).unwrap();
     assert_eq!(serde_json::to_value(live.view.check_run).unwrap(), expected);
     assert!(fx.attention("T-1").await.is_empty());
-    assert_eq!(card_check_run(&fx, "T-1").await, expected);
+    let mut card = expected.clone();
+    card["stage"] = json!("proposal");
+    assert_eq!(card_check_run(&fx, "T-1").await, card);
     assert_eq!(agent_check_run(&fx, "frontend").await, expected);
     assert_eq!(fx.agent_attention().await["frontend"], json!([]));
 

@@ -507,6 +507,7 @@ impl Supervisor {
         self.clone().resume_owed_send_backs().await;
         self.clone().resume_owed_gate_runs().await;
         self.clone().resume_owed_reviewers(None).await;
+        self.clone().give_owed_conflicts().await;
         self.clone().resume_owed_messages().await;
         self.resume_pending().await;
     }
@@ -573,12 +574,20 @@ pub(super) async fn watch_done(
                 continue;
             }
         };
-        for agent in done {
+        for agent in done.stop {
             supervisor.spawn_stop(agent);
+        }
+        if !done.held.is_empty() {
+            let held = done.held;
+            let supervisor = supervisor.clone();
+            tokio::spawn(async move { supervisor.tell_batch_holders(&held).await });
         }
         let items = resume::resume_items(&event);
         if !items.is_empty() {
             tokio::spawn(supervisor.clone().resume_authors(items));
+        }
+        if let Some(owed) = super::conflict::conflict_fixer(&event) {
+            tokio::spawn(supervisor.clone().give_conflict_to_reviewer(owed));
         }
         if let Some(run) = super::gate::gate_run(&event) {
             tokio::spawn(supervisor.clone().resume_gate_author(run));

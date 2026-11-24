@@ -990,7 +990,7 @@ async fn a_comment_on_members_together_is_one_batch_comment_on_each_member() {
 }
 
 #[tokio::test]
-async fn a_batch_whose_members_all_integrate_closes_and_archives_its_checkout() {
+async fn a_batch_whose_members_are_all_reviewed_alone_closes_and_archives_its_checkout() {
     let scene = Scene::new().await;
     let batch = scene.batch(&[2, 3]).await;
     let reviews = scene.fx.reviews();
@@ -1000,41 +1000,44 @@ async fn a_batch_whose_members_all_integrate_closes_and_archives_its_checkout() 
         .unwrap()
         .workspace
         .id;
-    for proposal in [p(2), p(3)] {
-        reviews
-            .submit_review(
-                &human("tanim"),
-                proposal,
-                1,
-                Verdict::Approve,
-                "fine",
-                Vec::new(),
-            )
-            .await
-            .unwrap();
-    }
-
+    reviews
+        .submit_review(
+            &human("tanim"),
+            p(2),
+            1,
+            Verdict::Approve,
+            "fine",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
     reviews
         .integrate_proposal(&scene.review, p(2), None)
         .await
         .unwrap();
     let view = reviews.get_review_batch(batch).await.unwrap();
     assert_eq!(view.state, BatchState::Open, "P-3 is still to review");
-    assert_eq!(view.checkout.map(|workspace| workspace.id), Some(checkout));
+    assert_eq!(view.checkout, None, "the checkout holds P-2, which left");
 
     reviews
-        .integrate_proposal(&scene.review, p(3), None)
+        .submit_review(
+            &human("tanim"),
+            p(3),
+            1,
+            Verdict::Approve,
+            "fine",
+            Vec::new(),
+        )
         .await
         .unwrap();
     let view = reviews.get_review_batch(batch).await.unwrap();
     assert_eq!(view.state, BatchState::Closed);
     assert!(view.closed_at.is_some());
     assert_eq!(view.submitted_at, None);
-    assert_eq!(view.checkout, None);
     assert!(
         view.members
             .iter()
-            .all(|member| member.released == Some(MemberRelease::Closed))
+            .all(|member| member.released == Some(MemberRelease::ReviewedAlone))
     );
     let archived = scene
         .fx
@@ -1044,6 +1047,10 @@ async fn a_batch_whose_members_all_integrate_closes_and_archives_its_checkout() 
         .unwrap();
     assert_eq!(archived.state, WorkspaceState::Archived);
     assert_eq!(scene.event_count("review.batch_closed").await, 1);
+    reviews
+        .integrate_proposal(&scene.review, p(3), None)
+        .await
+        .unwrap();
     let again = refusal(
         reviews
             .submit_batch_review(&scene.review, batch, Vec::new(), Vec::new())
@@ -1107,4 +1114,110 @@ async fn a_batch_that_rejects_every_member_is_submitted_not_closed() {
     let view = reviews.get_review_batch(batch).await.unwrap();
     assert_eq!(view.state, BatchState::Submitted);
     assert_eq!(scene.event_count("review.batch_closed").await, 0);
+}
+
+#[tokio::test]
+async fn a_member_reviewed_alone_leaves_the_batch_and_integrates_on_its_own() {
+    let scene = Scene::new().await;
+    let reviews = scene.fx.reviews();
+    let batch = scene.batch(&[2, 3]).await;
+    reviews
+        .create_batch_checkout(&scene.review, batch)
+        .await
+        .unwrap();
+    // A comment gives no verdict, so the member stays for the batch's review.
+    reviews
+        .submit_review(
+            &scene.review,
+            p(2),
+            1,
+            Verdict::Comment,
+            "a note",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let view = reviews.get_review_batch(batch).await.unwrap();
+    assert!(view.members.iter().all(|member| member.released.is_none()));
+    assert!(view.checkout.is_some());
+
+    reviews
+        .submit_review(&scene.review, p(2), 1, Verdict::Approve, "fine", Vec::new())
+        .await
+        .unwrap();
+    let view = reviews.get_review_batch(batch).await.unwrap();
+    assert_eq!(view.state, BatchState::Open);
+    let released: Vec<(ProposalId, Option<MemberRelease>)> = view
+        .members
+        .iter()
+        .map(|member| (member.proposal, member.released))
+        .collect();
+    assert_eq!(
+        released,
+        [(p(2), Some(MemberRelease::ReviewedAlone)), (p(3), None)]
+    );
+    // The checkout holds a member the batch lacks now.
+    assert!(view.checkout.is_none());
+    // The batch's review can no longer name the member that left.
+    let error = refusal(
+        reviews
+            .submit_batch_review(
+                &scene.review,
+                batch,
+                vec![verdict(2, Verdict::Approve, "again")],
+                Vec::new(),
+            )
+            .await,
+    );
+    assert_eq!(error.code(), codes::NOT_BATCH_MEMBER);
+
+    // The open batch holds only P-3, so P-2 integrates on its own.
+    let done = reviews.integrate_ready().await.unwrap();
+    let integrated: Vec<ProposalId> = done.iter().map(|done| done.proposal).collect();
+    assert_eq!(integrated, [p(2)]);
+    assert_eq!(
+        scene.summary(p(3)).await.state,
+        fold_store::reviews::ProposalState::Open
+    );
+
+    // The last member's verdict alone leaves the batch with no member, so it closes.
+    reviews
+        .submit_review(
+            &scene.review,
+            p(3),
+            1,
+            Verdict::RequestChanges,
+            "add a test",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let view = reviews.get_review_batch(batch).await.unwrap();
+    assert_eq!(view.state, BatchState::Closed);
+    assert_eq!(view.members[1].released, Some(MemberRelease::ReviewedAlone));
+    assert_eq!(scene.event_count("review.batch_closed").await, 1);
+}
+
+#[tokio::test]
+async fn a_member_reviewed_alone_is_out_of_the_submitted_batchs_wait() {
+    let scene = Scene::new().await;
+    let reviews = scene.fx.reviews();
+    let batch = scene.batch(&[2, 3]).await;
+    reviews
+        .submit_review(&scene.review, p(2), 1, Verdict::Approve, "fine", Vec::new())
+        .await
+        .unwrap();
+    // P-3 gets only a comment from the batch, so the submitted batch waits for it.
+    reviews
+        .submit_batch_review(
+            &scene.review,
+            batch,
+            vec![verdict(3, Verdict::Comment, "a question")],
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let done = reviews.integrate_ready().await.unwrap();
+    let integrated: Vec<ProposalId> = done.iter().map(|done| done.proposal).collect();
+    assert_eq!(integrated, [p(2)], "the wait for P-3 holds only P-3");
 }

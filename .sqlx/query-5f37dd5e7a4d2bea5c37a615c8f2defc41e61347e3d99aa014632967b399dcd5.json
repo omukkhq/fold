@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT t.number AS \"number!: i64\",\n                  t.status,\n                  t.blocked AS \"blocked: bool\",\n                  t.archived_at IS NOT NULL AS \"archived!: bool\",\n                  t.kind,\n                  EXISTS (SELECT 1 FROM completions c WHERE c.task_id = t.id) AS \"completed!: bool\",\n                  EXISTS (\n                      SELECT 1 FROM claims c\n                      WHERE c.task_id = t.id AND c.kind = 'implementation' AND c.released_at IS NULL\n                  ) AS \"claimed!: bool\",\n                  EXISTS (\n                      SELECT 1 FROM task_reports r WHERE r.task_id = t.id AND r.resolution IS NULL\n                  ) AS \"reported!: bool\",\n                  EXISTS (\n                      SELECT 1 FROM workspaces w\n                      WHERE w.task_id = t.id AND w.kind = 'task' AND w.state IN ('active', 'missing')\n                  ) AS \"active_workspace!: bool\",\n                  EXISTS (\n                      SELECT 1 FROM workspaces w WHERE w.task_id = t.id AND w.kind = 'task'\n                  ) AS \"ever_had_workspace!: bool\",\n                  (p.conflicted OR p.checks_failed) AS \"conflicted?: bool\",\n                  (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) AS \"verdict?: String\"\n           FROM tasks t\n           LEFT JOIN proposals p ON p.task_id = t.id AND p.state = 'open'\n           WHERE t.number IN (SELECT value FROM json_each(?1))\n           ORDER BY t.number",
+  "query": "SELECT t.number AS \"number!: i64\",\n                  t.status,\n                  t.blocked AS \"blocked: bool\",\n                  t.archived_at IS NOT NULL AS \"archived!: bool\",\n                  t.kind,\n                  EXISTS (SELECT 1 FROM completions c WHERE c.task_id = t.id) AS \"completed!: bool\",\n                  EXISTS (\n                      SELECT 1 FROM claims c\n                      WHERE c.task_id = t.id AND c.kind = 'implementation' AND c.released_at IS NULL\n                  ) AS \"claimed!: bool\",\n                  EXISTS (\n                      SELECT 1 FROM task_reports r WHERE r.task_id = t.id AND r.resolution IS NULL\n                  ) AS \"reported!: bool\",\n                  EXISTS (\n                      SELECT 1 FROM workspaces w\n                      WHERE w.task_id = t.id AND w.kind = 'task' AND w.state IN ('active', 'missing')\n                  ) AS \"active_workspace!: bool\",\n                  EXISTS (\n                      SELECT 1 FROM workspaces w WHERE w.task_id = t.id AND w.kind = 'task'\n                  ) AS \"ever_had_workspace!: bool\",\n                  p.checks_failed AS \"checks_failed?: bool\",\n                  (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) AS \"verdict?: String\"\n           FROM tasks t\n           LEFT JOIN proposals p ON p.task_id = t.id AND p.state = 'open'\n           WHERE t.number IN (SELECT value FROM json_each(?1))\n           ORDER BY t.number",
   "describe": {
     "columns": [
       {
@@ -84,10 +84,15 @@
         "origin": "Expression"
       },
       {
-        "name": "conflicted?: bool",
+        "name": "checks_failed?: bool",
         "ordinal": 10,
         "type_info": "Integer",
-        "origin": "Expression"
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "checks_failed"
+          }
+        }
       },
       {
         "name": "verdict?: String",
@@ -119,5 +124,5 @@
       true
     ]
   },
-  "hash": "e94bd7f513cce6384a67d343090c876eec88df6cdc452667bda63db3a761f64a"
+  "hash": "5f37dd5e7a4d2bea5c37a615c8f2defc41e61347e3d99aa014632967b399dcd5"
 }

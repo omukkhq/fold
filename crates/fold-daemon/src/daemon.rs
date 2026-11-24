@@ -201,6 +201,7 @@ impl Daemon {
                 .with_registry(registry.clone())
                 .with_push_files(config.push_dir())
                 .with_notify_dir(config.notify_dir())
+                .with_closing_dir(config.closing_dir())
                 .with_folder_files(folder_files),
             registry,
             clock: clock.clone(),
@@ -255,6 +256,11 @@ impl Daemon {
         let notify = jobs::spawn_notify(state.clone(), jobs::NOTIFY_TICK, stopped.clone());
         let plan_deadlines =
             jobs::spawn_plan_deadlines(state.clone(), jobs::PLAN_DEADLINE_TICK, stopped.clone());
+        let request_escalations = jobs::spawn_request_escalations(
+            state.clone(),
+            jobs::REQUEST_ESCALATION_TICK,
+            stopped.clone(),
+        );
         let http = tokio::spawn(serve_http(listener, http::router(state.clone()), stopped));
         for handle in &opened {
             resume_workers(handle).await;
@@ -276,6 +282,7 @@ impl Daemon {
             worker_idle,
             notify,
             plan_deadlines,
+            request_escalations,
             stop,
             _lock: lock,
         })
@@ -317,6 +324,7 @@ pub struct RunningDaemon {
     worker_idle: Job,
     notify: Job,
     plan_deadlines: Job,
+    request_escalations: Job,
     stop: watch::Sender<bool>,
     /// The advisory lock lives as long as this file is open.
     _lock: File,
@@ -353,6 +361,7 @@ impl RunningDaemon {
             self.worker_idle.stopped(DRAIN_TIMEOUT),
             self.notify.stopped(DRAIN_TIMEOUT),
             self.plan_deadlines.stopped(DRAIN_TIMEOUT),
+            self.request_escalations.stopped(DRAIN_TIMEOUT),
         );
         let handles = self.state.projects.handles();
         // The projects end their workers at the same time, so the stop that systemd and `fld restart` wait for does not grow with the number of projects.

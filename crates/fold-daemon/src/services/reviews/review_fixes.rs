@@ -59,7 +59,9 @@ pub struct FixedVersion {
 impl ReviewService {
     /// Makes the files of the actor worker's active review checkout of `version` the next version of an open proposal, authored by the reviewer, when the reviewer fixed what it found there (`policy::can_fix_in_review`: only the agent that holds the review claim). `version` is the version the checkout holds and the reviewer fixed; another current version is `stale_version`. `fixes` names every file that differs from `version`, each once with its reason, and nothing else (`invalid_request` with the reason `fixes_mismatch`); `checks` gives the commands the reviewer ran on the fixed files and their results. Both make the new version's evidence. `intent` is the new version's own intent, checked as for `create_proposal`: how the fixed change works as a whole, with every file the new version changes against its base in one part.
     ///
-    /// The new version keeps the base of `version`, so a main that moved meanwhile is merged at integration as for any version, and it starts without approvals: the reviewer approves it with `submit_review` after its checks pass, and the review claim stays with the reviewer. The fix is recorded in the task workspace as a changeset and as a `review_fix` checkpoint marked as the workspace's pending write, without touching its files: fold writes into a workspace only on create, sync and restore. The worker's next sync writes the fix into the files first, and until then `record_changes` and `update_proposal` refuse with `workspace_write_unfinished`; the author's agent gets a push notice to sync. The checkout then holds the new version, so the reviewer builds, tests and approves it there, or fixes it again. A batch checkout mixes every member's work and is never one member's version, so a fix of a member is made in that member's own checkout.
+    /// The new version keeps the base of `version`, so a main that moved meanwhile is merged at integration as for any version, except a fix in a checkout of a conflicted version merged onto main: its base is that main, the checkout's base, `fixes` name the files that differ from the merged checkout as it was made, and a conflicted path that still holds a marker line or its `.fold-main` side is refused with `unresolved_conflicts`. Such a fix also moves the task workspace's base to that main, so the author's next sync finds the fix already merged.
+    ///
+    /// The new version starts without approvals: the reviewer approves it with `submit_review` after its checks pass, and the review claim stays with the reviewer. The fix is recorded in the task workspace as a changeset and as a `review_fix` checkpoint marked as the workspace's pending write, without touching its files: fold writes into a workspace only on create, sync and restore. The worker's next sync writes the fix into the files first, and until then `record_changes` and `update_proposal` refuse with `workspace_write_unfinished`; the author's agent gets a push notice to sync. The checkout then holds the new version, so the reviewer builds, tests and approves it there, or fixes it again. A batch checkout mixes every member's work and is never one member's version, so a fix of a member is made in that member's own checkout.
     ///
     /// The fix is refused with `worker_busy` by the rules of a human edit: the task worker may be changing its workspace, or it holds work the version does not.
     pub async fn submit_review_fix(
@@ -100,11 +102,27 @@ impl ReviewService {
         let workspace = usable_workspace(live, row.task, &row.author)?;
         idle_checks(&mut conn, &row, &workspace, &current).await?;
         drop(conn);
+        let (base, from_tree) = if checkout.base == current.base {
+            (current.base, current.tree)
+        } else {
+            let merged = self
+                .workspaces
+                .conflict_checkout_tree(current.base, current.tree, checkout.base)
+                .await?;
+            let open = self
+                .workspaces
+                .unresolved_in_checkout(&checkout, merged.conflicted)
+                .await?;
+            if !open.is_empty() {
+                return Err(unresolved(proposal, checkout_id, &open));
+            }
+            (checkout.base, merged.tree)
+        };
         let fixed = self
             .workspaces
-            .snapshot_review_fix(workspace.id, &checkout, current.base, current.tree)
+            .snapshot_review_fix(workspace.id, &checkout, base, from_tree)
             .await?;
-        if fixed.tree == current.tree {
+        if fixed.tree == from_tree {
             return Err(FoldError::new(
                 codes::VERSION_UNCHANGED,
                 format!(
@@ -123,7 +141,7 @@ impl ReviewService {
             .into());
         }
         match_fixes(&fixes, &fixed.changed)?;
-        self.check_coverage(&intent, current.base, fixed.tree, "submit_review_fix")
+        self.check_coverage(&intent, base, fixed.tree, "submit_review_fix")
             .await?;
         let evidence = evidence(&worker.name, current.version, &fixes, &checks);
         let fix = FixJob {
@@ -131,29 +149,21 @@ impl ReviewService {
             checkout: checkout_id,
             files: fixes.len(),
         };
-        let checks_changed = match self.gate_in(checkout_id, current.base, fixed.tree).await? {
+        let checks_changed = match self.gate_in(checkout_id, base, fixed.tree).await? {
             GateDecision::Ready { checks_changed } => checks_changed,
             GateDecision::Run(mut job) => {
                 let tree = fixed.tree;
                 drop(fixed);
                 job.fix = Some(fix);
                 return self
-                    .start_fix_run(
-                        actor,
-                        &row,
-                        &checkout,
-                        current.base,
-                        tree,
-                        &evidence,
-                        &intent,
-                        job,
-                    )
+                    .start_fix_run(actor, &row, &checkout, base, tree, &evidence, &intent, job)
                     .await;
             }
         };
         let input = FixInput {
             actor,
             proposal,
+            base,
             workspace: workspace.id,
             fixed: &fixed,
             evidence: &evidence,
@@ -323,6 +333,7 @@ impl ReviewService {
         let input = FixInput {
             actor: &actor,
             proposal,
+            base: run.base,
             workspace: live.id,
             fixed: &snapshot,
             evidence: &evidence,
@@ -399,6 +410,8 @@ impl FixOutcome {
 struct FixInput<'a> {
     actor: &'a Actor,
     proposal: ProposalId,
+    /// The new version's base: the fixed version's, or main's head that a checkout of a conflicted version was merged onto.
+    base: RevisionId,
     /// The task workspace the snapshot was taken against.
     workspace: WorkspaceId,
     fixed: &'a ReviewFixTree,
@@ -444,11 +457,20 @@ async fn fix_in_tx(
     idle_checks(tx.conn(), &row, &live, &current).await?;
     let by = actor.event_actor();
     let message = format!("Review fix of v{} by {by}", current.version);
+    // A fix merged onto main holds main's changes, so the task workspace takes that main as its base.
+    let workspace_base = if input.base == current.base {
+        live.base
+    } else {
+        if !workspaces::set_base(tx, live.id, input.base).await? {
+            return Err(StoreError::Corrupt("revisions.number").into());
+        }
+        input.base
+    };
     let changeset = workspaces::insert_changeset(
         tx,
         live.id,
         live.task,
-        live.base,
+        workspace_base,
         fixed.tree,
         &message,
         fixed.stats,
@@ -464,7 +486,7 @@ async fn fix_in_tx(
     let recorded = NewEvent::new(types::CHANGESET_RECORDED, by.clone())?
         .task(live.task)
         .workspace(live.id)
-        .revision(live.base)
+        .revision(workspace_base)
         .data(json!({"changeset": changeset.id.to_string(), "files": files}))?;
     buffer.append(tx, &recorded, now).await?;
     let next = current.version.saturating_add(1);
@@ -482,7 +504,7 @@ async fn fix_in_tx(
     .await?;
     workspaces::set_sync_checkpoint(tx, live.id, Some(checkpoint.id)).await?;
     let new = NewVersion {
-        base: current.base,
+        base: input.base,
         tree: fixed.tree,
         head_changeset: changeset.id,
         evidence: Some(input.evidence),
@@ -498,7 +520,7 @@ async fn fix_in_tx(
         .task(row.task)
         .proposal(proposal)
         .workspace(live.id)
-        .revision(current.base)
+        .revision(input.base)
         .data(json!({
             "version": next,
             "from_version": current.version,
@@ -641,6 +663,24 @@ fn no_checkout(proposal: ProposalId, version: u32) -> ReviewError {
         ("version", json!(version)),
     ])
     .with_hint("call create_review_checkout for the proposal and fix the files there; a batch checkout mixes every member, so fix a member in its own checkout")
+    .into()
+}
+
+/// `unresolved_conflicts` for a fix in a checkout merged onto main that still holds conflicts at `open`.
+fn unresolved(proposal: ProposalId, checkout: WorkspaceId, open: &[String]) -> ReviewError {
+    FoldError::new(
+        codes::UNRESOLVED_CONFLICTS,
+        format!(
+            "the review checkout of {proposal} still holds {} unresolved conflicts",
+            open.len()
+        ),
+    )
+    .with_details([
+        ("proposal", json!(proposal.to_string())),
+        ("checkout", json!(checkout.to_string())),
+        ("paths", json!(open)),
+    ])
+    .with_hint("remove every conflict marker and every .fold-main file in the review checkout, then call submit_review_fix again")
     .into()
 }
 

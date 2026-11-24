@@ -55,6 +55,7 @@ use crate::services::events::EventBuffer;
 use crate::services::fired;
 
 mod agent_changes;
+pub mod closing;
 mod commits;
 mod enable_git;
 mod folder;
@@ -196,6 +197,16 @@ enum Start {
     },
 }
 
+/// [`closing::INIT_CLOSE_WAIT`], or the milliseconds the failpoint `init_close_wait_ms` returns, so a test sees the refusal at once.
+fn init_close_wait() -> std::time::Duration {
+    #[cfg(feature = "failpoints")]
+    fail::fail_point!("init_close_wait_ms", |ms: Option<String>| {
+        ms.and_then(|ms| ms.parse().ok())
+            .map_or(closing::INIT_CLOSE_WAIT, std::time::Duration::from_millis)
+    });
+    closing::INIT_CLOSE_WAIT
+}
+
 /// What a failed init made in the folder, so it removes exactly that and never a file of the folder.
 #[derive(Debug, Default)]
 struct Created {
@@ -205,7 +216,7 @@ struct Created {
     restore: Vec<(PathBuf, Vec<u8>)>,
 }
 
-/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, writes an empty `.foldignore` when the folder has none and fold's lines into `.fold/exclude`, so neither the skills fold writes nor `.claude/settings.local.json` become part of `r1`, and in one transaction makes the genesis `r0` with the empty tree and records the folder's files, less the ignore rules, as `r1`, the change of the human `human` (an integration of kind `record` with its human change and events), then registers the project under a free slug. It needs no `git` and writes no Git data: Git sync stays off. A folder that is a Git repository, or inside another repository's working tree, is refused with a hint to use `--with-git` at the repository's top, and a folder in a Git directory, the `.git` of a repository or a bare repository, with a hint to choose a folder outside it. A failure after `.fold/` exists removes `.fold/` and what init created beside it and writes back the bytes of a file that init changed, never touching another file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way, or a project that fold removed while its `.fold/` was away: when its database is complete the init finishes it and registers it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`, or with `project_incomplete` when `.fold/` holds project content without a database, or a database without `main`; a registered folder without `.fold/`, or whose `.fold/` holds only what a daemon that still had the project open wrote after it was deleted, holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
+/// Makes `root` a fold project whose folder is main: creates `.fold/`, migrates the project database, writes the commented config, writes an empty `.foldignore` when the folder has none and fold's lines into `.fold/exclude`, so neither the skills fold writes nor `.claude/settings.local.json` become part of `r1`, and in one transaction makes the genesis `r0` with the empty tree and records the folder's files, less the ignore rules, as `r1`, the change of the human `human` (an integration of kind `record` with its human change and events), then registers the project under a free slug. While a daemon closes the old project of a deleted `.fold/` in the folder, init waits up to [`closing::INIT_CLOSE_WAIT`] for that close before it makes `.fold/`, and is refused with `project_unavailable` after it. It needs no `git` and writes no Git data: Git sync stays off. A folder that is a Git repository, or inside another repository's working tree, is refused with a hint to use `--with-git` at the repository's top, and a folder in a Git directory, the `.git` of a repository or a bare repository, with a hint to choose a folder outside it. A failure after `.fold/` exists removes `.fold/` and what init created beside it and writes back the bytes of a file that init changed, never touching another file of the folder. A `.fold/` that the registry does not know is an init that stopped part-way, or a project that fold removed while its `.fold/` was away: when its database is complete the init finishes it and registers it, and otherwise it is refused with `project_incomplete` and nothing is removed. A registered folder that holds `.fold/` is refused with `project_exists`, or with `project_incomplete` when `.fold/` holds project content without a database, or a database without `main`; a registered folder without `.fold/`, or whose `.fold/` holds only what a daemon that still had the project open wrote after it was deleted, holds no project, so the new project replaces that registration in the transaction that registers it and keeps its slug.
 pub async fn init_project(
     host: &HostPaths,
     root: &Path,
@@ -455,6 +466,12 @@ async fn init_with(
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default(),
     };
+    // While a daemon closes the old project of a deleted `.fold/` here, its store is open on the old files; the init waits for that close, and holds the lock itself, so no close of this folder starts before the new project is registered.
+    let _folder =
+        closing::FolderLock::take_within(&closing::closing_dir(host), root, init_close_wait())
+            .await
+            .map_err(|error| io_error(&error))?
+            .ok_or_else(|| closing::old_project_closing(root))?;
     let registry = Store::open_registry(&host.registry_db()).await?;
     let notify = notify::NotifySettings::new(host.notify_dir());
     let init = Init {

@@ -336,13 +336,13 @@ async fn a_comment_review_changes_nothing() {
 }
 
 #[tokio::test]
-async fn a_conflicted_proposal_gives_in_progress() {
+async fn a_conflicted_proposal_keeps_review() {
     let fx = Fixture::new(1).await;
     let proposal = fx.open_proposal(1).await;
     assert_eq!(fx.settle(1).await, Review);
 
     fx.set_proposal(&proposal, "open", true).await;
-    assert_eq!(fx.settle(1).await, InProgress);
+    assert_eq!(fx.settle(1).await, Review);
     fx.set_proposal(&proposal, "open", false).await;
     assert_eq!(fx.settle(1).await, Review);
 }

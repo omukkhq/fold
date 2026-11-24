@@ -4,8 +4,8 @@ use axum::Json;
 use axum::extract::Path;
 use axum::http::StatusCode;
 use fold_core::{
-    ChecklistItemId, ChecklistName, FoldError, IdParseError, LabelColor, LabelName, StepText,
-    TaskDescription, TaskId, TaskTitle,
+    CheckRunId, ChecklistItemId, ChecklistName, FoldError, IdParseError, LabelColor, LabelName,
+    ProposalId, StepText, TaskDescription, TaskId, TaskTitle, Timestamp,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -16,6 +16,7 @@ use super::Project;
 use super::actor::Human;
 use super::error::{ApiError, ApiJson, ErrorEnvelope, fold};
 use super::events::{CheckpointSummary, DurableEventType, LiveCheckRun};
+use super::reviews::checks::{CheckPurpose, CheckStage};
 use super::reviews::{ReviewPlanWait, ReviewVerdict};
 use crate::daemon::AppState;
 use crate::services::tasks::{self as service, ItemContent};
@@ -53,9 +54,10 @@ pub enum TaskStatus {
 }
 
 /// How a task's work reaches Done: `proposal` through the integration of its proposal, `no_proposal` through a lead check of its task worker's report, `human` when a person marks the work Done; no agent takes a human task.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
+    #[default]
     Proposal,
     NoProposal,
     Human,
@@ -302,9 +304,36 @@ pub struct BoardCard {
     /// Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them.
     #[schema(required = true)]
     pub edits_after_version: Option<bool>,
-    /// The check run that goes in the live workspace; its worker waits for the result and is not stalled while it goes. Null while no run goes.
+    /// The check run in progress for the task: an integration run of its proposal on the merged tree, else a proposal-stage run in its workspace, whose worker waits for the result and is not stalled while it goes. Null while no run goes.
     #[schema(required = true)]
-    pub check_run: Option<LiveCheckRun>,
+    pub check_run: Option<CardCheckRun>,
+}
+
+/// A check run in progress for a board card's task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+pub struct CardCheckRun {
+    #[schema(value_type = String, example = "cr-4")]
+    pub run: CheckRunId,
+    pub stage: CheckStage,
+    pub purpose: CheckPurpose,
+    /// The proposal the run checks, or whose next version it makes; null for `check` and `create_proposal`.
+    #[schema(value_type = Option<String>, required = true, example = "P-3")]
+    pub proposal: Option<ProposalId>,
+    /// UTC milliseconds.
+    #[schema(value_type = i64)]
+    pub started_at: Timestamp,
+}
+
+impl From<service::CardCheckRun> for CardCheckRun {
+    fn from(run: service::CardCheckRun) -> Self {
+        Self {
+            run: run.run,
+            stage: run.stage.into(),
+            purpose: run.purpose.into(),
+            proposal: run.proposal,
+            started_at: run.started_at,
+        }
+    }
 }
 
 /// Where a proposal stands, as the pill on a card and the block of a task draw it.
@@ -409,7 +438,7 @@ impl From<service::BoardCard> for BoardCard {
             proposal: card.proposal.map(BoardProposal::from),
             activity: card.activity.map(BoardActivity::from),
             edits_after_version: card.edits_after_version,
-            check_run: card.check_run,
+            check_run: card.check_run.map(CardCheckRun::from),
         }
     }
 }
