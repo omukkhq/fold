@@ -228,6 +228,7 @@ mod worker_history;
 mod worker_limits;
 mod worker_park;
 mod worker_questions;
+mod worker_queue;
 mod worker_restart;
 mod worker_resume;
 mod worker_transcript;

@@ -281,6 +281,37 @@ function roleText(role: string): string {
   return (STORED_ROLES.get(role) ?? role).replaceAll("_", " ");
 }
 
+/** The worker a queued start is for: the name its starter gave, else its role. */
+function queuedWorkerOf(event: DurableEvent): string {
+  const name = text(event.data.name);
+  if (name !== null) {
+    return name;
+  }
+  const role = text(event.data.role);
+  return role === null ? "a worker" : `a ${roleText(role)}`;
+}
+
+function startQueuedText(event: DurableEvent): string {
+  const position = count(event.data.position);
+  const where = position === null ? "" : ` at place ${String(position)}`;
+  return `queued the start of ${queuedWorkerOf(event)}${where}`;
+}
+
+const QUEUE_DROP_REASONS: ReadonlyMap<string, string> = new Map([
+  ["task_claimed", "another worker claimed its task"],
+  ["task_done", "its task is Done"],
+  ["task_archived", "its task was archived"],
+  ["proposal_ended", "its proposal ended"],
+  ["cancelled", "its start no longer applies"],
+]);
+
+function queuedStartDroppedText(event: DurableEvent): string {
+  const reason = text(event.data.reason);
+  const why = reason === null ? undefined : QUEUE_DROP_REASONS.get(reason);
+  const tail = why === undefined ? "" : `: ${why}`;
+  return `dropped the queued start of ${queuedWorkerOf(event)}${tail}`;
+}
+
 function startedText(event: DurableEvent): string {
   const worker = workerOf(event);
   if (event.data.resumed === true) {
@@ -1017,6 +1048,8 @@ const SPECS: Record<EventType, Spec> = {
     icon: Pause,
     text: (e) => `parked ${workerOf(e)} to wait for its go`,
   },
+  "worker.start_queued": { icon: ListChecks, text: startQueuedText },
+  "worker.queued_start_dropped": { icon: X, text: queuedStartDroppedText },
   "review.plan_created": { icon: Hourglass, text: planCreatedText },
   "review.plan_changed": {
     icon: Hourglass,

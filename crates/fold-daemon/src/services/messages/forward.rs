@@ -1,6 +1,6 @@
 use fold_core::{
-    Actor, AddressedAs, AgentName, MessageBody, Recipient, Role, Sender, Target, TaskId, Timestamp,
-    WorkerName,
+    Actor, AddressedAs, AgentName, EventActor, HumanName, MessageBody, Recipient, Role, Sender,
+    Target, TaskId, Timestamp, WorkerName,
 };
 use fold_store::agents::WorkerProcessRow;
 use fold_store::messages::{self, OwedMessage};
@@ -145,6 +145,58 @@ pub(crate) async fn tell_lead_in_tx(
     )
     .await?;
     Ok(Some(lead))
+}
+
+/// Sends fold's `text` to `to`, the stored label of an agent's worker or a human; a label of fold itself, or one that names neither, gets nothing and returns false. The caller publishes the buffer after the commit.
+pub(crate) async fn tell_actor_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    to: &EventActor,
+    task: Option<TaskId>,
+    proposal: Option<fold_core::ProposalId>,
+    text: String,
+    now: Timestamp,
+) -> Result<bool, MessageError> {
+    let recipient = if let Some(name) = to.human_name() {
+        let Ok(name) = HumanName::parse(name) else {
+            return Ok(false);
+        };
+        Recipient {
+            target: Target::Human(name),
+            addressed_as: AddressedAs::Human,
+        }
+    } else {
+        let Ok(worker) = WorkerName::parse(to.as_str()) else {
+            return Ok(false);
+        };
+        Recipient {
+            target: Target::Worker(worker),
+            addressed_as: AddressedAs::Agent,
+        }
+    };
+    let body = MessageBody::parse(text)?;
+    write_message(
+        tx,
+        buffer,
+        Draft {
+            actor: &Actor::System,
+            sender: &Sender::Fold,
+            task,
+            proposal,
+            request: None,
+            join: None,
+            parent: None,
+            body: &body,
+            choices: None,
+            questions: None,
+            lines: None,
+            asks_human: false,
+            recipients: vec![recipient],
+            now,
+        },
+    )
+    .await?;
+    Ok(true)
 }
 
 /// The lead that takes a message to the stopped worker of `worker`; see [`forward_in_tx`].

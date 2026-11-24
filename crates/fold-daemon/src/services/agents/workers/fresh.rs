@@ -8,7 +8,7 @@ use fold_store::agents::{self, PreviousSessionRow, WorkerProcessRow};
 use super::{AgentError, AgentService};
 
 impl AgentService {
-    /// Starts the worker again in a new Claude Code session; `Supervisor::restart_fresh` names the steps. A named human asks for it, the main agent for a stalled worker or else on the user's word, and the lead that started the worker. `instructions` are added to the first turn of the new session and never stored.
+    /// Starts the worker again in a new Claude Code session; `Supervisor::restart_fresh` names the steps. A named human asks for it, the main agent for a stalled worker or else on the user's word, and the lead that started the worker. `instructions` are added to the first turn of the new session and stored only while a queued restart waits.
     pub async fn restart_worker(
         &self,
         actor: &Actor,
@@ -34,7 +34,7 @@ impl AgentService {
         };
         policy::can_restart_worker(&starter, started_it).map_err(FoldError::from)?;
         supervisor
-            .restart_fresh(agent, &actor.event_actor(), instructions)
+            .restart_fresh(agent, &actor.event_actor(), instructions, None)
             .await?;
         self.get_worker(agent).await
     }

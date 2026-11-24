@@ -594,6 +594,8 @@ pub(super) fn stopped_event(
 ) -> Result<NewEvent, fold_core::EventError> {
     NewEvent::new(types::WORKER_STOPPED, EventActor::fold())?.data(json!({
         "agent": row.agent.as_str(),
+        "role": row.role.as_str(),
+        "area": row.area.as_ref().map(fold_core::AreaName::as_str),
         "exit_code": code,
         "turns": row.turns,
         "cost_micro_usd": row.cost_micro_usd,

@@ -18,8 +18,9 @@ use super::FoldServer;
 use super::error::from_agent;
 use super::parse;
 use crate::services::agents::{
-    AgentOverview, ClaimSummary, OverviewFilter, PauseState, ProposalSummary, StartWorker,
-    StartedWorker, WorkerOverview, WorkspaceSummary,
+    AgentOverview, ClaimSummary, OverviewFilter, PauseState, ProposalSummary, QueueEntry,
+    QueuedWorkerStart, RestartOutcome, StartOutcome, StartWorker, StartedWorker, WorkerOverview,
+    WorkspaceSummary,
 };
 
 pub const GET_ACTIVITY: &str = "get_activity";
@@ -111,6 +112,9 @@ pub struct StartWorkerInput {
     /// What the worker should know beyond its role and its tasks; fold adds it to the worker's first turn.
     #[serde(default)]
     pub instructions: Option<String>,
+    /// True lets a task worker's or a reviewer's start wait for a place when the worker limits are full, instead of failing: fold stores the start and gives queued with its position, starts it when a place frees and the resumes fold owes went first, and sends you a notice when it starts or drops because its tasks were claimed, Done or archived meanwhile. It cannot go with scopes.
+    #[serde(default)]
+    pub queue: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -128,9 +132,12 @@ pub struct StopWorkerInput {
 pub struct RestartWorkerInput {
     /// The worker's agent name, such as web-lead. Any role: an area lead, the review lead, a task worker or a reviewer.
     pub name: String,
-    /// What the user wants the worker to know in its new session; fold adds it to the first turn and never stores it.
+    /// What the user wants the worker to know in its new session; fold adds it to the first turn and never stores it, except while a queued restart waits.
     #[serde(default)]
     pub instructions: Option<String>,
+    /// True lets the restart of a stopped task worker or reviewer wait for a place when the worker limits are full, instead of failing: fold stores it and gives queued with its position, restarts the worker when a place frees and the resumes fold owes went first, and sends you a notice when it restarts, or drops because the worker runs again or its tasks were claimed, Done or archived meanwhile.
+    #[serde(default)]
+    pub queue: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -207,7 +214,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             START_WORKER,
-            "Start a worker agent that fold runs and supervises: the main agent starts an area lead or the review lead, an area lead starts a task worker for tasks of its area, the review lead starts a reviewer for one proposal or a group of related proposals. fold gives the new worker its claims in the same step: the implementation claim on each task, or the review claim on the one proposal, or a review batch of two or more. A task or proposal that another running worker holds refuses the start with already_claimed; a stale claim, a claim of a worker that has ended and a task claim of your own agent move to the new worker. A group with a proposal whose task has the human review mark is refused with invalid_request: give that proposal to a reviewer alone. Refused over the worker limits with worker_limit_reached, also with details.reason owed_resume_waits when the free place goes first to a stopped worker that fold resumes for owed work, which details.agent names. An area has one lead and the project one review lead: while it runs, a start is refused with area_has_lead or worker_exists; once it has stopped or failed, a start resumes that lead under its own name, ignores name, and says resumed with its session.",
+            "Start a worker agent that fold runs and supervises: the main agent starts an area lead or the review lead, an area lead starts a task worker for tasks of its area, the review lead starts a reviewer for one proposal or a group of related proposals. fold gives the new worker its claims in the same step: the implementation claim on each task, or the review claim on the one proposal, or a review batch of two or more. A task or proposal that another running worker holds refuses the start with already_claimed; a stale claim, a claim of a worker that has ended and a task claim of your own agent move to the new worker. A group with a proposal whose task has the human review mark is refused with invalid_request: give that proposal to a reviewer alone. Refused over the worker limits with worker_limit_reached, also with details.reason owed_resume_waits when the free place goes first to a stopped worker that fold resumes for owed work, which details.agent names; with queue true a task worker's or reviewer's start waits instead and gives queued with its position, and fold starts it when a place frees and tells you. An area has one lead and the project one review lead: while it runs, a start is refused with area_has_lead or worker_exists; once it has stopped or failed, a start resumes that lead under its own name, ignores name, and says resumed with its session.",
             schema_for_type::<StartWorkerInput>(),
         ),
         Tool::new(
@@ -217,7 +224,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_WORKERS,
-            "List the areas with their leads, models and MCP servers, and the workers that run or failed, each with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human. A worker whose last turn ended because Claude Code could not reach the model or reached a usage limit, or whose login the API refused, has waits_for, network, usage_limit or login: fold runs that turn again in its session once the cause has passed (for login, once a person gives the account a working token or switches the account), so do not restart or replace it. stopped_count counts the stopped workers; pass include_stopped true to list them, such as to read a finished worker's sessions, and include_instructions true for each area's instructions.",
+            "List the areas with their leads, models and MCP servers, and the workers that run or failed, each with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human. A worker whose last turn ended because Claude Code could not reach the model or reached a usage limit, or whose login the API refused, has waits_for, network, usage_limit or login: fold runs that turn again in its session once the cause has passed (for login, once a person gives the account a working token or switches the account), so do not restart or replace it. stopped_count counts the stopped workers; pass include_stopped true to list them, such as to read a finished worker's sessions, and include_instructions true for each area's instructions. queue lists the worker starts that wait for a place, in the order fold runs them.",
             schema_for_type::<ListWorkersInput>(),
         ),
         Tool::new(
@@ -242,7 +249,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             RESTART_WORKER,
-            "Start a worker again in a new Claude Code session, for example when its session is broken or fold says it stalled: the main agent for a worker of any role, when fold tells it that the worker stalled and otherwise only when the user asks, and a lead for a worker it started (an area lead's task workers, the review lead's reviewers); any other caller is refused with main_agent_required. fold stops a running worker first. The worker keeps its name, claims, tasks, proposals and workers; list_workers shows its newest old session ids in previous_sessions with previous_session_count, and the new session gets the role's first turn. Refused with project_paused while paused and over the worker limits, also when the free place goes first to a worker that fold resumes for owed work (worker_limit_reached with details.reason owed_resume_waits).",
+            "Start a worker again in a new Claude Code session, for example when its session is broken or fold says it stalled: the main agent for a worker of any role, when fold tells it that the worker stalled and otherwise only when the user asks, and a lead for a worker it started (an area lead's task workers, the review lead's reviewers); any other caller is refused with main_agent_required. fold stops a running worker first. The worker keeps its name, claims, tasks, proposals and workers; list_workers shows its newest old session ids in previous_sessions with previous_session_count, and the new session gets the role's first turn. Refused with project_paused while paused and over the worker limits, also when the free place goes first to a worker that fold resumes for owed work (worker_limit_reached with details.reason owed_resume_waits); with queue true the restart of a task worker or reviewer waits instead and gives queued with its position, and fold restarts it when a place frees and tells you.",
             schema_for_type::<RestartWorkerInput>(),
         ),
     ]
@@ -366,12 +373,41 @@ pub async fn start_worker(server: &FoldServer, arguments: &JsonObject) -> Result
         instructions: input.instructions,
     };
     let actor = server.actor().await?;
-    let started = server
+    let outcome = server
         .agents
-        .start_worker(&actor, request)
+        .start_or_queue_worker(&actor, request, input.queue)
         .await
         .map_err(from_agent)?;
-    Ok(started_json(&started))
+    Ok(match outcome {
+        StartOutcome::Started(started) => started_json(&started),
+        StartOutcome::Queued(queued) => queued_json(&queued),
+    })
+}
+
+/// A start or restart that waits for a place: where it waits, and what comes next.
+fn queued_json(queued: &QueuedWorkerStart) -> Value {
+    json!({
+        "queued": true,
+        "position": queued.position,
+        "role": queued.role.as_str(),
+        "area": queued.area.as_ref().map(AreaName::as_str),
+        "name": queued.name.as_ref().map(AgentName::as_str),
+        "hint": "fold runs it when a place frees, after the resumes it owes, and sends you a notice when it starts or drops; list_workers shows the queue",
+    })
+}
+
+fn queue_entry_json(entry: &QueueEntry) -> Value {
+    json!({
+        "position": entry.position,
+        "role": entry.role.as_str(),
+        "area": entry.area.as_ref().map(AreaName::as_str),
+        "name": entry.name.as_ref().map(AgentName::as_str),
+        "tasks": entry.tasks.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "proposals": entry.proposals.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "plan": entry.plan.map(|plan| plan.to_string()),
+        "queued_by": entry.queued_by,
+        "queued_at": entry.queued_at,
+    })
 }
 
 /// A start that resumed the existing lead says so, with the session fold resumes and the turns the lead has had, because the caller may have asked for a new agent. fold learns only after the result whether that session is gone, so the hint names both outcomes.
@@ -403,11 +439,15 @@ pub async fn restart_worker(
     let input: RestartWorkerInput = parse(arguments)?;
     let name = AgentName::parse(&input.name)?;
     let actor = server.actor().await?;
-    let worker = server
+    let outcome = server
         .agents
-        .restart_worker(&actor, &name, input.instructions.as_deref())
+        .restart_or_queue_worker(&actor, &name, input.instructions.as_deref(), input.queue)
         .await
         .map_err(from_agent)?;
+    let worker = match outcome {
+        RestartOutcome::Restarted(worker) => *worker,
+        RestartOutcome::Queued(queued) => return Ok(queued_json(&queued)),
+    };
     let mut value = worker_process_json(&worker);
     let previous = server
         .agents
@@ -517,6 +557,7 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
         .map_err(from_agent)?;
     let config = server.agents.worker_config().await;
     let pause = server.agents.pause_state().await.map_err(from_agent)?;
+    let queue = server.agents.queued_starts().await.map_err(from_agent)?;
     let mut listed = Vec::with_capacity(workers.len());
     let mut stopped_count = 0;
     for worker in &workers {
@@ -553,6 +594,7 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
         "stopped_count": stopped_count,
         "limits": config.as_ref().map_or(Value::Null, |config| limits_json(config.workers.limits())),
         "pause": pause_json(&pause),
+        "queue": queue.iter().map(queue_entry_json).collect::<Vec<_>>(),
     }))
 }
 

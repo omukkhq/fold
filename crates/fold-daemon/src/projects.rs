@@ -15,7 +15,9 @@ use crate::jobs::{self, AutoCommit, ProjectTask};
 use crate::live::{LiveConfig, LiveState, WatchStart, follow_watch_owners};
 use crate::push::{self, PushTargets, PushTask};
 use crate::services::agents::environment::WorkerEnvironment;
-use crate::services::agents::{AgentService, Launcher, SeenPresence, Supervisor, code_of};
+use crate::services::agents::{
+    AgentService, Launcher, SeenPresence, Supervisor, code_of, follow_queued_starts,
+};
 use crate::services::events::EventBus;
 use crate::services::messages::MessageService;
 use crate::services::projects::{
@@ -88,6 +90,8 @@ pub struct ProjectHandle {
     stall_turns: ProjectTask,
     /// Gives each workspace its watch or its rest on the timer scan again after each start or end of a worker process or a session.
     watch_owners: ProjectTask,
+    /// Runs the queued worker starts when a place frees.
+    queued_starts: ProjectTask,
     /// The device and inode of the database file this handle opened. SQLite keeps reading a file that was deleted, so only this tells the handle's database from a new one at the same path.
     database_file: Option<(u64, u64)>,
 }
@@ -235,6 +239,19 @@ impl ProjectHandle {
             bus.subscribe(),
         ));
         let watch_owners = ProjectTask::spawn(follow_watch_owners(live.clone(), bus.subscribe()));
+        let presence = SeenPresence::new();
+        let queue_service = AgentService::new(store.clone(), bus.clone(), clock.clone())
+            .with_project_config(paths.clone())
+            .with_seen_presence(presence.clone())
+            .with_push_targets(push.clone())
+            .with_live(live.clone())
+            .with_workers(workers.clone())
+            .with_workspace_locks(workspace_locks.clone());
+        let queued_starts = ProjectTask::spawn(follow_queued_starts(
+            queue_service,
+            bus.clone(),
+            bus.subscribe(),
+        ));
         let workspace_cleanup = ProjectTask::spawn(follow_closed_workspaces(
             cleanup,
             bus.clone(),
@@ -248,7 +265,7 @@ impl ProjectHandle {
             store,
             clock,
             bus,
-            presence: SeenPresence::new(),
+            presence,
             tasks,
             integration: Arc::new(tokio::sync::Mutex::new(())),
             gc: tokio::sync::Mutex::new(()),
@@ -272,6 +289,7 @@ impl ProjectHandle {
             cleanup_due,
             stall_turns,
             watch_owners,
+            queued_starts,
             database_file,
         })
     }
@@ -378,6 +396,7 @@ impl ProjectHandle {
             self.workspace_cleanup.stopped(timeout),
             self.stall_turns.stopped(timeout),
             self.watch_owners.stopped(timeout),
+            self.queued_starts.stopped(timeout),
         );
     }
 

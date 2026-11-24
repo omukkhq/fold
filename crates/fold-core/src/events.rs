@@ -183,6 +183,8 @@ define_event_types! {
     WORKER_PARKED = "worker.parked",
     CLAIM_RENEWED = "claim.renewed",
     REQUEST_ESCALATED = "request.escalated",
+    WORKER_START_QUEUED = "worker.start_queued",
+    WORKER_QUEUED_START_DROPPED = "worker.queued_start_dropped",
 }
 
 impl EventType {

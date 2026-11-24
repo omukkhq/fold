@@ -1106,7 +1106,7 @@ fn record_plan(actor: &Actor, record: &RecordIntegration) -> Result<Plan, Step> 
 }
 
 /// The caller of a stored queue request: a named human or an agent's worker. Its rights are read again from the database when its turn comes, so no tag is carried.
-pub(super) fn queued_actor(label: &str) -> Option<Actor> {
+pub(crate) fn queued_actor(label: &str) -> Option<Actor> {
     let actor = EventActor::parse(label).ok()?;
     if let Some(name) = actor.human_name() {
         return HumanName::parse(name).ok().map(Actor::human);

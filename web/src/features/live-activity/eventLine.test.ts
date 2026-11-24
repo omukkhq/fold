@@ -167,6 +167,27 @@ describe("eventLine", () => {
         wait_for: "my go",
       }),
     ).toBe("parked web-worker to wait for its go");
+    expect(
+      line("worker.start_queued", { role: "task_worker", position: 2 }),
+    ).toBe("queued the start of a task worker at place 2");
+    expect(line("worker.start_queued", { name: "web-worker" })).toBe(
+      "queued the start of web-worker",
+    );
+    expect(line("worker.start_queued")).toBe("queued the start of a worker");
+    expect(
+      line("worker.queued_start_dropped", {
+        name: "web-worker",
+        reason: "task_claimed",
+      }),
+    ).toBe(
+      "dropped the queued start of web-worker: another worker claimed its task",
+    );
+    expect(
+      line("worker.queued_start_dropped", {
+        role: "reviewer",
+        reason: "unknown",
+      }),
+    ).toBe("dropped the queued start of a reviewer");
     expect(line("workspace.created", { kind: "review", version: 2 })).toBe(
       "checked out P-4 v2 in ws-9",
     );

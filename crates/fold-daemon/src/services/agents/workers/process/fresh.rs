@@ -50,6 +50,7 @@ impl Supervisor {
         agent: &AgentName,
         by: &EventActor,
         instructions: Option<&str>,
+        queued: Option<i64>,
     ) -> Result<WorkerProcessRow, AgentError> {
         let supervisor = self.clone();
         let agent = agent.clone();
@@ -66,7 +67,7 @@ impl Supervisor {
                 .into());
             }
             let restarted = supervisor
-                .restart_held(&agent, &by, instructions.as_deref())
+                .restart_held(&agent, &by, instructions.as_deref(), queued)
                 .await;
             lock(&supervisor.inner.refreshing).remove(&agent);
             restarted
@@ -81,12 +82,13 @@ impl Supervisor {
         })
     }
 
-    /// The steps of [`Supervisor::restart_fresh`]. A worker with a process here ends it the way a hand-off refresh ends a lead's: its row keeps its state and its place under the limits, so no `worker.stopped` resumes it in its old session and no other start takes its place. A worker without one is stopped first if it runs. Then one transaction with `worker.refreshed` keeps the old session id as a previous session, closes the questions of the old session and gives the row a new session, and Claude Code runs the role's first turn in it, with the work a task worker still owes on its proposals and reports. The worker keeps its name, its claims, its bound tasks and proposals, and the workers it started. A stop that comes while the process ends wins: the worker ends `stopped` and the restart is refused with `worker_busy`.
+    /// The steps of [`Supervisor::restart_fresh`]. With `queued`, the restart runs the queued restart of that row id: it lets the owed resumes go first whoever queued it, the row ends `started` in the restart's transaction, `worker.refreshed` says `queued` and the starter gets a notice there. A worker with a process here ends it the way a hand-off refresh ends a lead's: its row keeps its state and its place under the limits, so no `worker.stopped` resumes it in its old session and no other start takes its place. A worker without one is stopped first if it runs. Then one transaction with `worker.refreshed` keeps the old session id as a previous session, closes the questions of the old session and gives the row a new session, and Claude Code runs the role's first turn in it, with the work a task worker still owes on its proposals and reports. The worker keeps its name, its claims, its bound tasks and proposals, and the workers it started. A stop that comes while the process ends wins: the worker ends `stopped` and the restart is refused with `worker_busy`.
     async fn restart_held(
         &self,
         agent: &AgentName,
         by: &EventActor,
         instructions: Option<&str>,
+        queued: Option<i64>,
     ) -> Result<WorkerProcessRow, AgentError> {
         self.inner
             .store
@@ -159,7 +161,7 @@ impl Supervisor {
                         return Err(changed(agent));
                     }
                     refuse_while_paused(tx).await?;
-                    let queue = if by.is_human() {
+                    let queue = if by.is_human() && queued.is_none() {
                         Turn::Limits
                     } else {
                         Turn::Owed {
@@ -176,10 +178,16 @@ impl Supervisor {
                     )
                     .await?;
                 }
+                if let Some(queued) = queued {
+                    crate::services::agents::workers::queue::mark_started(
+                        tx, queued, current.id, now,
+                    )
+                    .await?;
+                }
                 agents::close_open_questions(tx, current.id, now).await?;
                 agents::record_previous_session(tx, current.id, SessionEnd::Requested, now).await?;
                 agents::refresh_session(tx, current.id, &session, now).await?;
-                let event = NewEvent::new(types::WORKER_REFRESHED, by.clone())?.data(json!({
+                let mut data = json!({
                     "agent": agent.as_str(),
                     "role": current.role.as_str(),
                     "area": current.area.as_ref().map(AreaName::as_str),
@@ -188,8 +196,24 @@ impl Supervisor {
                     "context_tokens": current.context_tokens,
                     "handoff": false,
                     "requested": true,
-                }))?;
+                });
+                if queued.is_some() {
+                    data["queued"] = json!(true);
+                }
+                let event = NewEvent::new(types::WORKER_REFRESHED, by.clone())?.data(data)?;
                 buffer.append(tx, &event, now).await?;
+                if queued.is_some() {
+                    crate::services::agents::workers::queue::tell_started_in_tx(
+                        tx,
+                        &mut buffer,
+                        by,
+                        agent,
+                        &current.tasks,
+                        &current.proposals,
+                        now,
+                    )
+                    .await?;
+                }
                 agents::find_worker_process(tx.conn(), agent)
                     .await?
                     .ok_or(StoreError::Corrupt("worker_processes"))
