@@ -701,9 +701,6 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
     let _peer = child
         .id()
         .map(|pid| peers::register_check(pid, owner.clone()));
-    if let Some(pid) = child.id() {
-        prefer_for_oom(pid).await;
-    }
     let group = child
         .id()
         .and_then(|pid| i32::try_from(pid).ok())
@@ -781,18 +778,6 @@ pub const KILLED_NOTE: &str = "\nkilled: out of memory or by a signal\n";
 /// The `oom_score_adj` of a check command's shell, which every process it starts inherits: the kernel's OOM killer ends a check before the daemon or a worker, whose score stays near 0.
 pub const CHECK_OOM_SCORE_ADJ: &str = "800";
 
-/// Raises the OOM score of the command's process on Linux. A failed write leaves the command as it is and only logs it, inside the span of its run.
-async fn prefer_for_oom(pid: u32) {
-    if !cfg!(target_os = "linux") {
-        return;
-    }
-    if let Err(error) =
-        tokio::fs::write(format!("/proc/{pid}/oom_score_adj"), CHECK_OOM_SCORE_ADJ).await
-    {
-        tracing::warn!(pid, error = %error.kind(), "fold could not raise the OOM score of a check command");
-    }
-}
-
 /// The command ended by SIGKILL: its shell, or the process the shell waited for last, which the shell reports as exit 137. fold sends SIGKILL only after a timeout, whose status this never reads, so this one came from the kernel's OOM killer or another process.
 fn killed_by_sigkill(status: std::process::ExitStatus) -> bool {
     use std::os::unix::process::ExitStatusExt as _;
@@ -815,12 +800,29 @@ fn signal(group: Option<rustix::process::Pid>, signal: rustix::process::Signal) 
     }
 }
 
+/// The shell on Linux raises its own OOM score, then `exec`s the `sh -c` of the command in the same process, so the score is set before the command's first instruction and every child inherits it. The command keeps its text, its `$0`, its empty arguments, its pid and its exit code; a failed write is silent and the command runs as it is.
+#[cfg(target_os = "linux")]
+fn shell_args(run: &str) -> [String; 4] {
+    [
+        "-c".to_owned(),
+        format!(
+            "{{ echo {CHECK_OOM_SCORE_ADJ} >/proc/self/oom_score_adj; }} 2>/dev/null; exec /bin/sh -c \"$1\""
+        ),
+        "/bin/sh".to_owned(),
+        run.to_owned(),
+    ]
+}
+
+#[cfg(not(target_os = "linux"))]
+fn shell_args(run: &str) -> [String; 2] {
+    ["-c".to_owned(), run.to_owned()]
+}
+
 /// The `sh -c` of one command in `dir`, with stdin closed and without the daemon's session and identity variables.
 fn shell(dir: &Path, run: &str) -> Command {
     let mut command = Command::new("/bin/sh");
     command
-        .arg("-c")
-        .arg(run)
+        .args(shell_args(run))
         .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1137,6 +1139,42 @@ mod tests {
             String::from_utf8_lossy(&results[0].log).trim(),
             CHECK_OOM_SCORE_ADJ
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_child_that_a_check_command_starts_at_once_has_the_high_oom_score() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = run_commands(
+            dir.path(),
+            vec![spec(
+                "child",
+                "cat /proc/self/oom_score_adj & wait; sh -c 'cat /proc/self/oom_score_adj'",
+            )],
+            quick(),
+            &clock(),
+        )
+        .await;
+        let log = String::from_utf8_lossy(&results[0].log).into_owned();
+        let lines: Vec<&str> = log.lines().collect();
+        assert_eq!(lines, [CHECK_OOM_SCORE_ADJ, CHECK_OOM_SCORE_ADJ], "{log}");
+    }
+
+    #[tokio::test]
+    async fn a_command_keeps_its_text_arguments_and_exit_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = run_commands(
+            dir.path(),
+            vec![spec(
+                "args",
+                "echo \"$0|$#|$1\"; echo 'it'\\''s \"q\"'; exit 7",
+            )],
+            quick(),
+            &clock(),
+        )
+        .await;
+        assert_eq!(results[0].exit_code, Some(7));
+        assert_eq!(results[0].log, b"/bin/sh|0|\nit's \"q\"\n");
     }
 
     #[tokio::test]
