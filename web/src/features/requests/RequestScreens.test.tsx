@@ -1021,6 +1021,47 @@ describe("Request detail", () => {
     expect(screen.getByText("Gutter colour")).toBeTruthy();
   });
 
+  it("shows each draft card's kind and the existing tasks it needs, with no edit control for them", async () => {
+    update("RQ-3", (d) => ({
+      ...d,
+      drafts: [
+        requestDraft(1, {
+          cards: [
+            { ...card("c1", "Code card"), kind: "proposal" },
+            { ...card("c2", "Report card"), kind: "no_proposal" },
+            {
+              ...card("c3", "Person card"),
+              kind: "human",
+              needs: ["T-12", "T-14"],
+            },
+          ],
+          edges: [],
+        }),
+      ],
+    }));
+    renderAt("/p/demo/requests/RQ-3");
+    const [code, report, person] = await screen
+      .findAllByRole("listitem")
+      .then((items) => items.filter((i) => i.textContent.includes("card")));
+    expect(within(code as HTMLElement).queryByText("no proposal")).toBeNull();
+    expect(within(code as HTMLElement).queryByText("human task")).toBeNull();
+    expect(within(code as HTMLElement).queryByText("Needs")).toBeNull();
+    expect(within(report as HTMLElement).getByText("no proposal")).toBeTruthy();
+    expect(within(report as HTMLElement).queryByText("Needs")).toBeNull();
+    const human = person as HTMLElement;
+    expect(within(human).getByText("human task")).toBeTruthy();
+    const needs = within(human).getByLabelText("Tasks c3 needs");
+    expect(
+      within(needs)
+        .getAllByRole("link")
+        .map((a) => [a.textContent, a.getAttribute("href")]),
+    ).toEqual([
+      ["T-12", "/p/demo/t/T-12"],
+      ["T-14", "/p/demo/t/T-14"],
+    ]);
+    expect(within(human).queryAllByRole("textbox")).toEqual([]);
+  });
+
   it("sends a thread message that changes nothing on the request", async () => {
     renderAt("/p/demo/requests/RQ-4");
     const box = await screen.findByRole("combobox", { name: "Message" });
