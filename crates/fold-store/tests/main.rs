@@ -46,6 +46,7 @@ mod store_rules;
 mod task_reports_schema;
 mod tasks;
 mod test_project;
+mod tool_schema_hashes_schema;
 mod worker_cursors_schema;
 mod worker_questions_schema;
 mod worker_reads;

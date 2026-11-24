@@ -11,3 +11,4 @@ mod policy;
 mod presence;
 mod projects;
 mod status_props;
+mod tool_schemas;

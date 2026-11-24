@@ -206,6 +206,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "task_labels",
         "task_reports",
         "tasks",
+        "tool_schema_hashes",
         "worker_cursors",
         "worker_permission_answers",
         "worker_permission_closures",

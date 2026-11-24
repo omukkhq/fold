@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO tool_schema_hashes (fingerprint, tool, hash) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "e8738e094e999a8c2237b2a400d7a9aa9e562cee3d7c9a64fc932c39eddec197"
+}
