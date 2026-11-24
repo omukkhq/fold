@@ -13,9 +13,11 @@ use fold_store::{SqliteConnection, StoreError, WriteTx, reviews, tasks};
 use serde_json::json;
 use tokio::sync::broadcast::{self, error::RecvError, error::TryRecvError};
 
+use super::limits::{Turn, check_running};
 use super::{AgentError, AgentService, StartWorker, StartedWorker, binding_area};
 use crate::services::events::{BusMessage, EventBuffer, EventBus};
 use crate::services::messages::tell_actor_in_tx;
+use crate::services::projects::load_config;
 
 /// Where a start waits in the queue: `position` 1 runs first.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -581,16 +583,19 @@ impl AgentService {
                     .is_some_and(|(started, acting)| started == acting);
                 match policy::can_restart_worker(&starter, started_it) {
                     Err(error) => Err(AgentError::from(FoldError::from(error))),
-                    Ok(()) => self
-                        .supervisor()?
-                        .restart_fresh(
-                            &agent,
-                            &actor.event_actor(),
-                            row.instructions.as_deref(),
-                            Some(row.id),
-                        )
-                        .await
-                        .map(|_| ()),
+                    Ok(()) => match self.restart_fits(&agent, existing.as_ref()).await {
+                        Err(error) => Err(error),
+                        Ok(()) => self
+                            .supervisor()?
+                            .restart_fresh(
+                                &agent,
+                                &actor.event_actor(),
+                                row.instructions.as_deref(),
+                                Some(row.id),
+                            )
+                            .await
+                            .map(|_| ()),
+                    },
                 }
             }
             QueuedRun::Start | QueuedRun::Drop(_) => {
@@ -643,6 +648,36 @@ impl AgentService {
             }
             Err(other) => Err(other),
         }
+    }
+
+    /// Refuses a queued restart of `agent` that the worker limits, or a resume fold owes first, would refuse, before `restart_fresh` marks the agent as starting in a new session: a pass that only finds the place full must not make a restart outside the queue fail with `worker_exists`. The restart checks the limits again in its own transaction.
+    async fn restart_fits(
+        &self,
+        agent: &AgentName,
+        worker: Option<&WorkerProcessRow>,
+    ) -> Result<(), AgentError> {
+        let Some(worker) = worker else {
+            return Ok(());
+        };
+        let limits = load_config(self.supervisor()?.paths())
+            .await?
+            .workers
+            .limits();
+        self.store
+            .write(async |tx| {
+                check_running(
+                    tx,
+                    limits,
+                    worker.role,
+                    worker.area_id.zip(worker.area.as_ref()),
+                    Turn::Owed {
+                        agent: Some(agent),
+                        tool: "restart_worker",
+                    },
+                )
+                .await
+            })
+            .await
     }
 
     /// Ends the waiting `row` without a worker for `reason`, with `worker.queued_start_dropped` and a notice to its starter in the same transaction. `refusal` is the code of the start that failed, when one did. A row that has ended already changes nothing.

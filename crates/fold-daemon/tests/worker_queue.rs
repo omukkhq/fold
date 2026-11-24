@@ -4,7 +4,7 @@ use fold_core::codes;
 use fold_store::testing::eventually;
 use serde_json::{Value, json};
 
-use crate::common::acceptance::{Harness, WAIT};
+use crate::common::acceptance::{Harness, WAIT, body};
 use crate::workers_support::FakeClaude;
 
 const MAIN: &str = "frontend";
@@ -91,6 +91,22 @@ async fn until_dropped(harness: &Harness, name: &Value) -> crate::common::accept
                 event.kind == "worker.queued_start_dropped" && event.data["name"] == *name
             })
             .ok_or(())
+    })
+    .await
+}
+
+/// `web-lead`'s `restart_worker` with `arguments`, called again while fold refuses it with `worker_exists`: a queued restart of the same worker that the queue runs at that time holds its new session's start until its launch ends.
+async fn restart_when_free(harness: &Harness, arguments: Value) -> Value {
+    eventually(WAIT, async || {
+        let result = harness
+            .call_raw(WEB_LEAD, "restart_worker", arguments.clone())
+            .await;
+        let answer = body(&result);
+        match result.is_error {
+            Some(false) => Ok(answer),
+            _ if answer["error"]["code"] == codes::WORKER_EXISTS => Err(answer),
+            _ => panic!("{WEB_LEAD} restart_worker failed: {answer}"),
+        }
     })
     .await
 }
@@ -301,7 +317,7 @@ async fn a_queued_restart_runs_in_a_new_session_or_drops_once_its_worker_runs_ag
             .any(|body| body.contains(&format!("fold started @{web}"))),
     );
 
-    // Once the restarted worker stops again and its queued restart waits, a restart outside the queue runs it first.
+    // Once the restarted worker stops again and its queued restart waits, a restart outside the queue runs it unless the queue gets the free place first.
     harness
         .call(MAIN, "stop_worker", json!({"name": web}))
         .await;
@@ -313,7 +329,7 @@ async fn a_queued_restart_runs_in_a_new_session_or_drops_once_its_worker_runs_ag
             json!({"name": web, "queue": true}),
         )
         .await;
-    // The follower runs the queue for one event after the other, so once the start queued behind the restart drops, every earlier run is over and the restart waited in each.
+    // The follower runs the queue for one event after the other, so once the start queued behind the restart drops, the restart waited in each run before it.
     harness
         .call(WEB_LEAD, "start_worker", task_worker("T-3", true))
         .await;
@@ -323,19 +339,77 @@ async fn a_queued_restart_runs_in_a_new_session_or_drops_once_its_worker_runs_ag
     until_dropped(&harness, &Value::Null).await;
     let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
     std::fs::write(&config, "[workers]\ntask_worker = 3\n").unwrap();
-    harness
-        .call(WEB_LEAD, "restart_worker", json!({"name": web}))
-        .await;
-    let dropped = until_dropped(&harness, &json!(web)).await;
-    assert_eq!(dropped.data["reason"], "cancelled");
-    assert_eq!(dropped.data["name"], web.as_str());
-    assert!(
-        harness
-            .fold_messages(WEB_LEAD)
-            .await
+    // A queue pass that an event before the drop started can still run and take the new place, so the queued restart either drops because the worker runs again or runs first.
+    restart_when_free(&harness, json!({"name": web})).await;
+    let ended = eventually(WAIT, async || {
+        let events = harness.events().await;
+        let dropped = events.iter().find(|event| {
+            event.kind == "worker.queued_start_dropped" && event.data["name"] == web.as_str()
+        });
+        let ran = events
             .iter()
-            .any(|body| body.contains("fold dropped the worker start you queued")),
-    );
+            .filter(|event| event.kind == "worker.refreshed" && event.data["queued"] == true)
+            .count()
+            == 2;
+        match dropped {
+            Some(event) => Ok(Some(event.clone())),
+            None if ran => Ok(None),
+            None => Err(()),
+        }
+    })
+    .await;
+    if let Some(dropped) = ended {
+        assert_eq!(dropped.data["reason"], "cancelled");
+        assert!(
+            harness
+                .fold_messages(WEB_LEAD)
+                .await
+                .iter()
+                .any(|body| body.contains("fold dropped the worker start you queued")),
+        );
+    }
+}
+
+/// A pass that finds no place for a queued restart refuses it before fold marks the worker as starting in a new session, so a restart outside the queue at that time is not refused with `worker_exists`.
+#[cfg(feature = "failpoints")]
+#[tokio::test]
+async fn a_queued_restart_without_a_place_is_never_marked_as_starting() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    two_areas(&mut harness).await;
+    let web = start(&harness, WEB_LEAD, "T-1").await;
+    harness
+        .call(MAIN, "stop_worker", json!({"name": web}))
+        .await;
+    start(&harness, WEB_LEAD, "T-2").await;
+    start(&harness, API_LEAD, "T-5").await;
+    let queued = harness
+        .call(
+            WEB_LEAD,
+            "restart_worker",
+            json!({"name": web, "queue": true}),
+        )
+        .await;
+    assert_eq!(queued["queued"], true, "{queued}");
+    let marked = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&marked);
+    fail::cfg_callback("worker_restart_marked", move || {
+        count.fetch_add(1, Ordering::SeqCst);
+    })
+    .unwrap();
+    // Each pass reads the restart before the start queued behind it, so the drop of that start comes after the restart waited in each pass.
+    harness
+        .call(WEB_LEAD, "start_worker", task_worker("T-3", true))
+        .await;
+    harness
+        .call(MAIN, "archive_task", json!({"id": "T-3"}))
+        .await;
+    until_dropped(&harness, &Value::Null).await;
+    fail::remove("worker_restart_marked");
+    assert_eq!(marked.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

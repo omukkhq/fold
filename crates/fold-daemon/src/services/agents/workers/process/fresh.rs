@@ -66,6 +66,8 @@ impl Supervisor {
                 .with_hint("call list_workers")
                 .into());
             }
+            #[cfg(feature = "failpoints")]
+            fail::fail_point!("worker_restart_marked");
             let restarted = supervisor
                 .restart_held(&agent, &by, instructions.as_deref(), queued)
                 .await;
