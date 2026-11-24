@@ -348,6 +348,38 @@ pub async fn newest_for_task(
     rows.into_iter().map(EventRecord::into_event).collect()
 }
 
+/// The newest `limit` events of `types` that carry `proposal` with `seq < before`, newest first; `before` `None` starts at the newest event. Unlike a `read_after` with a proposal filter, it reads through the `events_proposal_seq` index, so its cost grows with the proposal's own events, not with the whole log.
+pub async fn newest_for_proposal(
+    executor: impl SqliteExecutor<'_>,
+    proposal: ProposalId,
+    types: &[EventType],
+    before: Option<u64>,
+    limit: usize,
+) -> Result<Vec<Event>, StoreError> {
+    let proposal = proposal.to_db();
+    let types = json_list(types.iter(), |t| t.as_str().into());
+    let before = before.map(seq_param).transpose()?.unwrap_or(i64::MAX);
+    let limit = i64::try_from(limit.min(MAX_PAGE)).unwrap_or(MAX_PAGE as i64);
+    let rows = sqlx::query_as!(
+        EventRecord,
+        r#"SELECT seq AS "seq!: i64", type AS event_type, actor, task_id, proposal_id,
+                  workspace_id, revision_id, data, created_at
+           FROM events
+           WHERE proposal_id = ?1
+             AND type IN (SELECT value FROM json_each(?2))
+             AND seq < ?3
+           ORDER BY seq DESC
+           LIMIT ?4"#,
+        proposal,
+        types,
+        before,
+        limit
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter().map(EventRecord::into_event).collect()
+}
+
 /// When the newest event of `event_type` that carries `task` happened, or `None` without one.
 pub async fn newest_at_for_task(
     executor: impl SqliteExecutor<'_>,

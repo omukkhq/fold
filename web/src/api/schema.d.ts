@@ -2809,6 +2809,31 @@ export interface components {
             main: string;
             version: string;
         };
+        /** @description Why an open proposal is `conflicted` on its current version, as its newest handoff to a fixer stored it. */
+        ConflictedReason: {
+            /**
+             * @description The reviewer agent that fixes it; null when the review lead got the conflict to start a reviewer for it.
+             * @example reviewer
+             */
+            fixer: string | null;
+            /** @enum {string} */
+            kind: "merge_conflict";
+        } | {
+            /**
+             * @description The reviewer agent that fixes it; null when the review lead got the failure to start a reviewer for it.
+             * @example reviewer
+             */
+            fixer: string | null;
+            /** @enum {string} */
+            kind: "lane_checks_failed";
+            /** @example migrations */
+            lane: string;
+            /**
+             * @description The failed integration check run.
+             * @example cr-4
+             */
+            run: string;
+        };
         /** @description A sum of turns. */
         CostAmount: {
             /**
@@ -3669,6 +3694,11 @@ export interface components {
         LinkSignIn: {
             link: string;
         };
+        /** @description A listed proposal with its lane and the reason of its conflict flag. */
+        ListedProposal: components["schemas"]["ProposalSummary"] & {
+            conflicted_reason: components["schemas"]["ConflictedReason"] | null;
+            lane: components["schemas"]["ProposalLane"] | null;
+        };
         /** @description What fold saw of a workspace's worker, as the stall rule decides it. fold keeps the times of the worker's output in memory, so after a daemon start it counts from that start. */
         LiveActivity: {
             call: components["schemas"]["LiveCall"] | null;
@@ -4398,10 +4428,12 @@ export interface components {
             checks: components["schemas"]["CheckRun"][];
             comments: components["schemas"]["CommentCounts"];
             conflict: components["schemas"]["ConflictReportView"] | null;
+            conflicted_reason: components["schemas"]["ConflictedReason"] | null;
             /** @description The files the selected version changes against its base, in path order. */
             files: components["schemas"]["ComparedFile"][];
             /** @description What stands between the requesting human and integrating the selected version. */
             gates: components["schemas"]["ProposalGate"][];
+            lane: components["schemas"]["ProposalLane"] | null;
             /**
              * Format: int32
              * @description The newest version before the selected one that has a verdict, by any reviewer, agent or human: what changed since it is what is left to review.
@@ -4433,9 +4465,24 @@ export interface components {
             gate: components["schemas"]["GateName"];
             status: components["schemas"]["GateStatusKind"];
         };
+        /** @description Where an open member of a serial lane of main's `fold-checks.toml` stands: a proposal whose current version changes a path of the lane. The members integrate one at a time in the order of their first approval. */
+        ProposalLane: {
+            /**
+             * @description The hold reason while a member ahead integrates first, such as `lane migrations, position 2`; null at the front.
+             * @example lane migrations, position 2
+             */
+            held: string | null;
+            /** @example migrations */
+            name: string;
+            /**
+             * Format: int32
+             * @description From 1 at the front, in the order of first approval; null before the proposal's first approval.
+             */
+            position: number | null;
+        };
         ProposalList: {
             /** @description In number order. */
-            proposals: components["schemas"]["ProposalSummary"][];
+            proposals: components["schemas"]["ListedProposal"][];
             /**
              * @description The open proposals of the whole project, whatever the filter, whose current version waits for the signed-in human's review, in number order: the `human_review` items of Needs you that are theirs, which the Proposals screen marks. Empty when the request names no human.
              * @example [
@@ -4506,7 +4553,7 @@ export interface components {
              * @description UTC milliseconds.
              */
             closed_at: number | null;
-            /** @description The latest integration of the current version conflicted with main. */
+            /** @description The current version waits for a fix on main by its reviewer: its latest integration conflicted with main, or, for a member of a serial lane, its integration checks failed after another member moved the lane. The proposal detail and the list give the reason. */
             conflicted: boolean;
             /**
              * Format: int64

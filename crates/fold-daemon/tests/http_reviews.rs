@@ -931,6 +931,20 @@ async fn a_conflicting_integration_answers_integration_conflicted() {
     assert_eq!(hunk["version"]["lines"], json!(["pub fn y() {}\n"]));
     assert_eq!(detail.body["summary"]["conflicted"], true);
     assert_eq!(detail.body["summary"]["turn"], "with_reviewer");
+    let reason = json!({"kind": "merge_conflict", "fixer": null});
+    assert_eq!(detail.body["conflicted_reason"], reason);
+    assert_eq!(detail.body["lane"], Value::Null);
+    let list = send(&fx, Method::GET, "/proposals", None, Some(TANIM)).await;
+    let row = list.body["proposals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "P-1")
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(row["conflicted_reason"], reason, "{}", list.body);
+    assert_eq!(row["lane"], Value::Null, "{}", list.body);
+    assert_eq!(row["conflicted"], true, "{}", list.body);
 }
 
 #[test]

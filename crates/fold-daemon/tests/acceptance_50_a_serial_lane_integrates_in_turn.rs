@@ -267,6 +267,50 @@ async fn acceptance_50_lane_members_integrate_in_approval_order_and_a_lane_failu
         )
         .await;
     assert_eq!(code, StatusCode::OK, "{page}");
+    assert_eq!(page["summary"]["conflicted"], true, "{page}");
+    assert_eq!(
+        page["lane"],
+        json!({"name": "migrations", "position": 1, "held": null}),
+        "{page}"
+    );
+    let failed = page["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|run| run["stage"] == "integration" && run["state"] == "failed")
+        .map(|run| run["id"].clone())
+        .unwrap_or_default();
+    assert!(
+        failed.as_str().is_some_and(|id| id.starts_with("cr-")),
+        "{page}"
+    );
+    let reason = json!({"kind": "lane_checks_failed", "lane": "migrations", "run": failed, "fixer": SECOND_REVIEWER});
+    assert_eq!(page["conflicted_reason"], reason, "{page}");
+    assert_eq!(page["conflict"], Value::Null, "{page}");
+    let (code, list) = harness
+        .http(
+            Method::GET,
+            &format!("/api/v1/projects/{SLUG}/proposals?state=open"),
+            None,
+            HUMAN,
+        )
+        .await;
+    assert_eq!(code, StatusCode::OK, "{list}");
+    let rows = list["proposals"].as_array().unwrap();
+    let row = |id: &str| {
+        rows.iter()
+            .find(|row| row["id"] == id)
+            .cloned()
+            .unwrap_or_default()
+    };
+    assert_eq!(row("P-1")["conflicted_reason"], reason, "{list}");
+    assert_eq!(row("P-1")["lane"]["position"], 1, "{list}");
+    assert_eq!(
+        row("P-3")["lane"],
+        json!({"name": "migrations", "position": 2, "held": "lane migrations, position 2"}),
+        "{list}"
+    );
+    assert_eq!(row("P-3")["conflicted_reason"], Value::Null, "{list}");
     let view = harness
         .call(LEAD, "get_proposal", json!({"id": "P-3"}))
         .await;

@@ -17,6 +17,7 @@ pub use fold_store::reviews::ReviewRow as ReviewView;
 
 use super::checks::{CheckRunView, VersionRun, next_version_run};
 use super::claims::ReviewClaimView;
+use super::conflicts::{ConflictedReason, conflicted_reason};
 use super::integrate::caller_facts;
 use super::plans::{ProposalPlan, RelatedTaskView, proposal_plan, related_plan_tasks};
 use super::proposals::{ProposalDetail, proposal_detail, proposal_not_found};
@@ -78,6 +79,8 @@ pub struct ProposalView {
     pub integrated: Option<(RevisionId, Option<ReviewBatchId>)>,
     /// The lane of main's `fold-checks.toml` that the open proposal's current version changes a path of, with its position; `None` outside every lane.
     pub lane: Option<LanePlace>,
+    /// Why the open proposal is flagged `conflicted` on its current version; `None` when it is not.
+    pub conflicted_reason: Option<ConflictedReason>,
 }
 
 impl ReviewService {
@@ -122,6 +125,12 @@ impl ReviewService {
             Vec::new()
         };
         let integrated = reviews::batches::integrated_as(&mut *read, proposal).await?;
+        let summary = &detail.summary;
+        let conflicted_reason = if summary.state == ProposalState::Open && summary.conflicted {
+            conflicted_reason(&mut read, proposal, summary.current_version).await?
+        } else {
+            None
+        };
         read.commit().await.map_err(StoreError::from)?;
         let claim = match holder {
             Some(row) => Some(ReviewClaimView {
@@ -200,6 +209,7 @@ impl ReviewService {
             related_tasks,
             integrated,
             lane,
+            conflicted_reason,
         })
     }
 }

@@ -234,6 +234,45 @@ async fn filters_by_type_task_and_proposal() {
 }
 
 #[tokio::test]
+async fn newest_for_proposal_reads_the_proposal_and_types_newest_first_before_a_seq() {
+    let project = TestProject::new().await;
+    let proposal = ProposalId::from_number(7).unwrap();
+    let other = ProposalId::from_number(8).unwrap();
+    append_all(
+        &project,
+        vec![
+            new_event(types::CHECKS_FINISHED).proposal(proposal),
+            new_event(types::REVIEW_SUBMITTED).proposal(proposal),
+            new_event(types::INTEGRATION_CONFLICTED).proposal(other),
+            new_event(types::INTEGRATION_CONFLICTED).proposal(proposal),
+            new_event(types::CHECKS_FINISHED).proposal(proposal),
+            new_event(types::MAIN_ADVANCED),
+        ],
+    )
+    .await;
+    let pool = project.store().read();
+    let handoffs = [types::INTEGRATION_CONFLICTED, types::CHECKS_FINISHED];
+    let seqs = |before: Option<u64>, limit: usize| async move {
+        events::newest_for_proposal(pool, proposal, &handoffs, before, limit)
+            .await
+            .unwrap()
+            .iter()
+            .map(|e| e.seq)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(seqs(None, 100).await, vec![5, 4, 1]);
+    assert_eq!(seqs(None, 2).await, vec![5, 4]);
+    assert_eq!(seqs(Some(4), 100).await, vec![1]);
+    assert!(seqs(Some(1), 100).await.is_empty());
+    assert!(
+        events::newest_for_proposal(pool, proposal, &[], None, 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn an_event_for_a_task_without_a_row_is_accepted() {
     let project = TestProject::new().await;
     let tasks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE number = 12")

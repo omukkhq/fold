@@ -2,12 +2,13 @@ use fold_core::object::ObjectHash;
 use fold_core::reviews::Verdict;
 use fold_core::reviews::checks::{ChecksFile, Lane};
 use fold_core::reviews::lanes::{LaneMember, LanePlace, lane_places};
-use fold_core::{FoldError, ProposalId, codes};
+use fold_core::{FoldError, HumanName, ProposalId, codes};
 use fold_store::reviews::{self, ProposalState};
 use fold_store::{StoreError, workspaces};
 use serde_json::json;
 
-use super::{ProposalFilter, ProposalSummary, ReviewError, ReviewService};
+use super::conflicts::{ConflictedReason, conflicted_reason};
+use super::{ProposalFilter, ProposalListing, ProposalSummary, ReviewError, ReviewService};
 
 impl ReviewService {
     /// The lanes of main's own `fold-checks.toml`; empty when main has no checks file, an invalid one or no `[[serial]]` table. Every member is placed by main's lanes, so one definition orders a lane whatever a proposal's own copy of the file says.
@@ -121,6 +122,34 @@ impl ReviewService {
         Ok((proposals, self.lane_places().await?))
     }
 
+    /// [`ReviewService::list_proposals_for`] with the place of each lane member among all open proposals and the reason of each listed open proposal flagged `conflicted`.
+    pub async fn list_proposals_in_lanes_for(
+        &self,
+        filter: ProposalFilter,
+        human: Option<&HumanName>,
+    ) -> Result<LaneListing, ReviewError> {
+        let listing = self.list_proposals_for(filter, human).await?;
+        let lanes = self.lane_places().await?;
+        let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
+        let mut conflicted = Vec::new();
+        for summary in &listing.proposals {
+            if summary.state != ProposalState::Open || !summary.conflicted {
+                continue;
+            }
+            if let Some(reason) =
+                conflicted_reason(&mut read, summary.id, summary.current_version).await?
+            {
+                conflicted.push((summary.id, reason));
+            }
+        }
+        read.commit().await.map_err(StoreError::from)?;
+        Ok(LaneListing {
+            listing,
+            lanes,
+            conflicted,
+        })
+    }
+
     /// The places of the open lane members that wait for a reviewer's fix on main: flagged with a conflict, or with failed integration checks after their lane moved.
     pub async fn lane_fixes(&self) -> Result<Vec<LanePlace>, ReviewError> {
         let places = self.lane_places().await?;
@@ -133,6 +162,16 @@ impl ReviewService {
         }
         Ok(fixes)
     }
+}
+
+/// A proposal listing with what the lanes and the handoffs add to it.
+#[derive(Debug, Clone)]
+pub struct LaneListing {
+    pub listing: ProposalListing,
+    /// The place of every open lane member, listed or not.
+    pub lanes: Vec<LanePlace>,
+    /// The reason of each listed open proposal flagged `conflicted`.
+    pub conflicted: Vec<(ProposalId, ConflictedReason)>,
 }
 
 /// The refusal of an integration of a lane member behind the front: `invalid_request` with the reason `lane_held`, the lane and the position.

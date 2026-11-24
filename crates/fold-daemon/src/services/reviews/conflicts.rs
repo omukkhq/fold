@@ -4,12 +4,14 @@ use fold_core::events::types;
 use fold_core::merge::{Conflict, ConflictReport, ReportTrees};
 use fold_core::reviews::{Approver, Verdict};
 use fold_core::{
-    Actor, AgentName, CheckRunId, HumanName, IdKind, IntegrationId, NewEvent, ProposalId,
+    Actor, AgentName, CheckRunId, Event, HumanName, IdKind, IntegrationId, NewEvent, ProposalId,
     RevisionId, Role, TaskId,
 };
 use fold_store::reviews::{self, IntegrationSubject, NewIntegration};
-use fold_store::{StoreError, WriteTx, agents, counters, tasks, workspaces};
-use serde_json::json;
+use fold_store::{
+    SqliteConnection, StoreError, WriteTx, agents, counters, events, tasks, workspaces,
+};
+use serde_json::{Value, json};
 
 use super::integrate::{caller_facts, decide};
 use super::lanes::lane_moved_note;
@@ -531,6 +533,70 @@ mod tests {
                 notice.contains("start one for P-2 with start_worker"),
                 "{notice}"
             );
+        }
+    }
+}
+
+/// Why an open proposal is flagged `conflicted`, from the newest handoff event of its current version, so it reads the same after a daemon restart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConflictedReason {
+    /// The merge with main conflicted: the conflict report holds the files.
+    MergeConflict {
+        /// The reviewer that fixes it; `None` when the review lead got the conflict.
+        fixer: Option<AgentName>,
+    },
+    /// The integration checks failed on the merge with main after another member of the lane integrated.
+    LaneChecksFailed {
+        lane: String,
+        run: CheckRunId,
+        /// The reviewer that fixes it; `None` when the review lead got the failure.
+        fixer: Option<AgentName>,
+    },
+}
+
+/// The reason of a handoff event of `version`: `integration.conflicted`, or a failed integration `checks.finished` with a `lane`; `None` for any other event.
+fn handoff_reason(event: &Event, version: u32) -> Option<ConflictedReason> {
+    let data = &event.data;
+    if data.get("version").and_then(Value::as_u64) != Some(u64::from(version)) {
+        return None;
+    }
+    let fixer = data
+        .get("fixer")
+        .and_then(Value::as_str)
+        .and_then(|name| AgentName::parse(name).ok());
+    if event.event_type == types::INTEGRATION_CONFLICTED {
+        return Some(ConflictedReason::MergeConflict { fixer });
+    }
+    if event.event_type != types::CHECKS_FINISHED {
+        return None;
+    }
+    let lane = data.get("lane").and_then(Value::as_str)?;
+    let run = data.get("run").and_then(Value::as_str)?.parse().ok()?;
+    Some(ConflictedReason::LaneChecksFailed {
+        lane: lane.to_owned(),
+        run,
+        fixer,
+    })
+}
+
+/// The reason `proposal` is flagged for `version`, from its newest handoff event of that version; `None` when it has none. It pages the proposal's own events newest first and stops at the first handoff.
+pub(super) async fn conflicted_reason(
+    conn: &mut SqliteConnection,
+    proposal: ProposalId,
+    version: u32,
+) -> Result<Option<ConflictedReason>, ReviewError> {
+    let handoffs = [types::INTEGRATION_CONFLICTED, types::CHECKS_FINISHED];
+    let mut before = None;
+    loop {
+        let page =
+            events::newest_for_proposal(&mut *conn, proposal, &handoffs, before, events::MAX_PAGE)
+                .await?;
+        if let Some(reason) = page.iter().find_map(|event| handoff_reason(event, version)) {
+            return Ok(Some(reason));
+        }
+        match page.last() {
+            Some(last) if page.len() == events::MAX_PAGE => before = Some(last.seq),
+            _ => return Ok(None),
         }
     }
 }

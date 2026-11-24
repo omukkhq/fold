@@ -50,6 +50,7 @@ pub use checkouts::{CheckoutTarget, ListedCheckout, ReviewCheckout};
 pub use claims::ReviewClaimView;
 pub(crate) use claims::{Assignment, assign_reviews_in_tx};
 pub use comments::{CommentInput, CommentLocation, CommentView};
+pub use conflicts::ConflictedReason;
 pub(crate) use conflicts::{Handoff, NoReviewer, handoff_notice_in_tx, reviewer_turn};
 pub use human_edits::HumanEdit;
 pub use human_review::{AwaitingHumanReview, awaiting_human_review, awaiting_human_review_in};
@@ -58,6 +59,7 @@ pub use integrate::{
     AutomaticIntegration, DirectChange, DirectOutcome, HumanRecord, IntegrationOutcome,
     PullIntegration, PullOutcome, RecordAuthor, RecordIntegration,
 };
+pub use lanes::LaneListing;
 pub use plans::{
     AwaitedTask, DEFAULT_PLAN_LIST, MAX_PLAN_LIST, PlanChange, ProposalPlan, RelatedTaskView,
     ReviewPlanView, proposal_plan, proposal_plans, related_plan_tasks,
