@@ -1181,12 +1181,14 @@ mod tests {
     }
 
     #[test]
-    fn the_review_lead_groups_the_tasks_of_one_feature_before_any_review_starts() {
+    fn the_review_lead_groups_only_proposals_that_need_each_other_before_any_review_starts() {
         let lead = Role::ReviewLead.prompt();
         for wanted in [
-            "Group the proposals of one feature",
+            "Put proposals in one group, and so in one batch for one reviewer, only when they cannot work without each other; every other proposal gets its own review",
+            "leaves the batch with the reason `reviewed_alone` and integrates on its own",
+            "One feature or one area alone is not a reason to group",
             "the same request (`RQ-n`), have the same parent task or a dependency between them",
-            "code and its tests or docs, or the backend and the screen of one feature",
+            "code and its tests, or the backend and the screen of one change",
             "shared files are one sign, not the test",
             "Before a review start that is not a plan's, read the task graph with `get_task_graph` and decide; never start such a reviewer without that read",
             "in its notice and in `related_tasks` (an open one with its `proposal`) and `plan_hint` of `get_proposal`",
@@ -1194,7 +1196,6 @@ mod tests {
             "a proposal reviewed alone can integrate minutes before its related proposal opens",
             "Start a review alone at once only when no related proposal waits for a review and no related task can still open a proposal",
             "never make a plan wait for a To do or In progress task only because it shares the area",
-            "group the open proposals of one feature first, then the open proposals of the same area (not Main)",
             "make the plan with the related tasks that are To do or In progress, or start the review alone when none is left",
         ] {
             assert!(lead.contains(wanted), "{wanted}");
@@ -1202,7 +1203,8 @@ mod tests {
         assert!(!lead.contains("the same files or code"));
         // The rule comes right after the skill, ahead of every other step.
         let bullets: Vec<&str> = lead.lines().filter(|line| line.starts_with("- ")).collect();
-        assert!(bullets[1].starts_with("- Group the proposals of one feature"));
+        assert!(bullets[1].starts_with("- Put proposals in one group"));
+        assert!(!lead.contains("then the open proposals of the same area"));
         let turn = first_turn(&StartFacts {
             role: Role::ReviewLead,
             name: &AgentName::parse("review").unwrap(),
