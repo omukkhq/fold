@@ -93,6 +93,8 @@ pub enum CheckRunReason {
     Superseded,
     /// fold itself could not run the checks; the integration can be asked again once the fault is fixed.
     FoldFailed,
+    /// A SIGKILL that fold did not send ended a required command, such as the kernel's OOM killer.
+    Killed,
 }
 
 impl From<RunReason> for CheckRunReason {
@@ -107,6 +109,7 @@ impl From<RunReason> for CheckRunReason {
             RunReason::DaemonStopped => Self::DaemonStopped,
             RunReason::Superseded => Self::Superseded,
             RunReason::FoldFailed => Self::FoldFailed,
+            RunReason::Killed => Self::Killed,
         }
     }
 }

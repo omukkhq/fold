@@ -409,6 +409,8 @@ pub struct CommandResult {
     pub log_bytes: u64,
     /// fold could not start the command or wait for it, so its failure is fold's and says nothing of the tree.
     pub fault: bool,
+    /// A SIGKILL that fold did not send ended the command, such as the kernel's OOM killer, so its failure says nothing of the tree either.
+    pub killed: bool,
 }
 
 impl CommandResult {
@@ -471,6 +473,7 @@ pub async fn run_commands_for(
             log: Vec::new(),
             log_bytes: 0,
             fault: false,
+            killed: false,
         };
         if setup_failed {
             results.push(skipped(Outcome::NotRun));
@@ -501,6 +504,7 @@ pub async fn run_commands_for(
             log: ran.log,
             log_bytes: ran.log_bytes,
             fault: ran.fault,
+            killed: ran.killed,
         };
         setup_failed = spec.check.is_none() && result.outcome.is_failure();
         results.push(result);
@@ -514,6 +518,7 @@ struct Ran {
     log: Vec<u8>,
     log_bytes: u64,
     fault: bool,
+    killed: bool,
 }
 
 /// The end of a stream of output, at most `limit` bytes, and the size of the whole.
@@ -579,12 +584,16 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
                 log,
                 log_bytes,
                 fault: true,
+                killed: false,
             };
         }
     };
     let _peer = child
         .id()
         .map(|pid| peers::register_check(pid, owner.clone()));
+    if let Some(pid) = child.id() {
+        prefer_for_oom(pid).await;
+    }
     let group = child
         .id()
         .and_then(|pid| i32::try_from(pid).ok())
@@ -597,42 +606,46 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
     if let Some(stderr) = child.stderr.take() {
         readers.spawn(read_into(stderr, Arc::clone(&tail)));
     }
-    let (outcome, exit_code, fault) = match tokio::time::timeout(limits.timeout, child.wait()).await
-    {
-        Ok(Ok(status)) => {
-            let outcome = if status.success() {
-                Outcome::Passed
-            } else {
-                Outcome::Failed
-            };
-            (outcome, status.code(), false)
-        }
-        Ok(Err(error)) => {
-            note(
-                &tail,
-                &format!("\nfold could not wait for the command: {}\n", error.kind()),
-            );
-            (Outcome::Failed, None, true)
-        }
-        Err(_) => {
-            signal(group, rustix::process::Signal::TERM);
-            if tokio::time::timeout(limits.kill_grace, child.wait())
-                .await
-                .is_err()
-            {
-                signal(group, rustix::process::Signal::KILL);
-                let _ = child.wait().await;
+    let (outcome, exit_code, fault, killed) =
+        match tokio::time::timeout(limits.timeout, child.wait()).await {
+            Ok(Ok(status)) => {
+                let outcome = if status.success() {
+                    Outcome::Passed
+                } else {
+                    Outcome::Failed
+                };
+                let killed = killed_by_sigkill(status);
+                if killed {
+                    note(&tail, KILLED_NOTE);
+                }
+                (outcome, status.code(), false, killed)
             }
-            note(
-                &tail,
-                &format!(
-                    "\nfold stopped the command after {} s\n",
-                    limits.timeout.as_secs()
-                ),
-            );
-            (Outcome::TimedOut, None, false)
-        }
-    };
+            Ok(Err(error)) => {
+                note(
+                    &tail,
+                    &format!("\nfold could not wait for the command: {}\n", error.kind()),
+                );
+                (Outcome::Failed, None, true, false)
+            }
+            Err(_) => {
+                signal(group, rustix::process::Signal::TERM);
+                if tokio::time::timeout(limits.kill_grace, child.wait())
+                    .await
+                    .is_err()
+                {
+                    signal(group, rustix::process::Signal::KILL);
+                    let _ = child.wait().await;
+                }
+                note(
+                    &tail,
+                    &format!(
+                        "\nfold stopped the command after {} s\n",
+                        limits.timeout.as_secs()
+                    ),
+                );
+                (Outcome::TimedOut, None, false, false)
+            }
+        };
     drop(guard);
     let drained = tokio::time::timeout(DRAIN_WAIT, async {
         while readers.join_next().await.is_some() {}
@@ -648,7 +661,33 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
         log,
         log_bytes,
         fault,
+        killed,
     }
+}
+
+/// The line a command's log ends with when a SIGKILL that fold did not send ended it.
+pub const KILLED_NOTE: &str = "\nkilled: out of memory or by a signal\n";
+
+/// The `oom_score_adj` of a check command's shell, which every process it starts inherits: the kernel's OOM killer ends a check before the daemon or a worker, whose score stays near 0.
+pub const CHECK_OOM_SCORE_ADJ: &str = "800";
+
+/// Raises the OOM score of the command's process on Linux. A failed write leaves the command as it is and only logs it, inside the span of its run.
+async fn prefer_for_oom(pid: u32) {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    if let Err(error) =
+        tokio::fs::write(format!("/proc/{pid}/oom_score_adj"), CHECK_OOM_SCORE_ADJ).await
+    {
+        tracing::warn!(pid, error = %error.kind(), "fold could not raise the OOM score of a check command");
+    }
+}
+
+/// The command ended by SIGKILL: its shell, or the process the shell waited for last, which the shell reports as exit 137. fold sends SIGKILL only after a timeout, whose status this never reads, so this one came from the kernel's OOM killer or another process.
+fn killed_by_sigkill(status: std::process::ExitStatus) -> bool {
+    use std::os::unix::process::ExitStatusExt as _;
+    let kill = rustix::process::Signal::KILL.as_raw();
+    status.signal() == Some(kill) || status.code() == Some(128 + kill)
 }
 
 /// Kills the command's process group when it is dropped: at the command's end, so what it left running, such as a server a test started, ends with it, and when a stopping daemon aborts the run, which `kill_on_drop` alone does only for the shell.
@@ -970,6 +1009,68 @@ mod tests {
             CheckPermits::new(0).acquire().await.is_some(),
             "at least one run"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_check_command_runs_with_a_high_oom_score() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = run_commands(
+            dir.path(),
+            vec![spec("oom", "cat /proc/self/oom_score_adj")],
+            quick(),
+            &clock(),
+        )
+        .await;
+        assert_eq!(
+            String::from_utf8_lossy(&results[0].log).trim(),
+            CHECK_OOM_SCORE_ADJ
+        );
+    }
+
+    #[tokio::test]
+    async fn a_command_that_a_sigkill_ended_is_killed_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = run_commands(
+            dir.path(),
+            vec![
+                spec("self", "kill -KILL $$"),
+                spec("child", "sh -c 'kill -KILL $$'"),
+                spec("red", "exit 1"),
+            ],
+            quick(),
+            &clock(),
+        )
+        .await;
+        for killed in &results[..2] {
+            assert_eq!(killed.outcome, Outcome::Failed);
+            assert!(killed.killed, "{:?}", killed.check);
+            assert!(!killed.fault);
+            assert!(
+                String::from_utf8_lossy(&killed.log)
+                    .contains("killed: out of memory or by a signal")
+            );
+        }
+        assert!(!results[2].killed);
+    }
+
+    #[tokio::test]
+    async fn a_timeout_is_not_a_kill() {
+        let dir = tempfile::tempdir().unwrap();
+        let limits = RunLimits {
+            timeout: Duration::from_millis(200),
+            kill_grace: Duration::from_millis(100),
+            ..quick()
+        };
+        let results = run_commands(
+            dir.path(),
+            vec![spec("stubborn", "trap '' TERM; sleep 30")],
+            limits,
+            &clock(),
+        )
+        .await;
+        assert_eq!(results[0].outcome, Outcome::TimedOut);
+        assert!(!results[0].killed);
     }
 
     #[test]

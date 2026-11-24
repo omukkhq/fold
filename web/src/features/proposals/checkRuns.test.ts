@@ -77,10 +77,12 @@ describe("reasonText", () => {
       "daemon_stopped",
       "superseded",
       "fold_failed",
+      "killed",
     ] as const) {
       expect(reasonText(reason)).not.toBe("");
     }
     expect(reasonText("fold_failed")).toContain("integrate again");
+    expect(reasonText("killed")).toContain("out of memory");
   });
 });
 

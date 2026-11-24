@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use tracing::Instrument as _;
 
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
@@ -286,6 +287,7 @@ impl ReviewService {
             self.checks.limits(),
             &*self.clock,
         )
+        .instrument(tracing::info_span!("check_run", run = %run.id))
         .await;
         drop(permit);
         let mut verdict = Verdict::of(&results);

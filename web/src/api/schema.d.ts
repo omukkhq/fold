@@ -2530,7 +2530,7 @@ export interface components {
          * @description Why a run failed or stopped.
          * @enum {string}
          */
-        CheckRunReason: "check_failed" | "setup_failed" | "checks_file_invalid" | "files_changed" | "workspace_changed" | "refused" | "daemon_stopped" | "superseded" | "fold_failed";
+        CheckRunReason: "check_failed" | "setup_failed" | "checks_file_invalid" | "files_changed" | "workspace_changed" | "refused" | "daemon_stopped" | "superseded" | "fold_failed" | "killed";
         /**
          * @description Where a run stands.
          * @enum {string}

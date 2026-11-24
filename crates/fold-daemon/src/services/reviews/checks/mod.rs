@@ -13,6 +13,7 @@ use fold_store::tasks::claims;
 use fold_store::workspaces::{self, WorkspaceRow, WorkspaceState};
 use fold_store::{SqliteConnection, Store, StoreError, WriteTx, counters, tasks};
 use serde_json::json;
+use tracing::Instrument as _;
 
 use super::proposals::{
     Proposed, VersionInput, add_version_in_tx, no_task_workspace, open_in_tx, usable_workspace,
@@ -85,8 +86,14 @@ impl Verdict {
         }
     }
 
-    /// From the commands' results alone: a blocking setup failure, then a blocking check failure, else a pass.
+    /// From the commands' results alone: a blocking command that a SIGKILL ended, then a blocking setup failure, then a blocking check failure, else a pass.
     pub(super) fn of(results: &[CommandResult]) -> Self {
+        if results
+            .iter()
+            .any(|result| result.killed && result.blocks())
+        {
+            return Self::failed(RunReason::Killed);
+        }
         if results
             .iter()
             .any(|result| result.check.is_none() && result.blocks())
@@ -364,6 +371,7 @@ impl ReviewService {
             self.checks.limits(),
             &*self.clock,
         )
+        .instrument(tracing::info_span!("check_run", run = %run.id))
         .await;
         drop(permit);
         let (mut verdict, checked) = self.recheck_workspace(&run, &results).await?;
@@ -817,10 +825,13 @@ pub(super) fn result_message(
         ),
         Some(reason) => {
             let failed = failed_names(results, true);
-            let what = if reason == RunReason::SetupFailed {
-                "the setup failed, so no check ran".to_owned()
-            } else {
-                failed.join(", ")
+            let what = match reason {
+                RunReason::SetupFailed => "the setup failed, so no check ran".to_owned(),
+                RunReason::Killed => format!(
+                    "{} killed: out of memory or by a signal, not a test failure; run the checks again when the machine has free memory",
+                    failed.join(", ")
+                ),
+                _ => failed.join(", "),
             };
             let mut text = format!("{subject} failed: {what}.");
             if let Some(gate) = gate_sentence(run) {
@@ -998,6 +1009,7 @@ mod tests {
             log: b"line 1\nline 2\nboom\n".to_vec(),
             log_bytes: 19,
             fault: false,
+            killed: false,
         }
     }
 
@@ -1042,6 +1054,20 @@ mod tests {
             Verdict::failed(RunReason::SetupFailed)
         );
         assert_eq!(Verdict::of(&[]), Verdict::passed());
+        let killed = CommandResult {
+            killed: true,
+            ..result(Some("test"), Outcome::Failed, true)
+        };
+        let red = result(Some("lint"), Outcome::Failed, true);
+        assert_eq!(
+            Verdict::of(&[red, killed.clone()]),
+            Verdict::failed(RunReason::Killed)
+        );
+        let optional = CommandResult {
+            required: false,
+            ..killed
+        };
+        assert_eq!(Verdict::of(&[optional]), Verdict::passed());
     }
 
     #[test]

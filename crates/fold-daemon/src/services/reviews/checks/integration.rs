@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use tracing::Instrument as _;
 
 use fold_core::object::ObjectHash;
 use fold_core::reviews::checks::{
@@ -100,6 +101,7 @@ impl ReviewService {
                     log_bytes: message.len() as u64,
                     log: message,
                     fault: false,
+                    killed: false,
                 };
                 let verdict = Verdict::failed(RunReason::ChecksFileInvalid);
                 if at.batch.is_some() {
@@ -142,8 +144,9 @@ impl ReviewService {
             .await
         {
             Ok(dir) => {
-                let results =
-                    runner::run_commands(&dir, specs, self.checks.limits(), &*self.clock).await;
+                let results = runner::run_commands(&dir, specs, self.checks.limits(), &*self.clock)
+                    .instrument(tracing::info_span!("check_run", run = %run.id))
+                    .await;
                 let verdict = if results.iter().any(|result| result.fault) {
                     tracing::warn!(run = %run.id, "a command of the integration checks could not start or be waited for");
                     fault
@@ -554,6 +557,10 @@ fn send_back_message(
         Some(RunReason::ChecksFileInvalid) => {
             "the merged tree's fold-checks.toml is not valid".to_owned()
         }
+        Some(RunReason::Killed) => {
+            "a check was killed: out of memory or by a signal, not a failure of the change"
+                .to_owned()
+        }
         _ => results
             .iter()
             .filter(|result| result.blocks())
@@ -650,6 +657,7 @@ mod tests {
             log: b"step 1\nboom\n".to_vec(),
             log_bytes: 12,
             fault: false,
+            killed: false,
         }];
         let text = send_back_message(at, &run, &results, Verdict::failed(RunReason::CheckFailed));
         assert!(text.starts_with(

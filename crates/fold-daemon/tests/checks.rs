@@ -402,6 +402,28 @@ async fn a_process_of_a_workers_check_acts_as_that_worker() {
 }
 
 #[tokio::test]
+async fn a_check_that_a_sigkill_ended_fails_the_run_as_killed() {
+    let fx = Fixture::new().await;
+    workspace_with_checks(&fx, "[[check]]\nname = \"test\"\nrun = \"kill -KILL $$\"\n").await;
+    let run = running(
+        fx.reviews
+            .run_checks(&by(&fx.frontend.worker), t(1))
+            .await
+            .unwrap(),
+    );
+    let view = ended(&fx.reviews, run).await;
+    assert_eq!(view.run.state, RunState::Failed);
+    assert_eq!(view.run.reason, Some(RunReason::Killed));
+    assert_eq!(view.results[0].outcome, Outcome::Failed);
+    assert!(
+        String::from_utf8_lossy(&view.results[0].log)
+            .contains("killed: out of memory or by a signal")
+    );
+    let message = fold_messages(&fx).await.pop().unwrap();
+    assert!(message.contains("not a test failure"), "{message}");
+}
+
+#[tokio::test]
 async fn a_run_waits_for_free_memory_and_starts_when_it_frees() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
