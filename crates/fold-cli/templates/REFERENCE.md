@@ -235,7 +235,7 @@ Git remotes (with Git sync on):
 - `fld push [NAME]`: push main's history, one commit per revision, without force. The name can be left out when the project has one remote.
 - `fld pull [NAME]`: bring the remote's commits into main; a conflict becomes a sync task.
 
-Host config. `$XDG_CONFIG_HOME/fold/daemon.toml` (else `~/.config/fold/daemon.toml`) holds `listen` (the web address, `127.0.0.1:7420` by default), `socket` and `session_days` (how long a web sign-in lasts). The daemon reads it at its start, so an edit needs `fld restart`.
+Host config. `$XDG_CONFIG_HOME/fold/daemon.toml` (else `~/.config/fold/daemon.toml`) holds `listen` (the web address, `127.0.0.1:7420` by default), `socket`, `session_days` (how long a web sign-in lasts, 30 days by default), `check_runs` (the most check runs at once across all projects, half the processors by default) and `check_memory_gb` (the free memory in GiB a check run waits for before its commands start; the larger of 4 GiB and 10% of the total memory by default). Each of the three numbers is a positive whole number: a zero, a negative or a text value stops the start. The daemon reads it at its start, so an edit needs `fld restart`.
 
 ## Web app
 

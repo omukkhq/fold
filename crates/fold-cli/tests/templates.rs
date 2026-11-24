@@ -1331,8 +1331,10 @@ const REFERENCE_SECTIONS: [&str; 8] = [
 ];
 
 /// Backticked names of the reference that are neither tools, codes, config or checks keys nor run states, but the values and fields it explains.
-const REFERENCE_NAMES: [&str; 9] = [
+const REFERENCE_NAMES: [&str; 11] = [
     "session_days",
+    "check_runs",
+    "check_memory_gb",
     "needs_you",
     "sent_back",
     "changes_requested",
