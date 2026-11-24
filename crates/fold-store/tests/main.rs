@@ -39,6 +39,7 @@ mod reviews_schema;
 mod revision_reads;
 mod revisions;
 mod schema;
+mod start_queue_schema;
 mod store;
 mod store_rules;
 mod task_reports_schema;

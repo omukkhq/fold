@@ -17,7 +17,7 @@ pub mod workspaces;
 
 // Every domain submodule is also reachable at the crate root, so callers outside the crate name it without its domain.
 pub use agents::{
-    accounts, carry, cost, presence, push, roles, transcript, turn_errors, turn_waits,
+    accounts, carry, cost, presence, push, roles, start_queue, transcript, turn_errors, turn_waits,
     worker_folders,
 };
 pub use tasks::{claims, container, dag, readiness, requests, status};

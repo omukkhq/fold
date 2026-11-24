@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_start_queue SET ended_at = ?, outcome = 'started', worker_process_id = ?\n         WHERE id = ? AND ended_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "d04cdab6a5419a4067b38832224f6a5544c7f5d2a2fa0f9b22b59a14eb5c583b"
+}

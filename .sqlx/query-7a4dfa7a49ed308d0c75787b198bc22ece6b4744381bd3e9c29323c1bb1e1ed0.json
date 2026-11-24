@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.queued_start_id AS \"start!: i64\", t.number AS \"number!: i64\"\n           FROM worker_start_queue_tasks s\n           JOIN worker_start_queue q ON q.id = s.queued_start_id\n           JOIN tasks t ON t.id = s.task_id\n           WHERE (?1 IS NULL AND q.ended_at IS NULL) OR q.id = ?1\n           ORDER BY s.queued_start_id, s.position",
+  "describe": {
+    "columns": [
+      {
+        "name": "start!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_start_queue_tasks",
+            "name": "queued_start_id"
+          }
+        }
+      },
+      {
+        "name": "number!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "7a4dfa7a49ed308d0c75787b198bc22ece6b4744381bd3e9c29323c1bb1e1ed0"
+}

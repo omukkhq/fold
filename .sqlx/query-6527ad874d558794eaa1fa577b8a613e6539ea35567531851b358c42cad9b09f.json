@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_start_queue SET ended_at = ?, outcome = 'dropped', drop_reason = ?\n         WHERE id = ? AND ended_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "6527ad874d558794eaa1fa577b8a613e6539ea35567531851b358c42cad9b09f"
+}

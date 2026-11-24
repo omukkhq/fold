@@ -18,6 +18,7 @@ mod handoffs;
 mod pause;
 mod previous_sessions;
 mod questions;
+mod start_queue;
 mod turns;
 mod workers;
 
@@ -35,6 +36,10 @@ pub use questions::{
     AnswerRow, NewQuestion, QuestionKind, QuestionRow, asker_answered_by, close_open_questions,
     find_question, insert_answer, insert_question, insert_question_message, last_answers_by_agent,
     open_ask_of_thread, open_questions, question_by_id, question_messages, questions_of_worker,
+};
+pub use start_queue::{
+    DropReason, NewQueuedStart, QueueEnd, QueuedStartRow, drop_queued_start, insert_queued_start,
+    last_queued_starts_by_area, mark_queued_start_started, queued_start, waiting_starts,
 };
 pub use turns::{CostSlot, CostTotals, cost_groups, cost_slots, cost_totals};
 pub use workers::{
