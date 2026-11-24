@@ -1,8 +1,10 @@
 use std::ffi::OsString;
-use std::fs::Permissions;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::fs::{Metadata, Permissions};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, SystemTime};
 
 use fold_core::ProjectPaths;
 use sqlx::migrate::{MigrateError, Migrator};
@@ -10,7 +12,7 @@ use sqlx::sqlite::{
     SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePool, SqlitePoolOptions,
     SqliteSynchronous,
 };
-use sqlx::{Sqlite, Transaction};
+use sqlx::{Connection, Sqlite, Transaction};
 
 use crate::error::StoreError;
 
@@ -24,6 +26,115 @@ const OPEN_WAIT: Duration = Duration::from_secs(60);
 const BUSY_RETRY: Duration = Duration::from_millis(10);
 const BUSY_RETRY_MAX: Duration = Duration::from_millis(250);
 const SQLITE_BUSY: i32 = 5;
+/// The sqlx defaults, named so a test can shorten them and see a pool open a new connection.
+const POOLS: PoolTimeouts = PoolTimeouts {
+    idle_timeout: Duration::from_secs(10 * 60),
+    acquire_timeout: Duration::from_secs(30),
+};
+
+#[derive(Debug, Clone, Copy)]
+struct PoolTimeouts {
+    idle_timeout: Duration,
+    acquire_timeout: Duration,
+}
+
+/// What tells one file from another at the same path. The inode number alone is not enough: once the store holds no connection, a new file at the path can get the freed number, so the birth time is compared too where the file system records it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileId {
+    device: u64,
+    inode: u64,
+    born: Option<SystemTime>,
+}
+
+impl FileId {
+    fn of(metadata: &Metadata) -> FileId {
+        FileId {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            born: metadata.created().ok(),
+        }
+    }
+}
+
+/// The database file a store opened. The pools open every connection by path, so a connection opened after the file was deleted or replaced would reach another database; each new connection and each write checks the file first. Once a check fails the store stays refused.
+#[derive(Debug)]
+struct FileIdentity {
+    path: PathBuf,
+    database: &'static str,
+    id: FileId,
+    replaced: AtomicBool,
+}
+
+impl FileIdentity {
+    async fn take(path: &Path, database: &'static str) -> Result<FileIdentity, StoreError> {
+        let metadata = tokio::fs::metadata(path).await?;
+        Ok(FileIdentity {
+            path: path.to_owned(),
+            database,
+            id: FileId::of(&metadata),
+            replaced: AtomicBool::new(false),
+        })
+    }
+
+    async fn check(&self) -> Result<(), StoreError> {
+        if self.replaced.load(Ordering::Acquire) {
+            return Err(self.replaced_error());
+        }
+        match tokio::fs::metadata(&self.path).await {
+            Ok(metadata) if FileId::of(&metadata) == self.id => Ok(()),
+            Ok(_) => Err(self.mark_replaced()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(self.mark_replaced()),
+            Err(error) => Err(StoreError::Io(error)),
+        }
+    }
+
+    fn mark_replaced(&self) -> StoreError {
+        if !self.replaced.swap(true, Ordering::AcqRel) {
+            tracing::error!(
+                database = self.database,
+                "the database file was deleted or replaced while the store was open; the store refuses every new connection and write"
+            );
+        }
+        self.replaced_error()
+    }
+
+    fn replaced_error(&self) -> StoreError {
+        StoreError::FileReplaced {
+            database: self.database,
+        }
+    }
+
+    /// A pool whose connection hook failed the check gives up only at its acquire timeout, with `PoolTimedOut`; this names the cause.
+    fn pool_error(&self, error: sqlx::Error) -> StoreError {
+        if self.replaced.load(Ordering::Acquire) {
+            self.replaced_error()
+        } else {
+            StoreError::Database(error)
+        }
+    }
+}
+
+/// Pool options whose every new connection checks the file before the pool hands it out.
+fn guarded_pool(
+    identity: &Arc<FileIdentity>,
+    max_connections: u32,
+    timeouts: PoolTimeouts,
+) -> SqlitePoolOptions {
+    let identity = Arc::clone(identity);
+    SqlitePoolOptions::new()
+        .max_connections(max_connections)
+        .idle_timeout(timeouts.idle_timeout)
+        .acquire_timeout(timeouts.acquire_timeout)
+        .after_connect(move |_, _| {
+            let identity = Arc::clone(&identity);
+            Box::pin(async move {
+                identity
+                    .check()
+                    .await
+                    .map_err(|error| sqlx::Error::Io(std::io::Error::other(error)))
+            })
+        })
+}
 
 /// The registry holds every human's name and the hashes of the web tokens, sessions and sign-in links, so only the host's user may open it or list its folder. SQLite gives the `-wal` and `-shm` files the mode of the database file when it creates them; ones left from before get it here.
 async fn restrict_registry(path: &Path) -> Result<(), StoreError> {
@@ -85,6 +196,7 @@ fn suffixed(path: &Path, suffix: &str) -> PathBuf {
 pub struct Store {
     writer: SqlitePool,
     readers: SqlitePool,
+    identity: Arc<FileIdentity>,
 }
 
 /// The one open write transaction. Commands and `events::append` take it by `&mut`; it is begun with `BEGIN IMMEDIATE` so the writer lock is held from the first statement.
@@ -108,6 +220,28 @@ impl Store {
             "project",
             OPEN_WAIT,
             BUSY_TIMEOUT,
+            POOLS,
+        )
+        .await
+    }
+
+    /// `open_project` with a chosen idle timeout and acquire timeout, so a test sees the pools drop their connections and open new ones in well under a second.
+    #[cfg(any(test, feature = "testing"))]
+    pub async fn open_project_reconnecting(
+        paths: &ProjectPaths,
+        idle_timeout: Duration,
+        acquire_timeout: Duration,
+    ) -> Result<Store, StoreError> {
+        Self::open(
+            &paths.db(),
+            &PROJECT_MIGRATIONS,
+            "project",
+            OPEN_WAIT,
+            BUSY_TIMEOUT,
+            PoolTimeouts {
+                idle_timeout,
+                acquire_timeout,
+            },
         )
         .await
     }
@@ -121,6 +255,7 @@ impl Store {
             "registry",
             OPEN_WAIT,
             BUSY_TIMEOUT,
+            POOLS,
         )
         .await
     }
@@ -133,7 +268,15 @@ impl Store {
         busy_timeout: Duration,
     ) -> Result<Store, StoreError> {
         restrict_registry(path).await?;
-        Self::open(path, &REGISTRY_MIGRATIONS, "registry", wait, busy_timeout).await
+        Self::open(
+            path,
+            &REGISTRY_MIGRATIONS,
+            "registry",
+            wait,
+            busy_timeout,
+            POOLS,
+        )
+        .await
     }
 
     /// One read-only connection to the host registry, for a command that only reports what it holds. It never creates the file, never migrates and gives up on a lock after `busy_timeout`, so it never writes and never waits long. A registry whose applied migrations are not exactly this build's is refused, because its tables may not match the queries.
@@ -162,6 +305,7 @@ impl Store {
         database: &'static str,
         wait: Duration,
         busy_timeout: Duration,
+        timeouts: PoolTimeouts,
     ) -> Result<Store, StoreError> {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -169,8 +313,8 @@ impl Store {
         let started = tokio::time::Instant::now();
         let mut retry = BUSY_RETRY;
         let mut logged = false;
-        let writer = loop {
-            match connect_and_migrate(path, migrations, busy_timeout).await {
+        let (writer, identity) = loop {
+            match connect_and_migrate(path, migrations, database, busy_timeout, timeouts).await {
                 Err(error) if is_busy(&error) => {
                     let waited = started.elapsed();
                     if waited >= wait {
@@ -190,18 +334,27 @@ impl Store {
                 other => break other?,
             }
         };
-        let readers = SqlitePoolOptions::new()
-            .max_connections(READ_CONNECTIONS)
+        let readers = guarded_pool(&identity, READ_CONNECTIONS, timeouts)
             .connect_lazy_with(connect_options(path, busy_timeout).read_only(true));
-        Ok(Store { writer, readers })
+        Ok(Store {
+            writer,
+            readers,
+            identity,
+        })
     }
 
-    /// The read pool. Its connections are opened read-only, so a write through them fails.
+    /// The open connections of the writer and of the read pool, so a test can wait until the pools dropped theirs.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn connections(&self) -> (u32, u32) {
+        (self.writer.size(), self.readers.size())
+    }
+
+    /// The read pool. Its connections are opened read-only, so a write through them fails. A connection it opens after the database file was deleted or replaced fails the file check, so a read then fails with `PoolTimedOut` at the acquire timeout instead of reading the other file.
     pub fn read(&self) -> &SqlitePool {
         &self.readers
     }
 
-    /// Runs `body` on the writer connection inside `BEGIN IMMEDIATE`. It commits when `body` returns `Ok` and rolls back when it returns `Err`, panics or is dropped. The writer pool has one connection, so writes never interleave.
+    /// Runs `body` on the writer connection inside `BEGIN IMMEDIATE`. It commits when `body` returns `Ok` and rolls back when it returns `Err`, panics or is dropped. The writer pool has one connection, so writes never interleave. A closed store refuses with `PoolClosed`; an open one refuses with `FileReplaced` once the database file it opened is no longer at its path.
     pub async fn write<T, E>(
         &self,
         body: impl AsyncFnOnce(&mut WriteTx) -> Result<T, E>,
@@ -209,11 +362,15 @@ impl Store {
     where
         E: From<StoreError>,
     {
+        if self.writer.is_closed() {
+            return Err(StoreError::Database(sqlx::Error::PoolClosed).into());
+        }
+        self.identity.check().await?;
         let tx = self
             .writer
             .begin_with("BEGIN IMMEDIATE")
             .await
-            .map_err(StoreError::from)?;
+            .map_err(|error| self.identity.pool_error(error))?;
         let mut tx = WriteTx { tx };
         match body(&mut tx).await {
             Ok(value) => {
@@ -228,33 +385,48 @@ impl Store {
         }
     }
 
-    /// Checkpoints the WAL and closes both pools.
+    /// Checkpoints the WAL and closes both pools. A store whose file was deleted or replaced closes them without the checkpoint, which would run on the other file, and returns `FileReplaced`.
     pub async fn close(&self) -> Result<(), StoreError> {
         self.readers.close().await;
+        if let Err(error) = self.identity.check().await {
+            self.writer.close().await;
+            return Err(error);
+        }
         let checkpoint = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
             .execute(&self.writer)
-            .await;
+            .await
+            .map_err(|error| self.identity.pool_error(error));
         self.writer.close().await;
         checkpoint?;
         Ok(())
     }
 }
 
-/// One attempt to open the writer and apply the migrations. Switching a new file to WAL takes the exclusive lock without waiting on the busy timeout, so it fails at once with `SQLITE_BUSY` while another process holds a lock; the migration's `BEGIN IMMEDIATE` waits up to the busy timeout first.
+/// One attempt to open the writer and apply the migrations. A first connection creates the file when it is absent and switches it to WAL, which the file keeps; the pool's own connections neither create the file nor set the journal mode, so a connection the pool opens later writes nothing before its file check. Switching a new file to WAL takes the exclusive lock without waiting on the busy timeout, so it fails at once with `SQLITE_BUSY` while another process holds a lock; the migration's `BEGIN IMMEDIATE` waits up to the busy timeout first.
 async fn connect_and_migrate(
     path: &Path,
     migrations: &Migrator,
+    database: &'static str,
     busy_timeout: Duration,
-) -> Result<SqlitePool, StoreError> {
-    let writer = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(connect_options(path, busy_timeout).create_if_missing(true))
-        .await?;
+    timeouts: PoolTimeouts,
+) -> Result<(SqlitePool, Arc<FileIdentity>), StoreError> {
+    let first = SqliteConnection::connect_with(
+        &connect_options(path, busy_timeout)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal),
+    )
+    .await?;
+    first.close().await?;
+    let identity = Arc::new(FileIdentity::take(path, database).await?);
+    let writer = guarded_pool(&identity, 1, timeouts)
+        .connect_with(connect_options(path, busy_timeout))
+        .await
+        .map_err(|error| identity.pool_error(error))?;
     if let Err(error) = migrate(&writer, migrations).await {
         writer.close().await;
         return Err(error);
     }
-    Ok(writer)
+    Ok((writer, identity))
 }
 
 fn is_busy(error: &StoreError) -> bool {
@@ -312,7 +484,6 @@ fn connect_options_read_only(path: &Path, busy_timeout: Duration) -> SqliteConne
 fn connect_options(path: &Path, busy_timeout: Duration) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(path)
-        .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Full)
         .foreign_keys(true)
         .busy_timeout(busy_timeout)
@@ -338,6 +509,78 @@ mod tests {
             return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
         }
         set_mode(path, mode)
+    }
+
+    async fn new_database(path: &Path) {
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true);
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        sqlx::query("CREATE TABLE marker (n INTEGER NOT NULL)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        conn.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_connection_to_a_replaced_file_fails_its_check_and_changes_nothing_in_the_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("fold.db");
+        new_database(&path).await;
+        let identity = Arc::new(FileIdentity::take(&path, "project").await.unwrap());
+        std::fs::remove_file(&path).unwrap();
+        new_database(&path).await;
+
+        let timeouts = PoolTimeouts {
+            idle_timeout: Duration::from_millis(50),
+            acquire_timeout: Duration::from_millis(300),
+        };
+        let pool = guarded_pool(&identity, 1, timeouts)
+            .connect_lazy_with(connect_options(&path, BUSY_TIMEOUT));
+        let error = sqlx::query("INSERT INTO marker VALUES (1)")
+            .execute(&pool)
+            .await
+            .unwrap_err();
+        assert!(identity.replaced.load(Ordering::Acquire));
+        let error = identity.pool_error(error);
+        assert!(
+            matches!(
+                error,
+                StoreError::FileReplaced {
+                    database: "project"
+                }
+            ),
+            "{error:?}"
+        );
+        pool.close().await;
+
+        let options = SqliteConnectOptions::new().filename(&path);
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM marker")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(rows, 0);
+        let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(mode, "delete");
+        conn.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_failed_acquire_of_an_intact_file_keeps_its_database_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("fold.db");
+        new_database(&path).await;
+        let identity = FileIdentity::take(&path, "project").await.unwrap();
+        identity.check().await.unwrap();
+        assert!(matches!(
+            identity.pool_error(sqlx::Error::PoolTimedOut),
+            StoreError::Database(sqlx::Error::PoolTimedOut)
+        ));
     }
 
     #[test]

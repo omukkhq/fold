@@ -32,6 +32,11 @@ pub enum StoreError {
     RevisionNotFound(RevisionId),
     #[error("main is no longer at {expected}")]
     HeadMoved { expected: RevisionId },
+    /// The database file the store opened was deleted, or another file took its path, as when a project's `.fold/` is made again while the old store still closes. The store refuses so that nothing reaches the other file.
+    #[error(
+        "the {database} database file was deleted or replaced while fold had it open; fold writes nothing into the new file"
+    )]
+    FileReplaced { database: &'static str },
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
     /// The registry file keeps a mode that may let other users read it, so fold does not open it.
@@ -64,6 +69,7 @@ impl StoreError {
         match self {
             StoreError::SchemaTooNew { .. } => Some(codes::SCHEMA_TOO_NEW),
             StoreError::Locked { .. } => Some(codes::DATABASE_LOCKED),
+            StoreError::FileReplaced { .. } => Some(codes::DATABASE_REPLACED),
             StoreError::RevisionNotFound(_) => Some(codes::REVISION_NOT_FOUND),
             StoreError::HeadMoved { .. } => Some(codes::HEAD_MOVED),
             _ => None,

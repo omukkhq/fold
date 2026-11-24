@@ -31,6 +31,7 @@ mod notify_outbox;
 mod proposals_schema;
 mod registry;
 mod removal;
+mod replaced_file;
 mod requests_schema;
 mod review_batch_release;
 mod review_batches_schema;

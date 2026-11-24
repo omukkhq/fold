@@ -206,7 +206,19 @@ async fn a_request_removes_a_project_whose_fold_was_deleted_and_its_handle_write
             .await
             .is_err()
     );
-    assert!(Running::claim(&handle).await.is_err());
+    let refused = handle
+        .tasks
+        .create_task(
+            &frontend(),
+            CreateTask {
+                title: TaskTitle::parse("task").unwrap(),
+                description: TaskDescription::new("body"),
+                labels: Vec::new(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Some("database_replaced"));
     assert_eq!(QuietCheckpoints::default().run(&handle).await, 0);
     assert!(project_service::gc(&handle, false).await.is_err());
     running.clock.advance(Duration::from_secs(600)).unwrap();
