@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use regex::Regex;
@@ -110,7 +111,7 @@ impl Outcome {
     }
 }
 
-/// One `[[check]]` of the file. `files` limits the check to trees whose change touches a matching path; `required = false` shows the result and never blocks; `timeout` replaces [`CHECK_TIMEOUT`] for this check.
+/// One `[[check]]` of the file. `files` limits the check to trees whose change touches a matching path; `required = false` shows the result and never blocks; `timeout` replaces [`CHECK_TIMEOUT`] for this check; `max_parallel` is the most runs of the project that run this check's command at the same time.
 #[derive(Debug, Clone)]
 pub struct Check {
     pub name: String,
@@ -120,6 +121,7 @@ pub struct Check {
     /// The stages the check runs in, in the order the file lists them; never empty.
     pub stages: Vec<Stage>,
     pub timeout: Option<Duration>,
+    pub max_parallel: Option<NonZeroUsize>,
 }
 
 /// One `[[serial]]` lane of the file: the proposals whose change touches a path that one of `paths` matches integrate one at a time. A glob matches the whole path: `*` and `?` stay inside one path segment, and `**` spans segments, so `migrations/**` matches every file under `migrations/` and `**/alembic/versions/*.py` matches that folder at any depth.
@@ -195,6 +197,7 @@ struct RawCheck {
     required: Option<bool>,
     stage: Option<RawStage>,
     timeout: Option<toml::Spanned<String>>,
+    max_parallel: Option<toml::Spanned<toml::Value>>,
 }
 
 impl ChecksFile {
@@ -245,6 +248,22 @@ impl ChecksFile {
                     })
                 })
                 .transpose()?;
+            let max_parallel = check
+                .max_parallel
+                .map(|value| {
+                    value
+                        .get_ref()
+                        .as_integer()
+                        .and_then(|number| usize::try_from(number).ok())
+                        .and_then(NonZeroUsize::new)
+                        .ok_or_else(|| {
+                            invalid(format!(
+                                "line {}: {at} ({name}) max_parallel is a whole number of 1 or more, such as 1",
+                                line_of(text, value.span().start)
+                            ))
+                        })
+                })
+                .transpose()?;
             checks.push(Check {
                 name,
                 run,
@@ -252,6 +271,7 @@ impl ChecksFile {
                 required: check.required.unwrap_or(true),
                 stages,
                 timeout,
+                max_parallel,
             });
         }
         let lanes = parse_lanes(raw.serial)?;
@@ -675,6 +695,30 @@ stage = "integration"
         let number = ChecksFile::parse("[[check]]\nname = \"e2e\"\nrun = \"x\"\ntimeout = 600\n")
             .unwrap_err();
         assert!(number.message().contains("line 4"), "{}", number.message());
+    }
+
+    #[test]
+    fn max_parallel_is_a_whole_number_of_one_or_more() {
+        let file = ChecksFile::parse(
+            "[[check]]\nname = \"py\"\nrun = \"x\"\nmax_parallel = 2\n[[check]]\nname = \"t\"\nrun = \"y\"\n",
+        )
+        .unwrap();
+        assert_eq!(file.checks[0].max_parallel, NonZeroUsize::new(2));
+        assert_eq!(file.checks[1].max_parallel, None);
+        for bad in ["0", "-1", "\"2\"", "1.5", "true"] {
+            let error = ChecksFile::parse(&format!(
+                "[[check]]\nname = \"py\"\nrun = \"x\"\nmax_parallel = {bad}\n"
+            ))
+            .unwrap_err();
+            assert_eq!(error.code(), codes::CHECKS_FILE_INVALID, "{bad}");
+            assert!(
+                error
+                    .message()
+                    .contains("line 4: check 1 (py) max_parallel"),
+                "{bad}: {}",
+                error.message()
+            );
+        }
     }
 
     #[test]

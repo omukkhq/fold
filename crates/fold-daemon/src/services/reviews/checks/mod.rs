@@ -32,7 +32,8 @@ pub(crate) use integration::{Integrating, IntegrationChecks, PassedRun, fold_fai
 pub(crate) use runner::HeldRequest;
 pub use runner::{
     CheckPermits, CheckRunner, CheckSettings, CommandResult, CommandSpec, LOG_LIMIT, MEMORY_TICK,
-    RunLimits, commands, run_commands, run_commands_for,
+    RunGate, RunLimits, commands, run_commands, run_commands_for, run_gated_commands,
+    run_gated_commands_for,
 };
 
 /// The most lines of a failed command's log a result message carries.
@@ -49,6 +50,8 @@ pub struct CheckRunView {
     pub results: Vec<CheckResultRow>,
     /// Since when the running run holds its permit and waits for free memory before its commands start.
     pub waiting_for_memory: Option<Timestamp>,
+    /// The check whose `max_parallel` the running run waits for before that check's command starts, and since when.
+    pub waiting_for_check: Option<(String, Timestamp)>,
 }
 
 /// What a request for checks started.
@@ -171,10 +174,12 @@ impl ReviewService {
         let results = checks::list_results(&mut *read, run, logs).await?;
         read.commit().await.map_err(StoreError::from)?;
         let waiting_for_memory = self.checks.waiting_for_memory(run);
+        let waiting_for_check = self.checks.waiting_for_check(run);
         Ok(CheckRunView {
             run: row,
             results,
             waiting_for_memory,
+            waiting_for_check,
         })
     }
 
@@ -364,7 +369,8 @@ impl ReviewService {
         let owner = self
             .checks
             .owner(run.worker.as_ref().map(WorkerName::agent));
-        let results = run_commands_for(
+        let results = run_gated_commands_for(
+            Some(&self.checks.gate(run.id)),
             &owner,
             &dir,
             job.specs.clone(),
@@ -549,10 +555,12 @@ impl ReviewService {
         for run in runs {
             let results = checks::list_results(&mut *conn, run.id, false).await?;
             let waiting_for_memory = runner.waiting_for_memory(run.id);
+            let waiting_for_check = runner.waiting_for_check(run.id);
             views.push(CheckRunView {
                 run,
                 results,
                 waiting_for_memory,
+                waiting_for_check,
             });
         }
         Ok(views)

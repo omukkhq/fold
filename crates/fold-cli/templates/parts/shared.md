@@ -1,6 +1,6 @@
 ## Reference
 
-`REFERENCE.md` of the `fold` skill, `.claude/skills/fold/REFERENCE.md`, holds what surrounds this workflow, with exact formats and examples: `fold-checks.toml`, `.fold/config.toml` and role prompts, area profiles and the area `main`, the `Decisions` section of a task description, ignore files, the human's `fld` commands, the web app's screens and an index of the tools by purpose. A check that must run in both stages takes `stage = ["proposal", "integration"]` and keeps one name. Read its section before you write or review checks, plan config or an area profile, or tell the user what to run.
+`REFERENCE.md` of the `fold` skill, `.claude/skills/fold/REFERENCE.md`, holds what surrounds this workflow, with exact formats and examples: `fold-checks.toml`, `.fold/config.toml` and role prompts, area profiles and the area `main`, the `Decisions` section of a task description, ignore files, the human's `fld` commands, the web app's screens and an index of the tools by purpose. A check that must run in both stages takes `stage = ["proposal", "integration"]` and keeps one name. A heavy check takes `max_parallel = 1` so only one run of the project runs its command at a time, while its other checks run as before. Read its section before you write or review checks, plan config or an area profile, or tell the user what to run.
 
 ## Rights
 

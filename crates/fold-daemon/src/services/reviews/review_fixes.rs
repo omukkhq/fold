@@ -19,7 +19,7 @@ use serde_json::json;
 
 use super::checks::{
     FixJob, GateDecision, GateJob, NewProposalRun, Verdict, Waiting, end_run_in_tx,
-    insert_proposal_run, is_refusal, run_commands_for, tell_requester,
+    insert_proposal_run, is_refusal, run_gated_commands_for, tell_requester,
 };
 use super::human_edits::{busy, current_version, idle_checks};
 use super::proposals::{ProposalDetail, mark_checks_change, require_open, usable_workspace};
@@ -280,7 +280,8 @@ impl ReviewService {
         let owner = self
             .checks
             .owner(run.worker.as_ref().map(fold_core::WorkerName::agent));
-        let results = run_commands_for(
+        let results = run_gated_commands_for(
+            Some(&self.checks.gate(run.id)),
             &owner,
             &dir,
             job.specs.clone(),

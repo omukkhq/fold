@@ -144,9 +144,15 @@ impl ReviewService {
             .await
         {
             Ok(dir) => {
-                let results = runner::run_commands(&dir, specs, self.checks.limits(), &*self.clock)
-                    .instrument(tracing::info_span!("check_run", run = %run.id))
-                    .await;
+                let results = runner::run_gated_commands(
+                    &self.checks.gate(run.id),
+                    &dir,
+                    specs,
+                    self.checks.limits(),
+                    &*self.clock,
+                )
+                .instrument(tracing::info_span!("check_run", run = %run.id))
+                .await;
                 let verdict = if results.iter().any(|result| result.fault) {
                     tracing::warn!(run = %run.id, "a command of the integration checks could not start or be waited for");
                     fault

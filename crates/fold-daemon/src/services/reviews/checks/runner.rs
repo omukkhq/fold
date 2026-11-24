@@ -162,8 +162,22 @@ pub struct CheckRunner {
     dir_work: Arc<tokio::sync::RwLock<()>>,
     queue: Arc<Queue>,
     held: Arc<Mutex<Vec<HeldRequest>>>,
-    /// The runs of the project that hold their permit and wait for free memory, with the time each began to wait.
-    memory_waits: Arc<Mutex<HashMap<CheckRunId, Timestamp>>>,
+    /// The runs of the project that wait, with what each waits for and the time it began to wait.
+    memory_waits: Waits,
+    /// The permits of each check with a `max_parallel`, by check name, with the limit they were made for.
+    check_limits: CheckLimits,
+}
+
+/// The permits of each check with a `max_parallel`, by check name, with the limit they were made for.
+type CheckLimits = Arc<Mutex<HashMap<String, (NonZeroUsize, Arc<Semaphore>)>>>;
+
+type Waits = Arc<Mutex<HashMap<CheckRunId, (Waiting, Timestamp)>>>;
+
+/// What a running run waits for. A run waits for memory before its first command and for a check's limit only before that check, so it never waits for both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Waiting {
+    Memory,
+    Check(String),
 }
 
 /// A queued integration that waits for a valid checks file on main. Its stored request keeps no end, so a daemon start serves it again; while the daemon runs, the next revision of main does.
@@ -233,6 +247,7 @@ impl CheckRunner {
             queue: Arc::default(),
             held: Arc::default(),
             memory_waits: Arc::default(),
+            check_limits: Arc::default(),
         }
     }
 
@@ -297,7 +312,7 @@ impl CheckRunner {
                     floor_mib = memory::memory_floor(info.total, gate.floor) >> 20,
                     "the check run waits for free memory before its commands start"
                 );
-                lock(&self.memory_waits).insert(run, clock.now());
+                lock(&self.memory_waits).insert(run, (Waiting::Memory, clock.now()));
                 wait = Some(MemoryWait {
                     waits: Arc::clone(&self.memory_waits),
                     run,
@@ -309,7 +324,27 @@ impl CheckRunner {
 
     /// Since when `run` holds its permit and waits for free memory; `None` when it does not wait.
     pub fn waiting_for_memory(&self, run: CheckRunId) -> Option<Timestamp> {
-        lock(&self.memory_waits).get(&run).copied()
+        match lock(&self.memory_waits).get(&run) {
+            Some((Waiting::Memory, since)) => Some(*since),
+            _ => None,
+        }
+    }
+
+    /// The check whose `max_parallel` `run` waits for before its command starts, and since when; `None` when it does not wait.
+    pub fn waiting_for_check(&self, run: CheckRunId) -> Option<(String, Timestamp)> {
+        match lock(&self.memory_waits).get(&run) {
+            Some((Waiting::Check(name), since)) => Some((name.clone(), *since)),
+            _ => None,
+        }
+    }
+
+    /// The per-check limits of the project as `run` meets them.
+    pub(crate) fn gate(&self, run: CheckRunId) -> RunGate {
+        RunGate {
+            run,
+            limits: Arc::clone(&self.check_limits),
+            waits: Arc::clone(&self.memory_waits),
+        }
     }
 
     /// A place at the end of the project's integration queue, taken at once so the order is the order of the calls.
@@ -371,10 +406,49 @@ impl CheckRunner {
     }
 }
 
-/// A run's place among the runs that wait for memory, left when the wait ends or the run is aborted.
+/// A run's place among the runs that wait, left when the wait ends or the run is aborted.
 struct MemoryWait {
-    waits: Arc<Mutex<HashMap<CheckRunId, Timestamp>>>,
+    waits: Waits,
     run: CheckRunId,
+}
+
+/// The per-check limits of a project as one run meets them: before the command of a check with `max_parallel`, the run takes one of the check's permits and holds it until the command ends.
+#[derive(Debug, Clone)]
+pub struct RunGate {
+    run: CheckRunId,
+    limits: CheckLimits,
+    waits: Waits,
+}
+
+impl RunGate {
+    /// The permit of `check` under `max`, once fewer than `max` runs of the project run its command. While it waits, the run shows as waiting for the check. A changed `max` starts a new set of permits for the check; the runs that hold the old ones end as they are.
+    async fn enter(
+        &self,
+        check: &str,
+        max: NonZeroUsize,
+        clock: &dyn Clock,
+    ) -> Option<OwnedSemaphorePermit> {
+        let permits = {
+            let mut limits = lock(&self.limits);
+            let entry = limits
+                .entry(check.to_owned())
+                .or_insert_with(|| (max, Arc::new(Semaphore::new(max.get()))));
+            if entry.0 != max {
+                *entry = (max, Arc::new(Semaphore::new(max.get())));
+            }
+            Arc::clone(&entry.1)
+        };
+        if let Ok(permit) = Arc::clone(&permits).try_acquire_owned() {
+            return Some(permit);
+        }
+        tracing::info!(run = %self.run, check, max = max.get(), "the check run waits for the max_parallel of a check");
+        lock(&self.waits).insert(self.run, (Waiting::Check(check.to_owned()), clock.now()));
+        let _wait = MemoryWait {
+            waits: Arc::clone(&self.waits),
+            run: self.run,
+        };
+        permits.acquire_owned().await.ok()
+    }
 }
 
 impl Drop for MemoryWait {
@@ -393,6 +467,8 @@ pub struct CommandSpec {
     pub runs: bool,
     /// The check's own `timeout`; `None` takes the runner's.
     pub timeout: Option<Duration>,
+    /// The most runs of the project that run this check's command at once; `None` is no limit.
+    pub max_parallel: Option<NonZeroUsize>,
 }
 
 /// What one command did.
@@ -428,6 +504,7 @@ pub fn commands(file: &ChecksFile, plan: &[Planned<'_>]) -> Vec<CommandSpec> {
         required: true,
         runs: true,
         timeout: None,
+        max_parallel: None,
     });
     let checks = plan.iter().map(|planned| CommandSpec {
         check: Some(planned.check.name.clone()),
@@ -435,6 +512,7 @@ pub fn commands(file: &ChecksFile, plan: &[Planned<'_>]) -> Vec<CommandSpec> {
         required: planned.check.required,
         runs: planned.runs,
         timeout: planned.check.timeout,
+        max_parallel: planned.check.max_parallel,
     });
     setup.chain(checks).collect()
 }
@@ -453,8 +531,35 @@ pub async fn run_commands(
     run_commands_for(&nobody, dir, specs, limits, clock).await
 }
 
+/// [`run_commands`] of `gate`'s run: a check with `max_parallel` waits for its limit before its command.
+pub async fn run_gated_commands(
+    gate: &RunGate,
+    dir: &Path,
+    specs: Vec<CommandSpec>,
+    limits: RunLimits,
+    clock: &dyn Clock,
+) -> Vec<CommandResult> {
+    let nobody = PeerWorker {
+        project: String::new(),
+        agent: None,
+    };
+    run_gated_commands_for(Some(gate), &nobody, dir, specs, limits, clock).await
+}
+
 /// Runs `specs` one after another in `dir`. A skipped check is not started; after a failed setup no check is started. Every command is a `sh -c` of its own in a process group of its own, registered for the peer checks while it runs: a process under it that calls fold acts as `owner` and never as a human.
 pub async fn run_commands_for(
+    owner: &PeerWorker,
+    dir: &Path,
+    specs: Vec<CommandSpec>,
+    limits: RunLimits,
+    clock: &dyn Clock,
+) -> Vec<CommandResult> {
+    run_gated_commands_for(None, owner, dir, specs, limits, clock).await
+}
+
+/// [`run_commands_for`] under `gate`, when the run has one: a check with `max_parallel` waits for its limit before its command, and the wait counts in neither its duration nor its timeout.
+pub async fn run_gated_commands_for(
+    gate: Option<&RunGate>,
     owner: &PeerWorker,
     dir: &Path,
     specs: Vec<CommandSpec>,
@@ -483,12 +588,17 @@ pub async fn run_commands_for(
             results.push(skipped(Outcome::Skipped));
             continue;
         }
+        let limit = match (gate, &spec.check, spec.max_parallel) {
+            (Some(gate), Some(check), Some(max)) => gate.enter(check, max, clock).await,
+            _ => None,
+        };
         let started = clock.now();
         let own = RunLimits {
             timeout: spec.timeout.unwrap_or(limits.timeout),
             ..limits
         };
         let ran = run_command(dir.to_path_buf(), &spec.run, own, owner).await;
+        drop(limit);
         let duration_ms = clock
             .now()
             .as_millis()
@@ -752,6 +862,7 @@ mod tests {
             required: true,
             runs: true,
             timeout: None,
+            max_parallel: None,
         }
     }
 
@@ -1125,6 +1236,79 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(runner.waiting_for_memory(run), None);
+    }
+
+    #[tokio::test]
+    async fn a_check_with_max_parallel_runs_in_one_run_at_a_time_and_others_in_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = CheckRunner::new(CheckPermits::new(2));
+        let heavy = CommandSpec {
+            max_parallel: NonZeroUsize::new(1),
+            ..spec(
+                "heavy",
+                "mkdir lock || echo overlap >> overlaps; until [ -e go ]; do sleep 0.02; done; rmdir lock",
+            )
+        };
+        let runs = [("a", "b", 1), ("b", "a", 2)].map(|(own, other, number)| {
+            let light = spec(
+                "light",
+                &format!("touch light-{own}; until [ -e light-{other} ]; do sleep 0.02; done"),
+            );
+            let gate = runner.gate(CheckRunId::from_number(number).unwrap());
+            let specs = vec![light, heavy.clone()];
+            let work = dir.path().to_path_buf();
+            tokio::spawn(
+                async move { run_gated_commands(&gate, &work, specs, quick(), &clock()).await },
+            )
+        });
+        let ids = [1, 2].map(|number| CheckRunId::from_number(number).unwrap());
+        let waiting = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(found) = ids
+                    .iter()
+                    .find_map(|run| runner.waiting_for_check(*run).map(|wait| (*run, wait.0)))
+                {
+                    return found;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(waiting.1, "heavy");
+        assert_eq!(runner.waiting_for_memory(waiting.0), None);
+        std::fs::write(dir.path().join("go"), "").unwrap();
+        for run in runs {
+            let results = tokio::time::timeout(Duration::from_secs(20), run)
+                .await
+                .unwrap()
+                .unwrap();
+            let outcomes: Vec<Outcome> = results.iter().map(|result| result.outcome).collect();
+            assert_eq!(outcomes, [Outcome::Passed, Outcome::Passed]);
+        }
+        assert!(
+            !dir.path().join("overlaps").exists(),
+            "heavy ran twice at once"
+        );
+        assert!(
+            ids.iter()
+                .all(|run| runner.waiting_for_check(*run).is_none())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_changed_max_parallel_takes_new_permits() {
+        let runner = CheckRunner::new(CheckPermits::new(1));
+        let gate = runner.gate(CheckRunId::from_number(1).unwrap());
+        let one = NonZeroUsize::new(1).unwrap();
+        let held = gate.enter("heavy", one, &clock()).await;
+        assert!(held.is_some());
+        let two = NonZeroUsize::new(2).unwrap();
+        let other =
+            tokio::time::timeout(Duration::from_secs(5), gate.enter("heavy", two, &clock()))
+                .await
+                .unwrap();
+        assert!(other.is_some());
     }
 
     #[tokio::test]
