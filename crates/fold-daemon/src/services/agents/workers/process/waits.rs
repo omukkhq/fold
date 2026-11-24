@@ -245,8 +245,26 @@ impl Supervisor {
             })
             .collect();
         waiting.sort_by(|a, b| (a.1.since, &a.1.key).cmp(&(b.1.since, &b.1.key)));
-        let turns: Vec<WaitingTurn<AgentName>> =
-            waiting.iter().map(|(_, turn)| turn.clone()).collect();
+        // A re-run on its way keeps its place in its group, so the plan does not run the group's next turn beside it as a second check while its worker shows working; the loop never sends it twice.
+        let mut turns: Vec<WaitingTurn<AgentName>> = rows
+            .iter()
+            .filter(|row| row.state.is_running())
+            .filter_map(|row| {
+                let wait = row.wait.as_ref()?;
+                (lock(&self.inner.owed).sent.get(&row.agent) == Some(&wait.tried_at)).then(|| {
+                    WaitingTurn {
+                        key: row.agent.clone(),
+                        group: wait.group(),
+                        since: wait.since,
+                        tried_at: wait.tried_at,
+                        tries: wait.tries,
+                        resets_at: wait.resets_at,
+                    }
+                })
+            })
+            .collect();
+        turns.extend(waiting.iter().map(|(_, turn)| turn.clone()));
+        turns.sort_by(|a, b| (a.since, &a.key).cmp(&(b.since, &b.key)));
         let mut plan = rerun_plan(now, &turns, &[]);
         // A release runs each waiting turn of its group again once, in the plan that finds the worker idle, unless a turn reached the worker after the release, such as the own turn of a resume, which is that re-run. A release that meets a worker whose process starts, or an idle one that cannot take the turn now, stays for a later plan; one that meets nobody it is owed to ends.
         let turned = lock(&self.inner.owed).turned.clone();

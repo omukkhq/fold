@@ -329,7 +329,7 @@ async fn a_note_written_during_a_turn_refreshes_the_lead_when_the_turn_ends() {
     harness.make_main(MAIN).await;
     let started = lead(&mut harness).await;
     let note = "Mid-turn note. Next: split T-1.";
-    // A lead calls write_handoff inside a turn, so the note is stored while the row is working and the refresh waits for the turn's end.
+    // A lead calls write_handoff inside a turn, so the note is stored without a refresh of its own and the refresh waits for a turn's end.
     harness
         .handle
         .store
@@ -345,15 +345,23 @@ async fn a_note_written_during_a_turn_refreshes_the_lead_when_the_turn_ends() {
         })
         .await
         .unwrap();
-    assert_eq!(fake.runs_of(LEAD).len(), 1);
     harness.send(MAIN, &[LEAD], "Look at the page.").await;
     let fresh_runs = runs(&fake, 2, 2).await;
     let fresh = &fresh_runs[1];
     let fresh_session = fresh.flag("--session-id").unwrap().to_owned();
     assert_ne!(fresh_session, started.session_id);
     assert!(fresh.stdin[1].contains(note), "{}", fresh.stdin[1]);
-    let row = idle_after(&harness, 3).await;
-    assert_eq!(row.session_id, fresh_session);
+    // The check after the first turn can still be pending when the note is stored, so the refresh comes at the end of the first turn or of the message's turn.
+    let row = eventually(WAIT, async || {
+        let row = worker(&harness).await;
+        if row.state == WorkerState::Idle && row.session_id == fresh_session {
+            Ok(row)
+        } else {
+            Err((row.state, row.turns))
+        }
+    })
+    .await;
+    assert!(matches!(row.turns, 2 | 3), "{}", row.turns);
     let events = stored_events(&harness).await;
     let refreshed = events
         .iter()

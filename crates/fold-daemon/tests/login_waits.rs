@@ -103,9 +103,16 @@ async fn each_refused_login_waits_with_one_item_for_the_project_and_no_failed_tu
                 .await
                 .is_empty()
         );
+        // The two leads run at the same time, so their waits can come in either order.
+        let mut waiting = events_of(&harness, "worker.waiting").await;
+        waiting.sort_by_key(|event| event["agent"].to_string());
         assert_eq!(
-            events_of(&harness, "worker.waiting").await[0],
-            json!({"agent": "web-lead", "reason": "login", "limit": null})
+            waiting,
+            [
+                json!({"agent": "api-lead", "reason": "login", "limit": null}),
+                json!({"agent": "web-lead", "reason": "login", "limit": null}),
+            ],
+            "{text}"
         );
         let (_, workers) = harness
             .http(Method::GET, "/api/v1/projects/demo/workers", None, "ana")
@@ -569,7 +576,21 @@ async fn a_resume_on_a_refused_account_gives_each_waiting_worker_one_turn() {
         if seen > owed_before && one_more_refused(&harness, &agents, &before).await {
             Ok(())
         } else {
-            Err(seen)
+            let mut rows = Vec::new();
+            for agent in agents {
+                let row = worker(&harness, agent).await;
+                rows.push((
+                    row.state,
+                    row.wait.map(|wait| (wait.tries, wait.since, wait.tried_at)),
+                ));
+            }
+            Err((
+                seen,
+                owed_before,
+                before.clone(),
+                rows,
+                harness.project.now(),
+            ))
         }
     })
     .await;

@@ -263,7 +263,11 @@ async fn a_new_session_records_the_fingerprint_without_a_note() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{restarted}");
-    assert_eq!(restarted["state"], "starting", "{restarted}");
+    // The fake process can reach its first turn before the response is built.
+    assert!(
+        restarted["state"] == "starting" || restarted["state"] == "working",
+        "{restarted}"
+    );
     assert_eq!(
         restarted["older_fold"], false,
         "a starting session records its fingerprint once its process is in place"
