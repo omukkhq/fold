@@ -363,7 +363,7 @@ pub async fn claim_waits(
                   (c.kind = 'implementation' AND EXISTS (
                        SELECT 1 FROM proposals p
                        WHERE p.task_id = c.task_id AND p.state = 'open'
-                         AND NOT p.conflicted AND NOT p.checks_failed
+                         AND NOT p.checks_failed
                          AND NOT (
                              (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) = 'request_changes'
                              AND EXISTS (SELECT 1 FROM reviews r

@@ -49,6 +49,7 @@ pub use checkouts::{CheckoutTarget, ListedCheckout, ReviewCheckout};
 pub use claims::ReviewClaimView;
 pub(crate) use claims::{Assignment, assign_reviews_in_tx};
 pub use comments::{CommentInput, CommentLocation, CommentView};
+pub(crate) use conflicts::{NoReviewer, conflict_notice_in_tx, reviewer_conflict_turn};
 pub use human_edits::HumanEdit;
 pub use human_review::{AwaitingHumanReview, awaiting_human_review, awaiting_human_review_in};
 pub(crate) use integrate::queued_actor;

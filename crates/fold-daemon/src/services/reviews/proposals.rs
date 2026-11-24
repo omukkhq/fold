@@ -58,7 +58,8 @@ impl Turn {
             return None;
         }
         Some(
-            match ProposalFact::open(row.changes_requested, row.conflicted || row.checks_failed) {
+            // A conflict at integration waits for the reviewer that fixes it, not the author.
+            match ProposalFact::open(row.changes_requested, row.checks_failed) {
                 ProposalFact::WithAuthor => Turn::WithAuthor,
                 ProposalFact::WithReviewer | ProposalFact::None => Turn::WithReviewer,
             },

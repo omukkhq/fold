@@ -107,7 +107,7 @@ pub fn changes_requested(reviews: &[ReviewFact]) -> bool {
     latest_verdict(reviews).is_some_and(|review| review.verdict == Verdict::RequestChanges)
 }
 
-/// Where a proposal stands for the pill on a card and the proposal block of a task. A conflict comes first, because it puts the proposal with its author whatever the verdicts say.
+/// Where a proposal stands for the pill on a card and the proposal block of a task. A conflict comes first, because the version cannot integrate until a new version answers it, whatever the verdicts say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProposalStanding {
     Open,

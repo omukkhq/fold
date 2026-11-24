@@ -147,6 +147,51 @@ pub(crate) async fn tell_lead_in_tx(
     Ok(Some(lead))
 }
 
+/// Tells the agent that decides who reviews `proposal` with `text` from fold about its conflict that waits for a reviewer: the main agent for a task of the area main (`main_task`), whose reviews only it or a human decides, else the review lead, else the main agent. Returns the agent told; `None`, and nothing is sent, when none exists. The caller publishes the buffer after the commit.
+pub(crate) async fn tell_review_decider_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    task: TaskId,
+    proposal: fold_core::ProposalId,
+    text: String,
+    main_task: bool,
+    now: Timestamp,
+) -> Result<Option<AgentName>, MessageError> {
+    let lead = match agents::review_lead(tx.conn()).await? {
+        Some(lead) if !main_task => Some(lead),
+        _ => main_agent(tx).await?,
+    };
+    let Some(lead) = lead else {
+        return Ok(None);
+    };
+    let body = MessageBody::parse(text)?;
+    write_message(
+        tx,
+        buffer,
+        Draft {
+            actor: &Actor::System,
+            sender: &Sender::Fold,
+            task: Some(task),
+            proposal: Some(proposal),
+            request: None,
+            join: None,
+            parent: None,
+            body: &body,
+            choices: None,
+            questions: None,
+            lines: None,
+            asks_human: false,
+            recipients: vec![Recipient {
+                target: Target::Worker(WorkerName::main(&lead)),
+                addressed_as: AddressedAs::Agent,
+            }],
+            now,
+        },
+    )
+    .await?;
+    Ok(Some(lead))
+}
+
 /// Sends fold's `text` to `to`, the stored label of an agent's worker or a human; a label of fold itself, or one that names neither, gets nothing and returns false. The caller publishes the buffer after the commit.
 pub(crate) async fn tell_actor_in_tx(
     tx: &mut WriteTx,

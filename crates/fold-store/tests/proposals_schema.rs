@@ -661,3 +661,54 @@ async fn a_proposal_with_failed_checks_moves_its_task_back_to_in_progress() {
     assert!(marked);
     assert_eq!(calculated_status(&store, 1).await, TaskStatus::InProgress);
 }
+
+/// The `sent` wait of the author's implementation claim on task 1, as the lease reads it.
+#[cfg(test)]
+async fn author_claim_sent(store: &Store) -> bool {
+    let waits = fold_store::tasks::claims::claim_waits(store.read())
+        .await
+        .unwrap();
+    let (_, wait) = waits
+        .into_iter()
+        .find(|(worker, _)| *worker == 1)
+        .expect("the author's claim");
+    wait.sent
+}
+
+#[tokio::test]
+async fn a_conflicted_proposal_keeps_the_author_claim_waiting_on_its_reviewer() {
+    let (_dir, store) = seeded().await;
+    exec(
+        &store,
+        "INSERT INTO claims (kind, task_id, worker_id, acquired_at, renewed_at) VALUES ('implementation', 1, 1, 0, 0)",
+    )
+    .await
+    .unwrap();
+    open_proposal(&store, 1, 1, 1).await;
+    assert!(author_claim_sent(&store).await);
+
+    let at = Timestamp::from_millis(7).unwrap();
+    store
+        .write(async |tx| reviews::mark_conflicted(tx, p(1), at).await)
+        .await
+        .unwrap();
+    assert!(author_claim_sent(&store).await);
+}
+
+#[tokio::test]
+async fn failed_integration_checks_let_the_author_claim_go_stale_again() {
+    let (_dir, store) = seeded().await;
+    exec(
+        &store,
+        "INSERT INTO claims (kind, task_id, worker_id, acquired_at, renewed_at) VALUES ('implementation', 1, 1, 0, 0)",
+    )
+    .await
+    .unwrap();
+    open_proposal(&store, 1, 1, 1).await;
+    let at = Timestamp::from_millis(7).unwrap();
+    store
+        .write(async |tx| reviews::mark_checks_failed(tx, p(1), at).await)
+        .await
+        .unwrap();
+    assert!(!author_claim_sent(&store).await);
+}

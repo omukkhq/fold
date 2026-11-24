@@ -930,7 +930,7 @@ async fn a_conflicting_integration_answers_integration_conflicted() {
     assert_eq!(hunk["main"]["lines"], json!(["pub fn w() {}\n"]));
     assert_eq!(hunk["version"]["lines"], json!(["pub fn y() {}\n"]));
     assert_eq!(detail.body["summary"]["conflicted"], true);
-    assert_eq!(detail.body["summary"]["turn"], "with_author");
+    assert_eq!(detail.body["summary"]["turn"], "with_reviewer");
 }
 
 #[test]

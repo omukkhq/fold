@@ -42,7 +42,7 @@ pub struct StandingFacts {
     pub removed: bool,
     /// The proposal is integrated, closed or rejected.
     pub ended: bool,
-    /// An integration of the current version conflicted or failed its integration checks, so the proposal is with its author.
+    /// An integration of the current version conflicted or failed its integration checks, so the member waits for a new version: a conflict from the reviewer that fixes it, failed checks from the author.
     pub flagged: bool,
     /// A version from the one the member joined at got changes requested, so the member went back to its author. A later version of it is reviewed on its own rules.
     pub sent_back: bool,

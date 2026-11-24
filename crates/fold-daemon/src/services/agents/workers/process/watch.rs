@@ -507,6 +507,7 @@ impl Supervisor {
         self.clone().resume_owed_send_backs().await;
         self.clone().resume_owed_gate_runs().await;
         self.clone().resume_owed_reviewers(None).await;
+        self.clone().give_owed_conflicts().await;
         self.clone().resume_owed_messages().await;
         self.resume_pending().await;
     }
@@ -584,6 +585,13 @@ pub(super) async fn watch_done(
         let items = resume::resume_items(&event);
         if !items.is_empty() {
             tokio::spawn(supervisor.clone().resume_authors(items));
+        }
+        if let Some((proposal, version, agent)) = super::conflict::conflict_fixer(&event) {
+            tokio::spawn(
+                supervisor
+                    .clone()
+                    .give_conflict_to_reviewer(proposal, version, agent),
+            );
         }
         if let Some(run) = super::gate::gate_run(&event) {
             tokio::spawn(supervisor.clone().resume_gate_author(run));

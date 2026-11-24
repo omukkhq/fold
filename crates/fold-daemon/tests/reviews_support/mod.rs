@@ -370,7 +370,7 @@ fn workspace_service(
     .with_locks(Arc::clone(objects), Arc::clone(locks))
 }
 
-async fn register(agents: &AgentService, name: &str, tags: &[&str]) -> Agent {
+pub async fn register(agents: &AgentService, name: &str, tags: &[&str]) -> Agent {
     let mut ctx = agents.start_session(1).await.unwrap();
     let tags: Vec<fold_core::Tag> = tags
         .iter()

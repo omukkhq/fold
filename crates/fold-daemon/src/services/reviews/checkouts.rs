@@ -20,7 +20,9 @@ use super::{ReviewError, ReviewService};
 use crate::services::agents::{actor_worker, worker_not_found};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::worker_row;
-use crate::services::workspaces::{WorkspaceError, WorkspaceRef, WorkspaceView};
+use crate::services::workspaces::{
+    ArchiveReason, WorkspaceError, WorkspaceRef, WorkspaceView, archive_in_tx,
+};
 
 /// A review checkout with the proposal version its files hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +46,9 @@ enum Inserted {
 }
 
 impl ReviewService {
-    /// A copy of the current version of an open proposal for the actor's worker, under `.fold/ws/review-p-<n>`, so a review worker can read, build and test it without a task workspace, and fix what it finds there with `submit_review_fix`. `policy::can_create_review_checkout` admits the worker of the agent that holds the review claim, and the checkout belongs to that worker. A repeat call for the same version and worker returns the active checkout; any other checkout of the proposal takes the next directory name. A checkout is never synced or restored and never moves the task; fold only reads its files, when a fix in it becomes a version.
+    /// A copy of the current version of an open proposal for the actor's worker, under `.fold/ws/review-p-<n>`, so a review worker can read, build and test it without a task workspace, and fix what it finds there with `submit_review_fix`. `policy::can_create_review_checkout` admits the worker of the agent that holds the review claim, and the checkout belongs to that worker. A repeat call for the same version and worker returns the active checkout; any other checkout of the proposal takes the next directory name.
+    ///
+    /// A version flagged with a conflict at integration is checked out merged onto the current main, so the reviewer fixes the conflict there: its files are the merge with conflict markers and `.fold-main` sides (see [`WorkspaceService::conflict_checkout_tree`](crate::services::workspaces::WorkspaceService::conflict_checkout_tree)), and its base is main's head, which a fix in it takes as the new version's base. An active checkout of the same version and worker onto another base is archived in the transaction that inserts the merged one. A checkout is never synced or restored and never moves the task; fold only reads its files, when a fix in it becomes a version.
     ///
     /// The files are written and renamed into place before the transaction that inserts the row, so no row ever names a directory that is not complete; a failure to write them is `checkout_failed`. The transaction reads the current version again and refuses with `stale_version` when a version was added after the files were written, so a checkout never names a version that is not current when it is made. It looks for the active checkout again before it takes a workspace number, so a repeat that finished second takes none; the partial unique index on active checkouts backs that rule. When the transaction fails, or finds the checkout another call inserted first, the new directory is removed again: no row names it.
     pub async fn create_review_checkout(
@@ -59,17 +63,43 @@ impl ReviewService {
         let reviewer = checkout_checks(actor, standing, &row, holder.as_ref())?;
         let version = row.current_version;
         let worker = find_worker(&self.store, reviewer).await?;
+        let onto = if row.conflicted {
+            Some(
+                workspaces::main_head(read)
+                    .await?
+                    .ok_or(StoreError::Corrupt("refs.main"))?,
+            )
+        } else {
+            None
+        };
+        let mut replaced = None;
         if let Some(existing) =
             workspaces::active_review_checkout(read, proposal, version, worker.id).await?
         {
-            return self.checkout(existing, proposal, version).await;
+            let base = workspaces::get_workspace(read, existing)
+                .await?
+                .ok_or(StoreError::Corrupt("workspaces.number"))?
+                .base;
+            if onto.is_none_or(|head| head == base) {
+                return self.checkout(existing, proposal, version).await;
+            }
+            replaced = Some(existing);
         }
-        let tree = reviews::list_versions(read, proposal)
+        let held = reviews::list_versions(read, proposal)
             .await?
             .into_iter()
             .find(|row| row.version == version)
-            .ok_or(StoreError::Corrupt("proposal_versions.version"))?
-            .tree;
+            .ok_or(StoreError::Corrupt("proposal_versions.version"))?;
+        let tree = match onto {
+            Some(head) => {
+                self.workspaces
+                    .conflict_checkout_tree(held.base, held.tree, head)
+                    .await
+                    .map_err(|error| checkout_failed(proposal, error))?
+                    .tree
+            }
+            None => held.tree,
+        };
         let taken = workspaces::review_checkout_paths(read, proposal).await?;
         let (path, dir) = self
             .workspaces
@@ -94,7 +124,19 @@ impl ReviewService {
                     workspaces::active_review_checkout(tx.conn(), proposal, version, worker.id)
                         .await?
                 {
-                    return Ok(Inserted::Existing(existing));
+                    if replaced != Some(existing) {
+                        return Ok(Inserted::Existing(existing));
+                    }
+                    let by = EventActor::worker(&worker.name);
+                    archive_in_tx::<ReviewError>(
+                        tx,
+                        &mut buffer,
+                        &by,
+                        existing,
+                        ArchiveReason::ConflictMerged,
+                        now,
+                    )
+                    .await?;
                 }
                 let number = counters::allocate(tx, IdKind::Workspace).await?;
                 let id =
@@ -108,22 +150,31 @@ impl ReviewService {
                     now,
                 };
                 workspaces::insert_review_checkout(tx, &new).await?;
+                if let Some(head) = onto
+                    && !workspaces::set_base(tx, id, head).await?
+                {
+                    return Err(StoreError::Corrupt("revisions.number").into());
+                }
                 let base = workspaces::get_workspace(tx.conn(), id)
                     .await?
                     .ok_or(StoreError::Corrupt("workspaces.number"))?
                     .base;
+                let mut data = json!({
+                    "kind": "review",
+                    "path": path,
+                    "worker": worker.name.as_str(),
+                    "version": version,
+                });
+                if let Some(head) = onto {
+                    data["merged_onto"] = json!(head.to_string());
+                }
                 let event =
                     NewEvent::new(types::WORKSPACE_CREATED, EventActor::worker(&worker.name))?
                         .task(row.task)
                         .proposal(proposal)
                         .workspace(id)
                         .revision(base)
-                        .data(json!({
-                            "kind": "review",
-                            "path": path,
-                            "worker": worker.name.as_str(),
-                            "version": version,
-                        }))?;
+                        .data(data)?;
                 buffer.append(tx, &event, now).await?;
                 Ok::<_, ReviewError>(Inserted::Created(id))
             })

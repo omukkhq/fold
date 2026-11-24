@@ -234,5 +234,5 @@ pub fn integration_conflicted(proposal: ProposalId, conflicts: &[Conflict]) -> F
         ("proposal", json!(proposal.to_string())),
         ("files", json!(files)),
     ])
-    .with_hint("call get_proposal to read the conflict report; the author syncs the workspace and calls update_proposal")
+    .with_hint("call get_proposal to read the conflict report; the reviewer that approved the version fixes it in a review checkout merged onto main with submit_review_fix, or the review lead starts a reviewer for it")
 }

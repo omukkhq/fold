@@ -419,7 +419,7 @@ pub enum BatchIntegrationResultKind {
 #[serde(rename_all = "snake_case")]
 pub enum BatchMemberResultKind {
     Succeeded,
-    /// The member conflicted with main and went back to its author with the conflict report.
+    /// The member conflicted with main; the reviewer that approved it fixes the conflict, or the review lead starts one, and its task stays in Review.
     Conflicted,
     /// The member's own integration checks failed and it went back to its author.
     ChecksFailed,

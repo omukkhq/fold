@@ -88,7 +88,6 @@ pub fn is_pushed(event: &Event) -> bool {
     [
         types::PROPOSAL_OPENED,
         types::REVIEW_SUBMITTED,
-        types::INTEGRATION_CONFLICTED,
         types::TASK_STATUS_CHANGED,
         types::TASK_UPDATED,
         types::MESSAGE_SENT,
@@ -519,14 +518,6 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
             )),
             _ => None,
         };
-    }
-    if kind == types::INTEGRATION_CONFLICTED {
-        let proposal = event.proposal?;
-        return Some((
-            ctx.author.iter().cloned().collect(),
-            format!("{proposal} conflicts with main"),
-            "sync_workspace",
-        ));
     }
     if kind == types::TASK_STATUS_CHANGED {
         let task = event.task?;
@@ -1755,16 +1746,10 @@ mod tests {
     }
 
     #[test]
-    fn a_conflict_reaches_the_author() {
+    fn a_conflict_pushes_nothing_to_the_author() {
         let event = event(types::INTEGRATION_CONFLICTED, "lead");
-        assert_eq!(
-            sent(&notice_for(&event, &ctx())),
-            vec![row(
-                "frontend",
-                "fold: P-3 conflicts with main. Call sync_workspace.",
-                "sync_workspace"
-            )]
-        );
+        assert!(!is_pushed(&event));
+        assert!(notice_for(&event, &ctx()).is_empty());
     }
 
     #[test]
@@ -2521,7 +2506,6 @@ mod tests {
         for kind in [
             types::PROPOSAL_OPENED,
             types::REVIEW_SUBMITTED,
-            types::INTEGRATION_CONFLICTED,
             types::TASK_STATUS_CHANGED,
             types::MESSAGE_SENT,
             types::PROPOSAL_VERSION_ADDED,

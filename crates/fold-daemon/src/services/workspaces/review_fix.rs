@@ -1,11 +1,22 @@
 use fold_core::object::ObjectHash;
 use fold_core::tree::ChangeCounts;
-use fold_core::{RevisionId, Timestamp, WorkspaceId};
+use fold_core::{FoldError, RevisionId, Timestamp, WorkspaceId};
 use fold_store::workspaces::WorkspaceRow;
+use fold_vcs::integrate::tree_merge;
 use fold_vcs::scan::{changes, count_changes};
+use fold_vcs::sync::{ConflictedPath, MarkerLabels, SIDECAR_SUFFIX, merge_target, unresolved};
 use tokio::sync::{OwnedMutexGuard, OwnedRwLockReadGuard};
 
-use super::{WorkspaceError, WorkspaceService, blocking};
+use super::{WorkspaceError, WorkspaceService, blocking, open_objects};
+
+/// The files a review checkout of a conflicted version holds when it is made.
+#[derive(Debug, Clone)]
+pub(crate) struct ConflictTree {
+    /// Every object of it is in the object store.
+    pub tree: ObjectHash,
+    /// The paths that conflict, with a marker or a `.fold-main` side, in the order the merge wrote them.
+    pub conflicted: Vec<ConflictedPath>,
+}
 
 /// The tree of a reviewer's fix: the files of its review checkout recorded against the version's base, with the locks that took it. The caller keeps it until the transaction that names `tree` commits, so no record, sync or restore of the task workspace runs in between and garbage collection keeps the new objects.
 pub(crate) struct ReviewFixTree {
@@ -54,6 +65,48 @@ impl WorkspaceService {
                 taken_at,
                 _held: held,
             })
+        })
+        .await
+    }
+}
+
+impl WorkspaceService {
+    /// The tree of a review checkout of a conflicted version: `version_tree` merged onto the tree of main's revision `main` against the tree of the version's `base`, with markers labelled as a sync labels them around each conflicted text hunk and main's side of each other conflict as `<path>.fold-main`, stored with every object it needs. The same inputs always give the same tree, so a fix in the checkout is compared against it without a row that names it. It holds the shared object lock while it writes.
+    pub(crate) async fn conflict_checkout_tree(
+        &self,
+        base: RevisionId,
+        version_tree: ObjectHash,
+        main: RevisionId,
+    ) -> Result<ConflictTree, WorkspaceError> {
+        let base_tree = self.tree_of(base).await?;
+        let main_tree = self.tree_of(main).await?;
+        let paths = self.paths.clone();
+        let objects = self.objects.clone().read_owned().await;
+        blocking(move || {
+            let _held = objects;
+            let store = open_objects(&paths)?;
+            let merge = tree_merge(&store, &base_tree, &version_tree, &main_tree)?;
+            let labels = MarkerLabels::sync(base, main);
+            let (tree, conflicted) =
+                merge_target(&store, &merge, &version_tree, &labels, SIDECAR_SUFFIX)?;
+            Ok(ConflictTree { tree, conflicted })
+        })
+        .await
+    }
+
+    /// The paths of `conflicted` that the review checkout `checkout` still holds a marker line in, or whose `<path>.fold-main` side is still there, as text.
+    pub(crate) async fn unresolved_in_checkout(
+        &self,
+        checkout: &WorkspaceRow,
+        conflicted: Vec<ConflictedPath>,
+    ) -> Result<Vec<String>, WorkspaceError> {
+        let dir = self.workspace_dir(checkout);
+        blocking(move || {
+            Ok(unresolved(&dir, &conflicted)
+                .map_err(FoldError::from)?
+                .into_iter()
+                .map(|path| String::from_utf8_lossy(path.as_bytes()).into_owned())
+                .collect())
         })
         .await
     }

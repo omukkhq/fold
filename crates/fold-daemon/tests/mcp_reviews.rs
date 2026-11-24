@@ -985,7 +985,7 @@ async fn integration_conflicted_lists_files_and_kinds() {
     );
     assert!(error["hint"].as_str().unwrap().contains("get_proposal"));
     let view = ok(&frontend, "get_proposal", json!({"id": "P-1"})).await;
-    assert_eq!(view["turn"], "with_author");
+    assert_eq!(view["turn"], "with_reviewer");
     assert_eq!(view["conflict"]["files"][0]["path"], "src/lib.rs");
     assert_eq!(view["conflict"]["files"][0]["kind"], "text");
     assert_eq!(view["conflict"]["main_revision"], "r2");

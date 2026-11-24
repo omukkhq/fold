@@ -95,7 +95,7 @@ async fn conflicted() -> (Conflicted, Value) {
     )
 }
 
-/// Acceptance 7: the second of two proposals over the same line is refused with a conflict report. Main keeps the first integration byte for byte, the second proposal stays open with the report, its task returns to In Progress, its author is told, and nothing completes it.
+/// Acceptance 7: the second of two proposals over the same line is refused with a conflict report. Main keeps the first integration byte for byte, the second proposal stays open with the report and waits for a reviewer to fix the conflict, its task stays in Review, its author is not told, and nothing completes it.
 #[tokio::test]
 async fn acceptance_7_second_proposal_is_refused_with_a_conflict_report_and_main_is_intact() {
     let (state, error) = conflicted().await;
@@ -137,7 +137,7 @@ async fn acceptance_7_second_proposal_is_refused_with_a_conflict_report_and_main
         .call("backend", "get_proposal", json!({"id": second_proposal}))
         .await;
     assert_eq!(view["state"], "open");
-    assert_eq!(view["turn"], "with_author");
+    assert_eq!(view["turn"], "with_reviewer");
     let report = &view["conflict"];
     assert_eq!(report["proposal"], second_proposal.as_str());
     assert_eq!(report["base_revision"], "r1");
@@ -160,15 +160,10 @@ async fn acceptance_7_second_proposal_is_refused_with_a_conflict_report_and_main
 
     let inbox = harness.call("backend", "get_inbox", json!({})).await;
     let messages = inbox["messages"].as_array().unwrap();
-    assert_eq!(messages.len(), 1, "{inbox}");
-    assert_eq!(messages[0]["from"], "fold");
-    assert!(
-        messages[0]["body"].as_str().unwrap().contains("README.md"),
-        "{inbox}"
-    );
+    assert!(messages.is_empty(), "{inbox}");
 }
 
-/// Acceptance 7, continued: the author syncs, resolves the markers, records and sends `v2`; `review` approves it and it integrates as `r3` with both changes.
+/// Acceptance 7, continued: the author may still answer the conflict itself: it syncs, resolves the markers, records and sends `v2`; `review` approves it and it integrates as `r3` with both changes.
 #[tokio::test]
 async fn acceptance_7_conflicted_proposal_integrates_after_sync_and_a_new_version() {
     let (state, error) = conflicted().await;

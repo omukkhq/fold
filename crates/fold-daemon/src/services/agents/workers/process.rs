@@ -22,6 +22,7 @@ use questions::Waiter;
 use watch::watch_done;
 
 mod account;
+mod conflict;
 mod fresh;
 mod gate;
 mod launch;
