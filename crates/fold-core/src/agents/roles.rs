@@ -470,7 +470,7 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
         ),
         (Role::AreaLead, None) => format!("fold started you as {}, an area lead.", facts.name),
         (Role::ReviewLead, _) => format!(
-            "fold started you as {}, the review lead. Give each open proposal, or the proposals of one feature or area together, to a reviewer with start_worker, and when a related task can still open its proposal, make a review plan with create_review_plan first; you never review a proposal yourself.",
+            "fold started you as {}, the review lead. Give each open proposal its own reviewer with start_worker. Put proposals in one group, and so in one batch, only when they cannot work without each other; when a task that a proposal cannot work without can still open its proposal, make a review plan with create_review_plan first; you never review a proposal yourself.",
             facts.name
         ),
         (Role::TaskWorker, _) => format!(
@@ -534,7 +534,7 @@ pub fn catch_up_turn(facts: &CatchUpFacts<'_>) -> Option<String> {
             let mut parts = Vec::new();
             if !facts.proposals.is_empty() {
                 parts.push(format!(
-                    "These open proposals wait for a review and no reviewer works on them: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, and give them to reviewers with start_worker, which also moves the claim of a reviewer that has ended; when get_proposal names related_tasks, group them as its plan_hint says before any reviewer starts. Leave a proposal to a reviewer that runs or that fold resumes for a new version.",
+                    "These open proposals wait for a review and no reviewer works on them: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, and give them to reviewers with start_worker, which also moves the claim of a reviewer that has ended; give each proposal its own reviewer, and put proposals in one group only when they cannot work without each other; when get_proposal names related_tasks, decide that with its plan_hint before any reviewer starts. Leave a proposal to a reviewer that runs or that fold resumes for a new version.",
                     listed(facts.proposals.iter().map(ToString::to_string).collect())
                 ));
             }
@@ -1215,6 +1215,15 @@ mod tests {
             instructions: None,
         });
         assert!(turn.contains("make a review plan with create_review_plan first"));
+        assert!(
+            turn.contains("Give each open proposal its own reviewer with start_worker")
+                && turn.contains("only when they cannot work without each other"),
+            "{turn}"
+        );
+        assert!(
+            !turn.contains("feature") && !turn.contains("area"),
+            "{turn}"
+        );
     }
 
     #[test]
@@ -1469,8 +1478,12 @@ mod tests {
             review.contains("list_proposals")
                 && review.contains("start_worker")
                 && review.contains(
-                    "when get_proposal names related_tasks, group them as its plan_hint says"
+                    "give each proposal its own reviewer, and put proposals in one group only when they cannot work without each other"
                 ),
+            "{review}"
+        );
+        assert!(
+            !review.contains("feature") && !review.contains("area"),
             "{review}"
         );
         let plans = [ReviewPlanId::from_number(2).unwrap()];
