@@ -6,6 +6,7 @@ use crate::tasks::define_names;
 pub mod batches;
 pub mod checks;
 mod intent;
+pub mod lanes;
 pub mod plans;
 
 pub use intent::{

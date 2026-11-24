@@ -14,9 +14,11 @@ use fold_store::{StoreError, WriteTx, counters};
 use serde_json::json;
 
 use super::runner::{self, CommandResult};
-use super::{Verdict, end_run_in_tx, log_tail};
+use super::{Verdict, end_run_in_tx, end_run_with_in_tx, log_tail};
 use crate::services::events::EventBuffer;
 use crate::services::messages::send_from_fold_in_tx;
+use crate::services::reviews::conflicts::{Fixer, Handoff, conflict_fixer, handoff_notice_in_tx};
+use crate::services::reviews::lanes::lane_moved_note;
 use crate::services::reviews::{ReviewError, ReviewService};
 use crate::services::tasks::recompute;
 
@@ -39,7 +41,7 @@ pub(crate) enum IntegrationChecks {
     /// The merged tree's checks file has no integration check that runs for the change.
     None,
     Passed,
-    /// The run failed and the proposal went back to its author.
+    /// The run failed and the proposal went back to its author, or for a member of a lane that moved since its version's base, to the reviewer that approved it.
     Failed(CheckRunId),
     /// fold itself could not run the checks: the run stopped as `fold_failed`, and the proposal keeps its version, its approvals and its place with the reviewer.
     FoldFailed(CheckRunId),
@@ -64,7 +66,7 @@ pub(crate) struct Integrating<'a> {
 }
 
 impl ReviewService {
-    /// Runs the integration checks of the merged tree `merged` in fold's check directory, under the integration mutex the caller holds, so main cannot move meanwhile. The checks that run are the integration-stage checks of the merged tree's own `fold-checks.toml` whose `files` pattern matches a path the merge changes on main. A passed run of an earlier attempt on the same version, head and tree is reused from `carried`; one on another state ends as `superseded`. A passed run is left in `carried` for the caller's transaction to end; a failed one ends here, with the proposal sent back to its author.
+    /// Runs the integration checks of the merged tree `merged` in fold's check directory, under the integration mutex the caller holds, so main cannot move meanwhile. The checks that run are the integration-stage checks of the merged tree's own `fold-checks.toml` whose `files` pattern matches a path the merge changes on main. A passed run of an earlier attempt on the same version, head and tree is reused from `carried`; one on another state ends as `superseded`. A passed run is left in `carried` for the caller's transaction to end; a failed one ends here, with the proposal sent back to its author, or given to its reviewer when it is a member of a lane that moved since its version's base.
     pub(crate) async fn integration_checks(
         &self,
         actor: &Actor,
@@ -339,6 +341,11 @@ impl ReviewService {
         results: &[CommandResult],
         verdict: Verdict,
     ) -> Result<(), ReviewError> {
+        if let Some(lane) = self.moved_lane(at.proposal, at.head_tree).await? {
+            return self
+                .lane_checks_failed(actor, at, run, results, verdict, &lane)
+                .await;
+        }
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
         let ended = self
@@ -365,6 +372,64 @@ impl ReviewService {
         if ended {
             self.bus.publish(buffer);
             tracing::info!(run = %run.id, proposal = %at.proposal, reason = verdict.reason.map(RunReason::as_str), "integration checks failed; the proposal went back to its author");
+        }
+        Ok(())
+    }
+
+    /// [`Self::send_back_for_checks`] for a member of `lane` that main moved in since its version's base: the failure is the lane's move, not the author's work, so it goes the way of a conflict. One write transaction ends the run with `checks.finished`, whose `lane` names the lane and `fixer` the reviewer agent that approved the version and holds the review claim, flags the proposal as conflicted, so the reviewer's checkout holds the version merged onto main and the task stays in Review, tells the integrating agent, and, without such a reviewer, tells the review lead or for a task of main the main agent to have the failure fixed. The author gets no notice. The worker supervisor gives the failure to the named reviewer.
+    async fn lane_checks_failed(
+        &self,
+        actor: &Actor,
+        at: Integrating<'_>,
+        run: &CheckRunRow,
+        results: &[CommandResult],
+        verdict: Verdict,
+        lane: &str,
+    ) -> Result<(), ReviewError> {
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        let ended = self
+            .store
+            .write(async |tx| {
+                let fixer = conflict_fixer(tx, actor, at.proposal, at.version).await?;
+                let fixer_name = match &fixer {
+                    Fixer::Reviewer(agent) => Some(agent.as_str().to_owned()),
+                    Fixer::ReviewLead(_) => None,
+                };
+                let extra = json!({"lane": lane, "fixer": fixer_name});
+                if !end_run_with_in_tx(tx, &mut buffer, run, results, verdict, &extra, now).await? {
+                    return Ok(false);
+                }
+                reviews::mark_conflicted(tx, at.proposal, now).await?;
+                if let Actor::Agent(agent) = actor {
+                    let body = lane_send_back_message(at, run, results, verdict, lane);
+                    tell(
+                        tx,
+                        &mut buffer,
+                        &BTreeSet::from([agent.worker.clone()]),
+                        at,
+                        &body,
+                        now,
+                    )
+                    .await?;
+                }
+                if let Fixer::ReviewLead(why) = &fixer {
+                    let handoff = Handoff::LaneChecks {
+                        proposal: at.proposal,
+                        version: at.version,
+                        run: run.id,
+                        main: at.head,
+                    };
+                    handoff_notice_in_tx(tx, &mut buffer, &handoff, at.task, why, Some(lane), now)
+                        .await?;
+                }
+                buffer.extend(recompute(tx, &[at.task], now).await?.events);
+                Ok::<_, ReviewError>(true)
+            })
+            .await?;
+        if ended {
+            self.bus.publish(buffer);
+            tracing::info!(run = %run.id, proposal = %at.proposal, reason = verdict.reason.map(RunReason::as_str), "integration checks of a lane member failed after its lane moved; the proposal went to its reviewer");
         }
         Ok(())
     }
@@ -519,6 +584,24 @@ fn send_back_message(
     text
 }
 
+/// The message to the integrating agent of failed integration checks of a lane member after its lane moved: the same facts as [`send_back_message`], but the version goes to its reviewer.
+fn lane_send_back_message(
+    at: Integrating<'_>,
+    run: &CheckRunRow,
+    results: &[CommandResult],
+    verdict: Verdict,
+    lane: &str,
+) -> String {
+    send_back_message(at, run, results, verdict).replacen(
+        "fold did not integrate it, and the proposal is back with its author: fix the work in the task workspace, sync it with main, and call update_proposal.",
+        &format!(
+            "fold did not integrate it. {} The reviewer that approved it fixes it on the new main, not the author, and fold integrates it in its turn in the lane.",
+            lane_moved_note(lane)
+        ),
+        1,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use fold_core::Timestamp;
@@ -576,5 +659,20 @@ mod tests {
         assert!(text.contains("The end of the log of e2e:\nstep 1\nboom"));
         let changed = send_back_message(at, &run, &[], Verdict::failed(RunReason::FilesChanged));
         assert!(changed.contains("changed tracked files"));
+        let lane = lane_send_back_message(
+            at,
+            &run,
+            &results,
+            Verdict::failed(RunReason::CheckFailed),
+            "migrations",
+        );
+        assert!(
+            lane.contains("e2e failed (exit 1). fold did not integrate it. Lane migrations moved")
+        );
+        assert!(
+            lane.contains("The reviewer that approved it fixes it on the new main, not the author")
+        );
+        assert!(!lane.contains("update_proposal"));
+        assert!(lane.contains("The end of the log of e2e:"));
     }
 }

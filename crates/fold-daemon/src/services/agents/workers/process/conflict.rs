@@ -2,9 +2,8 @@ use std::sync::atomic::Ordering;
 
 use fold_core::events::EventFilter;
 use fold_core::events::types;
-use fold_core::merge::ConflictReport;
-use fold_core::{AgentName, Event, EventActor, NewEvent, ProposalId, Role, codes};
-use fold_store::reviews::{self, ProposalRow, ProposalState};
+use fold_core::{AgentName, CheckRunId, Event, EventActor, NewEvent, ProposalId, Role, codes};
+use fold_store::reviews::{self, ProposalRow, ProposalState, checks};
 use fold_store::{StoreError, agents, events};
 use serde_json::{Value, json};
 
@@ -14,11 +13,30 @@ use super::{Input, Supervisor, lock};
 use crate::services::agents::AgentError;
 use crate::services::agents::workers::is_paused_refusal;
 use crate::services::events::EventBuffer;
-use crate::services::reviews::{NoReviewer, conflict_notice_in_tx, reviewer_conflict_turn};
+use crate::services::reviews::{Handoff, NoReviewer, handoff_notice_in_tx, reviewer_turn};
 
-/// The proposal version and the reviewer that an `integration.conflicted` event gives the conflict to; `None` for any other event and for a conflict that went to the review lead.
-pub(super) fn conflict_fixer(event: &Event) -> Option<(ProposalId, u32, AgentName)> {
-    if event.event_type != types::INTEGRATION_CONFLICTED {
+/// A conflict, or failed integration checks of a lane member after its lane moved, that an event gives to the reviewer that approved the version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Owed {
+    pub proposal: ProposalId,
+    pub version: u32,
+    pub agent: AgentName,
+    /// The lane main moved in since the version's base, for the note of the turn.
+    pub lane: Option<String>,
+    /// The failed integration run of a lane member; `None` for a conflict.
+    pub run: Option<CheckRunId>,
+}
+
+/// Whether `event` hands a version to a reviewer to fix on main: `integration.conflicted`, or a failed integration `checks.finished` with a `lane`.
+fn is_handoff(event: &Event) -> bool {
+    event.event_type == types::INTEGRATION_CONFLICTED
+        || (event.event_type == types::CHECKS_FINISHED
+            && event.data.get("lane").and_then(Value::as_str).is_some())
+}
+
+/// What a handoff event gives the reviewer it names as `fixer`; `None` for any other event and for a handoff that went to the review lead.
+pub(super) fn conflict_fixer(event: &Event) -> Option<Owed> {
+    if !is_handoff(event) {
         return None;
     }
     let version = event
@@ -31,17 +49,31 @@ pub(super) fn conflict_fixer(event: &Event) -> Option<(ProposalId, u32, AgentNam
         .get("fixer")
         .and_then(Value::as_str)
         .and_then(|name| AgentName::parse(name).ok())?;
-    Some((event.proposal?, version, agent))
+    let lane = event
+        .data
+        .get("lane")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let run = (event.event_type == types::CHECKS_FINISHED)
+        .then(|| event.data.get("run").and_then(Value::as_str)?.parse().ok())
+        .flatten();
+    Some(Owed {
+        proposal: event.proposal?,
+        version,
+        agent,
+        lane,
+        run,
+    })
 }
 
-/// The reviewer that still owes the conflict of `version`, from the `integration.conflicted` and `worker.resumed` events of one proposal in `seq` order: the fixer of the newest conflict of that version, unless a `worker.resumed` of reason `conflict` for that version follows it.
-pub(super) fn owed_fixer(events: &[Event], version: u32) -> Option<AgentName> {
+/// What the reviewer still owes for `version`, from the handoff and `worker.resumed` events of one proposal in `seq` order: the newest handoff of that version, unless a `worker.resumed` of reason `conflict` for that version follows it.
+pub(super) fn owed_fixer(events: &[Event], version: u32) -> Option<Owed> {
     let of_version = |event: &Event| {
         event.data.get("version").and_then(Value::as_u64) == Some(u64::from(version))
     };
-    let at = events.iter().rposition(|event| {
-        event.event_type == types::INTEGRATION_CONFLICTED && of_version(event)
-    })?;
+    let at = events
+        .iter()
+        .rposition(|event| is_handoff(event) && of_version(event))?;
     let taken = events[at..].iter().any(|event| {
         event.event_type == types::WORKER_RESUMED
             && of_version(event)
@@ -50,7 +82,7 @@ pub(super) fn owed_fixer(events: &[Event], version: u32) -> Option<AgentName> {
     if taken {
         return None;
     }
-    conflict_fixer(&events[at]).map(|(_, _, agent)| agent)
+    conflict_fixer(&events[at])
 }
 
 /// How the conflict reached the reviewer.
@@ -67,14 +99,9 @@ enum Given {
 
 impl Supervisor {
     /// Gives the conflict of `version` to `agent`, the reviewer that approved it: a running reviewer gets the conflict report as its next turn, and a stopped or failed one is resumed in its own session with it, with `worker.resumed` of reason `conflict` once that session runs. When the reviewer cannot take it, because it lost the review claim, the worker limits refuse its start, its session is gone or its process ends before it runs, the review lead gets the notice to start a reviewer for the conflict instead. A version that moved on, or a proposal that left `open`, is left alone, and so is a start that a pause refuses: the resume of the pause gives the conflict.
-    pub(super) async fn give_conflict_to_reviewer(
-        self,
-        proposal: ProposalId,
-        version: u32,
-        agent: AgentName,
-    ) {
-        if let Err(error) = self.give_conflict(proposal, version, &agent).await {
-            tracing::warn!(%agent, proposal = %proposal, code = crate::services::agents::code_of(&error), "could not give a conflict to its reviewer");
+    pub(super) async fn give_conflict_to_reviewer(self, owed: Owed) {
+        if let Err(error) = self.give_conflict(&owed).await {
+            tracing::warn!(agent = %owed.agent, proposal = %owed.proposal, code = crate::services::agents::code_of(&error), "could not give a conflict to its reviewer");
         }
     }
 
@@ -96,7 +123,11 @@ impl Supervisor {
             .filter(|row| row.conflicted && !row.changes_requested)
         {
             let filter = EventFilter {
-                types: vec![types::INTEGRATION_CONFLICTED, types::WORKER_RESUMED],
+                types: vec![
+                    types::INTEGRATION_CONFLICTED,
+                    types::CHECKS_FINISHED,
+                    types::WORKER_RESUMED,
+                ],
                 task: None,
                 proposal: Some(row.id),
             };
@@ -107,34 +138,53 @@ impl Supervisor {
                     continue;
                 }
             };
-            if let Some(agent) = owed {
-                self.clone()
-                    .give_conflict_to_reviewer(row.id, row.current_version, agent)
-                    .await;
+            if let Some(owed) = owed {
+                self.clone().give_conflict_to_reviewer(owed).await;
             }
         }
     }
 
-    async fn give_conflict(
-        &self,
-        proposal: ProposalId,
-        version: u32,
-        agent: &AgentName,
-    ) -> Result<(), AgentError> {
+    async fn give_conflict(&self, owed: &Owed) -> Result<(), AgentError> {
         let read = self.inner.store.read();
-        let Some(row) = reviews::get_proposal(read, proposal).await? else {
+        let Some(row) = reviews::get_proposal(read, owed.proposal).await? else {
             return Ok(());
         };
-        let Some(report) = reviews::conflict_report(read, proposal, version).await? else {
-            return Ok(());
+        let report;
+        let handoff = match owed.run {
+            Some(run) => {
+                let Some(run_row) = checks::get_run(read, run).await? else {
+                    return Ok(());
+                };
+                Handoff::LaneChecks {
+                    proposal: owed.proposal,
+                    version: owed.version,
+                    run,
+                    main: run_row.base,
+                }
+            }
+            None => {
+                let Some(found) =
+                    reviews::conflict_report(read, owed.proposal, owed.version).await?
+                else {
+                    return Ok(());
+                };
+                report = found;
+                Handoff::Conflict(&report)
+            }
         };
-        let given = self.offer(&row, version, &report, agent).await?;
+        let lane = owed.lane.as_deref();
+        let given = self
+            .offer(&row, owed.version, &handoff, &owed.agent, lane)
+            .await?;
         match given {
             Given::Told | Given::Stale => Ok(()),
-            Given::Resumed => self.record_conflict_resumed(&row, version, agent).await,
+            Given::Resumed => {
+                self.record_conflict_resumed(&row, owed.version, &owed.agent)
+                    .await
+            }
             Given::Refused { lost } => {
-                let why = NoReviewer::NotResumed(agent.clone());
-                self.conflict_to_review_lead(&row, &report, &why, lost)
+                let why = NoReviewer::NotResumed(owed.agent.clone());
+                self.conflict_to_review_lead(&row, &handoff, &why, lost, lane)
                     .await
             }
         }
@@ -144,8 +194,9 @@ impl Supervisor {
         &self,
         row: &ProposalRow,
         version: u32,
-        report: &ConflictReport,
+        handoff: &Handoff<'_>,
         agent: &AgentName,
+        lane: Option<&str>,
     ) -> Result<Given, AgentError> {
         // The proposal, the claim and the row are read under the lock, so a second start of the reviewer finds it running.
         let resuming = self.inner.resuming.lock().await;
@@ -175,7 +226,7 @@ impl Supervisor {
             return Ok(Given::Refused { lost: None });
         };
         drop(conn);
-        let turn = reviewer_conflict_turn(report, row.task);
+        let turn = reviewer_turn(handoff, row.task, lane);
         if worker.state.is_running() {
             return Ok(if self.tell_running(agent, turn) {
                 Given::Told
@@ -258,9 +309,10 @@ impl Supervisor {
     async fn conflict_to_review_lead(
         &self,
         row: &ProposalRow,
-        report: &ConflictReport,
+        handoff: &Handoff<'_>,
         why: &NoReviewer,
         lost: Option<i64>,
+        lane: Option<&str>,
     ) -> Result<(), AgentError> {
         let now = self.inner.clock.now();
         let mut buffer = EventBuffer::new();
@@ -270,7 +322,7 @@ impl Supervisor {
                 if let Some(id) = lost {
                     agents::mark_session_lost(tx, id, SESSION_LOST).await?;
                 }
-                conflict_notice_in_tx(tx, &mut buffer, report, row.task, why, now)
+                handoff_notice_in_tx(tx, &mut buffer, handoff, row.task, why, lane, now)
                     .await
                     .map_err(AgentError::from)
             })
@@ -313,7 +365,8 @@ mod tests {
                 json!({"agent": "reviewer-3", "version": version, "reason": reason}),
             )
         };
-        let owed = |events: &[Event]| owed_fixer(events, 2).map(|agent| agent.as_str().to_owned());
+        let owed =
+            |events: &[Event]| owed_fixer(events, 2).map(|owed| owed.agent.as_str().to_owned());
         assert_eq!(
             owed(&[conflicted(2, json!("reviewer-3"))]),
             Some("reviewer-3".to_owned())
@@ -348,10 +401,26 @@ mod tests {
             types::INTEGRATION_CONFLICTED,
             json!({"version": 2, "fixer": "reviewer-3"}),
         );
-        let (proposal, version, agent) = conflict_fixer(&given).unwrap();
-        assert_eq!(proposal.to_string(), "P-4");
-        assert_eq!(version, 2);
-        assert_eq!(agent.as_str(), "reviewer-3");
+        let owed = conflict_fixer(&given).unwrap();
+        assert_eq!(owed.proposal.to_string(), "P-4");
+        assert_eq!(owed.version, 2);
+        assert_eq!(owed.agent.as_str(), "reviewer-3");
+        assert_eq!((owed.lane, owed.run), (None, None));
+        let lane_checks = event(
+            types::CHECKS_FINISHED,
+            json!({"version": 2, "fixer": "reviewer-3", "lane": "migrations", "run": "cr-9", "stage": "integration", "state": "failed"}),
+        );
+        let owed = conflict_fixer(&lane_checks).unwrap();
+        assert_eq!(owed.lane.as_deref(), Some("migrations"));
+        assert_eq!(owed.run.map(|run| run.to_string()).as_deref(), Some("cr-9"));
+        let plain_checks = event(
+            types::CHECKS_FINISHED,
+            json!({"version": 2, "fixer": "reviewer-3", "run": "cr-9"}),
+        );
+        assert!(
+            conflict_fixer(&plain_checks).is_none(),
+            "only a lane failure is a handoff"
+        );
         let to_lead = event(
             types::INTEGRATION_CONFLICTED,
             json!({"version": 2, "fixer": null}),
@@ -362,5 +431,24 @@ mod tests {
             json!({"version": 2, "fixer": "reviewer-3"}),
         );
         assert!(conflict_fixer(&other).is_none());
+    }
+
+    #[test]
+    fn a_lane_failure_is_owed_like_a_conflict() {
+        let lane_checks = |version: u32| {
+            event(
+                types::CHECKS_FINISHED,
+                json!({"version": version, "fixer": "reviewer-3", "lane": "m", "run": "cr-2"}),
+            )
+        };
+        let resumed = event(
+            types::WORKER_RESUMED,
+            json!({"agent": "reviewer-3", "version": 2, "reason": "conflict"}),
+        );
+        let plain = event(types::CHECKS_FINISHED, json!({"version": 2, "run": "cr-3"}));
+        let owed = owed_fixer(&[lane_checks(2), plain.clone()], 2).unwrap();
+        assert_eq!(owed.run.map(|run| run.to_string()).as_deref(), Some("cr-2"));
+        assert!(owed_fixer(&[lane_checks(2), resumed], 2).is_none());
+        assert!(owed_fixer(&[plain], 2).is_none());
     }
 }

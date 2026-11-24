@@ -248,6 +248,7 @@ async fn conflict_writes_one_integrations_row_with_the_report() {
             "main_revision": "r2",
             "files": 1,
             "fixer": "review",
+            "lane": null,
         })
     );
     assert!(

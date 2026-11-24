@@ -26,6 +26,12 @@ const MAX_PATTERN_CHARS: usize = 1000;
 /// A compiled `files` pattern may use at most this much memory, so a hostile pattern cannot take the daemon's memory.
 const MAX_PATTERN_BYTES: usize = 1 << 20;
 
+/// The most `[[serial]]` lanes one file may name.
+pub const MAX_LANES: usize = 16;
+/// The most globs one lane may list.
+pub const MAX_LANE_GLOBS: usize = 64;
+const MAX_GLOB_CHARS: usize = 500;
+
 define_names!(
     /// When a check runs: before fold makes a proposal version, or on the merged tree before an integration reaches main.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -114,11 +120,29 @@ pub struct Check {
     pub timeout: Option<Duration>,
 }
 
+/// One `[[serial]]` lane of the file: the proposals whose change touches a path that one of `paths` matches integrate one at a time. A glob matches the whole path: `*` and `?` stay inside one path segment, and `**` spans segments, so `migrations/**` matches every file under `migrations/` and `**/alembic/versions/*.py` matches that folder at any depth.
+#[derive(Debug, Clone)]
+pub struct Lane {
+    pub name: String,
+    /// The globs as the file writes them, in file order.
+    pub paths: Vec<String>,
+    matcher: Regex,
+}
+
+impl Lane {
+    /// Whether a glob of the lane matches `path`.
+    pub fn matches(&self, path: &str) -> bool {
+        self.matcher.is_match(path)
+    }
+}
+
 /// A parsed and checked `fold-checks.toml`. `setup` runs before the checks of every run, in the directory where they run.
 #[derive(Debug, Clone, Default)]
 pub struct ChecksFile {
     pub setup: Option<String>,
     pub checks: Vec<Check>,
+    /// The `[[serial]]` lanes in file order.
+    pub lanes: Vec<Lane>,
 }
 
 /// A check of one stage with whether it runs for the changed paths.
@@ -135,6 +159,15 @@ struct RawFile {
     setup: Option<RawSetup>,
     #[serde(default)]
     check: Vec<RawCheck>,
+    #[serde(default)]
+    serial: Vec<RawLane>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawLane {
+    name: String,
+    paths: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,7 +252,19 @@ impl ChecksFile {
                 timeout,
             });
         }
-        Ok(ChecksFile { setup, checks })
+        let lanes = parse_lanes(raw.serial)?;
+        Ok(ChecksFile {
+            setup,
+            checks,
+            lanes,
+        })
+    }
+
+    /// The lane of a change: the first lane in file order with a glob that matches at least one of `changed`. A change that touches the paths of two lanes belongs to the first one only, so it holds one place in one lane.
+    pub fn lane_of(&self, changed: &[String]) -> Option<&Lane> {
+        self.lanes
+            .iter()
+            .find(|lane| changed.iter().any(|path| lane.matches(path)))
     }
 
     /// The checks of `stage` in file order, each with whether it runs: a check without a pattern always runs, and one with a pattern runs when it matches at least one of `changed`, searched anywhere in the path.
@@ -345,6 +390,93 @@ fn check_name(name: String, at: &str) -> Result<String, FoldError> {
             "{at}: a name is 1 to {MAX_NAME_CHARS} letters, digits, '_', '-' or '.'"
         )))
     }
+}
+
+/// The lanes of the `[[serial]]` tables: each with a valid name used once among the lanes and 1 to [`MAX_LANE_GLOBS`] valid globs.
+fn parse_lanes(raw: Vec<RawLane>) -> Result<Vec<Lane>, FoldError> {
+    if raw.len() > MAX_LANES {
+        return Err(invalid(format!(
+            "at most {MAX_LANES} serial lanes are allowed"
+        )));
+    }
+    let mut names = HashSet::new();
+    let mut lanes = Vec::with_capacity(raw.len());
+    for (index, lane) in raw.into_iter().enumerate() {
+        let at = format!("serial {}", index + 1);
+        let name = check_name(lane.name, &at)?;
+        if !names.insert(name.clone()) {
+            return Err(invalid(format!("{at}: the lane name {name} is used twice")));
+        }
+        let at = format!("{at} ({name}) paths");
+        if lane.paths.is_empty() {
+            return Err(invalid(format!("{at} must list at least one glob")));
+        }
+        if lane.paths.len() > MAX_LANE_GLOBS {
+            return Err(invalid(format!(
+                "{at} must list at most {MAX_LANE_GLOBS} globs"
+            )));
+        }
+        let mut alternatives = Vec::with_capacity(lane.paths.len());
+        for glob in &lane.paths {
+            alternatives.push(glob_regex(glob, &at)?);
+        }
+        let matcher = regex::RegexBuilder::new(&format!("^(?:{})$", alternatives.join("|")))
+            .size_limit(MAX_PATTERN_BYTES)
+            .build()
+            .map_err(|_| invalid(format!("{at} are too large to match")))?;
+        lanes.push(Lane {
+            name,
+            paths: lane.paths,
+            matcher,
+        });
+    }
+    Ok(lanes)
+}
+
+/// The regular expression of one glob, unanchored. A glob is a relative path of 1 to [`MAX_GLOB_CHARS`] characters: no leading `/`, no empty, `.` or `..` segment, and `**` only as a whole segment.
+fn glob_regex(glob: &str, at: &str) -> Result<String, FoldError> {
+    let refuse = |why: &str| invalid(format!("{at}: the glob {glob:?} {why}"));
+    if glob.is_empty() || glob.chars().count() > MAX_GLOB_CHARS {
+        return Err(refuse(&format!(
+            "must have 1 to {MAX_GLOB_CHARS} characters"
+        )));
+    }
+    let segments: Vec<&str> = glob.split('/').collect();
+    if segments
+        .iter()
+        .any(|segment| segment.is_empty() || *segment == "." || *segment == "..")
+    {
+        return Err(refuse(
+            "must be a relative path without empty, . or .. segments",
+        ));
+    }
+    let last = segments.len() - 1;
+    let mut out = String::new();
+    for (index, segment) in segments.iter().enumerate() {
+        if *segment == "**" {
+            // `a/**/b` also matches `a/b`, and a trailing `**` needs at least one segment after the slash.
+            out.push_str(if index == last {
+                "[^/].*"
+            } else {
+                "(?:[^/]+/)*"
+            });
+            continue;
+        }
+        if segment.contains("**") {
+            return Err(refuse("may use ** only as a whole path segment"));
+        }
+        for character in segment.chars() {
+            match character {
+                '*' => out.push_str("[^/]*"),
+                '?' => out.push_str("[^/]"),
+                other => out.push_str(&regex::escape(&other.to_string())),
+            }
+        }
+        if index != last {
+            out.push('/');
+        }
+    }
+    Ok(out)
 }
 
 fn files_pattern(pattern: &str, at: &str) -> Result<Regex, FoldError> {
@@ -654,5 +786,140 @@ stage = "integration"
             let plan = file.plan(Stage::Proposal, &changed);
             prop_assert_eq!(plan[0].runs, changed.iter().any(|path| path.ends_with(".rs")));
         }
+    }
+
+    const LANES: &str = r#"
+[[serial]]
+name  = "migrations"
+paths = ["**/alembic/versions/*.py", "crates/fold-store/migrations/**"]
+
+[[serial]]
+name  = "lockfiles"
+paths = ["Cargo.lock", "web/bun.lock", "crates/fold-store/migrations/project/*.sql"]
+"#;
+
+    fn refusal(text: &str) -> String {
+        let error = ChecksFile::parse(text).unwrap_err();
+        assert_eq!(error.code(), codes::CHECKS_FILE_INVALID);
+        error.message().to_owned()
+    }
+
+    fn lane(globs: &str) -> String {
+        format!("[[serial]]\nname = \"m\"\npaths = {globs}\n")
+    }
+
+    #[test]
+    fn serial_lanes_parse_in_file_order() {
+        let file = ChecksFile::parse(LANES).unwrap();
+        let names: Vec<_> = file.lanes.iter().map(|lane| lane.name.as_str()).collect();
+        assert_eq!(names, ["migrations", "lockfiles"]);
+        assert_eq!(
+            file.lanes[1].paths,
+            [
+                "Cargo.lock",
+                "web/bun.lock",
+                "crates/fold-store/migrations/project/*.sql"
+            ]
+        );
+        assert!(file.checks.is_empty());
+        assert!(ChecksFile::parse(EXAMPLE).unwrap().lanes.is_empty());
+    }
+
+    #[test]
+    fn a_glob_matches_whole_paths_by_segment() {
+        let file = ChecksFile::parse(LANES).unwrap();
+        let migrations = &file.lanes[0];
+        assert!(migrations.matches("api/alembic/versions/0001_init.py"));
+        assert!(migrations.matches("alembic/versions/0001_init.py"));
+        assert!(
+            !migrations.matches("alembic/versions/sub/0001_init.py"),
+            "* stays in one segment"
+        );
+        assert!(
+            !migrations.matches("alembic/versions/0001_init.pyc"),
+            "the glob matches the whole path"
+        );
+        assert!(migrations.matches("crates/fold-store/migrations/project/1_a.sql"));
+        assert!(
+            !migrations.matches("crates/fold-store/migrations"),
+            "a trailing ** needs a path below"
+        );
+        let lockfiles = &file.lanes[1];
+        assert!(lockfiles.matches("Cargo.lock"));
+        assert!(!lockfiles.matches("sub/Cargo.lock"));
+        assert!(!lockfiles.matches("web/bun_lock"), "a dot is literal");
+        let single = ChecksFile::parse(&lane(r#"["a/**/b", "x?.txt", "**"]"#)).unwrap();
+        assert!(single.lanes[0].matches("a/b"));
+        assert!(single.lanes[0].matches("a/c/d/b"));
+        assert!(single.lanes[0].matches("x1.txt"));
+        assert!(single.lanes[0].matches("anything/at/all"));
+    }
+
+    #[test]
+    fn a_change_belongs_to_the_first_lane_whose_glob_it_touches() {
+        let file = ChecksFile::parse(LANES).unwrap();
+        let of = |changed: &[&str]| file.lane_of(&paths(changed)).map(|lane| lane.name.clone());
+        assert_eq!(of(&["README.md"]), None);
+        assert_eq!(of(&[]), None);
+        assert_eq!(
+            of(&["README.md", "Cargo.lock"]),
+            Some("lockfiles".to_owned())
+        );
+        assert_eq!(
+            of(&["Cargo.lock", "api/alembic/versions/2.py"]),
+            Some("migrations".to_owned())
+        );
+        assert_eq!(
+            of(&["crates/fold-store/migrations/project/1_a.sql"]),
+            Some("migrations".to_owned()),
+            "a path of two lanes goes to the first lane in file order"
+        );
+    }
+
+    #[test]
+    fn each_invalid_lane_is_refused_with_its_reason() {
+        assert!(refusal("[[serial]]\nname = \"m\"\n").contains("paths"));
+        assert!(
+            refusal("[[serial]]\nname = \"m\"\npaths = [\"a\"]\nfiles = \"x\"\n")
+                .contains("unknown field")
+        );
+        assert!(refusal(&lane("[]")).contains("at least one glob"));
+        assert!(
+            refusal("[[serial]]\nname = \"bad name\"\npaths = [\"a\"]\n")
+                .contains("serial 1: a name is")
+        );
+        assert!(
+            refusal(&format!("{}{}", lane(r#"["a"]"#), lane(r#"["b"]"#)))
+                .contains("serial 2: the lane name m is used twice")
+        );
+        let many: Vec<String> = (0..=MAX_LANE_GLOBS)
+            .map(|n| format!("\"d{n}/*\""))
+            .collect();
+        assert!(refusal(&lane(&format!("[{}]", many.join(",")))).contains("at most 64 globs"));
+        let lanes: String = (0..=MAX_LANES)
+            .map(|n| format!("[[serial]]\nname = \"l{n}\"\npaths = [\"a\"]\n"))
+            .collect();
+        assert!(refusal(&lanes).contains("at most 16 serial lanes"));
+        assert!(refusal(&lane(r#"[""]"#)).contains("must have 1 to 500 characters"));
+        assert!(
+            refusal(&lane(&format!("[\"{}\"]", "a".repeat(MAX_GLOB_CHARS + 1))))
+                .contains("must have 1 to 500")
+        );
+        for bad in ["/abs", "a//b", "a/./b", "../up", "trailing/"] {
+            assert!(
+                refusal(&lane(&format!("[\"{bad}\"]"))).contains("relative path"),
+                "{bad}"
+            );
+        }
+        assert!(refusal(&lane(r#"["a**/b"]"#)).contains("whole path segment"));
+        assert!(refusal(&lane(r#"["a"]"#).replace("name = \"m\"\n", "")).contains("name"));
+    }
+
+    #[test]
+    fn a_lane_name_may_equal_a_check_name() {
+        let text = "[[check]]\nname = \"m\"\nrun = \"true\"\n".to_owned() + &lane(r#"["a"]"#);
+        let file = ChecksFile::parse(&text).unwrap();
+        assert_eq!(file.checks[0].name, "m");
+        assert_eq!(file.lanes[0].name, "m");
     }
 }

@@ -60,6 +60,7 @@ mod acceptance_47_watch_follows_the_worker;
 mod acceptance_48_reviewer_fixes_a_conflict;
 mod acceptance_49_a_batch_member_approved_alone_integrates;
 mod acceptance_4_live_diff;
+mod acceptance_50_a_serial_lane_integrates_in_turn;
 mod acceptance_5_review_and_integrate;
 mod acceptance_6_dependency_unblocks;
 mod acceptance_7_conflicting_proposals;

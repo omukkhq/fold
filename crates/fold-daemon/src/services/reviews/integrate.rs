@@ -33,6 +33,7 @@ use super::checks::{
     fold_failed_refusal, next_version_run,
 };
 use super::conflicts::FoundConflict;
+use super::lanes::lane_held_refusal;
 use super::notify;
 use super::proposals::{Retirement, proposal_not_found, retire_proposal};
 use super::verdicts::update_refusal;
@@ -297,6 +298,9 @@ impl ReviewService {
             }
             if row.integration_queued {
                 return Err(already_queued_refusal(proposal, row.current_version).into());
+            }
+            if let Some(place) = self.lane_hold(proposal).await? {
+                return Err(lane_held_refusal(&place).into());
             }
             let mut conn = self
                 .store
@@ -593,7 +597,7 @@ impl ReviewService {
         )
     }
 
-    /// Integrates, as fold, every open proposal whose current version is ready: an agent that decides reviews or a human approved it, the latest verdict asks for no changes, a marked task has a human approval the mark accepts, and every prerequisite is Done. Each integration is the same procedure a deciding agent runs. A submitted review batch whose members all have their final state takes its turn first, its ready members together; the members a batch holds back, while it is open or waits for a member, are left to it. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag, and one whose update or reviewer's fix runs the checks of its next version waits for that run to end. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
+    /// Integrates, as fold, every open proposal whose current version is ready: an agent that decides reviews or a human approved it, the latest verdict asks for no changes, a marked task has a human approval the mark accepts, and every prerequisite is Done. Each integration is the same procedure a deciding agent runs. A submitted review batch whose members all have their final state takes its turn first, its ready members together; the members a batch holds back, while it is open or waits for a member, are left to it. A member of a lane behind its front waits, so the members of a lane integrate one at a time in the order of their first approval, each on the main its predecessor made. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag, and one whose update or reviewer's fix runs the checks of its next version waits for that run to end. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
     pub async fn integrate_ready(&self) -> Result<Vec<AutomaticIntegration>, ReviewError> {
         let mut done = Vec::new();
         let mut passed = HashSet::new();
@@ -642,7 +646,7 @@ impl ReviewService {
         Ok(done)
     }
 
-    /// The lowest-numbered open proposal outside `passed` and outside `held`, the members a review batch holds back to integrate together, that is not flagged with a conflict or failed integration checks, whose integration checks fold did not fail to run on this version and main, and that passes every gate for the automatic caller, with its current version.
+    /// The lowest-numbered open proposal outside `passed` and outside `held`, the members a review batch holds back to integrate together and the members of a lane behind its front, that is not flagged with a conflict or failed integration checks, whose integration checks fold did not fail to run on this version and main, and that passes every gate for the automatic caller, with its current version.
     async fn next_ready(
         &self,
         passed: &HashSet<ProposalId>,
@@ -954,6 +958,10 @@ impl ReviewService {
                 | GateRefusal::AuthorCannotIntegrate
                 | GateRefusal::AgentApprovalRequired => FoldError::from(refusal).into(),
             });
+        }
+        // Only the front member of a lane integrates, whoever asks and by whichever path.
+        if let Some(place) = self.lane_hold(proposal).await? {
+            return Err(lane_held_refusal(&place).into());
         }
         Ok(Plan {
             base_tree: facts.target.base_tree,

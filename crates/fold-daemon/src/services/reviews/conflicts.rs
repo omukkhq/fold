@@ -4,14 +4,15 @@ use fold_core::events::types;
 use fold_core::merge::{Conflict, ConflictReport, ReportTrees};
 use fold_core::reviews::{Approver, Verdict};
 use fold_core::{
-    Actor, AgentName, HumanName, IdKind, IntegrationId, NewEvent, ProposalId, RevisionId, Role,
-    TaskId,
+    Actor, AgentName, CheckRunId, HumanName, IdKind, IntegrationId, NewEvent, ProposalId,
+    RevisionId, Role, TaskId,
 };
 use fold_store::reviews::{self, IntegrationSubject, NewIntegration};
 use fold_store::{StoreError, WriteTx, agents, counters, tasks, workspaces};
 use serde_json::json;
 
 use super::integrate::{caller_facts, decide};
+use super::lanes::lane_moved_note;
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
 use crate::services::messages::tell_review_decider_in_tx;
@@ -32,7 +33,7 @@ pub(super) struct FoundConflict<'a> {
 }
 
 impl ReviewService {
-    /// Step 4 of the integration procedure, under the integration mutex. One write transaction records the `conflicted` integration with its report and `integration.conflicted`, sets the proposal's conflict flag and recalculates the task, which stays in Review while the proposal stays open. The conflict goes to the reviewer agent that approved the version and still holds its review claim: the event names it as `fixer`, and the worker supervisor gives it the conflict report. Without one, because a human or an agent that is not a reviewer approved the version or the reviewer lost its claim, the same transaction sends the review lead a message from `fold` to start a reviewer for the conflict. The author gets no conflict notice. Nothing is published: no revision, no move of main, no completion. False, with nothing written, when main moved, the proposal left that version or the gates refuse the caller, so the procedure starts again and its gate step reports why.
+    /// Step 4 of the integration procedure, under the integration mutex. One write transaction records the `conflicted` integration with its report and `integration.conflicted`, whose `lane` names the lane of a member that main moved in since the version's base, sets the proposal's conflict flag and recalculates the task, which stays in Review while the proposal stays open. The conflict goes to the reviewer agent that approved the version and still holds its review claim: the event names it as `fixer`, and the worker supervisor gives it the conflict report. Without one, because a human or an agent that is not a reviewer approved the version or the reviewer lost its claim, the same transaction sends the review lead a message from `fold` to start a reviewer for the conflict. The author gets no conflict notice. Nothing is published: no revision, no move of main, no completion. False, with nothing written, when main moved, the proposal left that version or the gates refuse the caller, so the procedure starts again and its gate step reports why.
     pub(super) async fn record_conflict(
         &self,
         actor: &Actor,
@@ -48,6 +49,7 @@ impl ReviewService {
             expected_version,
             automatic,
         } = found;
+        let lane = self.moved_lane(proposal, trees.main).await?;
         let label = actor.event_actor();
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
@@ -113,10 +115,21 @@ impl ReviewService {
                         "main_revision": main.to_string(),
                         "files": report.files.len(),
                         "fixer": fixer_name,
+                        "lane": lane,
                     }))?;
                 buffer.append(tx, &event, now).await?;
                 if let Fixer::ReviewLead(why) = &fixer {
-                    conflict_notice_in_tx(tx, &mut buffer, &report, task, why, now).await?;
+                    let handoff = Handoff::Conflict(&report);
+                    handoff_notice_in_tx(
+                        tx,
+                        &mut buffer,
+                        &handoff,
+                        task,
+                        why,
+                        lane.as_deref(),
+                        now,
+                    )
+                    .await?;
                 }
                 buffer.extend(recompute(tx, &[task], now).await?.events);
                 Ok::<_, ReviewError>(Some((integration, report.files.len())))
@@ -133,7 +146,7 @@ impl ReviewService {
 
 /// Who fixes a conflict of an approved version at integration.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Fixer {
+pub(super) enum Fixer {
     /// The reviewer agent that approved the version and holds the proposal's review claim.
     Reviewer(AgentName),
     /// No reviewer agent takes it on its own, for this reason; the review lead starts one.
@@ -154,7 +167,7 @@ pub(crate) enum NoReviewer {
 }
 
 /// The fixer of a conflict of `version`: the newest approval of the version by a reviewer worker whose agent holds the unreleased review claim, else the review lead with the reason of the newest approval. A human who integrates approves in the same action, so without a stored approval the integrating human is the approver.
-async fn conflict_fixer(
+pub(super) async fn conflict_fixer(
     tx: &mut WriteTx,
     actor: &Actor,
     proposal: ProposalId,
@@ -231,24 +244,96 @@ fn fix_steps(report: &ConflictReport) -> String {
     )
 }
 
-/// The turn of the reviewer that approved `report`'s version and fixes its conflict.
-pub(crate) fn reviewer_conflict_turn(report: &ConflictReport, task: TaskId) -> String {
-    let (proposal, version) = (report.proposal, report.version);
+/// What a reviewer fixes on the current main: a conflict, or the integration checks a lane member failed on its merge with main after the lane moved.
+pub(crate) enum Handoff<'a> {
+    Conflict(&'a ConflictReport),
+    LaneChecks {
+        proposal: ProposalId,
+        version: u32,
+        run: CheckRunId,
+        main: RevisionId,
+    },
+}
+
+impl Handoff<'_> {
+    fn version(&self) -> (ProposalId, u32) {
+        match self {
+            Handoff::Conflict(report) => (report.proposal, report.version),
+            Handoff::LaneChecks {
+                proposal, version, ..
+            } => (*proposal, *version),
+        }
+    }
+
+    /// What happened, as the first sentence of a turn or a notice says it after the version and the task.
+    fn what(&self) -> String {
+        match self {
+            Handoff::Conflict(report) => format!(
+                "conflicts with main at {} and was not integrated",
+                report.main_revision
+            ),
+            Handoff::LaneChecks { run, main, .. } => format!(
+                "failed its integration checks ({run}) on its merge with main {main} and was not integrated"
+            ),
+        }
+    }
+
+    /// The facts after the first sentence: the conflicting paths, or where the logs are.
+    fn facts(&self) -> String {
+        match self {
+            Handoff::Conflict(report) => conflict_paths(report),
+            Handoff::LaneChecks { run, .. } => {
+                format!("Call get_check_run with {run} for the failed checks and their logs.")
+            }
+        }
+    }
+
+    fn steps(&self) -> String {
+        match self {
+            Handoff::Conflict(report) => fix_steps(report),
+            Handoff::LaneChecks {
+                proposal, version, ..
+            } => format!(
+                "Call create_review_checkout for {proposal}: the checkout holds v{version} merged onto the current main. Fix the failure there, run the checks, send the fix with submit_review_fix, then approve the new version with submit_review, and fold integrates it in its turn in the lane. When the fix needs the author's decision, call submit_review with the verdict request_changes instead."
+            ),
+        }
+    }
+
+    fn noun(&self) -> &'static str {
+        match self {
+            Handoff::Conflict(_) => "conflict",
+            Handoff::LaneChecks { .. } => "failure",
+        }
+    }
+}
+
+/// The lane note after the first sentence, with its leading space; empty outside a moved lane.
+fn lane_note(lane: Option<&str>) -> String {
+    lane.map(|lane| format!(" {}", lane_moved_note(lane)))
+        .unwrap_or_default()
+}
+
+/// The turn of the reviewer that approved the version of `handoff` and fixes it; `lane` names the lane that moved.
+pub(crate) fn reviewer_turn(handoff: &Handoff<'_>, task: TaskId, lane: Option<&str>) -> String {
+    let (proposal, version) = handoff.version();
+    let noun = handoff.noun();
     format!(
-        "{proposal} v{version} for {task}, which you approved, conflicts with main at {} and was not integrated. You fix the conflict, not the author: the task stays in Review and the author gets no conflict notice.\n{}\n{}",
-        report.main_revision,
-        conflict_paths(report),
-        fix_steps(report)
+        "{proposal} v{version} for {task}, which you approved, {}.{} You fix the {noun}, not the author: the task stays in Review and the author gets no {noun} notice.\n{}\n{}",
+        handoff.what(),
+        lane_note(lane),
+        handoff.facts(),
+        handoff.steps()
     )
 }
 
-/// Sends the notice of a conflict that no reviewer agent takes on its own, in the caller's write: to the main agent for a task of the area main, with [`main_conflict_notice`], else to the review lead with [`review_lead_conflict_notice`].
-pub(crate) async fn conflict_notice_in_tx(
+/// Sends the notice of a handoff that no reviewer agent takes on its own, in the caller's write: to the main agent for a task of the area main, else to the review lead, with the note of the lane that moved.
+pub(crate) async fn handoff_notice_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
-    report: &ConflictReport,
+    handoff: &Handoff<'_>,
     task: TaskId,
     why: &NoReviewer,
+    lane: Option<&str>,
     now: fold_core::Timestamp,
 ) -> Result<(), ReviewError> {
     let main_task = tasks::labels_for_conn(tx.conn(), task)
@@ -256,17 +341,17 @@ pub(crate) async fn conflict_notice_in_tx(
         .iter()
         .any(|label| label.name.is_main());
     let text = if main_task {
-        main_conflict_notice(report, task, why)
+        main_notice(handoff, task, why, lane)
     } else {
-        review_lead_conflict_notice(report, task, why)
+        review_lead_notice(handoff, task, why, lane)
     };
-    tell_review_decider_in_tx(tx, buffer, task, report.proposal, text, main_task, now).await?;
+    let (proposal, _) = handoff.version();
+    tell_review_decider_in_tx(tx, buffer, task, proposal, text, main_task, now).await?;
     Ok(())
 }
 
 /// Why no reviewer agent takes the conflict, as the first sentence of a notice.
-fn no_reviewer_reason(report: &ConflictReport, why: &NoReviewer) -> String {
-    let (proposal, version) = (report.proposal, report.version);
+fn no_reviewer_reason(proposal: ProposalId, version: u32, why: &NoReviewer) -> String {
     match why {
         NoReviewer::Human(name) => format!("The human @{name} approved v{version}"),
         NoReviewer::Agent(agent) => format!("@{agent} approved v{version} and is not a reviewer"),
@@ -279,35 +364,41 @@ fn no_reviewer_reason(report: &ConflictReport, why: &NoReviewer) -> String {
     }
 }
 
-/// The notice to the main agent for a conflict of a task of the area main, whose reviews only it or a human decides, so no reviewer is started for it.
-pub(crate) fn main_conflict_notice(
-    report: &ConflictReport,
+/// The notice to the main agent for a task of the area main, whose reviews only it or a human decides, so no reviewer is started for it.
+fn main_notice(
+    handoff: &Handoff<'_>,
     task: TaskId,
     why: &NoReviewer,
+    lane: Option<&str>,
 ) -> String {
-    let (proposal, version) = (report.proposal, report.version);
+    let (proposal, version) = handoff.version();
+    let noun = handoff.noun();
     format!(
-        "{proposal} v{version} for {task} conflicts with main at {} and was not integrated. {}. {task} is a task of main, so you or a human fix the conflict: claim the review of {proposal} with claim_review, or ask the humans. The task stays in Review and its author gets no conflict notice.\n{}\nThe steps: {}",
-        report.main_revision,
-        no_reviewer_reason(report, why),
-        conflict_paths(report),
-        fix_steps(report)
+        "{proposal} v{version} for {task} {}.{} {}. {task} is a task of main, so you or a human fix the {noun}: claim the review of {proposal} with claim_review, or ask the humans. The task stays in Review and its author gets no {noun} notice.\n{}\nThe steps: {}",
+        handoff.what(),
+        lane_note(lane),
+        no_reviewer_reason(proposal, version, why),
+        handoff.facts(),
+        handoff.steps()
     )
 }
 
-/// The notice to the review lead for a conflict that no reviewer agent takes on its own.
-pub(crate) fn review_lead_conflict_notice(
-    report: &ConflictReport,
+/// The notice to the review lead for a handoff that no reviewer agent takes on its own.
+fn review_lead_notice(
+    handoff: &Handoff<'_>,
     task: TaskId,
     why: &NoReviewer,
+    lane: Option<&str>,
 ) -> String {
-    let (proposal, version) = (report.proposal, report.version);
-    let reason = no_reviewer_reason(report, why);
+    let (proposal, version) = handoff.version();
+    let noun = handoff.noun();
+    let reason = no_reviewer_reason(proposal, version, why);
     format!(
-        "{proposal} v{version} for {task} conflicts with main at {} and was not integrated. {reason}, so the conflict waits for a reviewer: start one for {proposal} with start_worker. The task stays in Review and its author gets no conflict notice.\n{}\nThe reviewer's steps: {}",
-        report.main_revision,
-        conflict_paths(report),
-        fix_steps(report)
+        "{proposal} v{version} for {task} {}.{} {reason}, so the {noun} waits for a reviewer: start one for {proposal} with start_worker. The task stays in Review and its author gets no {noun} notice.\n{}\nThe reviewer's steps: {}",
+        handoff.what(),
+        lane_note(lane),
+        handoff.facts(),
+        handoff.steps()
     )
 }
 
@@ -345,9 +436,39 @@ mod tests {
     }
 
     #[test]
+    fn a_lane_failure_turn_names_the_run_the_lane_and_the_steps() {
+        let task = TaskId::from_number(7).unwrap();
+        let handoff = Handoff::LaneChecks {
+            proposal: ProposalId::from_number(2).unwrap(),
+            version: 3,
+            run: CheckRunId::from_number(11).unwrap(),
+            main: RevisionId::from_number(8).unwrap(),
+        };
+        let turn = reviewer_turn(&handoff, task, Some("migrations"));
+        for wanted in [
+            "P-2 v3 for T-7, which you approved, failed its integration checks (cr-11) on its merge with main r8 and was not integrated. Lane migrations moved",
+            "You fix the failure, not the author",
+            "get_check_run with cr-11",
+            "merged onto the current main",
+            "submit_review_fix",
+        ] {
+            assert!(turn.contains(wanted), "{wanted}: {turn}");
+        }
+        let why = NoReviewer::ClaimGone;
+        let lead = review_lead_notice(&handoff, task, &why, Some("migrations"));
+        assert!(lead.contains("Lane migrations moved"));
+        assert!(lead.contains("so the failure waits for a reviewer"));
+        let main = main_notice(&handoff, task, &why, None);
+        assert!(main.contains("you or a human fix the failure"));
+        assert!(!main.contains("Lane "));
+        let conflict = reviewer_turn(&Handoff::Conflict(&report(&["a.rs"])), task, Some("m"));
+        assert!(conflict.contains("was not integrated. Lane m moved"));
+    }
+
+    #[test]
     fn the_reviewer_turn_says_who_fixes_the_conflict_and_how() {
         let task = TaskId::from_number(7).unwrap();
-        let turn = reviewer_conflict_turn(&report(&["a.rs"]), task);
+        let turn = reviewer_turn(&Handoff::Conflict(&report(&["a.rs"])), task, None);
         for wanted in [
             "P-2 v3 for T-7, which you approved, conflicts with main at r4",
             "You fix the conflict, not the author",
@@ -364,7 +485,7 @@ mod tests {
     fn a_conflict_of_a_main_task_asks_the_main_agent_and_starts_no_reviewer() {
         let task = TaskId::from_number(7).unwrap();
         let why = NoReviewer::Agent(AgentName::parse("main").unwrap());
-        let notice = main_conflict_notice(&report(&["a.rs"]), task, &why);
+        let notice = main_notice(&Handoff::Conflict(&report(&["a.rs"])), task, &why, None);
         for wanted in [
             "P-2 v3 for T-7 conflicts with main at r4",
             "@main approved v3 and is not a reviewer",
@@ -400,7 +521,7 @@ mod tests {
                 "@reviewer-2 approved v3, but fold could not resume it",
             ),
         ] {
-            let notice = review_lead_conflict_notice(&many, task, &why);
+            let notice = review_lead_notice(&Handoff::Conflict(&many), task, &why, None);
             assert!(notice.contains(wanted), "{wanted}: {notice}");
             assert!(
                 notice.contains("Conflicting paths (7): a, b, c, d, e and 2 more."),

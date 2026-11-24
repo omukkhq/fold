@@ -159,7 +159,9 @@ pub(super) fn resume_items(event: &Event) -> Vec<ResumeItem> {
         let failed_at_integration = data.get("stage").and_then(Value::as_str)
             == Some("integration")
             && data.get("state").and_then(Value::as_str) == Some("failed");
-        if !failed_at_integration {
+        // A lane member's failure after its lane moved goes to its reviewer, not its author.
+        let lane_handoff = data.get("lane").and_then(Value::as_str).is_some();
+        if !failed_at_integration || lane_handoff {
             return Vec::new();
         }
         return event
@@ -1340,6 +1342,7 @@ mod tests {
         for data in [
             json!({"stage": "integration", "state": "passed", "version": 3}),
             json!({"stage": "proposal", "state": "failed", "version": null}),
+            json!({"stage": "integration", "state": "failed", "version": 3, "lane": "m"}),
         ] {
             assert!(resume_items(&event(types::CHECKS_FINISHED, Some(6), data)).is_empty());
         }

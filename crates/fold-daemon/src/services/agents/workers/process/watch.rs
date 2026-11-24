@@ -586,12 +586,8 @@ pub(super) async fn watch_done(
         if !items.is_empty() {
             tokio::spawn(supervisor.clone().resume_authors(items));
         }
-        if let Some((proposal, version, agent)) = super::conflict::conflict_fixer(&event) {
-            tokio::spawn(
-                supervisor
-                    .clone()
-                    .give_conflict_to_reviewer(proposal, version, agent),
-            );
+        if let Some(owed) = super::conflict::conflict_fixer(&event) {
+            tokio::spawn(supervisor.clone().give_conflict_to_reviewer(owed));
         }
         if let Some(run) = super::gate::gate_run(&event) {
             tokio::spawn(supervisor.clone().resume_gate_author(run));

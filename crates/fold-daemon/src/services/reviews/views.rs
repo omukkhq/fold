@@ -1,6 +1,7 @@
 use fold_core::claims::is_stale;
 use fold_core::merge::{Conflict, ReportFile};
 use fold_core::policy::{GateState, IntegrateInput, ProposalFacts, gate_report};
+use fold_core::reviews::lanes::LanePlace;
 use fold_core::reviews::{deciding_approval, last_verdict_version};
 use fold_core::{
     Actor, ChangesetId, FoldError, ProposalId, ReviewBatchId, RevisionId, TaskDescription, TaskId,
@@ -75,6 +76,8 @@ pub struct ProposalView {
     pub related_tasks: Vec<RelatedTaskView>,
     /// The revision an integrated proposal became, and the review batch it integrated with, if any.
     pub integrated: Option<(RevisionId, Option<ReviewBatchId>)>,
+    /// The lane of main's `fold-checks.toml` that the open proposal's current version changes a path of, with its position; `None` outside every lane.
+    pub lane: Option<LanePlace>,
 }
 
 impl ReviewService {
@@ -160,6 +163,11 @@ impl ReviewService {
             main_task: facts.main_task,
             prerequisites: &facts.prerequisites,
         });
+        let lane = self
+            .lane_places()
+            .await?
+            .into_iter()
+            .find(|place| place.proposal == proposal);
         let comparison = self
             .workspaces
             .compare_states(
@@ -191,6 +199,7 @@ impl ReviewService {
             review_plan,
             related_tasks,
             integrated,
+            lane,
         })
     }
 }

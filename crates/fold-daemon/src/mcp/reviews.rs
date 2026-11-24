@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use fold_core::policy::{Gate, GateState, GateStatus};
+use fold_core::reviews::lanes::LanePlace;
 use fold_core::reviews::plans::{PlanCandidate, plan_hint};
 use fold_core::reviews::{
     Contracts, HumanReviewMark, IntentPart, ProposalIntent, ReviewScope, ReviewScopeRecord,
@@ -494,12 +495,12 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_PROPOSALS,
-            "List proposals with their task, author, whose turn it is, the review claim holder and the human review mark.",
+            "List proposals with their task, author, whose turn it is, the review claim holder and the human review mark. A member of a serial lane of main's fold-checks.toml has lane: its name, its position (1 is the front, null before its first approval) and held, the reason \"lane <name>, position <n>\" while it waits behind the front.",
             schema_for_type::<ListProposalsInput>(),
         ),
         Tool::new(
             GET_PROPOSAL,
-            "Read one proposal: versions, the intent of the version (its summary of how the change works and the parts of the diff with their files; check every hunk against its part), the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related open proposals without a review, each with its proposal, and the related tasks that can still open proposals, strongest link first, with the create_review_plan or start_worker call that has one reviewer review them together), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. The short form gives evidence_chars for the evidence, the intent's summary with each part's name and file_count, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the whole intent (what each part does, its files, contracts, decisions and not_changed), the task description and every whole body, such as before a review or when the task description matters.",
+            "Read one proposal: versions, the intent of the version (its summary of how the change works and the parts of the diff with their files; check every hunk against its part), the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related open proposals without a review, each with its proposal, and the related tasks that can still open proposals, strongest link first, with the create_review_plan or start_worker call that has one reviewer review them together), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, lane for a member of a serial lane of main's fold-checks.toml (name, position from 1 at the front in the order of first approval, null before one, and held, the reason \"lane <name>, position <n>\" while only the front may integrate), the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. The short form gives evidence_chars for the evidence, the intent's summary with each part's name and file_count, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the whole intent (what each part does, its files, contracts, decisions and not_changed), the task description and every whole body, such as before a review or when the task description matters.",
             schema_for_type::<GetProposalInput>(),
         ),
         Tool::new(
@@ -544,7 +545,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             INTEGRATE_PROPOSAL,
-            "Integrate the current version of a proposal onto main; only the main agent, the review lead and its reviewers may. Refusals: stale_version, changes_requested, not_approved, human_approval_missing, prerequisites_not_done (the gates are not met), author_cannot_integrate (your agent wrote it), integrator_required, and integration_conflicted (the version conflicts with main; details list the files and kinds; the reviewer that approved the version fixes it, or the review lead starts a reviewer for it, while the task stays in Review). When fold-checks.toml has integration checks, the result is queued: fold integrates the queued proposals one at a time in the order asked, after the integration checks pass on the merge with main; failed checks (result checks_failed when it ran at once) send the proposal back to its author, and until a new version the call is refused with invalid_request and the reason checks_failed. While the author's update or a reviewer's fix runs the checks of the next version, the call is refused with update_checks_running. A second call while the version waits in the queue is refused with invalid_request and the reason integration_queued; get_proposal shows integration_queued. When fold itself cannot run the checks, it answers workspace_io with the reason fold_failed: nothing is sent back, and you integrate again once the fault is fixed. When fold-checks.toml on main itself is not valid, the integration stays queued until a revision of main fixes it. fold sends each result as a message.",
+            "Integrate the current version of a proposal onto main; only the main agent, the review lead and its reviewers may. Refusals: stale_version, changes_requested, not_approved, human_approval_missing, prerequisites_not_done (the gates are not met), author_cannot_integrate (your agent wrote it), integrator_required, invalid_request with the reason lane_held (the proposal changes a path of a serial lane of main's fold-checks.toml and waits behind the front: lane members integrate one at a time in the order of their first approval; details give lane and position), and integration_conflicted (the version conflicts with main; details list the files and kinds; the reviewer that approved the version fixes it, or the review lead starts a reviewer for it, while the task stays in Review). When fold-checks.toml has integration checks, the result is queued: fold integrates the queued proposals one at a time in the order asked, after the integration checks pass on the merge with main; failed checks (result checks_failed when it ran at once) send the proposal back to its author, except for a member of a serial lane that another member moved since the version's base: that one goes to the reviewer that approved it, flagged like a conflict, with the note that the lane moved, and until a new version the call is refused with invalid_request and the reason checks_failed. While the author's update or a reviewer's fix runs the checks of the next version, the call is refused with update_checks_running. A second call while the version waits in the queue is refused with invalid_request and the reason integration_queued; get_proposal shows integration_queued. When fold itself cannot run the checks, it answers workspace_io with the reason fold_failed: nothing is sent back, and you integrate again once the fault is fixed. When fold-checks.toml on main itself is not valid, the integration stays queued until a revision of main fixes it. fold sends each result as a message.",
             schema_for_type::<IntegrateProposalInput>(),
         ),
         Tool::new(
@@ -648,6 +649,15 @@ fn mark_json(mark: Option<&HumanReviewMark>) -> Value {
             "reason": mark.reason,
             "set_by": mark.set_by.as_str(),
         })
+    })
+}
+
+/// A lane member's place: the lane, its position from 1 at the front (null before its first approval) and, behind the front, the hold reason.
+pub(crate) fn lane_json(place: &LanePlace) -> Value {
+    json!({
+        "name": place.lane,
+        "position": place.position,
+        "held": place.reason(),
     })
 }
 
@@ -868,6 +878,9 @@ fn view_json(view: &ProposalView, full: bool) -> Value {
             "purpose": update.purpose.as_str(),
         });
     }
+    if let Some(place) = &view.lane {
+        value["lane"] = lane_json(place);
+    }
     value["intent"] = selected
         .intent
         .as_ref()
@@ -982,15 +995,25 @@ async fn list_proposals(
             })
         })
         .transpose()?;
-    let rows = reviews
-        .list_proposals(ProposalFilter {
+    let (rows, lanes) = reviews
+        .list_proposals_in_lanes(ProposalFilter {
             state,
             unclaimed: input.unclaimed,
             limit: Some(input.limit.unwrap_or(DEFAULT_PROPOSAL_LIST)),
         })
         .await
         .map_err(from_review)?;
-    Ok(json!({"proposals": rows.iter().map(summary_json).collect::<Vec<_>>()}))
+    let listed: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            let mut value = summary_json(row);
+            if let Some(place) = lanes.iter().find(|place| place.proposal == row.id) {
+                value["lane"] = lane_json(place);
+            }
+            value
+        })
+        .collect();
+    Ok(json!({"proposals": listed}))
 }
 
 async fn get_proposal(

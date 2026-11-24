@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::FoldServer;
-use super::error::from_agent;
+use super::error::{from_agent, from_review};
 use super::parse;
 use crate::services::agents::{
     AgentOverview, ClaimSummary, OverviewFilter, PauseState, ProposalSummary, QueueEntry,
@@ -224,7 +224,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_WORKERS,
-            "List the areas with their leads, models and MCP servers, and the workers that run or failed, each with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human. A worker whose last turn ended because Claude Code could not reach the model or reached a usage limit, or whose login the API refused, has waits_for, network, usage_limit or login: fold runs that turn again in its session once the cause has passed (for login, once a person gives the account a working token or switches the account), so do not restart or replace it. stopped_count counts the stopped workers; pass include_stopped true to list them, such as to read a finished worker's sessions, and include_instructions true for each area's instructions. queue lists the worker starts that wait for a place, in the order fold runs them.",
+            "List the areas with their leads, models and MCP servers, and the workers that run or failed, each with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human. A worker whose last turn ended because Claude Code could not reach the model or reached a usage limit, or whose login the API refused, has waits_for, network, usage_limit or login: fold runs that turn again in its session once the cause has passed (for login, once a person gives the account a working token or switches the account), so do not restart or replace it. stopped_count counts the stopped workers; pass include_stopped true to list them, such as to read a finished worker's sessions, and include_instructions true for each area's instructions. queue lists the worker starts that wait for a place, in the order fold runs them. A reviewer that fixes a member of a serial lane on main, after a conflict or failed integration checks once the lane moved, has lane_fix: each proposal with its lane name, position and held reason.",
             schema_for_type::<ListWorkersInput>(),
         ),
         Tool::new(
@@ -558,6 +558,10 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
     let config = server.agents.worker_config().await;
     let pause = server.agents.pause_state().await.map_err(from_agent)?;
     let queue = server.agents.queued_starts().await.map_err(from_agent)?;
+    let lane_fixes = match &server.reviews {
+        Some(reviews) => reviews.lane_fixes().await.map_err(from_review)?,
+        None => Vec::new(),
+    };
     let mut listed = Vec::with_capacity(workers.len());
     let mut stopped_count = 0;
     for worker in &workers {
@@ -576,6 +580,20 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
             .map_or(Value::Null, |note| handoff_json(&note));
         if let Some(sessions) = previous.remove(&worker.agent) {
             add_previous_sessions(&mut value, &sessions);
+        }
+        if worker.role == Role::Reviewer {
+            let fixes: Vec<Value> = lane_fixes
+                .iter()
+                .filter(|place| worker.proposals.contains(&place.proposal))
+                .map(|place| {
+                    let mut fix = super::reviews::lane_json(place);
+                    fix["proposal"] = json!(place.proposal);
+                    fix
+                })
+                .collect();
+            if !fixes.is_empty() {
+                value["lane_fix"] = json!(fixes);
+            }
         }
         listed.push(value);
     }

@@ -1516,7 +1516,7 @@ fn the_reference_shows_every_config_key_in_its_example() {
 #[test]
 fn the_reference_names_every_checks_key_and_run_state() {
     let top = checks_keys("");
-    assert_eq!(top, ["setup", "check"]);
+    assert_eq!(top, ["setup", "check", "serial"]);
     assert!(REFERENCE.contains("`[setup]`") && REFERENCE.contains("`[[check]]`"));
     for key in checks_keys("[setup]\n")
         .into_iter()

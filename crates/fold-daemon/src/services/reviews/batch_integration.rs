@@ -8,6 +8,7 @@ use fold_core::reviews::batches::{
     batch_readiness, batch_wait_cutoff, member_standing, waits_on_comment,
 };
 use fold_core::reviews::checks::RunReason;
+use fold_core::reviews::lanes::group_held;
 use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{
     Actor, AddressedAs, CheckRunId, EventActor, FoldError, IdKind, IntegrationId, MessageBody,
@@ -28,6 +29,7 @@ use super::integrate::{
     ATTEMPTS, Commit, HumanResolution, Integrated, IntegrationOutcome, IntegrationRequest, Plan,
     Step, Subject, caller_facts, decide, queued_actor,
 };
+use super::lanes::lane_held_refusal;
 use super::verdicts::update_refusal;
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
@@ -372,13 +374,20 @@ impl ReviewService {
         Ok(standing.view(revisions))
     }
 
-    /// The proposals that batches hold back from integrating on their own: every member of an open batch, whose review is not submitted yet, and every member of a submitted batch whose turn has not ended that waits for the others or integrates with them. A submitted batch whose members all have their final state is ready for its turn, unless fold failed to run its checks on the same version and main, which only a caller's integrate or a move of main tries again, or the author's update or a reviewer's fix of a member that integrates runs the checks of its next version, whose end tries again.
+    /// The proposals that batches and lanes hold back from integrating on their own: every member of a lane behind its front, every member of an open batch, whose review is not submitted yet, and every member of a submitted batch whose turn has not ended that waits for the others or integrates with them. A submitted batch whose members all have their final state is ready for its turn, unless a member of a lane ahead of a ready member is outside the batch, or fold failed to run its checks on the same version and main, which only a caller's integrate or a move of main tries again, or the author's update or a reviewer's fix of a member that integrates runs the checks of its next version, whose end tries again.
     pub(super) async fn batch_holds(&self) -> Result<BatchHolds, ReviewError> {
         let head = workspaces::head(self.store.read())
             .await?
             .ok_or(StoreError::Corrupt("refs.main"))?
             .number;
+        let places = self.lane_places().await?;
         let mut holds = BatchHolds::default();
+        holds.held.extend(
+            places
+                .iter()
+                .filter(|place| place.held())
+                .map(|place| place.proposal),
+        );
         let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
         for open in batches::list_batches(&mut *read, true).await? {
             for member in batches::members(&mut *read, open.id).await? {
@@ -400,6 +409,10 @@ impl ReviewService {
             let BatchReadiness::Final { members: ready } = readiness else {
                 continue;
             };
+            // Members of one lane integrate together in one batch; a member ahead of them outside the batch goes first.
+            if group_held(&places, ready) {
+                continue;
+            }
             // A ready member whose update or reviewer's fix runs its checks would end that run as workspace_changed; the batch takes its turn once the run ends.
             if !standing.updating_among(ready).is_empty() {
                 continue;
@@ -648,6 +661,15 @@ impl ReviewService {
                 workspace: facts.live_workspace,
                 waits_for,
             });
+        }
+        let places = self.lane_places().await?;
+        let members: Vec<ProposalId> = plans.iter().map(|plan| plan.proposal).collect();
+        if group_held(&places, &members)
+            && let Some(place) = places
+                .iter()
+                .find(|place| members.contains(&place.proposal) && place.held())
+        {
+            return Err(lane_held_refusal(place).into());
         }
         Ok(plans)
     }
