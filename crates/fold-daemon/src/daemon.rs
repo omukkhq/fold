@@ -201,6 +201,7 @@ impl Daemon {
                 .with_registry(registry.clone())
                 .with_push_files(config.push_dir())
                 .with_notify_dir(config.notify_dir())
+                .with_closing_dir(config.closing_dir())
                 .with_folder_files(folder_files),
             registry,
             clock: clock.clone(),

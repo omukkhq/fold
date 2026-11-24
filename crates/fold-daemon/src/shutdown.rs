@@ -94,3 +94,18 @@ pub(crate) async fn hold(point: &str, name: &str) {
         std::future::pending::<()>().await;
     }
 }
+
+/// Waits while the failpoint `point` is set to `return(<name>)` and goes on once a test removes it, so a test can hold a step of a project's close that runs without a limit and then let it finish.
+#[cfg(feature = "failpoints")]
+pub(crate) async fn hold_while(point: &str, name: &str) {
+    loop {
+        let held = (|| {
+            fail::fail_point!(point, |arg: Option<String>| arg.as_deref() == Some(name));
+            false
+        })();
+        if !held {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}

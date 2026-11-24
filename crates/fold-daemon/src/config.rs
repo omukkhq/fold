@@ -33,6 +33,12 @@ impl DaemonConfig {
         self.data_dir.join("notices")
     }
 
+    /// The lock files of the project folders that the daemon closes and `fld init` makes, as [`crate::services::projects::closing::closing_dir`] finds them from the host's paths.
+    pub fn closing_dir(&self) -> PathBuf {
+        self.data_dir
+            .join(crate::services::projects::closing::CLOSING_DIR)
+    }
+
     /// The host's Claude accounts with their tokens, outside every project folder.
     pub fn accounts_dir(&self) -> PathBuf {
         self.data_dir.join(fold_core::layout::ACCOUNTS_DIR)
@@ -91,6 +97,15 @@ impl LockOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_daemon_and_init_find_the_same_folder_locks() {
+        let host = fold_core::HostPaths::new(Some("/data"), None).unwrap();
+        assert_eq!(
+            config("127.0.0.1:7420").closing_dir(),
+            crate::services::projects::closing::closing_dir(&host)
+        );
+    }
 
     fn config(listen: &str) -> DaemonConfig {
         DaemonConfig {

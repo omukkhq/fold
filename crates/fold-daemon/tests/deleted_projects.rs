@@ -14,6 +14,7 @@ use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::jobs::QuietCheckpoints;
 use fold_daemon::projects::{DatabaseFile, ProjectHandle, Projects, Slot};
+use fold_daemon::services::projects::closing::{FolderLock, closing_dir};
 use fold_daemon::services::projects::{
     self as project_service, DEFAULT_SESSION_LIFETIME, init_project,
 };
@@ -59,7 +60,9 @@ impl Running {
             .root;
         let registry = Store::open_registry(&host.registry_db()).await.unwrap();
         let state: AppState = Arc::new(DaemonState {
-            projects: Projects::default().with_registry(registry.clone()),
+            projects: Projects::default()
+                .with_registry(registry.clone())
+                .with_closing_dir(closing_dir(&host)),
             registry,
             clock: Arc::new(clock.clone()),
             assets: AssetSource::Embedded,
@@ -575,5 +578,30 @@ async fn a_fold_dir_without_its_database_keeps_the_project_and_says_how_to_get_i
     .await
     .unwrap_err();
     assert_eq!(refused.code(), Some("project_incomplete"));
+    running.close().await;
+}
+
+/// An init that holds the lock of the folder is making a new project there: the daemon leaves the old handle and the registry row until the lock is let go, and closes it then.
+#[tokio::test]
+async fn the_old_handle_of_a_deleted_fold_waits_for_an_init_that_holds_the_folder() {
+    let running = Running::start().await;
+    let handle = running.handle.clone();
+    let init = FolderLock::try_take(&closing_dir(&running.host), &running.root)
+        .await
+        .unwrap()
+        .unwrap();
+    running.delete_fold_data();
+
+    assert_eq!(running.state.projects.close_stale().await, 0);
+    assert!(!closed(&handle));
+    assert!(running.registered().await);
+    let (status, body) = running.get("/tasks").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"]["code"], "project_unavailable");
+    assert!(!closed(&handle), "an open leaves the handle too");
+
+    drop(init);
+    assert_eq!(running.state.projects.close_stale().await, 1);
+    running.assert_removed(&handle).await;
     running.close().await;
 }

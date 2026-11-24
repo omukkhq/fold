@@ -111,6 +111,8 @@ mod crash_workspace_removal;
 mod daemon_shell;
 mod delete_archive;
 mod deleted_projects;
+#[cfg(feature = "failpoints")]
+mod deleted_reinit_failpoints;
 mod dependencies_service;
 mod diff_routes;
 mod direct_changes;
