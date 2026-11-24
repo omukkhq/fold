@@ -7,7 +7,7 @@ use fold_cli::claude_files;
 use fold_core::ManualClock;
 use fold_daemon::{Daemon, DaemonConfig};
 use fold_store::Store;
-use fold_store::testing::remove_dir_eventually;
+use fold_store::testing::{eventually, remove_dir_eventually};
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -219,24 +219,45 @@ async fn the_running_daemon_closes_a_project_whose_fold_was_deleted_and_init_mak
     assert!(first.status.success(), "{first:?}");
     let Some(fold_daemon::projects::Slot::Open(old)) = daemon.state().projects.slot("scratch")
     else {
-        panic!("the daemon opened the project");
+        panic!("the daemon did not open the project");
     };
 
     // The open project can write into `.fold/` while it is removed.
     remove_dir_eventually(&project.join(".fold"), Duration::from_secs(10)).await;
-    // The daemon's live job finds the deleted database on its next tick, with no request for the project.
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        while !old.store.read().is_closed() {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    // The daemon's live job finds the deleted database on its next tick, with no request for the project. The pool marks itself closed when its close starts, so the test waits until the daemon also let go of the handle, which it does once the close returned, and until the registry and the slots no longer hold the project.
+    let registry = daemon.state().registry.clone();
+    eventually(Duration::from_secs(30), async || {
+        let closed = old.store.read().is_closed();
+        let released = Arc::strong_count(&old) == 1;
+        let slot_gone = daemon.state().projects.slot("scratch").is_none();
+        let rows = fold_store::projects::list_projects(registry.read())
+            .await
+            .unwrap()
+            .len();
+        if closed && released && slot_gone && rows == 0 {
+            Ok(())
+        } else {
+            Err(format!(
+                "closed {closed}, released {released}, slot gone {slot_gone}, registry rows {rows}"
+            ))
         }
     })
-    .await
-    .unwrap();
-    assert!(daemon.state().projects.handles().is_empty());
-    assert!(!project.join(".fold").exists());
+    .await;
+    assert!(
+        daemon.state().projects.handles().is_empty(),
+        "the daemon still holds an open project"
+    );
+    assert!(
+        !project.join(".fold").exists(),
+        "the closed project made its .fold again"
+    );
     // The same tick removed the project from fold.
     let listed = get_projects(daemon.socket_path()).await;
-    assert_eq!(listed["projects"], serde_json::json!([]));
+    assert_eq!(
+        listed["projects"],
+        serde_json::json!([]),
+        "the project is still listed"
+    );
 
     let (sandbox_again, cwd) = (sandbox.clone(), project.clone());
     let second = tokio::task::spawn_blocking(move || {
@@ -251,9 +272,12 @@ async fn the_running_daemon_closes_a_project_whose_fold_was_deleted_and_init_mak
     );
     let Some(fold_daemon::projects::Slot::Open(new)) = daemon.state().projects.slot("scratch")
     else {
-        panic!("the daemon opened the new project");
+        panic!("the daemon did not open the new project");
     };
-    assert!(!Arc::ptr_eq(&old, &new));
+    assert!(
+        !Arc::ptr_eq(&old, &new),
+        "the daemon kept the old handle for the new project"
+    );
     daemon.shutdown().await;
 }
 
