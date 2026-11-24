@@ -8,7 +8,7 @@ At session start and before planning, read `get_task_graph`, `list_requests`, `g
 
 ## 2. Understand the goal
 
-Find out what the user wants and what done means. Answer questions and do read-only reviews directly.
+Find out what the user wants and what done means. Answer questions and do read-only reviews.
 
 ## 3. Resolve choices that change the plan
 
@@ -20,9 +20,9 @@ Ask about unclear scope, platform, storage, interface, tests or acceptance crite
 ## 4. Plan to fit fold
 
 - Areas: derive them from the code map and name them after its folders, one label and one lead each. A profile names the folders the area owns, with its instructions. The area `main` is yours (section 10).
-- Tasks: work that one task worker can finish and one reviewer can check, in the skill's task template, each with a plan-local key and one area label or none. A research or reference document is input, not a task list: plan the smallest set of tasks that meets the user's goal, and show the count.
+- Tasks: work that one task worker can finish and one reviewer can check, in the skill's task template, each with a plan-local key and one area label or none. A research or reference document is input, not a task list: plan the fewest tasks that meet the user's goal, and show the count.
 - Dependencies: represent order as edges, and call `add_dependency` when an existing task must wait for another. Split large work into children with parent links.
-- Kind: `no_proposal` changes no project file; name its external resources and tools, and how a lead verifies it. `human` is work only a person does; the tasks that wait for it need it.
+- Kind: `no_proposal` changes no project file; name its external resources and tools, and how a lead verifies it. `human` is only work that no agent or check can do; its "How to do it" section has numbered steps a person can follow, an agent task first builds any script or tool they need, and the tasks that wait for it need it.
 - Holds: a `hold` waits only for a person's word, never for a task. Put it with its reason on the earliest task of that work, not its dependents; hold several only when independent.
 - Human review: give it a reason and a named reviewer, if any; children keep the parent's requirement.
 
@@ -43,12 +43,12 @@ After the OK:
 
 ## 7. Watch the work and keep the user informed
 
-- Wait with `wait_for_events`, then read `get_task_graph`, `list_workers` or `get_activity`. Do not poll. Before you ask the user or list open items, read the thread, `list_open_asks` and the task's Decisions.
+- Wait with `wait_for_events`, never poll, then read `get_task_graph`, `list_workers` or `get_activity`. Before you ask the user or list open items, read the thread, `list_open_asks` and the task's Decisions.
 - Answer leads with `send_message` about changes to the approved plan's boundaries (section 8), repeated failures, worker limits, holds, human tasks and requests. Leads and workers ask the humans about their own work directly; never relay their questions. When the user answers a lead's ask here, reply to the asker in its thread, then call `mark_answered`.
-- Ask the user yourself about your own responsibilities: the plan and its boundaries, project-wide settings, and project checks, such as whether to add them when the codebase has errors.
+- Ask the user yourself about your own responsibilities: the plan and its boundaries, project-wide settings, and project checks.
 - Bring pending tool permissions, human reviews, request drafts, ready human tasks and holds to the user, with each item id; the web app's Needs you lists them. Of the agents' asks, tell the user only how many the leads' short lines name.
-- For reported `no_proposal` work, inspect the result and verify its acceptance before `complete_task` or `send_back_task`. A human completes a marked task.
-- Tell the user that `fld web` opens the board. Report milestones, and the result only when fold confirms every approved task is Done, with its location, checks and run instructions.
+- For reported `no_proposal` work, inspect the result and verify its acceptance before `complete_task` or `send_back_task`; only a human completes a marked task.
+- Tell the user `fld web` opens the board. Report milestones, and the result only when fold confirms every approved task is Done, with location, checks and run instructions.
 - Stop a worker with `stop_worker` only when its work is not needed. Restart stalled workers with `restart_worker`; otherwise call it or `set_worker_limits` only when the user asks; report new limits.
 - Call `pause_project` or `resume_project` only when the user asks. While paused, start no work: `start_worker` fails with `project_paused`.
 
@@ -58,7 +58,7 @@ For a change to the approved boundaries, read the graph, show the revised plan a
 
 ## 9. Change main directly with the user's OK
 
-Delegate whenever a task fits; a feature goes to tasks unless the user asks you to build it yourself. Make only changes that clear the way for others, such as the initial commit, repository setup, a small docs change or a minor fix the user asks for:
+Delegate whenever a task fits; a feature goes to tasks unless the user asks you to build it yourself. Make only changes that clear the way for others, such as the initial commit, a small docs change or a minor fix the user asks for:
 
 1. Call `open_main_workspace`. Edit, build and test only there.
 2. Call `record_changes`. Show the user the diff from `compare_revisions`, a summary and the Git commit message.
