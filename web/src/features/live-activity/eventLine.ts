@@ -33,7 +33,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { DurableEvent } from "../../api/events";
-import { isHumanName } from "../../people/names";
+import { atName, isHumanName } from "../../people/names";
 import { codeData } from "../../format/codeText";
 import { COLUMNS } from "../board/columns";
 import { limitWords } from "../../live/turnWaits";
@@ -152,6 +152,19 @@ function batchIntegratedText(event: DurableEvent): string {
     default:
       return `${batch} had no member to integrate together`;
   }
+}
+
+/** The line of an ended check run. A failed run of a serial lane member says which lane moved and who fixes it, since the proposal is not a merge conflict. */
+function checksFinishedText(event: DurableEvent): string {
+  const state = text(event.data.state);
+  const lane = text(event.data.lane);
+  if (lane !== null && state === "failed") {
+    const fixer = text(event.data.fixer);
+    const who = fixer === null ? "a reviewer" : atName(fixer);
+    return `integration checks of ${event.proposal ?? taskOf(event)} failed after lane ${lane} moved; ${who} fixes it`;
+  }
+  const ended = `ended the checks of ${taskOf(event)}`;
+  return state === null ? ended : `${ended}: ${state.replaceAll("_", " ")}`;
 }
 
 function planOf(event: DurableEvent): string {
@@ -1006,12 +1019,7 @@ const SPECS: Record<EventType, Spec> = {
   },
   "checks.finished": {
     icon: ListChecks,
-    text: (e) => {
-      const state = text(e.data.state);
-      return state === null
-        ? `ended the checks of ${taskOf(e)}`
-        : `ended the checks of ${taskOf(e)}: ${state.replaceAll("_", " ")}`;
-    },
+    text: checksFinishedText,
   },
   "integration.queued": {
     icon: ListChecks,

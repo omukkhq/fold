@@ -1,4 +1,5 @@
 import type { ProposalState, ProposalSummary } from "@/api/proposals";
+import { isMergeConflict, type WithLane } from "./laneState";
 import { projectPath, withQuery } from "@/routes/paths";
 
 export const STATES: readonly ProposalState[] = [
@@ -42,12 +43,15 @@ export function shownState(search: ListSearch): ProposalState {
   return search.state ?? "open";
 }
 
-/** `waitingForYou` holds the ids the daemon names as waiting for your review; the waiting filter keeps only those. */
-export function filterProposals(
-  proposals: readonly ProposalSummary[],
+/**
+ * `waitingForYou` holds the ids the daemon names as waiting for your review; the waiting filter keeps only those.
+ * The conflicted filter keeps merge conflicts only: a proposal whose integration checks failed after its lane moved shows in the list under no filter of its own, and under the open state like any proposal that waits for its reviewer.
+ */
+export function filterProposals<T extends WithLane>(
+  proposals: readonly T[],
   search: ListSearch,
   waitingForYou: readonly string[] = [],
-): ProposalSummary[] {
+): T[] {
   const state = shownState(search);
   return proposals
     .filter((p) => p.state === state)
@@ -57,7 +61,7 @@ export function filterProposals(
       if (search.claim === "unclaimed") return p.review_claim === null;
       return true;
     })
-    .filter((p) => !search.conflicted || p.conflicted)
+    .filter((p) => !search.conflicted || isMergeConflict(p))
     .sort((a, b) => b.updated_at - a.updated_at);
 }
 
@@ -134,7 +138,7 @@ export function activeFilters(search: ListSearch): ActiveFilter[] {
 
 /** The open proposals each toggle of the Filter menu would keep, with the claim filter as it is. */
 export function menuCounts(
-  proposals: readonly ProposalSummary[],
+  proposals: readonly WithLane[],
   search: ListSearch,
   waitingForYou: readonly string[],
 ): { waiting: number; conflicted: number } {

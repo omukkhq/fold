@@ -978,3 +978,43 @@ describe("eventLine", () => {
     ]);
   });
 });
+
+describe("checks.finished of a serial lane member", () => {
+  it("names the lane and the fixer when the checks failed", () => {
+    expect(
+      eventLine(
+        event("checks.finished", {
+          data: { state: "failed", lane: "migrations", fixer: "reviewer" },
+        }),
+      ).text,
+    ).toBe(
+      "integration checks of P-4 failed after lane migrations moved; @reviewer fixes it",
+    );
+  });
+
+  it("says a reviewer fixes it when no fixer is named, and falls back to the task", () => {
+    expect(
+      eventLine(
+        event("checks.finished", {
+          proposal: null,
+          data: { state: "failed", lane: "migrations" },
+        }),
+      ).text,
+    ).toBe(
+      "integration checks of T-12 failed after lane migrations moved; a reviewer fixes it",
+    );
+  });
+
+  it("keeps the plain line for a passed run of a lane and for a run without a lane", () => {
+    expect(
+      eventLine(
+        event("checks.finished", {
+          data: { state: "passed", lane: "migrations" },
+        }),
+      ).text,
+    ).toBe("ended the checks of T-12: passed");
+    expect(
+      eventLine(event("checks.finished", { data: { state: "failed" } })).text,
+    ).toBe("ended the checks of T-12: failed");
+  });
+});

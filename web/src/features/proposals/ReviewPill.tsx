@@ -4,6 +4,7 @@ import {
   CircleDashed,
   CircleSlash,
   GitMerge,
+  ListChecks,
   UserCheck,
   type LucideIcon,
 } from "lucide-react";
@@ -13,6 +14,7 @@ import { PILL_CLASSES, type Pill, type PillIcon } from "./present";
 
 const ICONS: Record<PillIcon, LucideIcon> = {
   conflict: GitMerge,
+  checks: ListChecks,
   changes: CircleAlert,
   human: UserCheck,
   approved: CircleCheck,

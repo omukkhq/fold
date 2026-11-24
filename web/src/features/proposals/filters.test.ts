@@ -168,3 +168,31 @@ describe("the Filter menu", () => {
     });
   });
 });
+
+describe("a lane check failure", () => {
+  const failure = {
+    kind: "lane_checks_failed" as const,
+    lane: "migrations",
+    run: "cr-4",
+    fixer: "reviewer",
+  };
+  const merge = { kind: "merge_conflict" as const, fixer: null };
+  const list = [
+    { ...summary("P-1", { conflicted: true }), conflicted_reason: merge },
+    { ...summary("P-2", { conflicted: true }), conflicted_reason: failure },
+    summary("P-3", { conflicted: true }),
+    summary("P-4"),
+  ];
+
+  it("never counts as a merge conflict", () => {
+    expect(ids(filterProposals(list, { conflicted: true }))).toEqual([
+      "P-1",
+      "P-3",
+    ]);
+    expect(menuCounts(list, {}, []).conflicted).toBe(2);
+  });
+
+  it("stays in the open list with no filter", () => {
+    expect(ids(filterProposals(list, {}))).toContain("P-2");
+  });
+});

@@ -7,6 +7,7 @@ import { focusRing } from "@/lib/focus";
 import { PersonName } from "@/people/PersonName";
 import { projectPath } from "@/routes/paths";
 import { IdLink } from "@/components/id/IdLink";
+import { laneText } from "./laneState";
 import { planWait } from "./planWait";
 import { reviewPill, versionText } from "./present";
 import { ReviewPill } from "./ReviewPill";
@@ -28,6 +29,7 @@ export function ProposalHeader({
   batch: string | null;
 }) {
   const summary = proposal.summary;
+  const lane = laneText(proposal.lane);
   const wait = planWait(proposal.review_plan, summary.id, now);
   return (
     <header className="flex flex-col gap-8 px-16 pt-20 md:px-24">
@@ -63,6 +65,7 @@ export function ProposalHeader({
             revision,
             batch,
             conflictMain: proposal.conflict?.main_revision ?? null,
+            reason: proposal.conflicted_reason,
           })}
           large
         />
@@ -76,6 +79,7 @@ export function ProposalHeader({
           {summary.task}
         </IdLink>{" "}
         · proposal {versionText(summary)}
+        {lane === null ? null : ` · ${lane}`}
       </p>
       {wait === null ? null : (
         <p

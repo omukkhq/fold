@@ -510,3 +510,61 @@ describe("authorArea", () => {
     expect(authorArea(undefined, "frontend/ui")).toBeNull();
   });
 });
+
+describe("a lane check failure", () => {
+  const failure = {
+    kind: "lane_checks_failed" as const,
+    lane: "migrations",
+    run: "cr-4",
+    fixer: "reviewer",
+  };
+  const lane = { name: "migrations", position: 2, held: null };
+  const conflicted = proposalSummary("P-9", {
+    conflicted: true,
+    turn: "with_reviewer",
+    review_claim: "reviewer",
+  });
+
+  it("is its own pill, not a conflict, and names the fixer", () => {
+    const pill = reviewPill(conflicted, { reason: failure, long: true });
+    expect(pill).toMatchObject({ tone: "danger", icon: "checks" });
+    expect(pill.text).toBe(
+      "Integration checks failed after lane migrations moved · @reviewer fixes it",
+    );
+    expect(pill.segments).toContainEqual({ actor: "reviewer" });
+    expect(
+      reviewPill({ ...conflicted, conflicted_reason: failure }).text,
+    ).toContain("lane migrations moved");
+  });
+
+  it("keeps a merge conflict as it was, with or without its reason", () => {
+    const merge = { kind: "merge_conflict" as const, fixer: "reviewer" };
+    expect(reviewPill(conflicted, { reason: merge }).text).toBe("Conflict");
+    expect(reviewPill(conflicted, { reason: null })).toMatchObject({
+      icon: "conflict",
+      text: "Conflict",
+    });
+  });
+
+  it("shows in the list pill without a wait on a person", () => {
+    const pill = listPill(
+      { ...conflicted, conflicted_reason: failure },
+      { waitsForYou: true },
+    );
+    expect(pill.icon).toBe("checks");
+    expect(pill.tone).toBe("danger");
+    expect(pill.text).not.toContain("waits for you");
+  });
+
+  it("puts the lane and the position in the list line, only for a lane member", () => {
+    expect(segmentsText(listMeta({ ...conflicted, lane }))).toBe(
+      "v1 of 1 · Lane migrations, position 2 · claimed by @reviewer",
+    );
+    expect(segmentsText(listMeta(conflicted))).toBe(
+      "v1 of 1 · claimed by @reviewer",
+    );
+    expect(
+      segmentsText(listMeta({ ...conflicted, lane, state: "closed" })),
+    ).toBe("v1 of 1");
+  });
+});

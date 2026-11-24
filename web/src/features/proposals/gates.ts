@@ -6,6 +6,7 @@ import {
   type Segment,
   type Segments,
 } from "@/people/segments";
+import { fixerSegments, laneFailure, laneFailureText } from "./laneState";
 import { approvals } from "./present";
 import { approverSegments } from "./stateLine";
 
@@ -139,6 +140,10 @@ export function waitingSummary(p: ProposalDetail): Segments | null {
   }
   const v = `v${String(s.current_version)}`;
   const author = actorSegment(s.author);
+  const failure = laneFailure(p.conflicted_reason);
+  if (s.conflicted && failure !== null) {
+    return seg`${laneFailureText(failure)}. ${fixerSegments(failure)}, and ${author} has nothing to send.`;
+  }
   if (s.conflicted) {
     return seg`fold sent the report to ${author}. The task is back in In progress until a new version arrives.`;
   }
