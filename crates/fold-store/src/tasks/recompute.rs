@@ -90,7 +90,7 @@ pub async fn load_facts(
                   EXISTS (
                       SELECT 1 FROM workspaces w WHERE w.task_id = t.id AND w.kind = 'task'
                   ) AS "ever_had_workspace!: bool",
-                  (p.conflicted OR p.checks_failed) AS "conflicted?: bool",
+                  p.checks_failed AS "checks_failed?: bool",
                   (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) AS "verdict?: String"
            FROM tasks t
            LEFT JOIN proposals p ON p.task_id = t.id AND p.state = 'open'
@@ -102,11 +102,11 @@ pub async fn load_facts(
     .await?;
     rows.into_iter()
         .map(|row| {
-            let proposal = match row.conflicted {
+            let proposal = match row.checks_failed {
                 None => ProposalFact::None,
-                Some(conflicted) => ProposalFact::open(
+                Some(checks_failed) => ProposalFact::open(
                     row.verdict.as_deref() == Some("request_changes"),
-                    conflicted,
+                    checks_failed,
                 ),
             };
             let kind = row

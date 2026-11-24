@@ -547,7 +547,7 @@ async fn a_member_that_conflicts_goes_back_alone_and_the_others_integrate_togeth
         .summary;
     assert!(summary.conflicted, "P-4 went back with its conflict report");
     assert_eq!(scene.events("integration.conflicted").await.len(), 1);
-    assert_eq!(scene.status(4).await, TaskStatus::InProgress);
+    assert_eq!(scene.status(4).await, TaskStatus::Review);
     assert_consistent(&scene.fx.project).await;
 }
 

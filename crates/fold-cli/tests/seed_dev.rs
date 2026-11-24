@@ -189,7 +189,7 @@ async fn the_seed_fills_every_column_and_every_state_of_the_review_screens() {
         .collect();
     assert_eq!(
         totals,
-        [2, 2, 4, 2, 3],
+        [2, 2, 3, 3, 3],
         "the seed builds the same board every run"
     );
 

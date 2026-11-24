@@ -151,7 +151,7 @@ async fn conflicting_integration_publishes_nothing() {
 }
 
 #[tokio::test]
-async fn conflict_marks_the_proposal_and_returns_the_task_to_in_progress() {
+async fn conflict_marks_the_proposal_and_keeps_the_task_in_review() {
     let fx = Fixture::new().await;
     let review = conflicting(&fx).await;
     assert_eq!(fx.status(1).await, TaskStatus::Review);
@@ -162,7 +162,7 @@ async fn conflict_marks_the_proposal_and_returns_the_task_to_in_progress() {
     assert!(summary.conflicted);
     assert_eq!(summary.turn, Some(Turn::WithAuthor));
     assert_eq!(summary.current_version, 1);
-    assert_eq!(fx.status(1).await, TaskStatus::InProgress);
+    assert_eq!(fx.status(1).await, TaskStatus::Review);
 }
 
 #[tokio::test]
@@ -227,7 +227,6 @@ async fn conflict_writes_one_integrations_row_with_the_report() {
         [
             types::INTEGRATION_CONFLICTED.as_str(),
             types::MESSAGE_SENT.as_str(),
-            types::TASK_STATUS_CHANGED.as_str(),
         ]
     );
     let conflicted = &events[0];
@@ -344,7 +343,7 @@ async fn update_proposal_refuses_while_markers_remain() {
     let summary = detail(&fx, None).await.summary;
     assert_eq!(summary.current_version, 1);
     assert!(summary.conflicted);
-    assert_eq!(fx.status(1).await, TaskStatus::InProgress);
+    assert_eq!(fx.status(1).await, TaskStatus::Review);
 }
 
 #[tokio::test]
@@ -432,7 +431,7 @@ async fn binary_and_delete_versus_edit_conflicts_are_reported_by_kind() {
     assert!(report.files.iter().all(|file| file.hunks.is_empty()));
     let body = fx.text("SELECT body FROM messages").await.unwrap();
     assert!(body.contains("(3): README.md, src/lib.rs, src/new.rs."));
-    assert_eq!(fx.status(1).await, TaskStatus::InProgress);
+    assert_eq!(fx.status(1).await, TaskStatus::Review);
 }
 
 /// A proposal closed after the merge found the conflict and before it was recorded makes the record step write nothing and the procedure start again, whose open gate then refuses. No conflicted row, flag, message or event is left behind, and main stays where it was.

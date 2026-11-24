@@ -988,7 +988,7 @@ async fn get_proposal_reports_the_turn() {
     fx.execute("UPDATE proposals SET conflicted = 1").await;
     fx.recompute(1).await;
     assert_eq!(turn().await, Some(Turn::WithAuthor));
-    assert_eq!(fx.status(1).await, TaskStatus::InProgress);
+    assert_eq!(fx.status(1).await, TaskStatus::Review);
     assert_eq!(Turn::WithAuthor.as_str(), "with_author");
     assert_eq!(Turn::WithReviewer.as_str(), "with_reviewer");
 

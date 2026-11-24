@@ -516,7 +516,7 @@ async fn conflicting_proposal_returns_conflicts_and_publishes_nothing() {
     assert_eq!(
         untouched(&fx).await,
         Untouched {
-            status: TaskStatus::InProgress,
+            status: TaskStatus::Review,
             ..before
         }
     );

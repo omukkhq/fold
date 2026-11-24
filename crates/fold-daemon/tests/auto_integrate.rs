@@ -380,7 +380,7 @@ async fn a_conflict_leaves_the_proposal_open_and_is_recorded_once() {
     job.cycles(2).await;
     assert_eq!(head(&fx).await, r(2));
     assert_eq!(state_of(&fx, 2).await, "open");
-    assert_eq!(status(&fx, 2).await, TaskStatus::InProgress);
+    assert_eq!(status(&fx, 2).await, TaskStatus::Review);
     let conflicted = || async {
         let filter = EventFilter {
             types: vec![types::INTEGRATION_CONFLICTED],

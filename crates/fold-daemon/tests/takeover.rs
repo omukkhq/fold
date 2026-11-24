@@ -173,8 +173,7 @@ async fn a_takeover_hands_the_open_proposal_to_the_new_holder() {
         vec![
             "claim.taken_over",
             "workspace.adopted",
-            "proposal.author_changed",
-            "task.status_changed"
+            "proposal.author_changed"
         ],
         "the conflicted proposal is back with its new author"
     );

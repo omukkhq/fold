@@ -614,3 +614,50 @@ async fn a_version_holds_its_intent_as_rows_and_reads_it_back_whole() {
         assert!(trigger(&error).contains(refusal), "{error}");
     }
 }
+
+#[cfg(test)]
+async fn calculated_status(store: &Store, task: u32) -> fold_core::status::TaskStatus {
+    let id = TaskId::from_number(task).unwrap();
+    let loaded = store
+        .write(async |tx| fold_store::tasks::load_facts(tx.conn(), &[id]).await)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    fold_core::status::calculate(&loaded.facts).status
+}
+
+#[tokio::test]
+async fn a_conflicted_proposal_keeps_its_task_in_review_and_stays_conflicted() {
+    use fold_core::status::TaskStatus;
+    let (_dir, store) = seeded().await;
+    open_proposal(&store, 1, 1, 1).await;
+    assert_eq!(calculated_status(&store, 1).await, TaskStatus::Review);
+
+    let at = Timestamp::from_millis(7).unwrap();
+    let marked = store
+        .write(async |tx| reviews::mark_conflicted(tx, p(1), at).await)
+        .await
+        .unwrap();
+    assert!(marked);
+    assert_eq!(calculated_status(&store, 1).await, TaskStatus::Review);
+    let row = reviews::get_proposal(store.read(), p(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(row.conflicted && !row.checks_failed);
+}
+
+#[tokio::test]
+async fn a_proposal_with_failed_checks_moves_its_task_back_to_in_progress() {
+    use fold_core::status::TaskStatus;
+    let (_dir, store) = seeded().await;
+    open_proposal(&store, 1, 1, 1).await;
+    let at = Timestamp::from_millis(7).unwrap();
+    let marked = store
+        .write(async |tx| reviews::mark_checks_failed(tx, p(1), at).await)
+        .await
+        .unwrap();
+    assert!(marked);
+    assert_eq!(calculated_status(&store, 1).await, TaskStatus::InProgress);
+}

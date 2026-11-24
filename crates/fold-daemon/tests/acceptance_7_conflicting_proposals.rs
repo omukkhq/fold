@@ -155,7 +155,7 @@ async fn acceptance_7_second_proposal_is_refused_with_a_conflict_report_and_main
     assert_eq!(hunk["main"]["lines"], json!([FRONTEND_README]));
     assert_eq!(hunk["version"]["lines"], json!([BACKEND_README]));
 
-    assert_eq!(status(harness, &second.task).await, "in_progress");
+    assert_eq!(status(harness, &second.task).await, "review");
     assert_eq!(harness.completions(&second.task).await, 0);
 
     let inbox = harness.call("backend", "get_inbox", json!({})).await;

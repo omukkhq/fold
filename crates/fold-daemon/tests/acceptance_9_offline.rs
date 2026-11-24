@@ -412,7 +412,7 @@ async fn flow() {
     assert_eq!(view["conflict"]["main_revision"], "r3", "{view}");
     assert_eq!(view["conflict"]["base_revision"], "r2", "{view}");
     assert_eq!(status(&harness, &screen).await, "done");
-    assert_eq!(status(&harness, &readme).await, "in_progress");
+    assert_eq!(status(&harness, &readme).await, "review");
     assert_eq!(harness.completions(&readme).await, 0);
 
     // 7. The open stream delivered every event the flow stored, in order.
