@@ -317,6 +317,38 @@ async fn a_task_on_hold_is_not_ready_and_is_neither_claimed_nor_given_to_a_task_
 }
 
 #[tokio::test]
+async fn a_hold_whose_reason_names_a_task_is_set_with_a_hint_that_names_add_dependency() {
+    let fake = FakeClaude::new("result");
+    let harness = planned(&fake).await;
+    let plain = harness
+        .call(
+            LEAD,
+            "set_hold",
+            json!({"id": "T-3", "reason": "Wait for the T-1 copy from a person"}),
+        )
+        .await;
+    assert_eq!(plain, json!({"id": "T-3", "hold": true}));
+    let named = harness
+        .call(
+            LEAD,
+            "set_hold",
+            json!({"id": "T-3", "reason": "Wait until #T-2 lands"}),
+        )
+        .await;
+    assert_eq!(named["id"], "T-3", "{named}");
+    assert_eq!(named["hold"], true, "{named}");
+    assert!(
+        named["hint"].as_str().unwrap().contains("add_dependency"),
+        "{named}"
+    );
+    assert_eq!(
+        task(&harness, "T-3").await["hold"]["reason"],
+        "Wait until #T-2 lands"
+    );
+    assert!(ready(&harness).await.is_empty());
+}
+
+#[tokio::test]
 async fn a_planned_hold_is_set_before_the_lead_hears_of_the_task() {
     let fake = FakeClaude::new("result");
     let harness = planned(&fake).await;

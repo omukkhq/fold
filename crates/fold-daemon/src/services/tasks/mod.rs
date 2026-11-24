@@ -47,7 +47,7 @@ pub use claims::{ClaimView, Claimed, renew_leases};
 pub use dependencies::{Edge, add_edge_in_tx};
 pub use fold_core::reviews::HumanReviewMark;
 pub(crate) use hold::agent_refusal;
-pub use hold::{HumanTaskRights, human_task_rights};
+pub use hold::{HOLD_NAMES_TASK_HINT, HumanTaskRights, human_task_rights, reason_names_task};
 pub use lead_checks::{MAX_NOTE_CHARS, REPORT_LIMIT, ReportView};
 pub(crate) use lead_checks::{areas_of, proposal_kind_refusal};
 pub(crate) use leases::Holders;

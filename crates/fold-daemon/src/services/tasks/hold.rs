@@ -180,8 +180,41 @@ async fn labels_of(tx: &mut WriteTx, task: TaskId) -> Result<Vec<LabelName>, Tas
         .collect())
 }
 
+/// The hint of a `set_hold` whose reason names a task: a hold waits only for a person, so work that waits for a task needs a dependency.
+pub const HOLD_NAMES_TASK_HINT: &str = "a hold waits for a person, never for a task: to wait for the task the reason names, call add_dependency; a human or the main agent clears the hold";
+
+/// Whether a hold reason names a task as `#T-<n>`, where `<n>` is a task number without a leading zero.
+pub fn reason_names_task(reason: &str) -> bool {
+    reason.match_indices("#T-").any(|(at, mark)| {
+        let digits = &reason[at + mark.len()..];
+        digits
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_digit() && first != '0')
+    })
+}
+
 fn refusal(denied: PolicyDenied, task: TaskId) -> TaskError {
     FoldError::from(denied)
         .with_details([("task", json!(task.to_string()))])
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reason_names_task;
+
+    #[test]
+    fn a_reason_names_a_task_only_with_the_mark_and_a_number() {
+        assert!(reason_names_task("Wait for #T-12 to land"));
+        assert!(reason_names_task("#T-7"));
+        assert!(reason_names_task("after the API (#T-3, #T-4)"));
+        assert!(reason_names_task("T-0 first, then #T-9"));
+        assert!(!reason_names_task("Wait for the app id"));
+        assert!(!reason_names_task("Wait for T-12"));
+        assert!(!reason_names_task("Wait for #T-"));
+        assert!(!reason_names_task("Wait for #T-0"));
+        assert!(!reason_names_task("Wait for #T-x"));
+        assert!(!reason_names_task("Wait for #P-3"));
+    }
 }

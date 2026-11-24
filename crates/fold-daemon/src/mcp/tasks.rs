@@ -1078,7 +1078,11 @@ async fn set_hold(
         .set_hold(actor, id(&input.id)?, &input.reason)
         .await
         .map_err(from_task)?;
-    Ok(json!({"id": view.id, "hold": view.hold.is_some()}))
+    let mut result = json!({"id": view.id, "hold": view.hold.is_some()});
+    if crate::services::tasks::reason_names_task(&input.reason) {
+        result["hint"] = json!(crate::services::tasks::HOLD_NAMES_TASK_HINT);
+    }
+    Ok(result)
 }
 
 async fn clear_hold(
