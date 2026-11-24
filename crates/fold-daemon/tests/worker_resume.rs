@@ -617,8 +617,9 @@ async fn an_owed_resume_goes_before_a_leads_new_start() {
     let message = refused["message"].as_str().unwrap();
     assert!(message.contains("@web-worker"), "{message}");
     let hint = refused["hint"].as_str().unwrap();
-    assert!(hint.contains("wait_for_events"), "{hint}");
+    assert!(!hint.contains("wait_for_events"), "{hint}");
     assert!(hint.contains("start_worker"), "{hint}");
+    assert_eq!(hint.matches("queue: true").count(), 1, "{hint}");
 
     harness
         .call("web-lead", "stop_worker", json!({"name": other}))

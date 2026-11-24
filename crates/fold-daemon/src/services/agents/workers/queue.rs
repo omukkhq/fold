@@ -100,13 +100,14 @@ fn zero_limit(error: &FoldError) -> bool {
     })
 }
 
-/// Adds to a refusal of the worker limits that `tool` can wait for a place with `queue: true`; a limit of 0 gets no such hint.
+/// Adds to a refusal of the worker limits that `tool` can wait for a place with `queue: true`; a limit of 0 gets no such hint, and a hint that names `queue: true` already stays as it is.
 pub(super) fn with_queue_hint(error: AgentError, tool: &str) -> AgentError {
     match error {
         AgentError::Fold(fold)
             if fold.code() == codes::WORKER_LIMIT_REACHED && !zero_limit(&fold) =>
         {
             let hint = match fold.hint() {
+                Some(hint) if hint.contains("queue: true") => return AgentError::Fold(fold),
                 Some(hint) => format!(
                     "{hint}; or call {tool} again with queue: true, and fold runs it when a place frees"
                 ),
@@ -853,6 +854,19 @@ mod tests {
             bare.hint()
                 .unwrap()
                 .starts_with("call restart_worker again with queue: true")
+        );
+        let owed: AgentError = FoldError::new(codes::WORKER_LIMIT_REACHED, "owed")
+            .with_hint(
+                "call start_worker again with queue: true, and fold runs it when a place frees",
+            )
+            .into();
+        let AgentError::Fold(owed) = with_queue_hint(owed, "start_worker") else {
+            panic!("a fold error stays one");
+        };
+        assert_eq!(
+            owed.hint().unwrap().matches("queue: true").count(),
+            1,
+            "a hint that names the queue gets no second mention"
         );
         let zero: AgentError = FoldError::new(codes::WORKER_LIMIT_REACHED, "none")
             .with_details([("max", json!(0))])
