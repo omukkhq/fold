@@ -84,7 +84,7 @@ async fn until_notices(fake: &FakeClaude, count: usize) -> Vec<String> {
     .await
 }
 
-/// Until the stream of the newest run of [`TASK_WORKER`] shows its open command, so a later move of the clock counts that call from before the move.
+/// Until the stream of the newest run of [`TASK_WORKER`] shows its open command, so a later move of the clock counts that call from before the move: the daemon stamps a call with the clock's time at which it reads the line.
 async fn until_open_call(harness: &Harness) {
     let agent = fold_core::AgentName::parse(TASK_WORKER).unwrap();
     let live = harness.handle.live.clone();
@@ -111,6 +111,7 @@ async fn acceptance_40_a_stall_goes_to_the_lead_first_and_to_a_person_only_when_
     let fake = FakeClaude::new("bash_open");
     let harness = task_worker_for(&fake, &["Build the report"], WorkerState::Working).await;
     let work = harness.start_work(TASK_WORKER, "T-1").await;
+    until_open_call(&harness).await;
 
     harness.project.clock().advance(8 * MINUTE).unwrap();
     assert_eq!(decide(&harness, &work).await, Some(ActivityState::Working));
