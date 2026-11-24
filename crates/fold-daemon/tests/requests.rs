@@ -8,12 +8,12 @@ use fold_core::object::ObjectKind;
 use fold_core::requests::{DraftCard, DraftEdge, RequestKind, RequestState, Requester};
 use fold_core::roles::Role;
 use fold_core::{
-    Actor, AgentActor, HumanName, RequestId, TaskId, TaskKind, TaskStatus, Timestamp, WorkerName,
-    codes,
+    Actor, AgentActor, HumanName, RequestId, TaskDescription, TaskId, TaskKind, TaskStatus,
+    TaskTitle, Timestamp, WorkerName, codes,
 };
 use fold_daemon::services::events::EventBus;
 use fold_daemon::services::tasks::{
-    NewRequestAttachment, RequestFilter, SubmitDraft, TaskError, TaskService,
+    CreateTask, NewRequestAttachment, RequestFilter, SubmitDraft, TaskError, TaskService,
 };
 use fold_store::testing::{TestProject, execute};
 use fold_vcs::objects::ObjectStore;
@@ -851,4 +851,162 @@ async fn requests_list_by_state_kind_and_requester() {
     assert!(fx.tasks.list_requests(&mine).await.unwrap().is_empty());
     let missing = fx.tasks.get_request(rq(7)).await.unwrap_err();
     assert_eq!(code(&missing), codes::REQUEST_NOT_FOUND);
+}
+
+#[tokio::test]
+async fn an_approved_card_that_needs_an_existing_task_waits_for_it_and_a_human_card_becomes_a_human_task()
+ {
+    let fx = Fixture::new().await;
+    let tanim = human("tanim");
+    let existing = fx
+        .tasks
+        .create_task_of_kind(
+            &tanim,
+            CreateTask {
+                title: TaskTitle::parse("Sign the provider contract").unwrap(),
+                description: TaskDescription::new("**Scope** the contract".to_owned()),
+                labels: Vec::new(),
+            },
+            TaskKind::Human,
+            &[],
+            None,
+        )
+        .await
+        .unwrap()
+        .id;
+    let id = fx.claimed(&tanim).await;
+    let mut written = draft(&["build", "verify"], &[("build", "verify")]);
+    written.cards[0].needs = vec![existing];
+    written.cards[1].kind = TaskKind::Human;
+    let denied = fx
+        .tasks
+        .submit_request_draft(&agent("frontend"), id, written, None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(code(&denied), codes::TASK_KIND_DENIED);
+
+    let mut unknown = draft(&["build"], &[]);
+    unknown.cards[0].needs = vec![t(99)];
+    let missing = fx
+        .tasks
+        .submit_request_draft(&agent("frontend"), id, unknown, None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(code(&missing), codes::TASK_NOT_FOUND);
+    assert_eq!(fx.count("SELECT COUNT(*) FROM request_drafts").await, 0);
+
+    let mut needing = draft(&["build"], &[]);
+    needing.cards[0].needs = vec![existing];
+    fx.tasks
+        .submit_request_draft(&agent("frontend"), id, needing, None, None)
+        .await
+        .unwrap();
+    let mut edited = draft(&["build", "verify"], &[("build", "verify")]);
+    edited.cards[0].needs = vec![existing];
+    edited.cards[1].kind = TaskKind::Human;
+    fx.tasks
+        .edit_request_draft(&tanim, id, edited)
+        .await
+        .unwrap();
+    let detail = fx.tasks.get_request(id).await.unwrap();
+    assert_eq!(detail.drafts[1].cards[0].needs, vec![existing]);
+    assert_eq!(detail.drafts[1].cards[1].kind, TaskKind::Human);
+
+    let approved = fx.tasks.approve_request_draft(&tanim, id, 2).await.unwrap();
+    let (build, verify) = (approved.tasks[0], approved.tasks[1]);
+    let build_view = fx.tasks.get(build).await.unwrap();
+    let verify_view = fx.tasks.get(verify).await.unwrap();
+    assert_eq!(
+        (build_view.kind, build_view.status),
+        (TaskKind::Proposal, TaskStatus::Backlog)
+    );
+    assert_eq!(
+        (verify_view.kind, verify_view.status),
+        (TaskKind::Human, TaskStatus::Backlog)
+    );
+    let edges: Vec<(TaskId, TaskId)> = fx
+        .tasks
+        .edges()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|edge| (edge.task, edge.needs))
+        .collect();
+    assert!(edges.contains(&(build, existing)));
+    assert!(edges.contains(&(verify, build)));
+    let ready: Vec<TaskId> = fx
+        .tasks
+        .ready()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|task| task.id)
+        .collect();
+    assert!(!ready.contains(&build));
+
+    fx.tasks.complete_task(&tanim, existing).await.unwrap();
+    assert_eq!(fx.tasks.get(build).await.unwrap().status, TaskStatus::Todo);
+    let ready: Vec<TaskId> = fx
+        .tasks
+        .ready()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|task| task.id)
+        .collect();
+    assert!(ready.contains(&build));
+    assert_eq!(
+        fx.tasks.get(verify).await.unwrap().status,
+        TaskStatus::Backlog
+    );
+}
+
+#[tokio::test]
+async fn a_needed_task_cannot_be_deleted_and_an_archived_one_refuses_the_approval_and_creates_nothing()
+ {
+    let fx = Fixture::new().await;
+    let tanim = human("tanim");
+    let needed = fx
+        .tasks
+        .create_task_of_kind(
+            &tanim,
+            CreateTask {
+                title: TaskTitle::parse("Sign the provider contract").unwrap(),
+                description: TaskDescription::new("**Scope** the contract".to_owned()),
+                labels: Vec::new(),
+            },
+            TaskKind::Human,
+            &[],
+            None,
+        )
+        .await
+        .unwrap()
+        .id;
+    let id = fx.claimed(&tanim).await;
+    let mut written = draft(&["build"], &[]);
+    written.cards[0].needs = vec![needed];
+    fx.tasks
+        .submit_request_draft(&agent("frontend"), id, written, None, None)
+        .await
+        .unwrap();
+
+    let kept = fx.tasks.delete_task(&tanim, needed).await.unwrap_err();
+    assert_eq!(code(&kept), codes::INVALID_REQUEST);
+    fx.tasks.archive_task(&tanim, needed).await.unwrap();
+    let tasks_before = fx.count("SELECT COUNT(*) FROM tasks").await;
+    let state = fx.tasks.get_request(id).await.unwrap().request.state;
+
+    let refused = fx
+        .tasks
+        .approve_request_draft(&tanim, id, 1)
+        .await
+        .unwrap_err();
+    assert_eq!(code(&refused), codes::TASK_CLOSED);
+    assert_eq!(fx.tasks.get_request(id).await.unwrap().request.state, state);
+    assert_eq!(fx.count("SELECT COUNT(*) FROM tasks").await, tasks_before);
+    assert_eq!(
+        fx.count("SELECT COUNT(*) FROM events WHERE type = 'request.approved'")
+            .await,
+        0
+    );
 }

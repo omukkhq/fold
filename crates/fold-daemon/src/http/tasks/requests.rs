@@ -11,7 +11,9 @@ use fold_core::requests::{
     CodeAnchor, CodeRef, CodeSelection, DraftCard, DraftEdge, MAX_ATTACHMENT_BYTES,
     MAX_ATTACHMENTS, Requester, attachment_too_large, check_attachment_count, valid_media_type,
 };
-use fold_core::{FoldError, LabelName, ProposalId, RequestId, RevisionId, TaskKind, codes};
+use fold_core::{FoldError, LabelName, ProposalId, RequestId, RevisionId, TaskId, codes};
+
+use super::TaskKind as TaskKindView;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use utoipa::{IntoParams, ToSchema};
@@ -222,6 +224,13 @@ pub struct DraftCardView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = "backend")]
     pub label: Option<String>,
+    /// The kind of the card's task; `proposal` when left out. Only the main agent, a human or the lead of the card's area writes a `no_proposal` or `human` card (`task_kind_denied`).
+    #[serde(default)]
+    pub kind: TaskKindView,
+    /// Existing tasks the card's task needs; approval adds a dependency on each. Each must exist (`task_not_found`) and appear once.
+    #[serde(default)]
+    #[schema(example = json!(["T-12"]))]
+    pub needs: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -323,6 +332,8 @@ impl From<service::RequestDetail> for RequestDetailView {
                             title: card.title,
                             description: card.description,
                             label: card.label.map(|label| label.as_str().to_owned()),
+                            kind: card.kind.into(),
+                            needs: card.needs.iter().map(ToString::to_string).collect(),
                         })
                         .collect(),
                     edges: draft
@@ -817,7 +828,7 @@ pub async fn request_draft_changes(
         (status = 400, description = "`invalid_draft` with `details.reason`, `invalid_request` (`details.reason` `state` when there is no draft to edit) or `invalid_id`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 403, description = "`requester_required`: the human is not the requester", body = ErrorEnvelope),
-        (status = 404, description = "`request_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 404, description = "`request_not_found`, `task_not_found` for a needed task or `project_not_found`", body = ErrorEnvelope),
         (status = 409, description = "`dependency_cycle` or `request_not_open`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -845,8 +856,12 @@ pub async fn edit_request_draft(
                         .map(LabelName::parse)
                         .transpose()
                         .map_err(FoldError::from)?,
-                    kind: TaskKind::Proposal,
-                    needs: Vec::new(),
+                    kind: card.kind.into(),
+                    needs: card
+                        .needs
+                        .iter()
+                        .map(|need| need.parse::<TaskId>().map_err(FoldError::from))
+                        .collect::<Result<_, FoldError>>()?,
                 })
             })
             .collect::<Result<_, FoldError>>()?,

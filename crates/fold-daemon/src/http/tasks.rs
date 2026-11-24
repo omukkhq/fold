@@ -53,9 +53,10 @@ pub enum TaskStatus {
 }
 
 /// How a task's work reaches Done: `proposal` through the integration of its proposal, `no_proposal` through a lead check of its task worker's report, `human` when a person marks the work Done; no agent takes a human task.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
+    #[default]
     Proposal,
     NoProposal,
     Human,

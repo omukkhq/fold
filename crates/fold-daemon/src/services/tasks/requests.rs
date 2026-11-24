@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use fold_core::events::types;
 use fold_core::messages::{line_excerpt, text_lines};
 use fold_core::object::{ObjectHash, ObjectKind};
@@ -9,10 +7,11 @@ use fold_core::requests::{
     request_text, request_title, validate_draft,
 };
 use fold_core::reviews::Side;
+use fold_core::tasks::{PlanRef, PlannedTask};
 use fold_core::tree::EntryKind;
 use fold_core::{
-    Actor, DependencyOrigin, FoldError, IdKind, MessageId, NewEvent, ProposalId, RequestId,
-    TaskDescription, TaskId, TaskKind, TaskTitle, Timestamp, WorkerName, codes, policy,
+    Actor, FoldError, IdKind, MessageId, NewEvent, ProposalId, RequestId, TaskDescription, TaskId,
+    TaskKind, TaskTitle, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::tasks::requests::{self, NewAttachment, NewRequest, RequestRow};
 pub use fold_store::tasks::requests::{AttachmentRow as RequestAttachment, RequestFilter};
@@ -23,10 +22,9 @@ use fold_vcs::browse;
 use fold_vcs::objects::ObjectStore;
 use serde_json::json;
 
-use super::{
-    CreateTask, TaskError, TaskService, add_edge_in_tx, create_in_tx, recompute, require_labels,
-    worker_row,
-};
+use super::plans::{PlanGate, insert_plan_in_tx};
+use super::{TaskError, TaskService, areas_of, require_labels, task_not_found, worker_row};
+use crate::services::agents::starter_of;
 use crate::services::events::EventBuffer;
 use crate::services::page_limit;
 use crate::support::blocking;
@@ -509,6 +507,7 @@ impl TaskService {
                     .filter_map(|card| card.label.clone())
                     .collect();
                 require_labels(tx, &labels).await?;
+                require_card_tasks(tx, actor, checked.cards()).await?;
                 let note = match &draft.note {
                     Some(note) => request_text(note, "note", true)?,
                     None => None,
@@ -578,7 +577,7 @@ impl TaskService {
         self.request_view(request).await
     }
 
-    /// The requester approves the latest draft version: one task per card, created by the same rules as `create_task` and linked to the request, one direct dependency per edge by the same rules as `add_dependency`, a recompute seeded with the new tasks so each lands in its calculated column, and `request.approved` naming the tasks, all in one transaction. A version other than the latest is `stale_version`.
+    /// The requester approves the latest draft version: one task per card with the card's kind, created by the insertion of `create_task_plan` and linked to the request, one direct dependency per edge and per needed existing task by the same rules as `add_dependency`, a recompute seeded with the new tasks so each lands in its calculated column, and `request.approved` naming the tasks, all in one transaction. A version other than the latest is `stale_version`.
     pub async fn approve_request_draft(
         &self,
         actor: &Actor,
@@ -599,41 +598,16 @@ impl TaskService {
                     .into_iter()
                     .find(|draft| draft.version == expected_version)
                     .ok_or(StoreError::Corrupt("request_drafts.version"))?;
-                let mut by_key: BTreeMap<&str, TaskId> = BTreeMap::new();
-                let mut created = Vec::with_capacity(draft.cards.len());
-                for card in &draft.cards {
-                    let input = CreateTask {
-                        title: TaskTitle::parse(&card.title)
-                            .map_err(|_| StoreError::Corrupt("request_draft_cards.title"))?,
-                        description: TaskDescription::new(card.description.clone()),
-                        labels: card.label.iter().cloned().collect(),
-                    };
-                    let task =
-                        create_in_tx(tx, &mut buffer, actor, &input, TaskKind::Proposal, now)
-                            .await?;
-                    requests::set_task_request(tx, task, request).await?;
-                    by_key.insert(&card.key, task);
-                    created.push(task);
+                let plan = draft_plan(&draft.cards, &draft.edges)?;
+                let created: Vec<TaskId> =
+                    insert_plan_in_tx(tx, &mut buffer, actor, PlanGate::ApprovedDraft, &plan, now)
+                        .await?
+                        .into_iter()
+                        .map(|(_, task)| task)
+                        .collect();
+                for task in &created {
+                    requests::set_task_request(tx, *task, request).await?;
                 }
-                for edge in &draft.edges {
-                    let (Some(&dependent), Some(&prerequisite)) = (
-                        by_key.get(edge.dependent.as_str()),
-                        by_key.get(edge.prerequisite.as_str()),
-                    ) else {
-                        return Err(StoreError::Corrupt("request_draft_edges.key").into());
-                    };
-                    add_edge_in_tx(
-                        tx,
-                        &mut buffer,
-                        dependent,
-                        prerequisite,
-                        DependencyOrigin::Direct,
-                        actor,
-                        now,
-                    )
-                    .await?;
-                }
-                buffer.extend(recompute(tx, &created, now).await?.events);
                 requests::set_state(tx, request, next, now).await?;
                 let names: Vec<String> = created.iter().map(TaskId::to_string).collect();
                 let drafter = row.drafter.as_ref().map(|drafter| drafter.worker.as_str());
@@ -1002,4 +976,56 @@ fn version_refusal(proposal: ProposalId, version: u32) -> TaskError {
     ])
     .with_hint("call list_proposals for the proposals and get_proposal for the versions of one")
     .into()
+}
+
+/// The plan an approved draft creates: each card a task of its kind and label, needing its existing tasks and, through the edges, the cards before it. The kind gate ran when the version was written.
+fn draft_plan(cards: &[DraftCard], edges: &[DraftEdge]) -> Result<Vec<PlannedTask>, TaskError> {
+    cards
+        .iter()
+        .map(|card| {
+            let mut needs: Vec<PlanRef> =
+                card.needs.iter().copied().map(PlanRef::Existing).collect();
+            needs.extend(
+                edges
+                    .iter()
+                    .filter(|edge| edge.dependent == card.key)
+                    .map(|edge| PlanRef::Key(edge.prerequisite.clone())),
+            );
+            Ok(PlannedTask {
+                key: card.key.clone(),
+                title: TaskTitle::parse(&card.title)
+                    .map_err(|_| StoreError::Corrupt("request_draft_cards.title"))?,
+                description: TaskDescription::new(card.description.clone()),
+                labels: card.label.iter().cloned().collect(),
+                kind: card.kind,
+                needs,
+                parent: None,
+                human_review: None,
+                hold: None,
+                checklist: Vec::new(),
+                main_approves: false,
+            })
+        })
+        .collect()
+}
+
+/// Every existing task a card needs must exist, and a card of a kind without a proposal is written only by whoever may create such a task in the card's area, the same gate as `create_task` with a kind. Approval then creates the tasks as written.
+async fn require_card_tasks(
+    tx: &mut WriteTx,
+    actor: &Actor,
+    cards: &[DraftCard],
+) -> Result<(), TaskError> {
+    for card in cards {
+        for need in &card.needs {
+            if fold_store::tasks::fetch(tx.conn(), *need).await?.is_none() {
+                return Err(task_not_found(*need));
+            }
+        }
+        if card.kind != TaskKind::Proposal {
+            let starter = starter_of(tx, actor).await?;
+            let areas = areas_of(tx, &card.label.iter().cloned().collect::<Vec<_>>()).await?;
+            policy::can_choose_no_proposal(&starter, &areas).map_err(FoldError::from)?;
+        }
+    }
+    Ok(())
 }

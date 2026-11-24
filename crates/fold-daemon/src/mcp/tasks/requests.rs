@@ -4,7 +4,7 @@ use fold_core::requests::{
     CodeAnchor, CodeRef, DraftCard, DraftEdge, MAX_ATTACHMENT_BYTES, RequestKind, RequestState,
     Requester,
 };
-use fold_core::{Actor, FoldError, LabelName, RequestId, TaskKind, WorkspaceId, codes};
+use fold_core::{Actor, FoldError, LabelName, RequestId, TaskId, TaskKind, WorkspaceId, codes};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{ContentBlock, JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -115,6 +115,12 @@ pub struct CardInput {
     /// The label of the area that builds this card, such as backend; the main agent sets it. Approval gives the task this label, and fold sends the ready task to the area's lead. Create the label with create_label first; main, the label of the main agent's own area, always exists, and its ready task goes to the main agent, which builds it. Leave it out for a task that the main agent routes itself.
     #[serde(default)]
     pub label: Option<String>,
+    /// Existing tasks the card's task needs, such as ["T-12"]: approval adds a dependency on each, so the new task is never ready before they are Done. Name another card of this draft with an edge instead. Each task must exist (task_not_found) and appear once.
+    #[serde(default)]
+    pub needs: Vec<String>,
+    /// The kind of the card's task: proposal (the default), no_proposal or human, as in create_task. Only the main agent, a human or the lead of the card's area writes a no_proposal or human card (task_kind_denied).
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 /// One dependency between two cards of a draft.
@@ -226,7 +232,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             SUBMIT_REQUEST_DRAFT,
-            "As the drafter, send the next draft version: the cards in the task template and the dependency edges between them. The requester then approves it, asks for changes or edits it.",
+            "As the drafter, send the next draft version: the cards in the task template, each with its kind and the existing tasks it needs, and the dependency edges between them. The requester then approves it, asks for changes or edits it.",
             schema_for_type::<SubmitRequestDraftInput>(),
         ),
         Tool::new(
@@ -241,7 +247,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             APPROVE_REQUEST_DRAFT,
-            "As the requester, approve the latest draft version: each card becomes a task and each edge a dependency, in one step.",
+            "As the requester, approve the latest draft version: each card becomes a task of its kind, and each edge and each needed existing task a dependency, in one step.",
             schema_for_type::<ApproveRequestDraftInput>(),
         ),
         Tool::new(
@@ -316,8 +322,29 @@ fn draft(
                     title: card.title,
                     description: card.description,
                     label: card.label.as_deref().map(LabelName::parse).transpose()?,
-                    kind: TaskKind::Proposal,
-                    needs: Vec::new(),
+                    kind: card
+                        .kind
+                        .as_deref()
+                        .map(|kind| {
+                            kind.parse::<TaskKind>().map_err(|error| {
+                                FoldError::from(error).with_details([("field", json!("kind"))]).with_hint(
+                                    "give kind as proposal, no_proposal or human, or leave it out for proposal",
+                                )
+                            })
+                        })
+                        .transpose()?
+                        .unwrap_or(TaskKind::Proposal),
+                    needs: card
+                        .needs
+                        .iter()
+                        .map(|need| {
+                            need.parse::<TaskId>().map_err(|error| {
+                                FoldError::from(error).with_details([("field", json!("needs"))]).with_hint(
+                                    "give each need as an existing task id such as T-12; name a card of this draft with an edge instead",
+                                )
+                            })
+                        })
+                        .collect::<Result<_, FoldError>>()?,
                 })
             })
             .collect::<Result<_, FoldError>>()?,
@@ -332,7 +359,7 @@ fn draft(
     })
 }
 
-/// A card names its label only when it has one.
+/// A card names its label, its kind and its needed tasks only when it has them.
 fn card_json(card: &DraftCard) -> Value {
     let mut value = json!({
         "key": card.key,
@@ -341,6 +368,12 @@ fn card_json(card: &DraftCard) -> Value {
     });
     if let Some(label) = &card.label {
         value["label"] = json!(label.as_str());
+    }
+    if card.kind != TaskKind::Proposal {
+        value["kind"] = json!(card.kind.as_str());
+    }
+    if !card.needs.is_empty() {
+        value["needs"] = json!(card.needs.iter().map(TaskId::to_string).collect::<Vec<_>>());
     }
     value
 }

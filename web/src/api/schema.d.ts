@@ -2973,11 +2973,20 @@ export interface components {
              * @example c1
              */
             key: string;
+            /** @description The kind of the card's task; `proposal` when left out. Only the main agent, a human or the lead of the card's area writes a `no_proposal` or `human` card (`task_kind_denied`). */
+            kind?: components["schemas"]["TaskKind"];
             /**
              * @description The label of the area whose lead builds the card; approval gives the task this label. Absent for a card the main agent routes itself.
              * @example backend
              */
             label?: string | null;
+            /**
+             * @description Existing tasks the card's task needs; approval adds a dependency on each. Each must exist (`task_not_found`) and appear once.
+             * @example [
+             *       "T-12"
+             *     ]
+             */
+            needs?: string[];
             title: string;
         };
         DraftChangesBody: {
@@ -13016,7 +13025,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `request_not_found` or `project_not_found` */
+            /** @description `request_not_found`, `task_not_found` for a needed task or `project_not_found` */
             404: {
                 headers: {
                     [name: string]: unknown;
