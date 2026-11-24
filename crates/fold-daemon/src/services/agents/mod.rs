@@ -58,7 +58,7 @@ pub use workers::{
     StartedWorker, StopTimeouts, StreamFacts, Supervisor, WorkerLimitsChanged, WorkerStreams,
     new_session_id,
 };
-pub(crate) use workers::{code_of, starter_of};
+pub(crate) use workers::{code_of, named_area, starter_of};
 
 #[derive(Debug, Error)]
 pub enum AgentError {

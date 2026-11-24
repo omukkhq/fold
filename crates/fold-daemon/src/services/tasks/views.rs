@@ -27,6 +27,7 @@ use super::{
     TaskService, TaskView, area_labels, label_view, task_not_found, view,
 };
 use crate::live::LiveCheckRun;
+use crate::services::agents::named_area;
 use crate::services::reviews::{ProposalPlan, proposal_plans};
 
 /// How many Done cards the board returns: the most recently completed ones. The Done column's `total` counts them all.
@@ -521,7 +522,27 @@ impl TaskService {
 
     /// The tasks that are not archived, in number order, with their direct prerequisites and claim holders. Done tasks only when `include_done`; `done_count` counts them either way.
     pub async fn graph(&self, include_done: bool) -> Result<TaskGraph, TaskError> {
+        self.graph_in(include_done, None).await
+    }
+
+    /// [`TaskService::graph`], or only the tasks that carry the label of the area `area` when it is given, with `done_count` counting the Done tasks of the area; `needs` still names a prerequisite outside it. An unknown area is `area_not_found`.
+    pub async fn graph_in(
+        &self,
+        include_done: bool,
+        area: Option<&AreaName>,
+    ) -> Result<TaskGraph, TaskError> {
         let mut snapshot = tasks::board_snapshot(self.store.read()).await?;
+        if let Some(name) = area {
+            let label = named_area::<TaskError>(self.store.read(), name)
+                .await?
+                .label;
+            let labels = &snapshot.labels;
+            snapshot.tasks.retain(|row| {
+                labels
+                    .get(&row.id)
+                    .is_some_and(|own| own.iter().any(|own| own.name == label))
+            });
+        }
         let needs = needs_by_task(&snapshot);
         let done_count = snapshot
             .tasks

@@ -2,8 +2,10 @@ use std::collections::BTreeMap;
 
 use fold_core::dag::Dag;
 use fold_core::readiness::{Candidate, ready_order, unblock_count};
-use fold_core::{TaskId, TaskTitle, Timestamp};
+use fold_core::{AreaName, TaskId, TaskTitle, Timestamp};
 use fold_store::tasks;
+
+use crate::services::agents::named_area;
 
 use super::{LabelView, TaskError, TaskService, label_view};
 
@@ -20,11 +22,29 @@ pub struct ReadyTask {
 impl TaskService {
     /// The Todo tasks that are not archived and that no one holds an implementation claim on, the one that frees the most tasks first, then the oldest, then the lowest number.
     pub async fn ready(&self) -> Result<Vec<ReadyTask>, TaskError> {
+        self.ready_in(None).await
+    }
+
+    /// [`TaskService::ready`], or only the tasks that carry the label of the area `area` when it is given; an unknown area is `area_not_found`.
+    pub async fn ready_in(&self, area: Option<&AreaName>) -> Result<Vec<ReadyTask>, TaskError> {
+        let label = match area {
+            Some(name) => Some(
+                named_area::<TaskError>(self.store.read(), name)
+                    .await?
+                    .label,
+            ),
+            None => None,
+        };
         let snapshot = tasks::ready_snapshot(self.store.read()).await?;
         let dag = Dag::from_edges(snapshot.edges);
         let mut rows: Vec<(usize, tasks::ReadyRow)> = snapshot
             .candidates
             .into_iter()
+            .filter(|row| {
+                label
+                    .as_ref()
+                    .is_none_or(|label| row.labels.iter().any(|own| own.name == *label))
+            })
             .map(|row| (unblock_count(row.id, &dag, &snapshot.statuses), row))
             .collect();
         let candidates: Vec<Candidate> = rows

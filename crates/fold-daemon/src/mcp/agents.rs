@@ -142,6 +142,9 @@ pub struct ListWorkersInput {
     /// True gives each area's instructions. Leave it out to give only instructions_chars, their length.
     #[serde(default)]
     pub include_instructions: bool,
+    /// Only this area and its workers, such as web, with stopped_count counting its stopped workers. Leave it out for every area.
+    #[serde(default)]
+    pub area: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -495,8 +498,17 @@ pub async fn resume_project(
 
 pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let input: ListWorkersInput = parse(arguments)?;
-    let areas = server.agents.list_areas().await.map_err(from_agent)?;
-    let workers = server.agents.list_workers().await.map_err(from_agent)?;
+    let area = input.area.as_deref().map(AreaName::parse).transpose()?;
+    let areas = server
+        .agents
+        .list_areas_in(area.as_ref())
+        .await
+        .map_err(from_agent)?;
+    let workers = server
+        .agents
+        .list_workers_in(area.as_ref())
+        .await
+        .map_err(from_agent)?;
     let mut notes = server.agents.latest_handoffs().await.map_err(from_agent)?;
     let mut previous = server
         .agents

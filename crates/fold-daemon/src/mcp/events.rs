@@ -45,7 +45,7 @@ pub struct GetEventsInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct WaitForEventsInput {
-    /// Wake only for these exact event types, such as proposal.integrated. Leave it out to wake for every type. A new message to you ends the wait whatever this says, and so does a worker.stalled or claim.stale that fold tells you, and, for the main agent and an area lead, a request that waits for a drafter.
+    /// Wake only for these exact event types, such as proposal.integrated; a worker.stalled or claim.stale named here wakes you only for the workers fold tells you of. Leave it out to wake for every type. A new message to you ends the wait whatever this says, and so does a worker.stalled or claim.stale that fold tells you, and, for the main agent and an area lead, a request that waits for a drafter.
     #[serde(default)]
     pub types: Vec<String>,
     /// Wake only for events about this task, such as T-12.
@@ -54,6 +54,9 @@ pub struct WaitForEventsInput {
     /// Wake only for events about this proposal, such as P-3.
     #[serde(default)]
     pub proposal: Option<String>,
+    /// Wake only for events about a task of this area, such as web; your new messages, the requests you may draft and the stalls fold tells you of still end the wait. Leave it out for every area.
+    #[serde(default)]
+    pub area: Option<String>,
     /// The longest wait in seconds: 300 when left out, at most 1500. When fold started you with the five-minute prompt cache, it ends the wait after at most 270 whatever this says; call again when a wait returns with nothing new.
     #[serde(default)]
     pub timeout_s: Option<u64>,
@@ -191,6 +194,7 @@ pub async fn wait_for_events(
         types: input.types,
         task: input.task,
         proposal: input.proposal,
+        area: input.area,
         timeout_s,
     };
     let started = server.messages.now();

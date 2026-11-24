@@ -6,10 +6,14 @@ use fold_core::events::types;
 use fold_core::push::request_of;
 use fold_core::requests::{DRAFTER_WANTED, Requester};
 use fold_core::roles::CacheTtl;
-use fold_core::{AgentName, Event, EventFilter, EventType, MessageId, RequestId, Timestamp};
+use fold_core::{
+    AgentName, AreaName, Event, EventFilter, EventType, FoldError, LabelName, MessageId, RequestId,
+    TaskId, Timestamp,
+};
+use fold_store::StoreError;
 use fold_store::agents::{self, WorkerRow};
 use fold_store::events::{self, MessageWake};
-use fold_store::tasks::requests;
+use fold_store::tasks::{self, requests};
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::watch;
 use tokio::time::{Instant, Interval, MissedTickBehavior};
@@ -18,6 +22,7 @@ use super::query::{
     DEFAULT_LIMIT, EventPage, EventService, EventsError, cursor_page, parse_filter,
 };
 use super::{BusMessage, WaitingGuard};
+use crate::services::agents::named_area;
 
 /// The wait when a call names no `timeout_s`.
 pub const DEFAULT_TIMEOUT_S: u64 = 300;
@@ -49,6 +54,8 @@ pub struct WaitQuery {
     pub types: Vec<String>,
     pub task: Option<String>,
     pub proposal: Option<String>,
+    /// Keep only the events about a task that carries the label of this area, besides the wakes.
+    pub area: Option<String>,
     pub timeout_s: Option<u64>,
 }
 
@@ -68,6 +75,8 @@ pub struct Waiter {
     service: EventService,
     worker: WorkerRow,
     filter: EventFilter,
+    /// The label of the area the wait keeps the events of.
+    area: Option<LabelName>,
     wake: Option<MessageWake>,
     wakes: Wakes,
     /// The requests of the page that [`Waiter::next`] returned last that wait for a drafter.
@@ -141,13 +150,26 @@ impl EventService {
             query.task.as_deref(),
             query.proposal.as_deref(),
         )?;
+        let area = match &query.area {
+            Some(name) => {
+                let name = AreaName::parse(name).map_err(FoldError::from)?;
+                Some(
+                    named_area::<EventsError>(self.store().read(), &name)
+                        .await?
+                        .label,
+                )
+            }
+            None => None,
+        };
         let timeout_s = query
             .timeout_s
             .unwrap_or(DEFAULT_TIMEOUT_S)
             .clamp(1, MAX_TIMEOUT_S);
         let receiver = self.bus().subscribe();
         let closing = self.bus().closing();
-        let first = self.page(worker, &filter, wake, &wakes).await?;
+        let first = self
+            .page(worker, &filter, area.as_ref(), wake, &wakes)
+            .await?;
         let now = Instant::now();
         let mut ticks = tokio::time::interval_at(now + TICK, TICK);
         ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -155,6 +177,7 @@ impl EventService {
             service: self.clone(),
             worker: worker.clone(),
             filter,
+            area,
             wake,
             wakes,
             requests: first.requests,
@@ -174,6 +197,7 @@ impl EventService {
         &self,
         worker: &WorkerRow,
         filter: &EventFilter,
+        area: Option<&LabelName>,
         wake: Option<MessageWake>,
         wakes: &Wakes,
     ) -> Result<WaitPage, EventsError> {
@@ -188,17 +212,85 @@ impl EventService {
                 &wake_types,
             )
             .await?;
-            if page.events.is_empty() || wake_types.is_empty() {
+            if page.events.is_empty() {
                 return Ok(WaitPage::plain(page));
             }
-            let kept = self.keep_woken(page, filter, wakes).await?;
+            let mut kept = if wake_types.is_empty() {
+                WaitPage::plain(page)
+            } else {
+                self.keep_woken(page, filter, wakes).await?
+            };
+            if let Some(label) = area {
+                kept = self.keep_in_area(kept, label, wake, wakes).await?;
+            }
             if !kept.page.events.is_empty() {
                 return Ok(kept);
             }
         }
     }
 
-    /// Drops the events of `page` that only a wake of `wakes` selected and that do not concern the waiting agent: a request it cannot claim now, a stall fold did not tell it of. An agent never wakes for what its own workers did, nor for a request it made itself.
+    /// Drops the events of `found` that are about no task with the area's `label`, except the wakes: a message that wakes the agent by the rule of `wake`, a request it may claim and a stall fold told it of. One read of the task labels serves the whole page.
+    async fn keep_in_area(
+        &self,
+        mut found: WaitPage,
+        label: &LabelName,
+        wake: Option<MessageWake>,
+        wakes: &Wakes,
+    ) -> Result<WaitPage, EventsError> {
+        let in_area: BTreeSet<TaskId> =
+            if found.page.events.iter().any(|event| event.task.is_some()) {
+                let mut conn = self
+                    .store()
+                    .read()
+                    .acquire()
+                    .await
+                    .map_err(StoreError::from)?;
+                tasks::labels_by_task(&mut conn, true)
+                    .await?
+                    .into_iter()
+                    .filter(|(_, own)| own.iter().any(|own| own.name == *label))
+                    .map(|(task, _)| task)
+                    .collect()
+            } else {
+                BTreeSet::new()
+            };
+        let in_task = |event: &Event| event.task.is_some_and(|task| in_area.contains(&task));
+        let messages: Vec<u64> = found
+            .page
+            .events
+            .iter()
+            .filter(|event| event.event_type == types::MESSAGE_SENT && !in_task(event))
+            .map(|event| event.seq)
+            .collect();
+        let waking: BTreeSet<String> = match wake {
+            Some(wake) if !messages.is_empty() => {
+                events::waiting_messages(self.store().read(), &messages, wake)
+                    .await?
+                    .into_iter()
+                    .map(|message| message.to_string())
+                    .collect()
+            }
+            _ => BTreeSet::new(),
+        };
+        let requests = &found.requests;
+        found.page.events.retain(|event| {
+            in_task(event)
+                || (event.event_type == types::MESSAGE_SENT
+                    && event
+                        .data
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|message| waking.contains(message)))
+                || request_of(event).is_some_and(|request| requests.contains(&request))
+                || wakes
+                    .told
+                    .as_ref()
+                    .is_some_and(|agent| tells_of_stall(event, agent))
+        });
+        Ok(found)
+    }
+
+    /// Drops the events of `page` that only a wake of `wakes` selected and that do not concern the waiting agent: a request it cannot claim now, a stall fold did not tell it of. A `worker.stalled` or `claim.stale` that `types` names stays only when fold told the agent of it, so a lead that waits for stalls hears only of its own workers. An agent never wakes for what its own workers did, nor for a request it made itself.
     async fn keep_woken(
         &self,
         page: EventPage,
@@ -248,9 +340,10 @@ impl EventService {
                 }
                 let stall = told(event);
                 stalled |= stall;
+                let other_stall = TOLD.contains(&event.event_type) && !filter.types.is_empty();
                 claimable
                     || stall
-                    || filter.matches(event)
+                    || (filter.matches(event) && !other_stall)
                     || !(DRAFTER_WANTED.contains(&event.event_type)
                         || TOLD.contains(&event.event_type))
             })
@@ -370,7 +463,13 @@ impl Waiter {
             }
             let found = self
                 .service
-                .page(&self.worker, &self.filter, self.wake, &self.wakes)
+                .page(
+                    &self.worker,
+                    &self.filter,
+                    self.area.as_ref(),
+                    self.wake,
+                    &self.wakes,
+                )
                 .await?;
             if !found.page.events.is_empty() {
                 self.requests = found.requests;

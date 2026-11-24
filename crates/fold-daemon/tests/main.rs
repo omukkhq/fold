@@ -151,6 +151,7 @@ mod live_state;
 mod login_waits;
 mod main_area;
 mod mcp_activity;
+mod mcp_area_filters;
 mod mcp_compact_reads;
 mod mcp_footer;
 mod mcp_handshake;

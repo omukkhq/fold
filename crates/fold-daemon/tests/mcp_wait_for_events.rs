@@ -1573,3 +1573,65 @@ async fn a_stall_that_fold_tells_an_agent_ends_its_wait_whatever_it_waits_for_an
         events::head_seq(fx.store().read()).await.unwrap()
     );
 }
+
+#[tokio::test]
+async fn a_stall_type_in_types_matches_only_the_stalls_fold_tells_the_waiter_of() {
+    let fx = Fixture::new().await;
+    let lead = fx.connect("frontend").await;
+    let stalled = |agent: &str, told: Value| {
+        new_event(types::WORKER_STALLED, "fold")
+            .data(json!({"agent": agent, "reason": "silent", "call": null, "minutes": 5, "told": told}))
+            .unwrap()
+    };
+    let stale = |worker: &str, told: Value| {
+        new_event(types::CLAIM_STALE, "fold")
+            .data(
+                json!({"kind": "implementation", "worker": worker, "renewed_at": 0, "told": told}),
+            )
+            .unwrap()
+    };
+    fx.commit(vec![
+        stalled("api-worker", json!(["backend"])),
+        stale("api-worker", json!(["backend"])),
+        stalled("web-worker", json!(["frontend"])),
+        stale("web-worker", json!(["frontend"])),
+    ])
+    .await;
+    let woken = call(
+        &lead,
+        "wait_for_events",
+        json!({"types": ["worker.stalled", "claim.stale"], "timeout_s": 1}),
+    )
+    .await;
+    let events = woken["events"].as_array().unwrap();
+    assert_eq!(events.len(), 2, "{woken}");
+    assert_eq!(events[0]["type"], "worker.stalled");
+    assert_eq!(events[0]["data"]["agent"], "web-worker");
+    assert_eq!(events[1]["type"], "claim.stale");
+    assert_eq!(events[1]["data"]["worker"], "web-worker");
+    assert_eq!(
+        fx.cursor(&lead).await,
+        events::head_seq(fx.store().read()).await.unwrap()
+    );
+}
+
+#[tokio::test]
+async fn an_undeclared_type_is_refused_with_the_declared_types_and_the_nearest_one() {
+    let fx = Fixture::new().await;
+    let session = fx.connect("frontend").await;
+    for tool in ["wait_for_events", "get_events"] {
+        let result = call_raw(&session, tool, json!({"types": ["proposal.created"]})).await;
+        let error = body(&result)["error"].clone();
+        assert_eq!(error["code"], json!("invalid_event_filter"), "{tool}");
+        assert_eq!(error["details"]["type"], "proposal.created");
+        assert_eq!(error["details"]["nearest"], "proposal.opened", "{error}");
+        let declared: Vec<&str> = error["details"]["declared"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|name| name.as_str().unwrap())
+            .collect();
+        let all: Vec<&str> = EventType::ALL.iter().map(|name| name.as_str()).collect();
+        assert_eq!(declared, all);
+    }
+}

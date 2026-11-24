@@ -55,8 +55,12 @@ pub(super) fn parse_filter(
         .iter()
         .map(|name| {
             EventType::parse(name).map_err(|_| {
-                invalid("an event type in types is not declared")
-                    .with_details([("type", json!(name))])
+                let declared = EventType::ALL.iter().map(|declared| declared.as_str());
+                invalid("an event type in types is not declared").with_details([
+                    ("type", json!(name)),
+                    ("nearest", json!(nearest_name(name, declared.clone()))),
+                    ("declared", json!(declared.collect::<Vec<_>>())),
+                ])
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -73,6 +77,31 @@ pub(super) fn parse_filter(
         task,
         proposal,
     })
+}
+
+/// The candidate with the fewest single-character edits from `name`, the first one in candidate order on a tie; `None` only without candidates.
+pub fn nearest_name<'a>(name: &str, candidates: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    candidates.min_by_key(|candidate| edit_distance(name, candidate))
+}
+
+/// The Levenshtein distance between `a` and `b`, counted in chars.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, left) in a.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, right) in b.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = if left == *right {
+                diagonal
+            } else {
+                1 + diagonal.min(above).min(row[j])
+            };
+            diagonal = above;
+        }
+    }
+    row[b.len()]
 }
 
 fn parse_limit(limit: Option<u32>) -> Result<usize, FoldError> {
@@ -245,5 +274,44 @@ impl EventService {
         .await?;
         tx.commit().await.map_err(StoreError::from)?;
         Ok(count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use fold_core::EventType;
+
+    use super::{edit_distance, nearest_name};
+
+    fn declared() -> impl Iterator<Item = &'static str> {
+        EventType::ALL.iter().map(|declared| declared.as_str())
+    }
+
+    #[test]
+    fn the_edit_distance_counts_inserts_deletes_and_changes() {
+        assert_eq!(edit_distance("", ""), 0);
+        assert_eq!(edit_distance("abc", ""), 3);
+        assert_eq!(edit_distance("", "abc"), 3);
+        assert_eq!(edit_distance("kitten", "sitting"), 3);
+        assert_eq!(edit_distance("created", "opened"), 4);
+        assert_eq!(edit_distance("created", "closed"), 4);
+    }
+
+    #[test]
+    fn the_nearest_declared_type_is_the_closest_and_the_first_declared_on_a_tie() {
+        assert_eq!(
+            nearest_name("proposal.created", declared()),
+            Some("proposal.opened")
+        );
+        assert_eq!(
+            nearest_name("task.create", declared()),
+            Some("task.created")
+        );
+        assert_eq!(
+            nearest_name("worker.stalled", declared()),
+            Some("worker.stalled")
+        );
+        assert_eq!(nearest_name("b", ["a", "c"].into_iter()), Some("a"));
+        assert_eq!(nearest_name("x", std::iter::empty()), None);
     }
 }

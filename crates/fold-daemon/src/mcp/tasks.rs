@@ -4,8 +4,9 @@ use std::str::FromStr;
 
 use fold_core::tasks::{PlanRef, PlannedChecklistItem, PlannedReview, PlannedTask};
 use fold_core::{
-    Actor, ChecklistItemId, ChecklistName, FoldError, HumanName, IdParseError, LabelColor,
-    LabelName, StepText, TaskDescription, TaskId, TaskKind, TaskTitle, WorkerName, codes,
+    Actor, AreaName, ChecklistItemId, ChecklistName, FoldError, HumanName, IdParseError,
+    LabelColor, LabelName, StepText, TaskDescription, TaskId, TaskKind, TaskTitle, WorkerName,
+    codes,
 };
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
@@ -57,11 +58,18 @@ pub struct GetTaskGraphInput {
     /// full gives every field on each task, also a null holder and empty labels and needs. Leave it out for the short form, which leaves those empty fields out.
     #[serde(default)]
     pub detail: Option<String>,
+    /// Only the tasks of this area, such as web: the tasks that carry its label, with done_count counting its Done tasks. needs still names a task outside it. Leave it out for every area.
+    #[serde(default)]
+    pub area: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct NoInput {}
+pub struct GetReadyTasksInput {
+    /// Only the ready tasks of this area, such as web: the tasks that carry its label. Leave it out for every area.
+    #[serde(default)]
+    pub area: Option<String>,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -286,7 +294,7 @@ pub fn tools() -> Vec<Tool> {
         Tool::new(
             GET_READY_TASKS,
             "List the Todo tasks nobody has claimed, the one that unblocks the most tasks first. Human tasks and tasks on hold are left out: no agent takes them.",
-            schema_for_type::<NoInput>(),
+            schema_for_type::<GetReadyTasksInput>(),
         ),
         Tool::new(
             GET_TASK,
@@ -613,7 +621,11 @@ async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<V
             );
         }
     };
-    let graph = tasks.graph(input.include_done).await.map_err(from_task)?;
+    let area = input.area.as_deref().map(AreaName::parse).transpose()?;
+    let graph = tasks
+        .graph_in(input.include_done, area.as_ref())
+        .await
+        .map_err(from_task)?;
     let tasks: Vec<Value> = graph
         .tasks
         .iter()
@@ -642,8 +654,9 @@ async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<V
 
 async fn get_ready_tasks(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let tasks = &server.tasks;
-    let _: NoInput = parse(arguments)?;
-    let ready = tasks.ready().await.map_err(from_task)?;
+    let input: GetReadyTasksInput = parse(arguments)?;
+    let area = input.area.as_deref().map(AreaName::parse).transpose()?;
+    let ready = tasks.ready_in(area.as_ref()).await.map_err(from_task)?;
     let tasks: Vec<Value> = ready
         .iter()
         .map(|task| {

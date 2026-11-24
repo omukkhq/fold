@@ -146,10 +146,23 @@ pub(super) fn is_paused_refusal(error: &AgentError) -> bool {
 }
 
 fn area_not_found(area: &AreaName) -> AgentError {
+    area_missing(area).into()
+}
+
+fn area_missing(area: &AreaName) -> FoldError {
     FoldError::new(codes::AREA_NOT_FOUND, format!("area {area} does not exist"))
         .with_details([("area", json!(area.as_str()))])
-        .with_hint("the main agent defines it with define_area")
-        .into()
+        .with_hint("call list_workers to see the areas")
+}
+
+/// The area `name` for a read that a caller scopes to one area, or `area_not_found`.
+pub(crate) async fn named_area<E: From<StoreError> + From<FoldError>>(
+    pool: &fold_store::SqlitePool,
+    name: &AreaName,
+) -> Result<AreaRow, E> {
+    agents::find_area(pool, name)
+        .await?
+        .ok_or_else(|| area_missing(name).into())
 }
 
 /// What a start's transaction gave the new worker besides its claims: the workspaces it adopted, whose live owner changes after the commit, and the batch made of its proposals.
@@ -304,6 +317,16 @@ impl AgentService {
         Ok(areas)
     }
 
+    /// [`AgentService::list_areas`], or only the area `area` when it is given; an unknown area is `area_not_found`.
+    pub async fn list_areas_in(&self, area: Option<&AreaName>) -> Result<Vec<AreaRow>, AgentError> {
+        match area {
+            None => self.list_areas().await,
+            Some(name) => Ok(vec![
+                named_area::<AgentError>(self.store.read(), name).await?,
+            ]),
+        }
+    }
+
     /// The project's worker settings from `.fold/config.toml`, or its defaults when there is no file; `None` when the service knows no project folder or the file does not parse, so a list still answers.
     pub async fn worker_config(&self) -> Option<ProjectConfig> {
         load_config(self.config_paths()?).await.ok()
@@ -361,6 +384,20 @@ impl AgentService {
             .await
             .map_err(StoreError::from)?;
         Ok(agents::list_worker_processes(&mut conn).await?)
+    }
+
+    /// [`AgentService::list_workers`], or only the workers of the area `area` when it is given; an unknown area is `area_not_found`.
+    pub async fn list_workers_in(
+        &self,
+        area: Option<&AreaName>,
+    ) -> Result<Vec<WorkerProcessRow>, AgentError> {
+        let Some(name) = area else {
+            return self.list_workers().await;
+        };
+        named_area::<AgentError>(self.store.read(), name).await?;
+        let mut workers = self.list_workers().await?;
+        workers.retain(|worker| worker.area.as_ref() == Some(name));
+        Ok(workers)
     }
 
     pub async fn get_worker(&self, agent: &AgentName) -> Result<WorkerProcessRow, AgentError> {
