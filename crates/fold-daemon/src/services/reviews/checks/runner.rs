@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -5,12 +7,13 @@ use std::time::Duration;
 
 use fold_core::layout::{AGENT_ENV, AGENT_TAGS_ENV};
 use fold_core::reviews::checks::{CHECK_TIMEOUT, ChecksFile, Outcome, Planned};
-use fold_core::{AgentName, Clock};
+use fold_core::{AgentName, CheckRunId, Clock, Timestamp};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 use tokio::sync::{OwnedRwLockReadGuard, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
+use super::memory::{self, MemorySource};
 use crate::services::agents::peers::{self, PeerWorker};
 use crate::support::{lock, remove_daemon_context};
 
@@ -44,30 +47,104 @@ impl Default for RunLimits {
     }
 }
 
-/// How many runs of checks may go at the same time on this machine. Every project the daemon opens shares one set, so a machine with many projects never runs more test suites at once than half its processors.
-#[derive(Debug, Clone)]
-pub struct CheckPermits(Arc<Semaphore>);
+/// The host's settings of check runs, the same for every project the daemon opens.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CheckSettings {
+    /// The most runs at once on the machine; `None` is half the processors the daemon may use.
+    pub max_runs: Option<NonZeroUsize>,
+    /// The free memory in bytes a run waits for before its commands start; `None` is the larger of 4 GiB and 10% of the total.
+    pub memory_floor: Option<u64>,
+}
 
-impl CheckPermits {
-    /// At least one run.
-    pub fn new(runs: usize) -> Self {
-        Self(Arc::new(Semaphore::new(runs.max(1))))
-    }
+/// How often a run that waits for free memory reads the machine's memory again.
+pub const MEMORY_TICK: Duration = Duration::from_secs(10);
 
-    /// Half the processors the daemon may use, at least one.
-    pub fn for_machine() -> Self {
-        let processors = std::thread::available_parallelism().map_or(2, usize::from);
-        Self::new(processors / 2)
-    }
+/// The memory a run with its permit waits for before its commands start.
+#[derive(Clone)]
+struct MemoryGate {
+    /// `None` skips the gate.
+    source: Option<MemorySource>,
+    floor: Option<u64>,
+    tick: Duration,
+}
 
-    pub(crate) async fn acquire(&self) -> Option<OwnedSemaphorePermit> {
-        Arc::clone(&self.0).acquire_owned().await.ok()
+impl std::fmt::Debug for MemoryGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryGate")
+            .field("source", &self.source.is_some())
+            .field("floor", &self.floor)
+            .field("tick", &self.tick)
+            .finish()
     }
 }
 
+/// How many runs of checks may go at the same time on this machine, and the free memory each waits for. Every project the daemon opens shares one set, so a machine with many projects never runs more test suites at once than the host allows.
+#[derive(Debug, Clone)]
+pub struct CheckPermits {
+    runs: Arc<Semaphore>,
+    memory: MemoryGate,
+}
+
+impl CheckPermits {
+    /// At least one run, with no memory gate.
+    pub fn new(runs: usize) -> Self {
+        Self {
+            runs: Arc::new(Semaphore::new(runs.max(1))),
+            memory: MemoryGate {
+                source: None,
+                floor: None,
+                tick: MEMORY_TICK,
+            },
+        }
+    }
+
+    /// The permits of the host's settings, with the memory gate of this machine's `/proc/meminfo` on Linux.
+    pub fn from_settings(settings: CheckSettings) -> Self {
+        let runs = settings
+            .max_runs
+            .map_or_else(half_the_processors, NonZeroUsize::get);
+        let mut permits = Self::new(runs);
+        permits.memory.source = memory::system_source();
+        permits.memory.floor = settings.memory_floor;
+        permits
+    }
+
+    /// The permits with the memory gate reading `source`, waiting for `floor` and reading again every `tick`.
+    #[must_use]
+    pub fn with_memory_gate(
+        mut self,
+        source: MemorySource,
+        floor: Option<u64>,
+        tick: Duration,
+    ) -> Self {
+        self.memory = MemoryGate {
+            source: Some(source),
+            floor,
+            tick,
+        };
+        self
+    }
+
+    /// How many runs may go at once while none goes.
+    pub fn available(&self) -> usize {
+        self.runs.available_permits()
+    }
+
+    pub(crate) async fn acquire(&self) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(&self.runs).acquire_owned().await.ok()
+    }
+}
+
+/// Half the processors the daemon may use, at least one.
+fn half_the_processors() -> usize {
+    let processors = std::thread::available_parallelism().map_or(2, usize::from);
+    (processors / 2).max(1)
+}
+
+/// Half the processors with no memory gate; the daemon builds its permits with [`CheckPermits::from_settings`].
 impl Default for CheckPermits {
     fn default() -> Self {
-        Self::for_machine()
+        Self::new(half_the_processors())
     }
 }
 
@@ -85,6 +162,8 @@ pub struct CheckRunner {
     dir_work: Arc<tokio::sync::RwLock<()>>,
     queue: Arc<Queue>,
     held: Arc<Mutex<Vec<HeldRequest>>>,
+    /// The runs of the project that hold their permit and wait for free memory, with the time each began to wait.
+    memory_waits: Arc<Mutex<HashMap<CheckRunId, Timestamp>>>,
 }
 
 /// A queued integration that waits for a valid checks file on main. Its stored request keeps no end, so a daemon start serves it again; while the daemon runs, the next revision of main does.
@@ -153,6 +232,7 @@ impl CheckRunner {
             dir_work: Arc::default(),
             queue: Arc::default(),
             held: Arc::default(),
+            memory_waits: Arc::default(),
         }
     }
 
@@ -182,8 +262,54 @@ impl CheckRunner {
         self.limits
     }
 
-    pub(crate) fn permits(&self) -> &CheckPermits {
+    pub fn permits(&self) -> &CheckPermits {
         &self.permits
+    }
+
+    /// The machine-wide permit of `run`, once the machine has the free memory for it: while it has not, the run keeps its permit, shows as waiting for memory, logs that once and reads the memory again on every tick. A failed read starts the run, so a broken `/proc` never stops the checks.
+    pub(crate) async fn start_permit(
+        &self,
+        run: CheckRunId,
+        clock: &dyn Clock,
+    ) -> Option<OwnedSemaphorePermit> {
+        let permit = self.permits.acquire().await;
+        let gate = &self.permits.memory;
+        let Some(source) = gate.source.clone() else {
+            return permit;
+        };
+        let mut wait = None;
+        loop {
+            let read = Arc::clone(&source);
+            let info = tokio::task::spawn_blocking(move || read())
+                .await
+                .ok()
+                .flatten();
+            let Some(info) = info else {
+                return permit;
+            };
+            if memory::enough_memory(info, gate.floor) {
+                return permit;
+            }
+            if wait.is_none() {
+                tracing::info!(
+                    run = %run,
+                    available_mib = info.available >> 20,
+                    floor_mib = memory::memory_floor(info.total, gate.floor) >> 20,
+                    "the check run waits for free memory before its commands start"
+                );
+                lock(&self.memory_waits).insert(run, clock.now());
+                wait = Some(MemoryWait {
+                    waits: Arc::clone(&self.memory_waits),
+                    run,
+                });
+            }
+            tokio::time::sleep(gate.tick).await;
+        }
+    }
+
+    /// Since when `run` holds its permit and waits for free memory; `None` when it does not wait.
+    pub fn waiting_for_memory(&self, run: CheckRunId) -> Option<Timestamp> {
+        lock(&self.memory_waits).get(&run).copied()
     }
 
     /// A place at the end of the project's integration queue, taken at once so the order is the order of the calls.
@@ -242,6 +368,18 @@ impl CheckRunner {
         tasks.abort_all();
         while tasks.join_next().await.is_some() {}
         drop(self.dir_work.write().await);
+    }
+}
+
+/// A run's place among the runs that wait for memory, left when the wait ends or the run is aborted.
+struct MemoryWait {
+    waits: Arc<Mutex<HashMap<CheckRunId, Timestamp>>>,
+    run: CheckRunId,
+}
+
+impl Drop for MemoryWait {
+    fn drop(&mut self) {
+        lock(&self.waits).remove(&self.run);
     }
 }
 
@@ -832,5 +970,76 @@ mod tests {
             CheckPermits::new(0).acquire().await.is_some(),
             "at least one run"
         );
+    }
+
+    #[test]
+    fn the_host_setting_sets_the_number_of_permits() {
+        let three = CheckPermits::from_settings(CheckSettings {
+            max_runs: NonZeroUsize::new(3),
+            memory_floor: None,
+        });
+        assert_eq!(three.available(), 3);
+        assert_eq!(
+            CheckPermits::from_settings(CheckSettings::default()).available(),
+            half_the_processors()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_waits_for_memory_with_its_permit_and_starts_when_it_frees() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let free = Arc::new(AtomicU64::new(GIB));
+        let read = Arc::clone(&free);
+        let source: MemorySource = Arc::new(move || {
+            Some(memory::MemInfo {
+                total: 16 * GIB,
+                available: read.load(Ordering::SeqCst),
+            })
+        });
+        let permits =
+            CheckPermits::new(1).with_memory_gate(source, Some(2 * GIB), Duration::from_millis(10));
+        let runner = CheckRunner::new(permits);
+        let run = CheckRunId::from_number(7).unwrap();
+        let clock = clock();
+        let waiting = runner.clone();
+        let start = tokio::spawn(async move { waiting.start_permit(run, &clock).await.is_some() });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while runner.waiting_for_memory(run).is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            runner.permits().available(),
+            0,
+            "the waiting run holds its permit"
+        );
+        free.store(2 * GIB, Ordering::SeqCst);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), start)
+                .await
+                .unwrap()
+                .unwrap()
+        );
+        assert_eq!(runner.waiting_for_memory(run), None);
+    }
+
+    #[tokio::test]
+    async fn a_failed_memory_read_starts_the_run() {
+        let permits = CheckPermits::new(1).with_memory_gate(
+            Arc::new(|| None),
+            Some(u64::MAX),
+            Duration::from_millis(10),
+        );
+        let runner = CheckRunner::new(permits);
+        let started = tokio::time::timeout(
+            Duration::from_secs(5),
+            runner.start_permit(CheckRunId::from_number(1).unwrap(), &clock()),
+        )
+        .await
+        .unwrap();
+        assert!(started.is_some());
     }
 }

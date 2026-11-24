@@ -389,7 +389,7 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 75] = [
+const NON_TOOL_NAMES: [&str; 76] = [
     "next_offset",
     "file_count",
     "human_review",
@@ -465,6 +465,7 @@ const NON_TOOL_NAMES: [&str; 75] = [
     "reviewed_alone",
     "wait_for",
     "needs_person",
+    "waiting_for",
 ];
 
 /// The sections of the index before the shared ones.

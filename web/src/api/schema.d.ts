@@ -2520,6 +2520,11 @@ export interface components {
              * @description The version an integration run checks.
              */
             version: number | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds since the running run holds its permit and waits for free memory before its commands start. Absent while it does not wait.
+             */
+            waiting_for_memory_since?: number | null;
         };
         /**
          * @description Why a run failed or stopped.

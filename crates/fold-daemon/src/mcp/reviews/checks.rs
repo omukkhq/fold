@@ -43,7 +43,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_CHECK_RUN,
-            "Read one check run: its stage, state and reason, and each command's outcome, exit code and duration, with the end of the log of each command that failed.",
+            "Read one check run: its stage, state and reason, and each command's outcome, exit code and duration, with the end of the log of each command that failed. A running run with waiting_for memory holds its permit and waits until the machine has enough free memory to start its commands.",
             schema_for_type::<GetCheckRunInput>(),
         ),
     ]
@@ -148,6 +148,10 @@ pub fn run_json(view: &CheckRunView) -> Value {
     }
     if let Some(batch) = run.batch {
         line["batch"] = json!(batch);
+    }
+    if let Some(since) = view.waiting_for_memory {
+        line["waiting_for"] = json!("memory");
+        line["waiting_since"] = json!(since.as_millis());
     }
     line
 }

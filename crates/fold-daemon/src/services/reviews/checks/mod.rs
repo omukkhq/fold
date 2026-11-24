@@ -24,13 +24,14 @@ use crate::services::tasks::{TaskError, closed_refusal, proposal_kind_refusal, t
 use crate::services::workspaces::ProposalSnapshot;
 
 mod integration;
+pub mod memory;
 mod runner;
 
 pub(crate) use integration::{Integrating, IntegrationChecks, PassedRun, fold_failed_refusal};
 pub(crate) use runner::HeldRequest;
 pub use runner::{
-    CheckPermits, CheckRunner, CommandResult, CommandSpec, LOG_LIMIT, RunLimits, commands,
-    run_commands, run_commands_for,
+    CheckPermits, CheckRunner, CheckSettings, CommandResult, CommandSpec, LOG_LIMIT, MEMORY_TICK,
+    RunLimits, commands, run_commands, run_commands_for,
 };
 
 /// The most lines of a failed command's log a result message carries.
@@ -45,6 +46,8 @@ pub struct CheckRunView {
     pub run: CheckRunRow,
     /// In run order; each log is empty unless the read asked for logs.
     pub results: Vec<CheckResultRow>,
+    /// Since when the running run holds its permit and waits for free memory before its commands start.
+    pub waiting_for_memory: Option<Timestamp>,
 }
 
 /// What a request for checks started.
@@ -160,7 +163,12 @@ impl ReviewService {
             .ok_or_else(|| run_not_found(run))?;
         let results = checks::list_results(&mut *read, run, logs).await?;
         read.commit().await.map_err(StoreError::from)?;
-        Ok(CheckRunView { run: row, results })
+        let waiting_for_memory = self.checks.waiting_for_memory(run);
+        Ok(CheckRunView {
+            run: row,
+            results,
+            waiting_for_memory,
+        })
     }
 
     /// The task workspace a worker runs checks in: the task is open and of a kind with a proposal, and the actor's worker owns its active workspace.
@@ -344,7 +352,7 @@ impl ReviewService {
         let row = workspaces::get_workspace(self.store.read(), workspace)
             .await?
             .ok_or(StoreError::Corrupt("check_runs.workspace_id"))?;
-        let permit = self.checks.permits().acquire().await;
+        let permit = self.checks.start_permit(run.id, &*self.clock).await;
         let dir = self.workspaces.workspace_dir(&row);
         let owner = self
             .checks
@@ -523,6 +531,7 @@ impl ReviewService {
     /// The runs of one version of a proposal, newest first, without logs, on `conn`.
     pub(super) async fn version_checks(
         conn: &mut SqliteConnection,
+        runner: &CheckRunner,
         task: TaskId,
         proposal: ProposalId,
         version: u32,
@@ -531,7 +540,12 @@ impl ReviewService {
         let mut views = Vec::with_capacity(runs.len());
         for run in runs {
             let results = checks::list_results(&mut *conn, run.id, false).await?;
-            views.push(CheckRunView { run, results });
+            let waiting_for_memory = runner.waiting_for_memory(run.id);
+            views.push(CheckRunView {
+                run,
+                results,
+                waiting_for_memory,
+            });
         }
         Ok(views)
     }

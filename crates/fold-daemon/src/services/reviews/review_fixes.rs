@@ -274,7 +274,7 @@ impl ReviewService {
         let checkout = workspaces::get_workspace(self.store.read(), fix.checkout)
             .await?
             .ok_or(StoreError::Corrupt("check_runs.workspace_id"))?;
-        let permit = self.checks.permits().acquire().await;
+        let permit = self.checks.start_permit(run.id, &*self.clock).await;
         let dir = self.workspaces.workspace_dir(&checkout);
         let owner = self
             .checks

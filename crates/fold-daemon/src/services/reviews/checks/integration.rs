@@ -131,7 +131,7 @@ impl ReviewService {
         let specs = runner::commands(&file, &plan);
         let lock = self.checks.check_dir();
         let held = lock.lock().await;
-        let permit = self.checks.permits().acquire().await;
+        let permit = self.checks.start_permit(run.id, &*self.clock).await;
         let fault = Verdict {
             state: RunState::Stopped,
             reason: Some(RunReason::FoldFailed),

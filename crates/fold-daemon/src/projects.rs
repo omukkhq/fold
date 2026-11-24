@@ -674,6 +674,13 @@ pub struct Projects {
 struct InitRunning;
 
 impl Projects {
+    /// Every project's check runs take `permits`, the host's.
+    #[must_use]
+    pub fn with_check_permits(mut self, permits: CheckPermits) -> Self {
+        self.check_permits = permits;
+        self
+    }
+
     #[must_use]
     pub fn with_launcher(mut self, launcher: Launcher) -> Self {
         self.launcher = launcher;

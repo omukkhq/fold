@@ -400,3 +400,56 @@ async fn a_process_of_a_workers_check_acts_as_that_worker() {
         "an ended check leaves the registry"
     );
 }
+
+#[tokio::test]
+async fn a_run_waits_for_free_memory_and_starts_when_it_frees() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use fold_daemon::services::reviews::checks::memory::{MemInfo, MemorySource};
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+    let fx = Fixture::new().await;
+    let outside = tempfile::tempdir().unwrap();
+    let ran = outside.path().join("ran");
+    workspace_with_checks(
+        &fx,
+        &format!(
+            "[[check]]\nname = \"test\"\nrun = \"touch '{}'\"\n",
+            ran.display()
+        ),
+    )
+    .await;
+    let free = Arc::new(AtomicU64::new(GIB));
+    let read = Arc::clone(&free);
+    let source: MemorySource = Arc::new(move || {
+        Some(MemInfo {
+            total: 16 * GIB,
+            available: read.load(Ordering::SeqCst),
+        })
+    });
+    let permits =
+        CheckPermits::new(1).with_memory_gate(source, Some(2 * GIB), Duration::from_millis(20));
+    let reviews = fx.service().with_checks(CheckRunner::new(permits));
+    let run = running(
+        reviews
+            .run_checks(&by(&fx.frontend.worker), t(1))
+            .await
+            .unwrap(),
+    );
+    let since = eventually(WAIT, async || {
+        let view = reviews.get_check_run(run, false).await.unwrap();
+        view.waiting_for_memory.ok_or(view.run.state)
+    })
+    .await;
+    assert_eq!(since, fx.project.now());
+    let view = reviews.get_check_run(run, false).await.unwrap();
+    assert_eq!(view.run.state, RunState::Running);
+    assert!(!ran.exists(), "no command starts while memory is short");
+
+    free.store(2 * GIB, Ordering::SeqCst);
+    let view = ended(&reviews, run).await;
+    assert_eq!(view.run.state, RunState::Passed);
+    assert_eq!(view.waiting_for_memory, None);
+    assert!(ran.exists());
+}

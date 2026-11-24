@@ -183,6 +183,9 @@ pub struct CheckRun {
     pub batch: Option<String>,
     /// In run order: the setup first, then each check of the stage.
     pub results: Vec<CheckResult>,
+    /// UTC milliseconds since the running run holds its permit and waits for free memory before its commands start. Absent while it does not wait.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_for_memory_since: Option<i64>,
 }
 
 impl From<CheckRunView> for CheckRun {
@@ -200,6 +203,7 @@ impl From<CheckRunView> for CheckRun {
             created_at: run.created_at.as_millis(),
             finished_at: run.finished_at.map(|at| at.as_millis()),
             batch: run.batch.map(|batch| batch.to_string()),
+            waiting_for_memory_since: view.waiting_for_memory.map(|since| since.as_millis()),
             results: view
                 .results
                 .into_iter()
