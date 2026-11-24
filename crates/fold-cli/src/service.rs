@@ -334,6 +334,13 @@ fn xml_text(value: &str) -> String {
 /// How long systemd waits for the daemon's own stop before it sends SIGKILL: longer than the 60 seconds `fld restart` gives that stop, which ends every worker in turn.
 pub(crate) const UNIT_STOP_TIMEOUT_SECS: u64 = 90;
 
+/// The memory lines of the `[Service]` section, each a name and its value. `OOMPolicy=continue` makes the kernel's OOM killer end only the process it picks, such as one check, where the default `stop` ends the whole unit with the daemon and every worker; `MemoryHigh` slows the unit's processes before the limit and `MemoryMax` is the limit, as a share of the host's memory.
+pub(crate) const MEMORY_SETTINGS: [(&str, &str); 3] = [
+    ("OOMPolicy", "continue"),
+    ("MemoryHigh", "65%"),
+    ("MemoryMax", "80%"),
+];
+
 /// The unit file for a daemon started from `exe`, with `env` from the environment of `fld setup` and the [`SERVICE_ENV`] marker as its `Environment=` lines; a variable whose value holds a control character is left out. `KillMode=mixed` sends the stop's SIGTERM to the daemon alone, so a stop, a logout or a reboot ends the workers through the daemon's clean shutdown, which keeps each one resumable; the default would signal every worker at the same time, and a worker that exits before the daemon lets go of it counts as failed. What still runs after `TimeoutStopSec` gets SIGKILL.
 pub fn render_unit(exe: &Path, env: &[(&str, String)]) -> String {
     let marker = (SERVICE_ENV, "systemd".to_owned());
@@ -341,8 +348,12 @@ pub fn render_unit(exe: &Path, env: &[(&str, String)]) -> String {
         .chain(env)
         .filter_map(|(name, value)| environment_line(name, value))
         .collect();
+    let memory: String = MEMORY_SETTINGS
+        .iter()
+        .map(|(name, value)| format!("{name}={value}\n"))
+        .collect();
     format!(
-        "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\n{environment}ExecStart={} serve\nRestart=on-failure\nRestartSec=2\nKillMode=mixed\nTimeoutStopSec={UNIT_STOP_TIMEOUT_SECS}\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\n{environment}ExecStart={} serve\nRestart=on-failure\nRestartSec=2\nKillMode=mixed\nTimeoutStopSec={UNIT_STOP_TIMEOUT_SECS}\n{memory}\n[Install]\nWantedBy=default.target\n",
         exec_word(&exe.to_string_lossy())
     )
 }
@@ -464,7 +475,7 @@ mod tests {
         args: SetupArgs,
     }
 
-    const GOLDEN: &str = "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nEnvironment=FOLD_SERVICE=systemd\nEnvironment=PATH=/home/ana/.local/bin:/usr/bin\nEnvironment=XDG_RUNTIME_DIR=/run/user/1000\nExecStart=/usr/bin/fld serve\nRestart=on-failure\nRestartSec=2\nKillMode=mixed\nTimeoutStopSec=90\n\n[Install]\nWantedBy=default.target\n";
+    const GOLDEN: &str = "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nEnvironment=FOLD_SERVICE=systemd\nEnvironment=PATH=/home/ana/.local/bin:/usr/bin\nEnvironment=XDG_RUNTIME_DIR=/run/user/1000\nExecStart=/usr/bin/fld serve\nRestart=on-failure\nRestartSec=2\nKillMode=mixed\nTimeoutStopSec=90\nOOMPolicy=continue\nMemoryHigh=65%\nMemoryMax=80%\n\n[Install]\nWantedBy=default.target\n";
 
     /// The environment of the `fld setup` that [`GOLDEN`] was written by.
     fn golden_env() -> Vec<(&'static str, String)> {
@@ -527,9 +538,36 @@ mod tests {
         (script, log)
     }
 
-    /// The unit an older fld wrote for `/usr/bin/fld`, without the stop lines.
+    /// The unit an older fld wrote for `/usr/bin/fld`, without the stop and memory lines.
     fn older() -> String {
-        GOLDEN.replace("KillMode=mixed\nTimeoutStopSec=90\n", "")
+        GOLDEN
+            .replace("KillMode=mixed\nTimeoutStopSec=90\n", "")
+            .replace("OOMPolicy=continue\nMemoryHigh=65%\nMemoryMax=80%\n", "")
+    }
+
+    #[test]
+    fn a_unit_from_before_the_memory_lines_is_rewritten_with_them_and_keeps_its_environment() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (systemctl, _) = fake_systemctl(dir.path(), 0);
+        let unit = dir.path().join("systemd/user/fold.service");
+        std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
+        let before = GOLDEN.replace("OOMPolicy=continue\nMemoryHigh=65%\nMemoryMax=80%\n", "");
+        assert!(!before.contains("OOMPolicy"));
+        std::fs::write(&unit, before).unwrap();
+        let env = [("PATH", "/home/ana/.local/bin:/usr/bin".to_owned())];
+        assert_eq!(
+            refresh_unit(&unit, Path::new("/usr/bin/fld"), &env, &systemctl).unwrap(),
+            Refreshed::Wrote
+        );
+        let text = std::fs::read_to_string(&unit).unwrap();
+        for line in [
+            "OOMPolicy=continue\n",
+            "MemoryHigh=65%\n",
+            "MemoryMax=80%\n",
+            "Environment=PATH=/home/ana/.local/bin:/usr/bin\n",
+        ] {
+            assert!(text.contains(line), "{text}");
+        }
     }
 
     #[test]

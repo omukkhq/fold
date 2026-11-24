@@ -504,6 +504,7 @@ fn host_checks(socket_flag: Option<&Path>, file: &FileConfig, host: &Host) -> Ve
         claude_setup_check(host),
         service_manager_check(host),
         linger_check(host),
+        unit::service_unit_check(host),
         inotify_limit_check(host),
         inotify::queue_check(host.platform.linux, host.probe.inotify_max_queued_events()),
     ]
@@ -1529,6 +1530,7 @@ mod daemon;
 mod environment;
 mod inotify;
 mod push;
+mod unit;
 mod workers;
 
 #[cfg(test)]
