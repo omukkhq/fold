@@ -1127,6 +1127,11 @@ mod tests {
                 .prompt()
                 .contains("fold ends a `wait_for_events` after at most 270 s")
         );
+        for lead in [Role::AreaLead.prompt(), Role::ReviewLead.prompt()] {
+            assert!(lead.contains("End your turn when no action is due."));
+            assert!(lead.contains("always with a `task`, `proposal` or `area` filter"));
+            assert!(!lead.contains("call it again"));
+        }
         let lead = Role::ReviewLead.prompt();
         assert!(lead.contains("You decide the scope when you assign the review"));
         assert!(lead.contains("never resolve it yourself"));

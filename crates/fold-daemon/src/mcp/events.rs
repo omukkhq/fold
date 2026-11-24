@@ -57,7 +57,7 @@ pub struct WaitForEventsInput {
     /// Wake only for events about a task of this area, such as web; your new messages, the requests you may draft and the stalls fold tells you of still end the wait. Leave it out for every area.
     #[serde(default)]
     pub area: Option<String>,
-    /// The longest wait in seconds: 300 when left out, at most 1500. When fold started you with the five-minute prompt cache, it ends the wait after at most 270 whatever this says; call again when a wait returns with nothing new.
+    /// The longest wait in seconds: 300 when left out, at most 1500. When fold started you with the five-minute prompt cache, it ends the wait after at most 270 whatever this says; a task worker or a reviewer calls again when a wait returns with nothing new, and an area lead or the review lead ends its turn instead.
     #[serde(default)]
     pub timeout_s: Option<u64>,
 }
@@ -71,7 +71,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             WAIT_FOR_EVENTS,
-            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. A new message to you also ends the wait, whatever the filter says; the result then carries your new messages in `inbox`, so call get_inbox only when it says more wait. A message that `inbox` gives whole counts as read; a cut one stays unread until get_thread. For the main agent and an area lead, a request that another agent or a human created or released and that nobody drafts ends the wait too; the result names it in `requests`: read it with get_request, then claim_request it when it is yours. A worker.stalled or claim.stale that fold tells you of ends the wait too, with a hint to call restart_worker. Use it instead of polling get_events.",
+            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. A new message to you also ends the wait, whatever the filter says; the result then carries your new messages in `inbox`, so call get_inbox only when it says more wait. A message that `inbox` gives whole counts as read; a cut one stays unread until get_thread. For the main agent and an area lead, a request that another agent or a human created or released and that nobody drafts ends the wait too; the result names it in `requests`: read it with get_request, then claim_request it when it is yours. A worker.stalled or claim.stale that fold tells you of ends the wait too, with a hint to call restart_worker. Use it instead of polling get_events. An area lead or the review lead waits only with a task, proposal or area filter, and ends its turn when nothing is due: fold gives it ready tasks, requests, messages and stalls as new turns.",
             schema_for_type::<WaitForEventsInput>(),
         ),
     ]
