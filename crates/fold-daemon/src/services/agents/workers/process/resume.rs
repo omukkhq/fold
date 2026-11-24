@@ -385,6 +385,9 @@ impl Supervisor {
         agent: &AgentName,
         versions: &[(ProposalId, u32)],
     ) -> Result<(), AgentError> {
+        if !self.start_ticket().await {
+            return Ok(());
+        }
         // The row and the claims are read under the lock, so a second event finds the reviewer running, and a version whose claim a new reviewer took over since the owed reviews were read is left to that reviewer.
         let resuming = self.inner.resuming.lock().await;
         let mut conn = self
@@ -609,6 +612,9 @@ impl Supervisor {
         agent: &AgentName,
         items: &[ResumeItem],
     ) -> Result<(), AgentError> {
+        if !self.start_ticket().await {
+            return Ok(());
+        }
         // The row is read under the lock, so a second event finds the task worker running and leaves it to its stdin notices.
         let resuming = self.inner.resuming.lock().await;
         let mut conn = self

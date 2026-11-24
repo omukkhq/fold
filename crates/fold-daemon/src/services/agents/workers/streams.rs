@@ -11,6 +11,8 @@ use crate::support::lock;
 #[derive(Debug, Default)]
 pub struct WorkerStreams {
     agents: Mutex<HashMap<AgentName, Stream>>,
+    /// The workers that a daemon start runs again and that wait for their resume group, with the time each began to wait. Their rows keep a running state without a process meanwhile.
+    queued: Mutex<HashMap<AgentName, Timestamp>>,
 }
 
 #[derive(Debug)]
@@ -33,6 +35,7 @@ pub struct StreamFacts {
 impl WorkerStreams {
     /// A process of `agent` started at `at`; it replaces whatever an older process left.
     pub(crate) fn started(&self, agent: &AgentName, generation: u64, at: Timestamp) {
+        lock(&self.queued).remove(agent);
         lock(&self.agents).insert(
             agent.clone(),
             Stream {
@@ -94,6 +97,21 @@ impl WorkerStreams {
         {
             agents.remove(agent);
         }
+    }
+
+    /// `agent` waits for its resume group since `at`.
+    pub(crate) fn queue(&self, agent: &AgentName, at: Timestamp) {
+        lock(&self.queued).entry(agent.clone()).or_insert(at);
+    }
+
+    /// `agent` waits for its resume group no more.
+    pub(crate) fn unqueue(&self, agent: &AgentName) {
+        lock(&self.queued).remove(agent);
+    }
+
+    /// Since when `agent` waits for its resume group; `None` when it does not wait.
+    pub fn queued_since(&self, agent: &AgentName) -> Option<Timestamp> {
+        lock(&self.queued).get(agent).copied()
     }
 
     /// The stream of the running process of `agent`; `None` when no process of it started since the daemon did.
@@ -196,5 +214,24 @@ mod tests {
         assert_eq!(streams.facts(&agent), None);
         streams.line(&agent, 2, at(20), &tool_result("a"));
         assert_eq!(streams.facts(&agent), None);
+    }
+
+    #[test]
+    fn a_worker_waits_for_its_group_until_it_starts_or_leaves() {
+        let streams = WorkerStreams::default();
+        let agent = AgentName::parse("web-worker").unwrap();
+        assert_eq!(streams.queued_since(&agent), None);
+        streams.queue(&agent, at(0));
+        streams.queue(&agent, at(5));
+        assert_eq!(
+            streams.queued_since(&agent),
+            Some(at(0)),
+            "the first wait counts"
+        );
+        streams.started(&agent, 1, at(10));
+        assert_eq!(streams.queued_since(&agent), None);
+        streams.queue(&agent, at(20));
+        streams.unqueue(&agent);
+        assert_eq!(streams.queued_since(&agent), None);
     }
 }

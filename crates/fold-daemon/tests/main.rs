@@ -235,6 +235,7 @@ mod worker_questions;
 mod worker_queue;
 mod worker_restart;
 mod worker_resume;
+mod worker_resume_groups;
 mod worker_transcript;
 mod worker_update;
 mod workers;

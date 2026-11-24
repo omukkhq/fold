@@ -49,6 +49,9 @@ impl Supervisor {
 
     /// Resumes the worker of `agent` in its own session for one turn that names the messages it owes. A worker whose own resume is owed, such as requested changes to a task worker or a new version to a reviewer, waits for that resume, which moves its start, and answers once it stops again: a start for a message first would move the start too and leave the owed work untold. When the worker cannot start, because a worker limit refuses it or the owed resume, because its session is gone or because its process ends before it runs, every message goes on to a lead; see [`forward_in_tx`].
     async fn answer_messages(&self, agent: &AgentName) -> Result<(), AgentError> {
+        if !self.start_ticket().await {
+            return Ok(());
+        }
         if !lock(&self.inner.message_starts).insert(agent.clone()) {
             return Ok(());
         }

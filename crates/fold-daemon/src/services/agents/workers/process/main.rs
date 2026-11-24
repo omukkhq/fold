@@ -263,6 +263,10 @@ impl Supervisor {
             }
             let turn = match self.main_row().await? {
                 Some(row) if self.is_running(&row.agent) => return Ok(()),
+                // Its resume group runs it with the work that waits for it.
+                Some(row) if self.inner.streams.queued_since(&row.agent).is_some() => {
+                    return Ok(());
+                }
                 Some(row) if self.is_held(&row).await? => return Ok(()),
                 Some(row) => match self.catch_up(&row, &Default::default()).await {
                     Some(turn) => Some(turn),
@@ -277,6 +281,9 @@ impl Supervisor {
                     self.main_waiting(id, &Default::default()).await?
                 }
             };
+            if !self.start_ticket().await {
+                return Ok(());
+            }
             self.ensure_main(turn).await
         };
         if let Err(error) = caught.await {

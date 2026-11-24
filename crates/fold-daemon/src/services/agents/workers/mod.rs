@@ -30,6 +30,7 @@ mod output;
 mod pause;
 mod process;
 mod queue;
+mod resume_groups;
 mod streams;
 
 pub use account::ProjectAccount;
@@ -38,11 +39,13 @@ pub use pause::PauseState;
 #[cfg(feature = "dev-launcher")]
 pub use process::{DEV_STUB_COMMAND, DEV_STUB_DIR};
 pub use process::{
-    Launcher, MCP_RETRY_TURN, PAUSE_TURN, Park, RESTART_TURN, StopTimeouts, Supervisor,
+    Launcher, MCP_RETRY_TURN, PAUSE_TURN, Park, RESTART_TURN, ResumeGroups, StopTimeouts,
+    Supervisor,
 };
 pub use queue::{
     QueueEntry, QueuedWorkerStart, RestartOutcome, StartOutcome, follow_queued_starts,
 };
+pub use resume_groups::{DEFAULT_RESUME_GAP, DEFAULT_RESUME_GROUP};
 pub use streams::{StreamFacts, WorkerStreams};
 
 /// The most default names tried for one start before the start gives up.

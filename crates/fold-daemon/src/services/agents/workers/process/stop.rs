@@ -255,6 +255,7 @@ impl Supervisor {
 
     /// Ends every worker process the way a stop does, all at once, but keeps each row's state, so the next daemon start or the resume of a pause runs the workers that were working or idle again in their own sessions. A pause leaves a worker that is `stopping` to finish its stop.
     pub(in crate::services::agents::workers) async fn detach_all(&self, leave_stopping: bool) {
+        self.forget_queued();
         let rows = match self.inner.store.read().acquire().await {
             Ok(mut conn) => agents::list_running_worker_processes(&mut conn)
                 .await

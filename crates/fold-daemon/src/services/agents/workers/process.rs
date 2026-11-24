@@ -25,6 +25,7 @@ mod account;
 mod conflict;
 mod fresh;
 mod gate;
+mod groups;
 mod launch;
 mod lines;
 mod main;
@@ -40,6 +41,7 @@ mod stop;
 mod waits;
 mod watch;
 
+pub use groups::ResumeGroups;
 pub use restart::{MCP_RETRY_TURN, PAUSE_TURN, RESTART_TURN};
 pub use stop::Park;
 
@@ -224,6 +226,8 @@ struct Inner {
     owed: Mutex<waits::OwedTurns>,
     /// The context window of each model, as the last result that named it reported it. A wait inside a turn has no result of its own to size the context by.
     windows: Mutex<HashMap<String, u64>>,
+    /// The groups in which a daemon start runs the project's workers again, shared with every project of the daemon.
+    groups: Mutex<ResumeGroups>,
 }
 
 impl Drop for Inner {
@@ -296,6 +300,7 @@ impl Supervisor {
                 switch_turns: Mutex::default(),
                 owed: Mutex::default(),
                 windows: Mutex::default(),
+                groups: Mutex::default(),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();

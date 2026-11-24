@@ -51,14 +51,14 @@ pub use overview::{
     ProcessSummary, ProposalSummary, SessionSummary, WorkerOverview, WorkspaceSummary, waits_for,
 };
 pub use presence::SeenPresence;
+pub use workers::{
+    DEFAULT_RESUME_GAP, DEFAULT_RESUME_GROUP, Launcher, MCP_RETRY_TURN, PAUSE_TURN, PauseState,
+    ProjectAccount, QueueEntry, QueuedWorkerStart, RESTART_TURN, RestartOutcome, ResumeGroups,
+    StartOutcome, StartWorker, StartedWorker, StopTimeouts, StreamFacts, Supervisor,
+    WorkerLimitsChanged, WorkerStreams, follow_queued_starts, new_session_id,
+};
 #[cfg(feature = "dev-launcher")]
 pub use workers::{DEV_STUB_COMMAND, DEV_STUB_DIR};
-pub use workers::{
-    Launcher, MCP_RETRY_TURN, PAUSE_TURN, PauseState, ProjectAccount, QueueEntry,
-    QueuedWorkerStart, RESTART_TURN, RestartOutcome, StartOutcome, StartWorker, StartedWorker,
-    StopTimeouts, StreamFacts, Supervisor, WorkerLimitsChanged, WorkerStreams,
-    follow_queued_starts, new_session_id,
-};
 pub(crate) use workers::{code_of, named_area, starter_of};
 
 #[derive(Debug, Error)]
