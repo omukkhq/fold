@@ -288,13 +288,9 @@ impl Default for StallFacts {
 }
 
 impl StallFacts {
-    /// The latest time the worker's own work gave it the turn: its proposal came back, its workspace's newest check run ended, or its process started. A person's answer is not in it, because the agent that parked the worker gives the go.
+    /// The latest time the worker's own work gave it the turn: its proposal came back, or its process started. A person's answer is not in it, because the agent that parked the worker gives the go. The end of a check run is not in it either: nothing resumes a parked worker for a finished run, and a gate run that fold resumes the worker for starts its process.
     fn work_given_at(&self) -> Option<Timestamp> {
-        let checked = match self.checks {
-            WorkspaceChecks::Ended { at } => Some(at),
-            WorkspaceChecks::None | WorkspaceChecks::Running => None,
-        };
-        self.returned_at.max(checked).max(self.worker.started_at)
+        self.returned_at.max(self.worker.started_at)
     }
 }
 
@@ -352,7 +348,7 @@ impl Activity {
     }
 }
 
-/// Decides what the worker of a workspace does at `now`. Nothing is said while the project's agents are paused, nor of a worker without the implementation claim. A worker of an active workspace whose last turn waits for the network, a usage limit or a working login is `WaitsForNetwork`, `WaitsForUsageLimit` or `WaitsForLogin`, never a stall, whatever else holds. Nothing is said either while its check run goes. A worker that an agent parked is `Parked` while its workspace is active or holds its sent version, fold owes it no resume and its work gave it no turn after the park: a proposal that came back, a check run that ended or a start; a person's answer does not end the park. Nothing else is said of a workspace that is not active, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A worker whose resume fold owes while the worker limits hold it is `WaitsForSlot`, never a stall; once a place is free for it, it is `Silent` when a stall window from that time, and from `start`, passed without a run. A process that ended is `Failed` at once when it ended without anyone asking and `Stopped` when someone asked for its stop, whatever changed in the workspace after the end, unless others gave the worker the turn after it ended (`given_at`), such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
+/// Decides what the worker of a workspace does at `now`. Nothing is said while the project's agents are paused, nor of a worker without the implementation claim. A worker of an active workspace whose last turn waits for the network, a usage limit or a working login is `WaitsForNetwork`, `WaitsForUsageLimit` or `WaitsForLogin`, never a stall, whatever else holds. Nothing is said either while its check run goes. A worker that an agent parked is `Parked` while its workspace is active or holds its sent version, fold owes it no resume and its work gave it no turn after the park: a proposal that came back or a start; neither a person's answer nor the end of a check run ends the park. Nothing else is said of a workspace that is not active, a worker that waits for a person, a task with an open report, or a failure that Needs you already names. A worker whose resume fold owes while the worker limits hold it is `WaitsForSlot`, never a stall; once a place is free for it, it is `Silent` when a stall window from that time, and from `start`, passed without a run. A process that ended is `Failed` at once when it ended without anyone asking and `Stopped` when someone asked for its stop, whatever changed in the workspace after the end, unless others gave the worker the turn after it ended (`given_at`), such as a proposal that came back to its author, whose resume fold owes: then it is `Silent` once a stall window from `start` passed without a run. A worker whose stream fold does not read is `Silent` after `stall_minutes` from `start`, the time [`stall_start`] gives. A worker whose process runs counts from the later of `start` and its newest line: while a call is open it is `Working` from [`WORKING_AFTER`] and `LongCall` from [`LONG_CALL`] (a command from its start, a subagent or another tool from the newest line; a fold call or a question never), and with no call open it is `Silent` after `stall_minutes`.
 pub fn activity(
     now: Timestamp,
     facts: &StallFacts,
@@ -1591,8 +1587,8 @@ mod tests {
         };
         assert_eq!(
             activity(at(25 * MINUTE), &checked, stopped, back, 5),
-            Activity::Silent { since: back },
-            "a check run that ended after the park gives the worker the turn"
+            Activity::Parked { since: parked_at },
+            "a check run that ended after the park leaves the wait for the go"
         );
         let answered = StallFacts {
             parked: Some(parked_at),
@@ -1622,6 +1618,81 @@ mod tests {
                 slot: Slot::TaskWorker,
                 since: back
             }
+        );
+    }
+
+    #[test]
+    fn a_start_or_a_returned_proposal_after_the_park_still_ends_it() {
+        let parked_at = at(10 * MINUTE);
+        let stopped = WorkerStream::Ended {
+            at: parked_at,
+            failed: false,
+        };
+        let back = at(20 * MINUTE);
+        let started = StallFacts {
+            parked: Some(parked_at),
+            given_at: Some(back),
+            worker: WorkerTurn {
+                started_at: Some(back),
+                ..IDLE
+            },
+            ..CLAIMED
+        };
+        assert_eq!(
+            activity(at(25 * MINUTE), &started, stopped, back, 5),
+            Activity::Silent { since: back }
+        );
+        let returned_and_checked = StallFacts {
+            parked: Some(parked_at),
+            given_at: Some(back),
+            returned_at: Some(back),
+            checks: WorkspaceChecks::Ended {
+                at: at(15 * MINUTE),
+            },
+            ..CLAIMED
+        };
+        assert_eq!(
+            activity(at(25 * MINUTE), &returned_and_checked, stopped, back, 5),
+            Activity::Silent { since: back }
+        );
+        let start_before_the_park = StallFacts {
+            worker: WorkerTurn {
+                started_at: Some(at(5 * MINUTE)),
+                ..IDLE
+            },
+            ..started
+        };
+        assert_eq!(
+            activity(at(25 * MINUTE), &start_before_the_park, stopped, back, 5),
+            Activity::Parked { since: parked_at },
+            "a start before the park does not end it"
+        );
+    }
+
+    #[test]
+    fn a_worker_that_is_not_parked_keeps_its_verdicts_for_a_check_end() {
+        let stopped = WorkerStream::Ended {
+            at: at(10 * MINUTE),
+            failed: false,
+        };
+        let back = at(20 * MINUTE);
+        let checked = StallFacts {
+            given_at: Some(back),
+            checks: WorkspaceChecks::Ended { at: back },
+            ..CLAIMED
+        };
+        assert_eq!(
+            activity(at(24 * MINUTE), &checked, stopped, back, 5),
+            Activity::Quiet,
+            "the worker gets a whole window to act on its check results"
+        );
+        assert_eq!(
+            activity(at(25 * MINUTE), &checked, stopped, back, 5),
+            Activity::Silent { since: back }
+        );
+        assert_eq!(
+            activity(at(25 * MINUTE), &checked, WorkerStream::Unread, back, 5),
+            Activity::Silent { since: back }
         );
     }
 
