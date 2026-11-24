@@ -57,6 +57,9 @@ impl Fixture {
         let handle = ProjectHandle::open(&row(slug, &project), Arc::new(project.clock().clone()))
             .await
             .unwrap();
+        // The commit writer follows the project folder every tick with a snapshot, which refreshes the modification time of each object it reuses, so an object a test aged could turn new in the middle of a run. A garbage collection needs none of the project's background tasks.
+        handle.bus.close();
+        handle.stop_tasks(WAIT).await;
         let fixture = Self {
             project,
             objects,
