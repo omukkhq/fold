@@ -105,7 +105,8 @@ export function firstError(lines: readonly LogLine[]): number | null {
   return lines.find((line) => line.error)?.n ?? null;
 }
 
-function seconds(ms: number): string {
+/** `11 ms` under a second, else `83.2 s`; the step rows use it. */
+export function formatStepDuration(ms: number): string {
   return ms < 1000 ? `${String(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
 }
 
@@ -113,13 +114,13 @@ function seconds(ms: number): string {
 export function stepMeta(result: CheckResult): string {
   switch (result.outcome) {
     case "passed":
-      return seconds(result.duration_ms);
+      return formatStepDuration(result.duration_ms);
     case "failed":
       return result.exit_code === null
-        ? seconds(result.duration_ms)
-        : `exit ${String(result.exit_code)} · ${seconds(result.duration_ms)}`;
+        ? formatStepDuration(result.duration_ms)
+        : `exit ${String(result.exit_code)} · ${formatStepDuration(result.duration_ms)}`;
     case "timed_out":
-      return `timed out · ${seconds(result.duration_ms)}`;
+      return `timed out · ${formatStepDuration(result.duration_ms)}`;
     case "skipped":
       return "skipped";
     case "not_run":

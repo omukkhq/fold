@@ -1,19 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
 import { Copy, ListChecks } from "lucide-react";
 import { useState } from "react";
+import type { CheckRun } from "@/api/proposals";
 import { checkRunQuery } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
 import { Chip } from "@/components/badge/Chip";
 import { Button } from "@/components/button/Button";
 import { Id } from "@/components/id/Id";
+import { Tooltip } from "@/components/overlay/Tooltip";
 import { copyOutcome, type CopyState } from "@/components/mono/commitCopy";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { Skeleton } from "@/components/states/Skeleton";
 import { IdText } from "@/components/text/IdText";
 import { CODE_BOX, textFlow } from "@/components/text/textFlow";
-import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { runTime } from "./checkRunTime";
 import { outcomeText, reasonText, resultOf } from "./checkRuns";
 import {
   chosenStep,
@@ -45,6 +47,20 @@ function CopyLog({ log }: { log: string }) {
         </span>
       )}
     </span>
+  );
+}
+
+function RunTimeLabel({ run, now }: { run: CheckRun; now: number }) {
+  const time = runTime(run, now);
+  return (
+    <Tooltip content={time.tooltip}>
+      <span
+        tabIndex={0}
+        className={cn("ml-auto text-13 text-text-2", focusRing)}
+      >
+        {time.label}
+      </span>
+    </Tooltip>
   );
 }
 
@@ -199,9 +215,7 @@ export function ChecksTab({ slug, id, items, search, now }: ChecksTabProps) {
                 </h3>
                 <Id className="text-13 text-text-2">{item.run.id}</Id>
                 {item.run.state === "running" ? <Chip>running</Chip> : null}
-                <span className="ml-auto text-13 text-text-2">
-                  {formatAsOfMinute(now, item.run.created_at)}
-                </span>
+                <RunTimeLabel run={item.run} now={now} />
               </div>
               {item.run.reason === null ? null : (
                 <p className="px-6 text-14 text-text">

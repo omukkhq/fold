@@ -78,3 +78,11 @@ export function formatClock(at: number): string {
   const when = new Date(at);
   return `${pad(when.getHours())}:${pad(when.getMinutes())}`;
 }
+
+/** The local date and time of `at` with seconds, always with the date and year: `Oct 14, 2026, 14:12:31`. */
+export function formatDateTime(at: number): string {
+  const when = new Date(at);
+  const month = MONTHS[when.getMonth()] ?? "";
+  const day = `${month} ${String(when.getDate())}, ${String(when.getFullYear())}`;
+  return `${day}, ${pad(when.getHours())}:${pad(when.getMinutes())}:${pad(when.getSeconds())}`;
+}
