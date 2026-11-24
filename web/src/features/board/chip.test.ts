@@ -9,6 +9,7 @@ import {
   Hand,
   Hourglass,
   KeyRound,
+  LoaderCircle,
 } from "lucide-react";
 import type { BoardCard, BoardProposal } from "@/api/board";
 import { boardCard } from "@/test/payloads";
@@ -97,7 +98,7 @@ describe("cardChip", () => {
       proposal: proposal("changes_requested"),
     });
     const chip = cardChip(card, run);
-    expect(chip?.text).toBe("Running checks");
+    expect(chip?.text).toBe("Checks running");
     expect(chip?.tone).toBe("neutral");
     expect(cardChip(card)?.text).toBe("Stalled · needs you");
     expect(
@@ -106,6 +107,35 @@ describe("cardChip", () => {
         run,
       )?.text,
     ).toBe("On hold");
+  });
+
+  it("names the stage of a check run that goes, in the neutral tone", () => {
+    const run = {
+      run: "cr-4",
+      purpose: "integrate" as const,
+      proposal: "P-3",
+      started_at: 0,
+    };
+    const card = boardCard("T-1", {
+      status: "in_progress",
+      proposal: proposal("open"),
+    });
+    expect(cardChip(card, { ...run, stage: "integration" })).toMatchObject({
+      tone: "neutral",
+      icon: LoaderCircle,
+      text: "Integration checks running",
+    });
+    expect(
+      cardChip(card, {
+        ...run,
+        purpose: "update_proposal",
+        stage: "proposal",
+      }),
+    ).toMatchObject({ tone: "neutral", text: "Checks running" });
+    expect(cardChip(card, null)?.text).toBe("P-3 waits for review");
+    expect(
+      cardChip({ ...card, status: "done" }, { ...run, stage: "integration" }),
+    ).toBeNull();
   });
 
   it("never shows a stale claim over a check run that goes", () => {
@@ -119,7 +149,7 @@ describe("cardChip", () => {
       status: "in_progress",
       attention: [{ kind: "stale_claim", closable: false, action: null }],
     });
-    expect(cardChip(card, run)?.text).toBe("Running checks");
+    expect(cardChip(card, run)?.text).toBe("Checks running");
     expect(cardChip(card)?.text).toBe("Stale claim · needs you");
   });
 
