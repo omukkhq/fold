@@ -179,7 +179,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_THREAD,
-            "Read every message of a thread, or of a request's clarification thread, in id order.",
+            "Read every message of a thread, or of a request's clarification thread, in id order. Your messages in it count as read and leave your inbox.",
             schema_for_type::<GetThreadInput>(),
         ),
         Tool::new(
@@ -420,19 +420,18 @@ pub async fn get_inbox(server: &FoldServer, arguments: &JsonObject) -> Result<Va
 
 pub async fn get_thread(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let input: GetThreadInput = parse(arguments)?;
+    let actor = server.actor().await?;
     let messages = match (input.thread.as_deref(), input.request.as_deref()) {
         (Some(thread), None) => server
             .messages
-            .thread(message_id(thread)?)
+            .read_thread(&actor, message_id(thread)?)
             .await
             .map_err(from_message)?,
         (None, Some(request)) => server
             .messages
-            .request_thread(request.parse()?)
+            .read_request_thread(&actor, request.parse()?)
             .await
-            .map_err(from_message)?
-            .map(|thread| thread.messages)
-            .unwrap_or_default(),
+            .map_err(from_message)?,
         _ => {
             return Err(
                 FoldError::new(codes::INVALID_REQUEST, "give thread or request, not both")

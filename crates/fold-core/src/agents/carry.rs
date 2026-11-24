@@ -38,6 +38,8 @@ pub struct CarriedMessage<'a> {
 pub struct Carried {
     pub text: String,
     pub count: usize,
+    /// The first message did not fit whole and the text holds only its start.
+    pub cut: bool,
 }
 
 /// `head`, then `messages` in their order while they fit in [`MAX_CARRIED_LEN`], then `N more messages: call get_inbox.` for those that did not fit. The first message is always carried: one too long to fit is cut, with a note naming `get_thread`. The text stays one line: bodies and excerpts are JSON string literals, and `<` is escaped in them, so no text a sender writes can open or close the session's envelope.
@@ -53,7 +55,11 @@ pub fn carry(head: &str, messages: &[CarriedMessage<'_>]) -> Carried {
         }
         if index > 0 {
             text.push_str(&more(messages.len() - index));
-            return Carried { text, count: index };
+            return Carried {
+                text,
+                count: index,
+                cut: false,
+            };
         }
         let note = format!(" (cut: read {} whole with get_thread)", message.id);
         let mut entry = Writer::new(room.saturating_sub(note.len() + 1));
@@ -62,11 +68,16 @@ pub fn carry(head: &str, messages: &[CarriedMessage<'_>]) -> Carried {
         text.push_str(&entry.text);
         text.push_str(&note);
         text.push_str(&tail);
-        return Carried { text, count: 1 };
+        return Carried {
+            text,
+            count: 1,
+            cut: true,
+        };
     }
     Carried {
         text,
         count: messages.len(),
+        cut: false,
     }
 }
 
@@ -219,6 +230,7 @@ mod tests {
             "fold: message m-4 arrived. [m-4 from backend re m-2 on T-3, P-2] \"Is the API ready?\""
         );
         assert_eq!(carried.count, 1);
+        assert!(!carried.cut);
     }
 
     #[test]
@@ -274,6 +286,7 @@ mod tests {
         let messages = [message(1, "one"), message(2, "two"), message(3, "three")];
         let carried = carry("fold: 3 unread messages.", &messages);
         assert_eq!(carried.count, 3);
+        assert!(!carried.cut);
         assert_eq!(
             carried.text,
             "fold: 3 unread messages. [m-1 from backend] \"one\" [m-2 from backend] \"two\" [m-3 from backend] \"three\""
@@ -286,6 +299,7 @@ mod tests {
         let messages: Vec<_> = (1..=5).map(|n| message(n, &body)).collect();
         let carried = carry("fold: message m-5 arrived.", &messages);
         assert_eq!(carried.count, 2);
+        assert!(!carried.cut);
         assert!(carried.text.len() <= MAX_CARRIED_LEN);
         assert!(
             carried
@@ -302,6 +316,7 @@ mod tests {
         let messages = [message(7, &body), message(8, "short")];
         let carried = carry("fold: message m-7 arrived.", &messages);
         assert_eq!(carried.count, 1);
+        assert!(carried.cut);
         assert!(
             carried.text.len() <= MAX_CARRIED_LEN,
             "{}",

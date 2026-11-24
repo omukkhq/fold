@@ -11,7 +11,7 @@ use fold_store::messages::{self, InboxRow, MessageLines};
 use fold_store::{SqliteConnection, Store, StoreError, WriteTx, agents};
 use serde_json::json;
 
-use super::{MessageError, MessageService, message_not_found};
+use super::{MessageError, MessageService, MessageView, message_not_found};
 use crate::services::agents::{actor_worker, worker_not_found};
 use crate::services::events::EventBuffer;
 #[cfg(feature = "failpoints")]
@@ -214,6 +214,50 @@ impl MessageService {
             .await
     }
 
+    /// [`MessageService::thread`] for `actor`: an agent has read each message of the thread whole, so its worker's rows of them count as read, as [`mark_read_in_full`] marks them. A human or fold reads without marking.
+    pub async fn read_thread(
+        &self,
+        actor: &Actor,
+        message: MessageId,
+    ) -> Result<Vec<MessageView>, MessageError> {
+        let views = self.thread(message).await?;
+        self.mark_shown(actor, &views).await?;
+        Ok(views)
+    }
+
+    /// [`MessageService::request_thread`]'s messages for `actor`, marked read as [`MessageService::read_thread`] marks them; empty when nobody wrote about the request yet.
+    pub async fn read_request_thread(
+        &self,
+        actor: &Actor,
+        request: RequestId,
+    ) -> Result<Vec<MessageView>, MessageError> {
+        let views = self
+            .request_thread(request)
+            .await?
+            .map(|thread| thread.messages)
+            .unwrap_or_default();
+        self.mark_shown(actor, &views).await?;
+        Ok(views)
+    }
+
+    async fn mark_shown(&self, actor: &Actor, views: &[MessageView]) -> Result<(), MessageError> {
+        let Actor::Agent(agent) = actor else {
+            return Ok(());
+        };
+        let shown: Vec<MessageId> = views.iter().map(|view| view.id).collect();
+        if shown.is_empty() {
+            return Ok(());
+        }
+        let now = self.clock.now();
+        self.store
+            .write(async |tx| {
+                let worker = acting_worker(tx, agent).await?;
+                mark_read_in_full(tx, worker.id, &shown, now).await?;
+                Ok::<_, MessageError>(())
+            })
+            .await
+    }
+
     /// The time on this service's clock, which a wait records as its start.
     pub fn now(&self) -> Timestamp {
         self.clock.now()
@@ -230,17 +274,23 @@ pub async fn unread_count(store: &Store, agent_id: i64) -> Result<u64, MessageEr
     Ok(messages::unread_count(store.read(), agent_id).await?)
 }
 
-/// Records that a notice reached a session or the worker process of `agent` at `now`: `pushed_at` on the agent's rows of each of `pushed`, the message the notice is about and the messages it carried, where they have none, and `delivered_at` on the rows `carried`, as an inbox read marks them. Returns the messages whose rows got `pushed_at` here. It appends no stored event, as reading an inbox appends none; the caller sends a live `message.pushed` for each after the commit.
+/// Records that a notice reached a session or the worker process of `agent` at `now`: `pushed_at` on the agent's rows of each of `pushed`, the message the notice is about and the messages it carried, where they have none, `delivered_at` on the rows `carried`, as an inbox read marks them, and the acknowledgement of the worker's rows of `read`, the messages the notice gave in full. Returns the messages whose rows got `pushed_at` here. It appends no stored event, as reading an inbox appends none; the caller sends a live `message.pushed` for each after the commit.
 pub(crate) async fn record_pushed(
     store: &Store,
     agent: &AgentName,
     pushed: &[MessageId],
     carried: &[i64],
+    read: &[MessageId],
     now: Timestamp,
 ) -> Result<Vec<MessageId>, MessageError> {
     Ok(store
         .write(async |tx| {
             messages::mark_delivered(tx, carried, now).await?;
+            if !read.is_empty()
+                && let Some(worker) = agent_worker(tx.conn(), agent).await?
+            {
+                mark_read_in_full(tx, worker.id, read, now).await?;
+            }
             let mut first = Vec::new();
             for message in pushed {
                 if messages::mark_pushed(tx, *message, agent, now).await? > 0 {
@@ -258,10 +308,11 @@ pub struct StopCarry {
     pub messages: Vec<MessageId>,
 }
 
-/// What a wake carries: its text, the recipient rows of the messages in it, which count as delivered once the text reaches the agent, and each message with its thread.
+/// What a wake carries: its text, the recipient rows of the messages in it, which count as delivered once the text reaches the agent, the messages it gives in full, which count as read then, and each message with its thread.
 pub(crate) struct CarriedInbox {
     pub text: String,
     pub rows: Vec<i64>,
+    pub read: Vec<MessageId>,
     pub messages: Vec<(MessageId, MessageId)>,
 }
 
@@ -311,6 +362,7 @@ async fn carry_in_tx(
     };
     let carried = carry_rows(&head, &rows);
     messages::mark_delivered(tx, &carried.rows, now).await?;
+    mark_read_in_full(tx, worker.id, &carried.read, now).await?;
     Ok(Some(carried.text))
 }
 
@@ -371,14 +423,29 @@ fn carry_rows(head: &str, rows: &[InboxRow]) -> CarriedInbox {
         .collect();
     let carried = carry(head, &entries);
     let rows = &rows[..carried.count];
+    let whole = if carried.cut { &rows[1..] } else { rows };
     CarriedInbox {
         text: carried.text,
         rows: rows.iter().map(|row| row.row).collect(),
+        read: whole.iter().map(|row| row.message.id).collect(),
         messages: rows
             .iter()
             .map(|row| (row.message.id, row.message.thread))
             .collect(),
     }
+}
+
+/// Acknowledges the rows of the worker `worker_id` of `read`, the messages a wake gave in full: the agent has read them, so neither the footer nor the Stop hook counts them. A cut message stays unread until `acknowledge_message` or `get_thread`. It appends no `message.acknowledged`: the reader did not act, and the event would end the reader's own wait and count as the answer of a worker that fold started for a message.
+async fn mark_read_in_full(
+    tx: &mut WriteTx,
+    worker_id: i64,
+    read: &[MessageId],
+    now: Timestamp,
+) -> Result<(), StoreError> {
+    for message in read {
+        messages::acknowledge(tx, worker_id, *message, false, now).await?;
+    }
+    Ok(())
 }
 
 async fn acting_worker(tx: &mut WriteTx, agent: &AgentActor) -> Result<WorkerRow, MessageError> {

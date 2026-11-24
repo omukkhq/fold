@@ -95,18 +95,6 @@ async fn until_dropped(harness: &Harness, name: &Value) -> crate::common::accept
     .await
 }
 
-/// The bodies of the messages from fold in `agent`'s inbox.
-async fn fold_notices(harness: &Harness, agent: &str) -> Vec<String> {
-    let inbox = harness.call(agent, "get_inbox", json!({})).await;
-    inbox["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|message| message["from"] == "fold")
-        .map(|message| message["body"].as_str().unwrap().to_owned())
-        .collect()
-}
-
 #[tokio::test]
 async fn queued_starts_of_two_areas_take_the_free_places_in_turn_and_tell_their_lead() {
     let fake = FakeClaude::new("result");
@@ -185,7 +173,7 @@ async fn queued_starts_of_two_areas_take_the_free_places_in_turn_and_tell_their_
     assert_eq!(stopped.data["role"], "task_worker");
     assert_eq!(stopped.data["area"], "web");
 
-    let notices = fold_notices(&harness, WEB_LEAD).await;
+    let notices = harness.fold_messages(WEB_LEAD).await;
     for agent in [&second_web, started[2]["agent"].as_str().unwrap()] {
         assert!(
             notices
@@ -222,7 +210,7 @@ async fn a_queued_start_whose_task_was_archived_drops_with_a_notice() {
     .await;
     assert_eq!(dropped.data["reason"], "task_archived");
     assert_eq!(dropped.data["tasks"], json!(["T-2"]));
-    let notices = fold_notices(&harness, WEB_LEAD).await;
+    let notices = harness.fold_messages(WEB_LEAD).await;
     assert!(
         notices
             .iter()
@@ -306,7 +294,8 @@ async fn a_queued_restart_runs_in_a_new_session_or_drops_once_its_worker_runs_ag
     .await;
     assert_eq!(refreshed.data["agent"], web.as_str());
     assert!(
-        fold_notices(&harness, WEB_LEAD)
+        harness
+            .fold_messages(WEB_LEAD)
             .await
             .iter()
             .any(|body| body.contains(&format!("fold started @{web}"))),
@@ -341,7 +330,8 @@ async fn a_queued_restart_runs_in_a_new_session_or_drops_once_its_worker_runs_ag
     assert_eq!(dropped.data["reason"], "cancelled");
     assert_eq!(dropped.data["name"], web.as_str());
     assert!(
-        fold_notices(&harness, WEB_LEAD)
+        harness
+            .fold_messages(WEB_LEAD)
             .await
             .iter()
             .any(|body| body.contains("fold dropped the worker start you queued")),

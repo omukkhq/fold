@@ -501,6 +501,22 @@ impl Harness {
         sent["id"].as_str().unwrap().to_owned()
     }
 
+    /// The bodies of every message from fold to `agent`'s workers, read or not, oldest first. A notice that a push or a wait gave whole counts as read, so `get_inbox` no longer lists it.
+    pub async fn fold_messages(&self, agent: &str) -> Vec<String> {
+        sqlx::query_scalar(
+            "SELECT m.body FROM messages m
+             JOIN message_recipients r ON r.message_id = m.id
+             JOIN workers w ON w.id = r.worker_id
+             JOIN agents a ON a.id = w.agent_id
+             WHERE a.name = ?1 AND m.sender_kind = 'fold'
+             ORDER BY m.number",
+        )
+        .bind(agent)
+        .fetch_all(self.handle.store.read())
+        .await
+        .unwrap()
+    }
+
     /// The ids `get_inbox` returns to `agent`, oldest first.
     pub async fn inbox(&self, agent: &str) -> Vec<String> {
         ids(&self.call(agent, "get_inbox", json!({})).await)

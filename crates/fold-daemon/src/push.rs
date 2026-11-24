@@ -540,6 +540,8 @@ struct Prepared {
     text: Arc<str>,
     /// The recipient rows of the messages the text carries.
     rows: Vec<i64>,
+    /// The messages the text gives in full.
+    read: Vec<MessageId>,
     /// The messages the notice is about or carries, each with its thread.
     messages: Vec<(MessageId, MessageId)>,
 }
@@ -555,6 +557,7 @@ async fn prepare(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued) -> O
         Some(Prepared {
             text: Arc::clone(&notice.text),
             rows: Vec::new(),
+            read: Vec::new(),
             messages: about.clone(),
         })
     };
@@ -580,6 +583,7 @@ async fn prepare(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued) -> O
             Some(Prepared {
                 text: Arc::from(carried.text),
                 rows: carried.rows,
+                read: carried.read,
                 messages,
             })
         }
@@ -594,7 +598,7 @@ async fn prepare(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued) -> O
     }
 }
 
-/// Records a notice that just got through: its carried rows become delivered, and the messages it is about or carries get `pushed_at`, each followed by a live `message.pushed` when that set it a first time, so the web's delivery line of its thread refreshes. A failure is logged with the agent and the event's seq alone and leaves the rows undelivered.
+/// Records a notice that just got through: its carried rows become delivered, the messages it gives in full become read, and the messages it is about or carries get `pushed_at`, each followed by a live `message.pushed` when that set it a first time, so the web's delivery line of its thread refreshes. A failure is logged with the agent and the event's seq alone and leaves the rows undelivered.
 async fn record(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued, prepared: &Prepared) {
     if prepared.messages.is_empty() && prepared.rows.is_empty() {
         return;
@@ -612,6 +616,7 @@ async fn record(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued, prepa
         agent,
         &ids,
         &prepared.rows,
+        &prepared.read,
         now,
     )
     .await

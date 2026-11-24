@@ -404,19 +404,17 @@ async fn acceptance_22_a_reviewer_that_cannot_start_in_a_new_session_leaves_its_
     until_runs(&fake, REVIEWER, 2).await;
     until_state(&harness, REVIEWER, WorkerState::Failed).await;
     harness.connect(LEAD).await;
+    // A push can give the note whole before the inbox is read, so it is read from every message to the lead.
     let note = eventually(WAIT, async || {
-        let inbox = harness.call(LEAD, "get_inbox", json!({})).await;
-        inbox["messages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|message| message["from"] == "fold")
-            .cloned()
-            .ok_or(inbox)
+        let notes = harness.fold_messages(LEAD).await;
+        notes
+            .into_iter()
+            .find(|body| body.starts_with("@reviewer lost its session"))
+            .ok_or(())
     })
     .await;
     assert_eq!(
-        note["body"],
+        note,
         "@reviewer lost its session and the reviewer limit refuses it a new one now, so P-1 v1 waits for a review. Give it to a reviewer with start_worker when a place is free; the start takes over the claim."
     );
     assert_eq!(fake.runs_of(REVIEWER).len(), 2, "no new session");

@@ -394,12 +394,8 @@ async fn acceptance_23_a_worker_limit_sends_the_message_on_to_the_area_lead_and_
         WorkerState::Stopped
     );
 
-    let inbox = harness.inbox(LEAD).await;
-    assert!(inbox.contains(&message), "{inbox:?}");
-    assert!(
-        inbox.contains(&note["id"].as_str().unwrap().to_owned()),
-        "{inbox:?}"
-    );
+    let note_row = until_recipient(&harness, note["id"].as_str().unwrap(), LEAD, |_| true).await;
+    assert_eq!(note_row["name"], LEAD, "{note_row}");
 }
 
 #[tokio::test]

@@ -1173,23 +1173,11 @@ async fn a_reviewer_done_but_for_its_batch() -> (FakeClaude, Harness) {
     (fake, harness)
 }
 
-/// The text of every message from fold in `agent`'s inbox.
-async fn fold_messages(harness: &Harness, agent: &str) -> Vec<String> {
-    let inbox = harness.call(agent, "get_inbox", json!({})).await;
-    inbox["messages"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|message| message["from"] == "fold")
-        .filter_map(|message| message["body"].as_str().map(str::to_owned))
-        .collect()
-}
-
 #[tokio::test]
 async fn a_reviewer_that_holds_an_open_batch_is_told_and_stops_once_the_batch_is_empty() {
     let (_fake, harness) = a_reviewer_done_but_for_its_batch().await;
     let told = eventually(WAIT, async || {
-        let messages = fold_messages(&harness, "reviewer").await;
+        let messages = harness.fold_messages("reviewer").await;
         messages
             .into_iter()
             .find(|body| body.contains("rb-1"))
@@ -1220,7 +1208,7 @@ async fn a_reviewer_that_holds_an_open_batch_is_told_and_stops_once_the_batch_is
 async fn the_review_lead_hears_when_the_holder_of_an_open_batch_stops() {
     let (fake, harness) = a_reviewer_done_but_for_its_batch().await;
     eventually(WAIT, async || {
-        let messages = fold_messages(&harness, "reviewer").await;
+        let messages = harness.fold_messages("reviewer").await;
         if messages.iter().any(|body| body.contains("rb-1")) {
             Ok(())
         } else {

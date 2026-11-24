@@ -71,7 +71,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             WAIT_FOR_EVENTS,
-            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. A new message to you also ends the wait, whatever the filter says; the result then carries your new messages in `inbox`, so call get_inbox only when it says more wait. For the main agent and an area lead, a request that another agent or a human created or released and that nobody drafts ends the wait too; the result names it in `requests`: read it with get_request, then claim_request it when it is yours. A worker.stalled or claim.stale that fold tells you of ends the wait too, with a hint to call restart_worker. Use it instead of polling get_events.",
+            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. A new message to you also ends the wait, whatever the filter says; the result then carries your new messages in `inbox`, so call get_inbox only when it says more wait. A message that `inbox` gives whole counts as read; a cut one stays unread until get_thread. For the main agent and an area lead, a request that another agent or a human created or released and that nobody drafts ends the wait too; the result names it in `requests`: read it with get_request, then claim_request it when it is yours. A worker.stalled or claim.stale that fold tells you of ends the wait too, with a hint to call restart_worker. Use it instead of polling get_events.",
             schema_for_type::<WaitForEventsInput>(),
         ),
     ]

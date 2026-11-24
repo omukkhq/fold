@@ -301,7 +301,10 @@ async fn a_lead_that_writes_no_note_starts_fresh_with_the_summary_alone() {
     let first_turn = &fresh_runs[1].stdin[1];
     assert!(first_turn.contains("Your last session wrote no hand-off note."));
     assert!(first_turn.contains("T-1 todo Draw the page"));
-    assert!(first_turn.contains("Unread messages: 3. Call get_inbox."));
+    assert!(
+        first_turn.contains("Unread messages: 0."),
+        "each message reached the lead whole in its turn, so none is unread: {first_turn}"
+    );
     let events = stored_events(&harness).await;
     let refreshed = events
         .iter()
