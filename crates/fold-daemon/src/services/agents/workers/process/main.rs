@@ -210,12 +210,12 @@ impl Supervisor {
         if event.event_type == types::MESSAGE_SENT && row.is_some() {
             return Ok(None);
         }
-        let mut ctx = crate::push::context(&self.inner.store, event).await?;
+        let (event, mut ctx) = crate::push::push_input(&self.inner.store, event).await?;
         if ctx.main_agents.is_empty() {
             ctx.main_agents.insert(agent.clone());
         }
         Ok(Some(
-            notice_for(event, &ctx)
+            notice_for(&event, &ctx)
                 .into_iter()
                 .filter(|notice| notice.agent == agent)
                 .map(|notice| notice.text)

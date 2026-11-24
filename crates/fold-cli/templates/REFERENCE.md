@@ -76,6 +76,7 @@ auto_checkpoints_kept = 20           # automatic checkpoints each workspace keep
 max_file_bytes = 52428800            # a larger file keeps its recorded version and gives a warning
 stall_minutes = 5                    # a worker that fold runs counts as stalled after this long with no open tool call and no output; a session fold does not run, after this long without a file change; never while its workspace runs checks or its worker waits for a person's answer, and counted from the end of its last run, a person's answer or a worker start
 closed_workspace_days = 14           # how long `fld gc` keeps the checkpoints of a closed workspace, a record only; also how long a closed workspace's directory waits for its owner, and a finished worker's folder stays; at least 1, since fold refuses 0, so an owner that still runs keeps a closed directory for at least a day
+request_escalate_minutes = 10        # a new request in an area goes first to that area's lead; after this long without a claim, fold tells the main agent and every area lead of it
 account = "work-a"                   # optional: the host account whose Claude subscription the project's workers and main agent use; `fld account use` writes it, and without it they use default, Claude Code's own login
 
 [git]

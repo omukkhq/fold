@@ -59,6 +59,9 @@ pub const WORKER_IDLE_TICK: Duration = Duration::from_secs(30);
 /// How often the review plan job looks for plans whose hour of waiting ran out. It is short against the hour, so the review lead hears of the end of a wait at most this much late.
 pub const PLAN_DEADLINE_TICK: Duration = Duration::from_secs(30);
 
+/// How often the request job looks for area requests that nobody claimed within `request_escalate_minutes`, which bounds how late the other leads hear of one.
+pub const REQUEST_ESCALATION_TICK: Duration = Duration::from_secs(30);
+
 /// How many workspaces [`reconcile_workspaces`] scans at once.
 pub const RECONCILE_PARALLEL: usize = 4;
 
@@ -336,6 +339,64 @@ pub fn spawn_plan_deadlines(state: AppState, tick: Duration, stop: watch::Receiv
     Job {
         task,
         progress: watcher,
+    }
+}
+
+/// Starts the request job: every `tick` it escalates, through [`TaskService::escalate_due_requests`], each area request of each open project that nobody claimed within that project's `request_escalate_minutes` by its clock, so the main agent and every area lead hear of it. A cycle is a tick that escalated at least one request. It stops when `stop` changes.
+///
+/// [`TaskService::escalate_due_requests`]: crate::services::tasks::TaskService::escalate_due_requests
+pub fn spawn_request_escalations(
+    state: AppState,
+    tick: Duration,
+    stop: watch::Receiver<bool>,
+) -> Job {
+    let (progress, watcher) = watch::channel(JobProgress::default());
+    let task = tokio::spawn(request_escalations(state, tick, stop, progress));
+    Job {
+        task,
+        progress: watcher,
+    }
+}
+
+async fn request_escalations(
+    state: AppState,
+    tick: Duration,
+    mut stop: watch::Receiver<bool>,
+    progress: watch::Sender<JobProgress>,
+) {
+    let mut ticks = tokio::time::interval(tick);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = stop.changed() => break,
+            _ = ticks.tick() => {}
+        }
+        let mut escalated = 0;
+        for handle in state.projects.handles() {
+            let minutes = match projects::load_config(&handle.paths).await {
+                Ok(config) => config.request_escalate_minutes,
+                Err(error) => {
+                    tracing::warn!(
+                        project = %handle.slug,
+                        code = error.log_code(),
+                        "the request escalations were not checked; the next tick tries again"
+                    );
+                    continue;
+                }
+            };
+            match handle.tasks.escalate_due_requests(minutes).await {
+                Ok(count) => escalated += count,
+                Err(error) => tracing::warn!(
+                    project = %handle.slug,
+                    code = error.log_code(),
+                    "the request escalations were not checked; the next tick tries again"
+                ),
+            }
+        }
+        progress.send_modify(|seen| {
+            seen.checks += 1;
+            seen.cycles += u64::from(escalated > 0);
+        });
     }
 }
 

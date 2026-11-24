@@ -23,6 +23,8 @@ pub struct ProjectConfig {
     pub max_file_bytes: u64,
     pub stall_minutes: u64,
     pub closed_workspace_days: u64,
+    /// The minutes a new request in an area waits for a claim before fold tells the main agent and every area lead of it.
+    pub request_escalate_minutes: u64,
     pub git: GitConfig,
     /// The remote Git repositories by name, as `[remotes.<name>]` sections.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -192,6 +194,7 @@ impl Default for ProjectConfig {
             max_file_bytes: 52_428_800,
             stall_minutes: 5,
             closed_workspace_days: 14,
+            request_escalate_minutes: 10,
             git: GitConfig::default(),
             remotes: BTreeMap::new(),
             integration: IntegrationConfig::default(),
@@ -639,8 +642,8 @@ mod tests {
         // No remote exists by default, so the template names the section in a comment only.
         assert!(CONFIG_TEMPLATE.contains("`[remotes.<name>]`"));
         assert_eq!(named, fields);
-        assert_eq!(fields.len(), 13);
-        assert_eq!(known_keys().len(), 8);
+        assert_eq!(fields.len(), 14);
+        assert_eq!(known_keys().len(), 9);
         // Only comments: the file as written changes nothing.
         let as_written = ProjectConfig::from_toml(CONFIG_TEMPLATE).unwrap();
         assert_eq!(as_written, ProjectConfig::default());

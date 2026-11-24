@@ -75,7 +75,8 @@ async fn every_request_tool_succeeds_through_a_whole_request() {
     .await;
     assert_eq!(
         created,
-        json!({"id": "RQ-1", "state": "open", "attachments": 1})
+        json!({"id": "RQ-1", "state": "open", "attachments": 1, "area": "frontend-work"}),
+        "a worker's request is in its worker's area"
     );
 
     let listed = ok(&h, "backend", "list_requests", json!({"state": "open"})).await;
@@ -87,6 +88,7 @@ async fn every_request_tool_succeeds_through_a_whole_request() {
             "kind": null,
             "title": null,
             "excerpt": "The board is slow",
+            "area": "frontend-work",
             "requester": "frontend",
             "drafter": null,
             "latest_version": null,

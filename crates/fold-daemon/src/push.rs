@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::io::{self, Read as _, Write as _};
@@ -10,7 +11,9 @@ use std::time::Duration;
 
 use fold_core::carry::MAX_CARRIED_LEN;
 use fold_core::events::types;
-use fold_core::push::{MAX_NOTICE_LEN, Notice, PushContext, is_pushed, notice_for, request_of};
+use fold_core::push::{
+    MAX_NOTICE_LEN, MAX_REQUEST_NOTICE_LEN, Notice, PushContext, is_pushed, notice_for, request_of,
+};
 use fold_core::requests::{Requester, deputy};
 use fold_core::{
     AgentName, Clock, Event, FoldError, LiveEvent, MessageId, Tag, TaskId, TaskKind, TaskStatus,
@@ -484,15 +487,15 @@ impl PushTargets {
 
     /// Queues each notice on its supervised worker's stdin, else on every socket of its agent: a worker's own session-start hook can report an inbox socket too, and the notice must reach the worker once. `seq` is the event the notice is about and goes into the log line of a failed post. A notice that is not one short line of envelope-safe text is dropped here.
     pub fn deliver(&self, notices: &[Notice], seq: u64) {
-        self.queue(notices, seq, None);
+        self.queue(notices, seq, None, MAX_NOTICE_LEN);
     }
 
-    /// [`PushTargets::deliver`]; with `about`, the first post of each notice that gets through sets `pushed_at` on its agent's rows of that message.
-    fn queue(&self, notices: &[Notice], seq: u64, about: Option<About>) {
+    /// [`PushTargets::deliver`] with notices of at most `longest` bytes; with `about`, the first post of each notice that gets through sets `pushed_at` on its agent's rows of that message.
+    fn queue(&self, notices: &[Notice], seq: u64, about: Option<About>, longest: usize) {
         let agents = lock(&self.inner.agents);
         let stdin = lock(&self.inner.stdin);
         for notice in notices {
-            if !postable(&notice.text, MAX_NOTICE_LEN) {
+            if !postable(&notice.text, longest) {
                 tracing::warn!(agent = %notice.agent, seq, "session push refused a malformed notice");
                 continue;
             }
@@ -656,6 +659,15 @@ fn sent_message(event: &Event) -> Option<About> {
         message: id("message")?,
         thread: id("thread")?,
     })
+}
+
+/// The longest notice the event may give: a new or escalated request names its requester, its area and the start of its body, so its lead can tell from the notice alone whether the request is its own.
+fn longest_notice(event: &Event) -> usize {
+    if event.event_type == types::REQUEST_CREATED || event.event_type == types::REQUEST_ESCALATED {
+        MAX_REQUEST_NOTICE_LEN
+    } else {
+        MAX_NOTICE_LEN
+    }
 }
 
 /// The session shows the sender only when the content rebuilds to the same bytes, so the text holds no newline and never opens or closes the envelope tag. A notice that carries messages may be as long as [`MAX_CARRIED_LEN`]; its bodies are string literals with `<` escaped.
@@ -1115,8 +1127,13 @@ async fn deliver_events(
         if !is_pushed(&event) || targets.is_empty() {
             continue;
         }
-        match context(&store, &event).await {
-            Ok(ctx) => targets.queue(&notice_for(&event, &ctx), event.seq, sent_message(&event)),
+        match push_input(&store, &event).await {
+            Ok((event, ctx)) => targets.queue(
+                &notice_for(&event, &ctx),
+                event.seq,
+                sent_message(&event),
+                longest_notice(&event),
+            ),
             Err(error) => tracing::warn!(
                 seq = event.seq,
                 code = error.log_code(),
@@ -1132,8 +1149,33 @@ pub(crate) fn starter_agent(started_by: &str) -> Option<AgentName> {
     AgentName::parse(actor.agent()?).ok()
 }
 
-/// Reads only what the event's rule needs.
-pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError> {
+/// The event as its notice reads it, with its context. A new or escalated request's notice repeats the start of the request's body, which the stored event leaves out so that events hold names and ids only; the copy here carries as `excerpt` enough of it for the notice to cut it to its length and show the cut.
+pub(crate) async fn push_input<'a>(
+    store: &Store,
+    event: &'a Event,
+) -> Result<(Cow<'a, Event>, PushContext), StoreError> {
+    let (ctx, body) = loaded(store, event).await?;
+    let announces =
+        event.event_type == types::REQUEST_CREATED || event.event_type == types::REQUEST_ESCALATED;
+    let Some(body) = body.filter(|_| announces) else {
+        return Ok((Cow::Borrowed(event), ctx));
+    };
+    let mut copy = event.clone();
+    if let Some(data) = copy.data.as_object_mut() {
+        data.insert(
+            "excerpt".into(),
+            json!(
+                body.chars()
+                    .take(MAX_REQUEST_NOTICE_LEN)
+                    .collect::<String>()
+            ),
+        );
+    }
+    Ok((Cow::Owned(copy), ctx))
+}
+
+/// Reads only what the event's rule needs, with the body of the event's request when it names one.
+async fn loaded(store: &Store, event: &Event) -> Result<(PushContext, Option<String>), StoreError> {
     let mut ctx = PushContext::default();
     let kind = event.event_type;
     if kind == fold_core::events::types::MESSAGE_SENT {
@@ -1151,12 +1193,14 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
         {
             ctx.recipients.remove(&asker);
         }
-        return Ok(ctx);
+        return Ok((ctx, None));
     }
     if kind.as_str().starts_with("request.")
         && let Some(request) = request_of(event)
     {
         let mut conn = store.read().acquire().await?;
+        let mut request_area = None;
+        let mut body = None;
         if let Some(row) = requests::fetch(&mut conn, request).await? {
             ctx.requester = match row.requester {
                 Requester::Agent(agent) => Some(agent),
@@ -1173,16 +1217,19 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
                 };
             }
             ctx.drafter = row.drafter.map(|drafter| drafter.worker.agent());
+            request_area = row.area;
+            body = Some(row.body);
         }
-        if kind == fold_core::events::types::REQUEST_CREATED {
-            ctx.area_leads = agents::list_areas(store.read())
-                .await?
-                .into_iter()
-                .filter_map(|area| area.lead)
-                .collect();
+        if kind == types::REQUEST_CREATED || kind == types::REQUEST_ESCALATED {
+            let areas = agents::list_areas(store.read()).await?;
+            ctx.request_area_lead = areas
+                .iter()
+                .find(|area| Some(&area.name) == request_area.as_ref())
+                .and_then(|area| area.lead.clone());
+            ctx.area_leads = areas.into_iter().filter_map(|area| area.lead).collect();
             ctx.main_agents = tagged(store, Tag::is_main).await?;
         }
-        return Ok(ctx);
+        return Ok((ctx, body));
     }
     if kind == fold_core::events::types::PROJECT_PAUSED
         || kind == fold_core::events::types::PROJECT_RESUMED
@@ -1194,7 +1241,7 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
         || kind == fold_core::events::types::FOLDER_AGENT_CHANGED
     {
         ctx.main_agents = tagged(store, Tag::is_main).await?;
-        return Ok(ctx);
+        return Ok((ctx, None));
     }
     if kind == types::WORKER_FAILED || kind == types::WORKER_STOPPED {
         let agent = event
@@ -1203,7 +1250,7 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
             .and_then(serde_json::Value::as_str)
             .and_then(|agent| AgentName::parse(agent).ok());
         let Some(agent) = agent else {
-            return Ok(ctx);
+            return Ok((ctx, None));
         };
         let reason = event.data.get("reason").and_then(serde_json::Value::as_str);
         if kind == types::WORKER_FAILED && reason.is_some_and(fold_core::roles::needs_restart) {
@@ -1226,7 +1273,7 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
         if !ctx.unreviewed.is_empty() || !ctx.held_batches.is_empty() {
             ctx.review_leads = review_leads(store).await?;
         }
-        return Ok(ctx);
+        return Ok((ctx, None));
     }
     if kind == fold_core::events::types::WORKER_MODEL_UNREACHABLE {
         let agent = event
@@ -1241,13 +1288,13 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
                 .await?
                 .and_then(|row| starter_agent(&row.started_by));
         }
-        return Ok(ctx);
+        return Ok((ctx, None));
     }
     if kind == fold_core::events::types::TASK_REPORTED {
         if let Some(task) = event.task {
             route(store, task, None, &mut ctx).await?;
         }
-        return Ok(ctx);
+        return Ok((ctx, None));
     }
     if kind == fold_core::events::types::TASK_SENT_BACK {
         if let Some(task) = event.task {
@@ -1255,7 +1302,7 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
                 .await?
                 .map(|claim| claim.worker.agent());
         }
-        return Ok(ctx);
+        return Ok((ctx, None));
     }
     if kind == fold_core::events::types::TASK_STATUS_CHANGED {
         if let Some(task) = event.task {
@@ -1272,7 +1319,7 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
                 }
             }
         }
-        return Ok(ctx);
+        return Ok((ctx, None));
     }
     if kind == fold_core::events::types::TASK_UPDATED {
         let added: Vec<&str> = event
@@ -1294,7 +1341,7 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
                 route(store, task, Some(&added), &mut ctx).await?;
             }
         }
-        return Ok(ctx);
+        return Ok((ctx, None));
     }
     if kind == fold_core::events::types::TASK_HOLD_CLEARED {
         if let Some(task) = event.task {
@@ -1303,7 +1350,7 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
                 route(store, task, None, &mut ctx).await?;
             }
         }
-        return Ok(ctx);
+        return Ok((ctx, None));
     }
     if let Some(proposal) = event.proposal
         && let Some(row) = reviews::get_proposal(store.read(), proposal).await?
@@ -1349,7 +1396,7 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
     {
         ctx.review_leads = review_leads(store).await?;
     }
-    Ok(ctx)
+    Ok((ctx, None))
 }
 
 /// An agent can take the task now: an unclaimed agent task in Todo that is neither on hold nor archived.

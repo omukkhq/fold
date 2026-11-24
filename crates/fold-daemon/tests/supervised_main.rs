@@ -452,7 +452,10 @@ async fn a_request_starts_the_supervised_main_and_never_while_the_setting_is_off
     let runs = until_runs(&fake, MAIN, 1).await;
     let turn = &runs[0].stdin[1];
     assert!(turn.contains("fold started you as main"), "{turn}");
-    assert!(turn.contains("RQ-2 created. Call claim_request."), "{turn}");
+    assert!(
+        turn.contains("RQ-2 created by human:ana: Filter the board. Call claim_request."),
+        "{turn}"
+    );
     let (_, workers) = http(&harness, Method::GET, "/workers", None).await;
     let main = workers["workers"]
         .as_array()

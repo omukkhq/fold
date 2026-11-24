@@ -143,9 +143,17 @@ async fn an_agents_request_reaches_only_the_main_agent() {
         json!({"body": "The board query skips archived tasks"}),
     )
     .await;
-    expect(&mut main, "fold: RQ-1 created. Call claim_request.").await;
+    expect(
+        &mut main,
+        "fold: RQ-1 created by review: The board query skips archived tasks. Call claim_request.",
+    )
+    .await;
     human_request(&h, "Rename the board").await;
-    expect(&mut main, "fold: RQ-2 created. Call claim_request.").await;
+    expect(
+        &mut main,
+        "fold: RQ-2 created by human:ana: Rename the board. Call claim_request.",
+    )
+    .await;
 
     nothing_before_a_message(&h, &mut backend, "backend").await;
     nothing_before_a_message(&h, &mut review, "review").await;
@@ -167,8 +175,9 @@ async fn an_area_lead_hears_of_a_new_request_and_claims_it_when_it_is_relevant()
     let mut review = h.register_inbox("review").await;
 
     let request = human_request(&h, "The board query skips archived tasks").await;
-    expect(&mut main, "fold: RQ-1 created. Call claim_request.").await;
-    expect(&mut lead, "fold: RQ-1 created. Call claim_request.").await;
+    let created = "fold: RQ-1 created by human:ana: The board query skips archived tasks. Call claim_request.";
+    expect(&mut main, created).await;
+    expect(&mut lead, created).await;
     nothing_before_a_message(&h, &mut review, "review").await;
 
     let claim = json!({"id": request.to_string(), "kind": "bug", "title": "Archived tasks"});
@@ -249,7 +258,11 @@ async fn approved_cards_go_to_the_lead_of_their_area_and_the_rest_to_the_main_ag
     }
 
     let request = human_request(&h, "Make the page faster").await;
-    expect(&mut main, "fold: RQ-1 created. Call claim_request.").await;
+    expect(
+        &mut main,
+        "fold: RQ-1 created by human:ana: Make the page faster. Call claim_request.",
+    )
+    .await;
     h.call(
         MAIN,
         "claim_request",
@@ -557,6 +570,144 @@ async fn one_agent_that_fold_did_not_start_holds_the_main_tag() {
         .call("backend", "register_agent", json!({"name": "backend"}))
         .await;
     assert!(!read.to_string().contains("\"main\""), "{read}");
+}
+
+#[tokio::test]
+async fn a_workers_request_reaches_only_its_lead_until_nobody_claims_it_in_time() {
+    let fake = FakeClaude::new("result");
+    let mut h = Harness::start_with_launcher(fake.launcher.clone()).await;
+    make_main(&h, MAIN).await;
+    crate::common::roles::give_role(
+        &h.handle.store,
+        "backend",
+        fold_core::roles::Role::AreaLead,
+        Some("api"),
+    )
+    .await;
+    let mut main = h.register_inbox(MAIN).await;
+    let mut backend = h.register_inbox("backend").await;
+    h.call(MAIN, "create_label", json!({"name": "ui", "color": "sage"}))
+        .await;
+    h.call(MAIN, "define_area", json!({"name": "web", "label": "ui"}))
+        .await;
+    h.call(
+        MAIN,
+        "create_task",
+        json!({"title": "Draw the page", "labels": ["ui"]}),
+    )
+    .await;
+    h.call(
+        MAIN,
+        "start_worker",
+        json!({"role": "area_lead", "area": "web"}),
+    )
+    .await;
+    h.connect("web-lead").await;
+    h.call(
+        "web-lead",
+        "start_worker",
+        json!({"role": "task_worker", "tasks": ["T-1"]}),
+    )
+    .await;
+    h.connect("web-worker").await;
+    expect(
+        &mut main,
+        "fold: T-1 is ready in area web, which has no lead. Call start_worker.",
+    )
+    .await;
+    std::fs::write(
+        std::path::Path::new(h.root()).join(".fold/config.toml"),
+        "request_escalate_minutes = 3\n",
+    )
+    .unwrap();
+
+    // Longer than a notice of 200 bytes: the notice of a request repeats the first 200 characters.
+    let body = format!(
+        "The page header overlaps the menu. {}",
+        "It hides the search field. ".repeat(8)
+    );
+    let shown: String = body.chars().take(200).collect();
+    let created = h
+        .call("web-worker", "create_request", json!({"body": body}))
+        .await;
+    assert_eq!(created["area"], "web", "{created}");
+    let notice =
+        format!("fold: RQ-1 created by web-worker in area web: {shown}…. Call claim_request.");
+    assert!(notice.len() > 200, "{notice}");
+    until_stdin(&fake, "web-lead", &notice).await;
+    nothing_before_a_message(&h, &mut main, MAIN).await;
+    nothing_before_a_message(&h, &mut backend, "backend").await;
+    let read = h
+        .call("backend", "get_request", json!({"id": "RQ-1"}))
+        .await;
+    assert_eq!(
+        (
+            &read["requester"],
+            &read["area"],
+            &read["drafter"],
+            &read["escalated"]
+        ),
+        (
+            &json!("web-worker"),
+            &json!("web"),
+            &Value::Null,
+            &json!(false)
+        ),
+        "{read}"
+    );
+
+    h.project
+        .clock()
+        .advance(std::time::Duration::from_secs(3 * 60 + 1))
+        .unwrap();
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let job = fold_daemon::jobs::spawn_request_escalations(
+        h.state.clone(),
+        std::time::Duration::from_millis(5),
+        stopped,
+    );
+    let mut progress = job.progress();
+    tokio::time::timeout(
+        WAIT,
+        progress.wait_for(|seen: &fold_daemon::jobs::JobProgress| seen.checks >= 3),
+    )
+    .await
+    .expect("the job looks at the clock within the timeout")
+    .unwrap();
+    stop.send(true).unwrap();
+    job.stopped(WAIT).await;
+    assert_eq!(
+        progress.borrow().cycles,
+        1,
+        "the job escalates the request once, by the project's request_escalate_minutes"
+    );
+    let escalated = format!(
+        "fold: RQ-1 escalated (nobody claimed it in time) by web-worker in area web: {shown}…. Call claim_request."
+    );
+    expect(&mut main, &escalated).await;
+    expect(&mut backend, &escalated).await;
+
+    let claimed = h
+        .call(
+            "backend",
+            "claim_request",
+            json!({"id": "RQ-1", "kind": "bug", "title": "Header overlap"}),
+        )
+        .await;
+    assert_eq!(claimed["drafter"], "backend", "{claimed}");
+    let late = h
+        .refused(
+            MAIN,
+            "claim_request",
+            json!({"id": "RQ-1", "kind": "bug", "title": "Header overlap"}),
+        )
+        .await;
+    assert_eq!(late["code"], codes::ALREADY_CLAIMED);
+    let hint = late["hint"].as_str().unwrap();
+    assert!(
+        hint.contains("send_message to backend with request RQ-1"),
+        "{hint}"
+    );
 }
 
 #[tokio::test]

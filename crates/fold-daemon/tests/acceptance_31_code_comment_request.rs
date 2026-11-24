@@ -139,9 +139,9 @@ async fn acceptance_31_a_comment_on_lines_of_main_or_of_a_proposal_becomes_a_req
     assert_eq!(
         created,
         [
-            &json!({"request": "RQ-1", "attachments": 0, "code_revision": "r2"}),
-            &json!({"request": "RQ-2", "attachments": 0, "code_proposal": proposal, "code_version": 1}),
-            &json!({"request": "RQ-3", "attachments": 0, "code_proposal": proposal, "code_version": 1}),
+            &json!({"request": "RQ-1", "attachments": 0, "requester": "human:ana", "code_revision": "r2"}),
+            &json!({"request": "RQ-2", "attachments": 0, "requester": "human:ana", "code_proposal": proposal, "code_version": 1}),
+            &json!({"request": "RQ-3", "attachments": 0, "requester": "human:ana", "code_proposal": proposal, "code_version": 1}),
         ]
     );
 }

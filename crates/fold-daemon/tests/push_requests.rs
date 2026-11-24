@@ -47,7 +47,7 @@ async fn each_request_step_pushes_the_agent_that_acts_next() {
     )
     .await;
     // The area lead `backend` hears of it; the reviewer `review` drafts no request.
-    let created = "fold: RQ-1 created. Call claim_request.";
+    let created = "fold: RQ-1 created by frontend in area frontend-work: The board is slow. Call claim_request.";
     expect(&mut backend, created).await;
 
     h.call(
@@ -121,7 +121,7 @@ async fn a_human_request_reaches_the_main_agent_and_every_area_lead_and_own_step
         .create_request(&ana, "Why two boards?", Vec::new())
         .await
         .unwrap();
-    let created = "fold: RQ-1 created. Call claim_request.";
+    let created = "fold: RQ-1 created by human:ana: Why two boards?. Call claim_request.";
     expect(&mut frontend, created).await;
     expect(&mut backend, created).await;
 
@@ -156,7 +156,8 @@ async fn a_human_request_reaches_the_main_agent_and_every_area_lead_and_own_step
         json!({"body": "Rename the board"}),
     )
     .await;
-    let created = "fold: RQ-2 created. Call claim_request.";
+    let created =
+        "fold: RQ-2 created by backend in area backend-work: Rename the board. Call claim_request.";
     expect(&mut frontend, created).await;
     h.call(
         "backend",

@@ -8,8 +8,8 @@ use fold_core::object::ObjectKind;
 use fold_core::requests::{DraftCard, DraftEdge, RequestKind, RequestState, Requester};
 use fold_core::roles::Role;
 use fold_core::{
-    Actor, AgentActor, HumanName, RequestId, TaskDescription, TaskId, TaskKind, TaskStatus,
-    TaskTitle, Timestamp, WorkerName, codes,
+    Actor, AgentActor, AreaName, HumanName, RequestId, TaskDescription, TaskId, TaskKind,
+    TaskStatus, TaskTitle, Timestamp, WorkerName, codes,
 };
 use fold_daemon::services::events::EventBus;
 use fold_daemon::services::tasks::{
@@ -223,7 +223,15 @@ async fn a_human_creates_a_request_with_an_attachment_and_a_mention() {
 
     let events = fx.events_after(before).await;
     assert_eq!(types(&events), ["request.created"]);
-    assert_eq!(events[0].2, json!({"request": "RQ-1", "attachments": 1}));
+    assert_eq!(
+        events[0].2,
+        json!({
+            "request": "RQ-1",
+            "attachments": 1,
+            "requester": "human:tanim",
+        }),
+        "the event names the requester, never the text"
+    );
 
     let by_agent = fx
         .tasks
@@ -232,6 +240,160 @@ async fn a_human_creates_a_request_with_an_attachment_and_a_mention() {
         .unwrap();
     assert_eq!(by_agent.id, rq(2));
     assert_eq!(by_agent.requester, Requester::parse("backend").unwrap());
+}
+
+#[tokio::test]
+async fn a_request_takes_the_named_area_or_its_workers_and_none_for_a_human() {
+    let fx = Fixture::new().await;
+    let front = AreaName::parse("front").unwrap();
+    let own = fx
+        .tasks
+        .create_request(&agent("frontend"), "The header jumps", Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(own.area, Some(front.clone()), "the area of the worker");
+    let human_made = fx
+        .tasks
+        .create_request(&human("ana"), "Add dark mode", Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(human_made.area, None);
+    let named = fx
+        .tasks
+        .create_request_in(
+            &human("ana"),
+            "The checks are slow",
+            Vec::new(),
+            Some(AreaName::parse("checks").unwrap()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(named.area.as_ref().map(AreaName::as_str), Some("checks"));
+
+    let before = fx.last_seq().await;
+    let unknown = fx
+        .tasks
+        .create_request_in(
+            &agent("frontend"),
+            "Somewhere else",
+            Vec::new(),
+            Some(AreaName::parse("nowhere").unwrap()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(code(&unknown), codes::AREA_NOT_FOUND);
+    assert_eq!(details(&unknown), json!({"area": "nowhere"}));
+    assert!(
+        fx.events_after(before).await.is_empty(),
+        "a refused request leaves nothing"
+    );
+}
+
+#[tokio::test]
+async fn an_area_request_nobody_claims_in_time_is_escalated_once_by_the_clock() {
+    let fx = Fixture::new().await;
+    let front = Some(AreaName::parse("front").unwrap());
+    let waiting = fx
+        .tasks
+        .create_request_in(
+            &human("ana"),
+            "The board\nflickers",
+            Vec::new(),
+            front.clone(),
+        )
+        .await
+        .unwrap()
+        .id;
+    let claimed = fx
+        .tasks
+        .create_request_in(&human("ana"), "Export is slow", Vec::new(), front)
+        .await
+        .unwrap()
+        .id;
+    fx.tasks
+        .claim_request(&agent("frontend"), claimed, RequestKind::Bug, "Slow export")
+        .await
+        .unwrap();
+    fx.create(&human("ana"), "No area at all").await;
+
+    fx.advance(Duration::from_secs(10 * 60));
+    let before = fx.last_seq().await;
+    assert_eq!(
+        fx.tasks.escalate_due_requests(10).await.unwrap(),
+        0,
+        "a request is due only once more than the wait has passed"
+    );
+    fx.advance(Duration::from_millis(1));
+    let now = fx.project.now();
+    assert_eq!(fx.tasks.escalate_due_requests(10).await.unwrap(), 1);
+    let events = fx.events_after(before).await;
+    assert_eq!(types(&events), ["request.escalated"]);
+    assert_eq!(
+        events[0].2,
+        json!({"request": "RQ-1", "requester": "human:ana", "area": "front"})
+    );
+    let view = fx
+        .tasks
+        .read_request(&human("ana"), waiting)
+        .await
+        .unwrap()
+        .request;
+    assert_eq!(view.escalated_at, Some(now));
+
+    fx.advance(Duration::from_secs(3600));
+    assert_eq!(
+        fx.tasks.escalate_due_requests(10).await.unwrap(),
+        0,
+        "a request is escalated once, and a claimed or arealess one never"
+    );
+    assert_eq!(fx.events_after(before).await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_pause_holds_the_escalation_and_the_wait_counts_again_from_the_resume() {
+    let fx = Fixture::new().await;
+    fx.tasks
+        .create_request_in(
+            &human("ana"),
+            "The board flickers",
+            Vec::new(),
+            Some(AreaName::parse("front").unwrap()),
+        )
+        .await
+        .unwrap();
+    let paused_at = fx.advance(Duration::from_secs(60)).as_millis();
+    execute(
+        fx.project.store(),
+        &format!(
+            "INSERT INTO project_pause (id, paused_at, paused_by) VALUES (1, {paused_at}, 'human:ana')"
+        ),
+    )
+    .await;
+    fx.advance(Duration::from_secs(3600));
+    let before = fx.last_seq().await;
+    assert_eq!(
+        fx.tasks.escalate_due_requests(10).await.unwrap(),
+        0,
+        "no lead can claim while paused"
+    );
+
+    let resumed_at = fx.project.now().as_millis();
+    execute(
+        fx.project.store(),
+        &format!(
+            "UPDATE project_pause SET paused_at = NULL, paused_by = NULL, resumed_at = {resumed_at} WHERE id = 1"
+        ),
+    )
+    .await;
+    fx.advance(Duration::from_secs(10 * 60));
+    assert_eq!(
+        fx.tasks.escalate_due_requests(10).await.unwrap(),
+        0,
+        "the lead gets the whole wait again after the resume"
+    );
+    fx.advance(Duration::from_millis(1));
+    assert_eq!(fx.tasks.escalate_due_requests(10).await.unwrap(), 1);
+    assert_eq!(types(&fx.events_after(before).await), ["request.escalated"]);
 }
 
 #[tokio::test]
@@ -388,6 +550,16 @@ async fn only_an_orchestrator_claims_and_the_claim_sorts_and_names_the_request()
     assert_eq!(
         details(&second),
         json!({"request": "RQ-1", "holder": "frontend"})
+    );
+    let TaskError::Fold(refusal) = &second else {
+        panic!("not a refusal: {second}");
+    };
+    assert_eq!(
+        refusal.hint(),
+        Some(
+            "frontend drafts it: call send_message to frontend with request RQ-1 to add what you know, or call list_requests to pick another request"
+        ),
+        "the hint names the drafter to message"
     );
 
     let again = fx

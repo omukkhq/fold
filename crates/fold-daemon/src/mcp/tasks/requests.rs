@@ -4,7 +4,9 @@ use fold_core::requests::{
     CodeAnchor, CodeRef, DraftCard, DraftEdge, MAX_ATTACHMENT_BYTES, RequestKind, RequestState,
     Requester,
 };
-use fold_core::{Actor, FoldError, LabelName, RequestId, TaskId, TaskKind, WorkspaceId, codes};
+use fold_core::{
+    Actor, AreaName, FoldError, LabelName, RequestId, TaskId, TaskKind, WorkspaceId, codes,
+};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{ContentBlock, JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -43,6 +45,9 @@ pub struct CreateRequestInput {
     /// Your workspace, such as ws-9, that holds the attachments. Needed only with attachments.
     #[serde(default)]
     pub ws: Option<String>,
+    /// The area whose lead hears of the request first, such as web. Leave it out for the area of your own worker; the main agent's request has no area and goes to the main agent and every area lead. When the area lead does not claim it in time, fold tells them all.
+    #[serde(default)]
+    pub area: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -202,7 +207,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             CREATE_REQUEST,
-            "Ask for work: a bug, a feature or a question, written as a message with optional files from your workspace. The main agent or an area lead sorts and names it, then drafts the cards.",
+            "Ask for work: a bug, a feature or a question, written as a message with optional files from your workspace. fold tells the lead of its area first, by default the area of your worker; a request in no area, or one that its lead does not claim within request_escalate_minutes, goes to the main agent and every area lead. The one who claims it sorts and names it, then drafts the cards.",
             schema_for_type::<CreateRequestInput>(),
         ),
         Tool::new(
@@ -212,7 +217,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_REQUEST,
-            "Read one request: the message, the attachments (read one with get_request_attachment), the code it was made on (path, lines, an excerpt and the revision or proposal version), one draft version with its cards and edges, the requester's comments, the clarification thread and the tasks an approval created.",
+            "Read one request: the message, its requester, area and drafter, the attachments (read one with get_request_attachment), the code it was made on (path, lines, an excerpt and the revision or proposal version), one draft version with its cards and edges, the requester's comments, the clarification thread and the tasks an approval created.",
             schema_for_type::<GetRequestInput>(),
         ),
         Tool::new(
@@ -387,6 +392,7 @@ fn summary_json(view: &RequestView) -> Value {
         "title": view.title,
         "excerpt": view.excerpt,
         "requester": view.requester.label(),
+        "area": view.area.as_ref().map(ToString::to_string),
         "drafter": view.drafter.as_ref().map(ToString::to_string),
         "latest_version": view.latest_version,
     })
@@ -427,7 +433,9 @@ fn detail_json(detail: &RequestDetail, version: Option<u32>) -> Result<Value, Fo
         "title": request.title,
         "body": request.body,
         "requester": request.requester.label(),
+        "area": request.area.as_ref().map(ToString::to_string),
         "drafter": request.drafter.as_ref().map(ToString::to_string),
+        "escalated": request.escalated_at.is_some(),
         "close_reason": request.close_reason,
         "attachments": detail.attachments.iter().map(|attachment| json!({
             "position": attachment.position,
@@ -487,6 +495,7 @@ async fn create_request(
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let input: CreateRequestInput = parse(arguments)?;
+    let area = input.area.as_deref().map(AreaName::parse).transpose()?;
     let ws = match input.ws.as_deref() {
         Some(ws) if !input.attachments.is_empty() => Some(ws.parse::<WorkspaceId>()?),
         _ => None,
@@ -501,14 +510,18 @@ async fn create_request(
         .collect();
     let view = server
         .tasks
-        .create_request(actor, &input.body, attachments)
+        .create_request_in(actor, &input.body, attachments, area)
         .await
         .map_err(from_task)?;
-    Ok(json!({
+    let mut reply = json!({
         "id": view.id.to_string(),
         "state": view.state.as_str(),
         "attachments": input.attachments.len(),
-    }))
+    });
+    if let Some(area) = &view.area {
+        reply["area"] = json!(area.as_str());
+    }
+    Ok(reply)
 }
 
 async fn list_requests(
