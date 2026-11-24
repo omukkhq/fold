@@ -14,9 +14,9 @@ path = "src/main.rs"
 anyhow = "1.0.104"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
-fold-core = { version = "0.9.3", path = "../fold-core" }
-fold-daemon = { version = "0.9.3", path = "../fold-daemon" }
-fold-vcs = { version = "0.9.3", path = "../fold-vcs" }
+fold-core = { version = "0.9.4", path = "../fold-core" }
+fold-daemon = { version = "0.9.4", path = "../fold-daemon" }
+fold-vcs = { version = "0.9.4", path = "../fold-vcs" }
 getrandom = "0.4.3"
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", features = ["client", "http1"] }
