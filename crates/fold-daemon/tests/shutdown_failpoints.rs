@@ -251,7 +251,8 @@ async fn a_stop_during_a_sync_leaves_all_or_none_of_it_at_the_next_start() {
     let this = done.iter().find(|done| done.workspace == id).unwrap();
     assert_eq!(this.outcome, Reconciled::Attached);
     assert_eq!(this.unfinished, Some(mark));
-    let live = handle.live.get(id).expect("the workspace is live");
+    // Reconcile starts the pipeline; its first scan, which makes the live entry, waits for the live job to take its watch group.
+    let live = eventually(WAIT, async || handle.live.get(id).ok_or(())).await;
     assert_eq!(live.view.base, old_base);
 
     let synced = service
