@@ -107,6 +107,7 @@ async fn the_next_claimant_adopts_the_released_workspace_as_it_is() {
         .workspaces
         .details(WorkspaceRef::Task(t(1)))
         .await
+        .unwrap()
         .unwrap();
     let files = snapshot(&fx.dir(".fold/ws/t-1"));
     let seq = fx.last_seq().await;
@@ -133,6 +134,7 @@ async fn the_next_claimant_adopts_the_released_workspace_as_it_is() {
         .workspaces
         .details(WorkspaceRef::Task(t(1)))
         .await
+        .unwrap()
         .unwrap();
     assert_eq!(after.workspace.worker, Some(fx.backend.name.clone()));
     let mut expected = before.clone();

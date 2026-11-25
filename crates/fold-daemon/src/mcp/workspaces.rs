@@ -69,7 +69,7 @@ pub struct GetWorkspaceInput {
     /// The workspace, such as ws-9. Give ws or task, not both.
     #[serde(default)]
     pub ws: Option<String>,
-    /// A task such as T-12, to read its live workspace, or its newest one when none is live.
+    /// A task such as T-12, to read its live workspace, or its newest one when none is live. A task without any workspace gives workspace null and a hint to call create_workspace.
     #[serde(default)]
     pub task: Option<String>,
 }
@@ -190,7 +190,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_WORKSPACE,
-            "Read a workspace by id or by task: state, path, base revision, owner, conflicted paths, changed file count, last activity and the newest checkpoint and changeset.",
+            "Read a workspace by id or by task: state, path, base revision, owner, conflicted paths, changed file count, last activity and the newest checkpoint and changeset. A task that never had a workspace gives workspace null and a hint to call create_workspace.",
             schema_for_type::<GetWorkspaceInput>(),
         ),
         Tool::new(
@@ -493,11 +493,21 @@ pub async fn call(
                     .with_hint("call get_workspace with ws or with task"));
                 }
             };
-            let details = server
+            let Some(details) = server
                 .workspaces
                 .details(target)
                 .await
-                .map_err(from_workspace)?;
+                .map_err(from_workspace)?
+            else {
+                return Ok(Some(json!({
+                    "workspace": null,
+                    "task": match target {
+                        WorkspaceRef::Task(task) => Some(task.to_string()),
+                        WorkspaceRef::Workspace(_) => None,
+                    },
+                    "hint": "the task has no workspace yet: call create_workspace(task) to start one",
+                })));
+            };
             let view = &details.workspace;
             json!({
                 "workspace": view.id.to_string(),
