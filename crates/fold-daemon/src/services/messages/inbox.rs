@@ -17,6 +17,15 @@ use crate::services::events::EventBuffer;
 #[cfg(feature = "failpoints")]
 use crate::services::fired;
 
+/// What one `acknowledge_all` call did, both lists in message number order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Acknowledged {
+    /// The messages this call marked read.
+    pub acknowledged: Vec<MessageId>,
+    /// The given ids that were read before the call: a push, a wait or `get_thread` that gives a message whole marks it read, so the call was not needed for them.
+    pub already_read: Vec<MessageId>,
+}
+
 /// One unacknowledged message of a worker's inbox.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InboxItem {
@@ -97,7 +106,10 @@ impl MessageService {
         message: MessageId,
         up_to: bool,
     ) -> Result<Vec<MessageId>, MessageError> {
-        self.acknowledge_all(actor, &[message], up_to).await
+        Ok(self
+            .acknowledge_all(actor, &[message], up_to)
+            .await?
+            .acknowledged)
     }
 
     /// [`Self::acknowledge`] for several messages in one transaction: a message the worker did not receive refuses the whole call and acknowledges nothing. The ids come back in message number order.
@@ -106,7 +118,7 @@ impl MessageService {
         actor: &Actor,
         targets: &[MessageId],
         up_to: bool,
-    ) -> Result<Vec<MessageId>, MessageError> {
+    ) -> Result<Acknowledged, MessageError> {
         let agent = policy::can_use_inbox(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
@@ -127,7 +139,17 @@ impl MessageService {
             })
             .await?;
         self.bus.publish(buffer);
-        Ok(acknowledged)
+        let already_read = targets
+            .iter()
+            .copied()
+            .filter(|target| acknowledged.binary_search(target).is_err())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        Ok(Acknowledged {
+            acknowledged,
+            already_read,
+        })
     }
 
     /// Marks the thread that `message` belongs to read for the acting human: their unacknowledged recipient rows of its messages take this time, and `message.acknowledged` names them. Returns the ids this call changed; a repeat changes nothing and appends no event. Another recipient's rows never change.

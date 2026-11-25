@@ -444,6 +444,8 @@ pub async fn get_thread(server: &FoldServer, arguments: &JsonObject) -> Result<V
     Ok(json!({ "messages": messages.iter().map(thread_json).collect::<Vec<_>>() }))
 }
 
+const ALREADY_READ_HINT: &str = "fold marks a message read when a push, a wait or get_thread gives it whole, so call acknowledge_message only for a cut message or one read through get_inbox";
+
 pub async fn acknowledge_message(
     server: &FoldServer,
     arguments: &JsonObject,
@@ -461,12 +463,17 @@ pub async fn acknowledge_message(
         );
     }
     let actor = server.actor().await?;
-    let acknowledged = server
+    let done = server
         .messages
         .acknowledge_all(&actor, &targets, input.up_to)
         .await
         .map_err(from_message)?;
-    Ok(json!({ "acknowledged": ids(&acknowledged) }))
+    let mut value = json!({ "acknowledged": ids(&done.acknowledged) });
+    if !done.already_read.is_empty() {
+        value["already_read"] = json!(ids(&done.already_read));
+        value["hint"] = json!(ALREADY_READ_HINT);
+    }
+    Ok(value)
 }
 
 pub async fn mark_answered(
