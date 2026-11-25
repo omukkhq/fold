@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use fold_core::events::types;
 use fold_core::policy::{self, Starter};
 use fold_core::reviews::ScopeChoice;
@@ -47,9 +49,6 @@ pub use queue::{
 };
 pub use resume_groups::{DEFAULT_RESUME_GAP, DEFAULT_RESUME_GROUP};
 pub use streams::{StreamFacts, WorkerStreams};
-
-/// The most default names tried for one start before the start gives up.
-const MAX_NAME_ATTEMPTS: u32 = 100;
 
 /// What `start_worker` asks for. `area` names the area of an area lead; a task worker takes its lead's area. `tasks` binds a task worker, and `proposals` or the open proposals of `plan` a reviewer.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -986,23 +985,140 @@ async fn free_name(
     role: Role,
     area: Option<&AreaName>,
 ) -> Result<AgentName, AgentError> {
-    for attempt in 1..=MAX_NAME_ATTEMPTS {
-        let Some(name) = default_worker_name(role, area, attempt) else {
-            break;
-        };
-        if agents::find_agent(tx.conn(), &name).await?.is_none() {
-            return Ok(name);
-        }
+    let taken: BTreeSet<String> = agents::list_agents(tx.conn())
+        .await?
+        .into_iter()
+        .map(|agent| agent.name.as_str().to_owned())
+        .collect();
+    pick_free_name(role, area, &taken)
+        .ok_or_else(|| invalid("fold found no free name for the worker", "pass a name"))
+}
+
+/// The default name for a new worker of `role`: the number after the highest one `taken` already uses for this role and area, else the first free number. A number counts as used only when its name is exactly the default name of that number, so a shortened prefix and a hand-picked name such as `web-worker-x` are read correctly. `None` only when no number gives a valid free name.
+fn pick_free_name(
+    role: Role,
+    area: Option<&AreaName>,
+    taken: &BTreeSet<String>,
+) -> Option<AgentName> {
+    let free = |attempt: u32| {
+        default_worker_name(role, area, attempt).filter(|name| !taken.contains(name.as_str()))
+    };
+    let highest = taken
+        .iter()
+        .filter_map(|name| name_number(name))
+        .filter(|&attempt| {
+            default_worker_name(role, area, attempt)
+                .is_some_and(|name| taken.contains(name.as_str()))
+        })
+        .max();
+    if let Some(name) = highest
+        .and_then(|highest| highest.checked_add(1))
+        .and_then(free)
+    {
+        return Some(name);
     }
-    Err(invalid(
-        "fold found no free name for the worker",
-        "pass a name",
-    ))
+    let bound = u32::try_from(taken.len())
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+    (1..=bound).find_map(free)
+}
+
+/// The number a default worker name carries: the digits after its last `-`, or 1 for a name without them.
+fn name_number(name: &str) -> Option<u32> {
+    match name.rsplit_once('-') {
+        Some((_, digits))
+            if !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            digits.parse().ok().filter(|&number| number >= 2)
+        }
+        _ => Some(1),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn taken(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    fn picked(role: Role, area: Option<&AreaName>, names: &[&str]) -> String {
+        pick_free_name(role, area, &taken(names))
+            .unwrap()
+            .as_str()
+            .to_owned()
+    }
+
+    #[test]
+    fn the_free_name_follows_the_highest_used_number() {
+        let web = area("web");
+        assert_eq!(picked(Role::TaskWorker, Some(&web), &[]), "web-worker");
+        assert_eq!(
+            picked(Role::TaskWorker, Some(&web), &["web-worker"]),
+            "web-worker-2"
+        );
+        assert_eq!(
+            picked(
+                Role::TaskWorker,
+                Some(&web),
+                &["web-worker", "web-worker-99", "web-lead", "api-worker-400"]
+            ),
+            "web-worker-100"
+        );
+        let many: Vec<String> = (2..=150).map(|n| format!("web-worker-{n}")).collect();
+        let mut names: Vec<&str> = many.iter().map(String::as_str).collect();
+        names.push("web-worker");
+        assert_eq!(
+            picked(Role::TaskWorker, Some(&web), &names),
+            "web-worker-151"
+        );
+        assert_eq!(
+            picked(Role::Reviewer, None, &["reviewer", "reviewer-7"]),
+            "reviewer-8"
+        );
+    }
+
+    #[test]
+    fn names_that_only_look_like_defaults_are_not_counted() {
+        let web = area("web");
+        assert_eq!(
+            picked(
+                Role::TaskWorker,
+                Some(&web),
+                &[
+                    "web-worker-x",
+                    "web-worker-02",
+                    "web-worker-1",
+                    "web-worker-"
+                ]
+            ),
+            "web-worker"
+        );
+        assert_eq!(name_number("web-worker"), Some(1));
+        assert_eq!(name_number("web-worker-1"), None);
+        assert_eq!(name_number("web-worker-12"), Some(12));
+        assert_eq!(name_number("web-worker-"), Some(1));
+    }
+
+    #[test]
+    fn a_long_area_shortens_its_prefix_for_every_number() {
+        let long = area("a-very-long-area-name-for-names");
+        let first = picked(Role::TaskWorker, Some(&long), &[]);
+        let ninth = default_worker_name(Role::TaskWorker, Some(&long), 9).unwrap();
+        let next = picked(Role::TaskWorker, Some(&long), &[&first, ninth.as_str()]);
+        assert_eq!(
+            next,
+            default_worker_name(Role::TaskWorker, Some(&long), 10)
+                .unwrap()
+                .as_str()
+        );
+        assert!(next.len() <= 32, "{next}");
+        assert!(next.ends_with("-worker-10"), "{next}");
+        let huge = default_worker_name(Role::TaskWorker, Some(&long), u32::MAX).unwrap();
+        let after = picked(Role::TaskWorker, Some(&long), &[huge.as_str()]);
+        assert_eq!(after, first);
+    }
 
     fn area(name: &str) -> AreaName {
         AreaName::parse(name).unwrap()
