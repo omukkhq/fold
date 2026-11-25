@@ -587,3 +587,21 @@ async fn init_in_the_folder_of_a_removed_project_brings_it_back_under_its_slug()
     assert_eq!(found.removed_at, None);
     registry.close().await.unwrap();
 }
+
+#[test]
+fn init_in_the_home_folder_is_refused_and_writes_nothing() {
+    let sandbox = Sandbox::new();
+    let home = sandbox.path("home");
+    std::fs::create_dir(&home).unwrap();
+    let output = sandbox.fold_in(&home, &["init"], &[]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let refused = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(refused.contains("invalid_request"), "{refused}");
+    assert!(
+        refused.contains(&home.join(".claude/skills").display().to_string()),
+        "{refused}"
+    );
+    assert!(refused.contains(&home.display().to_string()), "{refused}");
+    assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+    assert!(!sandbox.registry_path().exists());
+}

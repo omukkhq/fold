@@ -258,9 +258,21 @@ fn log_filter(from_env: Option<tracing_subscriber::EnvFilter>) -> tracing_subscr
         .fold(filter, tracing_subscriber::EnvFilter::add_directive)
 }
 
+/// Prints the warning of [`claude_files::personal_skills_warning`] for the personal skills below `HOME` that hide fold's project skills. The warning only tells: a terminal that cannot take it stops nothing.
+pub(crate) fn warn_personal_skills(dirs: &Dirs, out: &mut impl std::io::Write) {
+    let Some(home) = dirs.home.as_deref() else {
+        return;
+    };
+    if let Some(warning) =
+        claude_files::personal_skills_warning(&claude_files::personal_fold_skills(home))
+    {
+        let _ = crate::output::line(out, &warning);
+    }
+}
+
 /// A project whose skills cannot be written still opens: its workers then find the skills a refresh or an earlier fold wrote.
-fn write_skills(root: &Path) {
-    if let Err(error) = claude_files::write_skills(root) {
+fn write_skills(root: &Path, home: Option<&Path>) {
+    if let Err(error) = claude_files::write_skills(root, home) {
         tracing::warn!(
             root = %root.display(),
             code = error.code(),
@@ -288,6 +300,7 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
         }
     }
     let dirs = Dirs::from_env();
+    warn_personal_skills(&dirs, &mut std::io::stdout());
     let file = read_file_config(&dirs.config_file()?)?;
     let config = build_config(args, &dirs, &file)?;
     let checks = check_settings(&file)?;
@@ -311,6 +324,7 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
         ..Launcher::default()
     }
     .with_claude_location(|name| std::env::var_os(name));
+    let home = dirs.home.clone();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -323,7 +337,7 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
             launcher,
             chosen.environment,
             started_by,
-            FolderFiles::new(write_skills),
+            FolderFiles::new(move |root: &Path| write_skills(root, home.as_deref())),
             checks,
         )
         .await?;
@@ -418,6 +432,43 @@ mod tests {
             runtime_dir: Some("/run/user/1000".into()),
             library_runtime: false,
         }
+    }
+
+    #[test]
+    fn the_start_warning_names_each_personal_fold_skill_once_and_needs_a_home() {
+        let home = tempfile::tempdir().unwrap();
+        let with_home = Dirs {
+            home: Some(home.path().to_owned()),
+            ..dirs()
+        };
+        let mut out = Vec::new();
+        warn_personal_skills(&with_home, &mut out);
+        assert!(out.is_empty());
+        let skills = home.path().join(claude_files::PERSONAL_SKILLS_DIR);
+        std::fs::create_dir_all(skills.join("fold-main")).unwrap();
+        std::fs::create_dir_all(skills.join("mine")).unwrap();
+        warn_personal_skills(&with_home, &mut out);
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(text.lines().count(), 1, "{text}");
+        assert!(text.starts_with("warning: "), "{text}");
+        assert!(
+            text.contains(&skills.join("fold-main").display().to_string()),
+            "{text}"
+        );
+        assert!(
+            !text.contains(&skills.join("mine").display().to_string()),
+            "{text}"
+        );
+        assert!(skills.join("fold-main").is_dir());
+        let mut homeless = Vec::new();
+        warn_personal_skills(
+            &Dirs {
+                home: None,
+                ..dirs()
+            },
+            &mut homeless,
+        );
+        assert!(homeless.is_empty());
     }
 
     fn args(listen: Option<&str>, socket: Option<&str>) -> ServeArgs {

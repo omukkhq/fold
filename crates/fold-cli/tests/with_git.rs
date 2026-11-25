@@ -387,7 +387,7 @@ fn with_git_in_a_git_repository_whose_agents_md_has_the_section_makes_no_revisio
     let sandbox = Sandbox::new();
     let written = sandbox.path("written");
     fs::create_dir(&written).unwrap();
-    fold_cli::claude_files::write(&written).unwrap();
+    fold_cli::claude_files::write(&written, None).unwrap();
     let agents = fs::read_to_string(written.join("AGENTS.md")).unwrap();
     let repo = sandbox.path("repo");
     let head = committed_repo(&repo, &[("README.md", "# app\n"), ("AGENTS.md", &agents)]);

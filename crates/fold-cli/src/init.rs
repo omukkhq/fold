@@ -190,6 +190,8 @@ pub(crate) fn initialise(
     dirs: &Dirs,
     out: &mut impl Write,
 ) -> Result<String, InitError> {
+    // Before anything is created: fold's skills in the personal skill folder would hide the skills of every project.
+    claude_files::refuse_personal_skills(dir, dirs.home.as_deref())?;
     let host = host_paths(dirs).map_err(InitError::HostPaths)?;
     let socket = socket_path(args.socket.as_deref(), dirs);
     let runtime = current_thread_runtime().map_err(InitError::Runtime)?;
@@ -220,7 +222,9 @@ pub(crate) fn initialise(
         )
     });
     let project = runtime.block_on(async {
-        let files: FolderFiles = Box::new(|root: &Path| new_claude_files(root));
+        let home = dirs.home.clone();
+        let files: FolderFiles =
+            Box::new(move |root: &Path| new_claude_files(root, home.as_deref()));
         if kind == Kind::FromGit {
             return init_project_from_git_with(
                 &host,
@@ -493,7 +497,7 @@ fn refresh(dir: Option<&Path>, dirs: &Dirs, out: &mut impl Write) -> Result<(), 
 }
 
 /// Writes the Claude Code files into a new project's folder before init records it, so the instructions file is part of the revision init records while `.fold/exclude` leaves the skills out, and returns the files and folders that did not exist before, the root files that changed, by the paths their symbolic links lead to, and the instructions file with the subject of its change. A write that fails part-way writes those root files back and removes what it created before it returns the error, since init only learns what a write that succeeds made.
-fn new_claude_files(root: &Path) -> Result<WrittenFiles, FoldError> {
+fn new_claude_files(root: &Path, home: Option<&Path>) -> Result<WrittenFiles, FoldError> {
     let name = claude_files::instructions_file(root);
     // A folder comes before the files below it, so only the topmost new path is recorded.
     let written = [name]
@@ -515,7 +519,7 @@ fn new_claude_files(root: &Path) -> Result<WrittenFiles, FoldError> {
             .filter(|(path, old)| std::fs::read(path).ok().as_ref() != Some(old))
             .collect()
     };
-    match claude_files::write(root) {
+    match claude_files::write(root, home) {
         Ok(()) => {
             let instructions = instructions_subject(root, name, &before);
             Ok(WrittenFiles {
@@ -527,7 +531,9 @@ fn new_claude_files(root: &Path) -> Result<WrittenFiles, FoldError> {
         Err(error) => {
             undo_claude_files(&changed(before), &created);
             Err(match error {
-                ClaudeFileError::Malformed(error) | ClaudeFileError::Link(error) => error,
+                ClaudeFileError::Malformed(error)
+                | ClaudeFileError::Link(error)
+                | ClaudeFileError::PersonalSkills(error) => error,
                 ClaudeFileError::Io { source, .. } => FoldError::new(
                     codes::WORKSPACE_IO,
                     format!("cannot write the Claude Code files: {}", source.kind()),
@@ -599,7 +605,7 @@ fn root_files(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 
 /// The warnings never stop the command: the files are written first.
 fn write_claude_files(root: &Path, dirs: &Dirs, out: &mut impl Write) -> Result<(), InitError> {
-    claude_files::write(root)?;
+    claude_files::write(root, dirs.home.as_deref())?;
     let home = dirs
         .home
         .as_deref()
@@ -906,7 +912,7 @@ mod tests {
         std::fs::write(root.join("docs/rules.md"), "# Ours\n").unwrap();
         std::os::unix::fs::symlink("docs/rules.md", root.join("AGENTS.md")).unwrap();
         std::os::unix::fs::symlink("AGENTS.md", root.join("CLAUDE.md")).unwrap();
-        let written = new_claude_files(&root).unwrap();
+        let written = new_claude_files(&root, None).unwrap();
         let rules = root.join("docs/rules.md");
         assert_eq!(written.changed, [(rules.clone(), b"# Ours\n".to_vec())]);
         assert_eq!(
@@ -926,7 +932,7 @@ mod tests {
             claude_files::AGENTS_END
         );
         std::fs::write(root.join("AGENTS.md"), &old).unwrap();
-        let written = new_claude_files(&root).unwrap();
+        let written = new_claude_files(&root, None).unwrap();
         assert_eq!(
             written.instructions.unwrap().1,
             "Update fold's section in AGENTS.md"
@@ -948,7 +954,7 @@ mod tests {
         let refused = refused.parent().unwrap();
         std::fs::create_dir_all(refused).unwrap();
         std::fs::set_permissions(refused, std::fs::Permissions::from_mode(0o555)).unwrap();
-        let error = new_claude_files(&root).unwrap_err();
+        let error = new_claude_files(&root, None).unwrap_err();
         std::fs::set_permissions(refused, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(error.code(), codes::WORKSPACE_IO);
         assert_eq!(

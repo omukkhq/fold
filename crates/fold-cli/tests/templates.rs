@@ -372,13 +372,14 @@ const FOLD_ERROR_CODES: [&str; 189] = [
 const PENDING_ERROR_CODES: [&str; 1] = ["too_large"];
 
 /// The `invalid_request` reasons that have a name.
-const INVALID_REQUEST_REASONS: [&str; 15] = [
+const INVALID_REQUEST_REASONS: [&str; 16] = [
     "self_dependency",
     "checklist_origin",
     "linked_item",
     "task_has_history",
     "proposal_open",
     "malformed_claude_file",
+    "personal_skill_folder",
     "no_service_manager",
     "too_many_attachments",
     "attachment_too_large",

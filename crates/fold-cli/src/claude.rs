@@ -189,12 +189,13 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
     })?;
     drop(runtime);
     // A daemon that already runs opened the project before this binary may have changed, so the main agent's session writes the skills its prompt names too. A refused write only warns: the session starts with the skills the folder holds.
-    if let Err(error) = claude_files::write_skills(&root) {
+    if let Err(error) = claude_files::write_skills(&root, dirs.home.as_deref()) {
         let _ = crate::output::line(
             &mut io::stdout(),
             &format!("warning: fold's skills were not updated: {error}"),
         );
     }
+    crate::serve::warn_personal_skills(dirs, &mut io::stdout());
     let paths = ProjectPaths::new(&root);
     let prompt = if picks_system_prompt(&args.claude_args) {
         None

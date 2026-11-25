@@ -298,6 +298,9 @@ pub(crate) fn collect(
     sections[0]
         .checks
         .extend(daemon::version_verdict(&daemon, fld));
+    sections[0]
+        .checks
+        .push(personal_skills_check(host.dirs.home.as_deref()));
     let report = socket
         .as_deref()
         .map_or(environment::DaemonReport::NotRunning, |socket| {
@@ -1505,6 +1508,25 @@ fn models_check(paths: &ProjectPaths, facts: &DatabaseFacts) -> Check {
         )
         .collect();
     environment::model_names_verdict(&models)
+}
+
+/// A personal skill with the name of one of fold's skills wins over the project's skill in every session, so each one is a failure; fold never removes the user's files.
+pub(crate) fn personal_skills_check(home: Option<&Path>) -> Check {
+    let Some(home) = home else {
+        return Check::not_applicable("personal skills");
+    };
+    let skills = claude_files::personal_fold_skills(home);
+    if skills.is_empty() {
+        return Check::ok(
+            "personal skills",
+            "no personal Claude Code skill hides fold's skills",
+        );
+    }
+    Check::fail(
+        "personal skills",
+        claude_files::personal_skills_problem(&skills),
+        claude_files::personal_skills_fix(&skills),
+    )
 }
 
 fn shadowing_checks(root: &Path, home: Option<&Path>) -> Vec<Check> {

@@ -48,7 +48,7 @@ fn malformed(error: ClaudeFileError) -> fold_core::FoldError {
 fn a_fresh_write_gives_the_section_and_the_skill_and_a_refresh_changes_no_byte() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
-    claude_files::write(root).unwrap();
+    claude_files::write(root, None).unwrap();
     assert!(!root.join(MCP_FILE).exists());
     assert!(!root.join(SETTINGS_FILE).exists());
     let agents = read(root, AGENTS_FILE);
@@ -71,8 +71,8 @@ fn a_fresh_write_gives_the_section_and_the_skill_and_a_refresh_changes_no_byte()
     let before = mtimes(root);
     let files = || std::iter::once(AGENTS_FILE).chain(SKILL_FILES);
     let bytes: Vec<String> = files().map(|relative| read(root, relative)).collect();
-    claude_files::write(root).unwrap();
-    claude_files::write(root).unwrap();
+    claude_files::write(root, None).unwrap();
+    claude_files::write(root, None).unwrap();
     let after: Vec<String> = files().map(|relative| read(root, relative)).collect();
     assert_eq!(bytes, after);
     assert_eq!(before, mtimes(root), "an unchanged file is not written");
@@ -88,7 +88,7 @@ fn a_refresh_of_an_earlier_skill_adds_the_role_skills_and_keeps_the_users_files(
     std::fs::write(root.join(SKILL_FILE), "an earlier skill\n").unwrap();
     std::fs::write(root.join(REFERENCE_FILE), "an earlier reference\n").unwrap();
     std::fs::write(folder.join("notes.md"), "my notes\n").unwrap();
-    claude_files::write(root).unwrap();
+    claude_files::write(root, None).unwrap();
     for (file, text) in SKILL_FILES.into_iter().zip(SKILL_TEXTS) {
         assert_eq!(read(root, file), text, "{file}");
     }
@@ -108,7 +108,7 @@ fn the_skills_alone_are_written_and_only_when_they_differ() {
     std::fs::write(root.join(SKILL_FILE), "an earlier skill\n").unwrap();
     std::fs::write(folder.join("notes.md"), "my notes\n").unwrap();
     std::fs::write(root.join(AGENTS_FILE), "# my rules\n").unwrap();
-    claude_files::write_skills(root).unwrap();
+    claude_files::write_skills(root, None).unwrap();
     for (file, text) in SKILL_FILES.into_iter().zip(SKILL_TEXTS) {
         assert_eq!(read(root, file), text, "{file}");
     }
@@ -119,7 +119,7 @@ fn the_skills_alone_are_written_and_only_when_they_differ() {
     );
     assert!(!root.join(SETTINGS_FILE).exists());
     let before = mtimes(root);
-    claude_files::write_skills(root).unwrap();
+    claude_files::write_skills(root, None).unwrap();
     assert_eq!(before, mtimes(root), "an unchanged skill is not written");
 }
 
@@ -134,7 +134,7 @@ fn a_refresh_removes_the_old_fold_entries_and_keeps_foreign_ones_in_their_order(
     let settings = r#"{"model": "opus", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo bye"}]}, {"hooks": [{"type": "command", "command": "fold hook stop"}]}], "SessionStart": [{"hooks": [{"type": "command", "command": "fold hook old-start"}, {"type": "command", "command": "notify-send hi"}]}, {"matcher": "resume", "hooks": [{"type": "command", "command": "fld hook session-start"}]}], "PreToolUse": [{"matcher": "Bash", "hooks": [{"command": "guard", "type": "command"}]}, {"matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": "fld hook pre-tool-use"}]}], "Notification": []}, "permissions": {"deny": ["Read(.env)", "Edit(/main/**)", "Write(/main/**)"], "allow": ["Bash(ls)", "mcp__fold"]}, "env": {"B": "2", "A": "1"}}"#;
     std::fs::write(root.join(SETTINGS_FILE), settings).unwrap();
     assert_eq!(claude_files::old_entries(root), [MCP_FILE, SETTINGS_FILE]);
-    claude_files::write(root).unwrap();
+    claude_files::write(root, None).unwrap();
 
     let mcp_expected = r#"{
   "other": 1,
@@ -209,7 +209,7 @@ fn a_refresh_removes_the_old_fold_entries_and_keeps_foreign_ones_in_their_order(
         .unwrap()
         .modified()
         .unwrap();
-    claude_files::write(root).unwrap();
+    claude_files::write(root, None).unwrap();
     assert_eq!(read(root, MCP_FILE), mcp_expected);
     assert_eq!(read(root, SETTINGS_FILE), settings_expected);
     let after = std::fs::metadata(root.join(MCP_FILE))
@@ -226,14 +226,14 @@ fn a_project_file_that_held_only_fold_entries_goes_and_a_link_stays() {
     std::fs::create_dir_all(root.join(".claude")).unwrap();
     std::fs::write(root.join(MCP_FILE), OLD_MCP).unwrap();
     std::fs::write(root.join(SETTINGS_FILE), OLD_SETTINGS).unwrap();
-    claude_files::write(root).unwrap();
+    claude_files::write(root, None).unwrap();
     assert!(!root.join(MCP_FILE).exists());
     assert!(!root.join(SETTINGS_FILE).exists());
     assert!(root.join(".claude").is_dir(), "the skill keeps the folder");
 
     std::fs::write(root.join("shared.json"), OLD_MCP).unwrap();
     std::os::unix::fs::symlink("shared.json", root.join(MCP_FILE)).unwrap();
-    claude_files::write(root).unwrap();
+    claude_files::write(root, None).unwrap();
     assert!(is_link(&root.join(MCP_FILE)));
     assert_eq!(read(root, "shared.json"), "{}\n");
 }
@@ -255,7 +255,7 @@ fn a_malformed_json_file_is_refused_and_nothing_is_written() {
         let root = dir.path();
         std::fs::create_dir_all(root.join(".claude")).unwrap();
         std::fs::write(root.join(relative), content).unwrap();
-        let error = malformed(claude_files::write(root).unwrap_err());
+        let error = malformed(claude_files::write(root, None).unwrap_err());
         assert_eq!(error.code(), "invalid_request", "{content}");
         let details = error.details().unwrap();
         assert_eq!(details["reason"], MALFORMED_REASON);
@@ -333,7 +333,7 @@ fn unmatched_or_repeated_markers_are_refused_and_leave_the_file_untouched() {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
         std::fs::write(root.join(AGENTS_FILE), &existing).unwrap();
-        let error = malformed(claude_files::write(root).unwrap_err());
+        let error = malformed(claude_files::write(root, None).unwrap_err());
         assert_eq!(error.code(), "invalid_request");
         assert_eq!(error.details().unwrap()["reason"], MALFORMED_REASON);
         assert!(error.message().contains(AGENTS_FILE));
@@ -619,7 +619,7 @@ fn the_section_goes_into_claude_md_when_it_is_a_file() {
     let root = dir.path();
     std::fs::write(root.join(CLAUDE_FILE), "# mine\n").unwrap();
     assert_eq!(instructions_file(root), CLAUDE_FILE);
-    claude_files::write(root).unwrap();
+    claude_files::write(root, None).unwrap();
     let claude = read(root, CLAUDE_FILE);
     assert!(
         claude.starts_with(&format!("# mine\n\n{AGENTS_BEGIN}\n")),
@@ -631,7 +631,7 @@ fn the_section_goes_into_claude_md_when_it_is_a_file() {
     let root = dir.path();
     std::fs::write(root.join(CLAUDE_FILE), "# claude\n").unwrap();
     std::fs::write(root.join(AGENTS_FILE), "# agents\n").unwrap();
-    claude_files::write(root).unwrap();
+    claude_files::write(root, None).unwrap();
     assert_eq!(sections(&read(root, CLAUDE_FILE)), 1);
     assert_eq!(read(root, AGENTS_FILE), "# agents\n");
     let canonical = root.canonicalize().unwrap();
@@ -649,7 +649,7 @@ fn the_section_goes_into_agents_md_when_claude_md_is_absent_or_a_link() {
     let root = dir.path();
     assert_eq!(instructions_file(root), AGENTS_FILE);
     std::fs::write(root.join(AGENTS_FILE), "# agents\n").unwrap();
-    claude_files::write(root).unwrap();
+    claude_files::write(root, None).unwrap();
     assert!(read(root, AGENTS_FILE).starts_with("# agents\n\n"));
     assert!(!root.join(CLAUDE_FILE).exists());
 
@@ -661,8 +661,8 @@ fn the_section_goes_into_agents_md_when_claude_md_is_absent_or_a_link() {
         }
         std::os::unix::fs::symlink(AGENTS_FILE, root.join(CLAUDE_FILE)).unwrap();
         assert_eq!(instructions_file(root), AGENTS_FILE);
-        claude_files::write(root).unwrap();
-        claude_files::write(root).unwrap();
+        claude_files::write(root, None).unwrap();
+        claude_files::write(root, None).unwrap();
         assert!(is_link(&root.join(CLAUDE_FILE)));
         assert!(!is_link(&root.join(AGENTS_FILE)));
         let text = read(root, AGENTS_FILE);
@@ -685,8 +685,8 @@ fn an_agents_md_link_to_claude_md_stays_a_link_and_the_file_holds_one_section() 
     std::fs::write(root.join(CLAUDE_FILE), "# claude\n").unwrap();
     std::os::unix::fs::symlink(CLAUDE_FILE, root.join(AGENTS_FILE)).unwrap();
     assert_eq!(instructions_file(root), CLAUDE_FILE);
-    claude_files::write(root).unwrap();
-    claude_files::write(root).unwrap();
+    claude_files::write(root, None).unwrap();
+    claude_files::write(root, None).unwrap();
     assert!(is_link(&root.join(AGENTS_FILE)));
     let text = read(root, CLAUDE_FILE);
     assert!(text.starts_with("# claude\n\n"));
@@ -709,7 +709,7 @@ fn an_instructions_link_that_leads_outside_the_root_or_nowhere_is_refused() {
         let root = dir.path();
         std::fs::create_dir(root.join(".claude")).unwrap();
         std::os::unix::fs::symlink(&link, root.join(AGENTS_FILE)).unwrap();
-        let error = match claude_files::write(root).unwrap_err() {
+        let error = match claude_files::write(root, None).unwrap_err() {
             ClaudeFileError::Link(error) => error,
             other => panic!("expected a refused link, got {other:?}"),
         };
@@ -738,7 +738,7 @@ fn a_claude_md_link_to_another_file_gets_agents_md_and_keeps_the_warning() {
     let dir = TempDir::new().unwrap();
     let root = dir.path().canonicalize().unwrap();
     std::os::unix::fs::symlink(&target, root.join(CLAUDE_FILE)).unwrap();
-    claude_files::write(&root).unwrap();
+    claude_files::write(&root, None).unwrap();
     assert!(is_link(&root.join(CLAUDE_FILE)));
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "# shared\n");
     assert_eq!(sections(&read(&root, AGENTS_FILE)), 1);
@@ -750,13 +750,13 @@ fn the_section_moves_between_the_files_and_the_old_one_keeps_its_other_bytes() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
     std::fs::write(root.join(AGENTS_FILE), "# agents\n").unwrap();
-    claude_files::write(root).unwrap();
+    claude_files::write(root, None).unwrap();
     let with_tail = format!("{}tail\n", read(root, AGENTS_FILE));
     std::fs::write(root.join(AGENTS_FILE), &with_tail).unwrap();
 
     std::fs::write(root.join(CLAUDE_FILE), "# claude\n").unwrap();
     assert_eq!(stale_section(root), Some(AGENTS_FILE));
-    claude_files::write(root).unwrap();
+    claude_files::write(root, None).unwrap();
     assert_eq!(read(root, AGENTS_FILE), "# agents\n\ntail\n");
     assert_eq!(sections(&read(root, CLAUDE_FILE)), 1);
     assert_eq!(stale_section(root), None);
@@ -764,7 +764,7 @@ fn the_section_moves_between_the_files_and_the_old_one_keeps_its_other_bytes() {
         .unwrap()
         .modified()
         .unwrap();
-    claude_files::write(root).unwrap();
+    claude_files::write(root, None).unwrap();
     let after = std::fs::metadata(root.join(AGENTS_FILE))
         .unwrap()
         .modified()
@@ -772,7 +772,7 @@ fn the_section_moves_between_the_files_and_the_old_one_keeps_its_other_bytes() {
     assert_eq!(before, after, "a file without a section is not written");
 
     std::fs::remove_file(root.join(CLAUDE_FILE)).unwrap();
-    claude_files::write(root).unwrap();
+    claude_files::write(root, None).unwrap();
     let agents = read(root, AGENTS_FILE);
     assert!(agents.starts_with("# agents\n\ntail\n\n"), "{agents}");
     assert_eq!(sections(&agents), 1);
@@ -786,7 +786,7 @@ fn stale_markers_that_cannot_be_removed_refuse_the_write() {
     let broken = format!("# agents\n{AGENTS_BEGIN}\n");
     std::fs::write(root.join(AGENTS_FILE), &broken).unwrap();
     assert_eq!(stale_section(root), Some(AGENTS_FILE));
-    let error = malformed(claude_files::write(root).unwrap_err());
+    let error = malformed(claude_files::write(root, None).unwrap_err());
     assert!(error.message().contains(AGENTS_FILE), "{}", error.message());
     assert_eq!(read(root, CLAUDE_FILE), "# claude\n");
     assert_eq!(read(root, AGENTS_FILE), broken);

@@ -2140,3 +2140,27 @@ fn the_fold_name_shows_where_it_comes_from() {
         (Status::Warn, "fld cannot tell who you are")
     );
 }
+
+#[test]
+fn personal_skills_need_a_home_and_fail_for_each_fold_name() {
+    assert_eq!(
+        personal_skills_check(None),
+        Check::not_applicable("personal skills")
+    );
+    let home = TempDir::new().unwrap();
+    assert_eq!(personal_skills_check(Some(home.path())).status, Status::Ok);
+    let skills = home.path().join(".claude/skills");
+    std::fs::create_dir_all(skills.join("fold-reviewer")).unwrap();
+    std::fs::create_dir_all(skills.join("fold")).unwrap();
+    let check = personal_skills_check(Some(home.path()));
+    assert_eq!(check.status, Status::Fail);
+    let fix = check.fix.unwrap();
+    assert!(
+        fix.contains(&skills.join("fold").display().to_string()),
+        "{fix}"
+    );
+    assert!(
+        fix.contains(&skills.join("fold-reviewer").display().to_string()),
+        "{fix}"
+    );
+}
