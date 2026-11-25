@@ -4,12 +4,16 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use fold_cli::claude_files::{SETTINGS_FILE, SKILL_FILES, SKILL_TEXTS, role_fingerprint};
+use fold_cli::claude_files::{
+    MAIN_SKILL_FILE, SETTINGS_FILE, SKILL_FILES, SKILL_TEXTS, role_fingerprint,
+};
 use fold_cli::claude_user::{self, UserFiles};
-use fold_core::roles::{Role, update_note};
+use fold_cli::main_reload::{Current, main_hooks};
+use fold_core::roles::{Role, reload_note};
 use fold_core::{AgentName, ProjectPaths};
+use fold_daemon::mcp::tool_schema_hashes;
 
-use crate::common::{DaemonGuard, Host, adapter, daemons, list_agents};
+use crate::common::{DaemonGuard, Host, adapter, daemons, feed, list_agents};
 
 /// A stand-in for the user's `claude` at the front of `PATH`: it prints its arguments, its working directory and the fold variables, one per line. Like Claude Code, it keeps an empty transcript `<id>.jsonl` for the session in `projects/<working directory with - for every other character than a letter or digit>` of `CLAUDE_CONFIG_DIR` or `$HOME/.claude`, with a fixed id when no `--session-id` names it.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
@@ -150,6 +154,22 @@ fn text(bytes: &[u8]) -> &str {
     std::str::from_utf8(bytes).unwrap()
 }
 
+/// The `--settings` of a user who runs fold's hooks: the main agent's own hooks only.
+fn only_main_hooks() -> String {
+    serde_json::json!({"hooks": main_hooks()}).to_string()
+}
+
+/// The `--settings` of a user who lacks fold's settings: those of every fold session and the main agent's own hooks.
+fn all_hooks() -> String {
+    let mut settings = fold_core::layout::session_settings();
+    if let (Some(hooks), serde_json::Value::Object(main)) =
+        (settings["hooks"].as_object_mut(), main_hooks())
+    {
+        hooks.extend(main);
+    }
+    settings.to_string()
+}
+
 #[tokio::test]
 async fn fld_claude_starts_the_daemon_and_runs_claude_as_the_main_agent_in_the_project_root() {
     let host = Host::new().await;
@@ -166,7 +186,8 @@ async fn fld_claude_starts_the_daemon_and_runs_claude_as_the_main_agent_in_the_p
     assert_eq!(
         text(&output.stdout),
         format!(
-            "arg --name\narg main\narg --session-id\narg {session}\narg --append-system-prompt-file\narg {}\narg --model\narg opus\ncwd {}\nFOLD_AGENT=main\nFOLD_AGENT_TAGS=main\n",
+            "arg --settings\narg {}\narg --name\narg main\narg --session-id\narg {session}\narg --append-system-prompt-file\narg {}\narg --model\narg opus\ncwd {}\nFOLD_AGENT=main\nFOLD_AGENT_TAGS=main\n",
+            only_main_hooks(),
             prompt.display(),
             host.root.display()
         )
@@ -244,7 +265,7 @@ async fn without_the_user_setup_fld_claude_names_the_command_and_gives_fold_by_f
     assert_eq!(mcp["mcpServers"]["fold"]["env"]["FOLD_AGENT"], "main");
     let settings: serde_json::Value =
         serde_json::from_str(flag_arg(&output, "--settings").unwrap()).unwrap();
-    assert_eq!(settings, fold_core::layout::session_settings());
+    assert_eq!(settings.to_string(), all_hooks());
     let args = all_args(&output);
     assert_eq!(args[0], "--mcp-config");
     assert_eq!(args.last(), Some(&"hello"));
@@ -259,13 +280,17 @@ async fn without_the_user_setup_fld_claude_names_the_command_and_gives_fold_by_f
     assert!(flag_arg(&server_only, "--mcp-config").is_none());
     assert_eq!(
         flag_arg(&server_only, "--settings"),
-        Some(fold_core::layout::session_settings().to_string().as_str())
+        Some(all_hooks().as_str())
     );
 
     claude_user::add(&files).unwrap();
     let set_up = fld_claude(&host, &[], &host.root).await;
     assert!(flag_arg(&set_up, "--mcp-config").is_none());
-    assert!(flag_arg(&set_up, "--settings").is_none());
+    assert_eq!(
+        flag_arg(&set_up, "--settings"),
+        Some(only_main_hooks().as_str()),
+        "the main agent's own hooks come by flag all the same"
+    );
     assert!(!text(&set_up.stdout).contains("fld setup --claude"));
     guard.stop().await;
 }
@@ -339,8 +364,19 @@ async fn fld_claude_resumes_the_main_session_fld_started_last_and_fld_new_starts
     guard.stop().await;
 }
 
+/// `fld hook <name>` of the agent `main` in the project root with `stdin`.
+async fn main_hook(host: &Host, name: &str, stdin: &serde_json::Value) -> Output {
+    let mut command = host.fold(&["hook", name], &host.root);
+    command.env("FOLD_AGENT", "main");
+    let mut child = command.spawn().unwrap();
+    feed(&mut child, &stdin.to_string()).await;
+    let output = child.wait_with_output().await.unwrap();
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    output
+}
+
 #[tokio::test]
-async fn a_main_session_that_an_older_fold_started_is_told_to_load_its_skill_again() {
+async fn a_main_session_that_an_older_fold_started_is_told_to_load_its_skill_until_it_does() {
     let host = Host::new().await;
     let first = fld_claude(&host, &[], &host.root).await;
     let guard = DaemonGuard(daemons(&host.default_socket()));
@@ -348,25 +384,103 @@ async fn a_main_session_that_an_older_fold_started_is_told_to_load_its_skill_aga
     assert_eq!(claude_args(&first), ["--name", "main", "--session-id", &x]);
     let record =
         ProjectPaths::new(&host.root).main_session_fingerprint(&AgentName::parse("main").unwrap());
-    let current = format!("{x} {}\n", role_fingerprint(Role::Main));
+    let fingerprint = role_fingerprint(Role::Main);
+    let tools = tool_schema_hashes();
+    let current = Current {
+        fingerprint: &fingerprint,
+        tools: &tools,
+    }
+    .loaded_by(&x)
+    .render();
     assert_eq!(std::fs::read_to_string(&record).unwrap(), current);
     let same = fld_claude(&host, &[], &host.root).await;
     assert_eq!(claude_args(&same), ["--name", "main", "--resume", &x]);
 
-    let note = update_note(Role::Main);
-    std::fs::write(&record, format!("{x} 0000000000000000\n")).unwrap();
+    let note = reload_note(Role::Main, None);
+    let older = format!("{x} 0000000000000000\n");
+    std::fs::write(&record, &older).unwrap();
     let updated = fld_claude(&host, &[], &host.root).await;
     assert_eq!(
         claude_args(&updated),
         ["--name", "main", "--resume", &x, note.as_str()],
         "the note is the session's first message"
     );
-    assert_eq!(std::fs::read_to_string(&record).unwrap(), current);
+    let settings: serde_json::Value =
+        serde_json::from_str(flag_arg(&updated, "--settings").unwrap()).unwrap();
+    claude_user::add(&user_files(&host)).unwrap();
+    let own_settings = fld_claude(&host, &["--", "--settings", "x.json"], &host.root).await;
+    assert_eq!(
+        flag_arg(&own_settings, "--settings"),
+        Some("x.json"),
+        "the user's own settings come alone"
+    );
+    assert_eq!(
+        settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+        "fld hook user-prompt-submit"
+    );
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), older);
     let again = fld_claude(&host, &[], &host.root).await;
     assert_eq!(
         claude_args(&again),
-        ["--name", "main", "--resume", &x],
-        "once"
+        ["--name", "main", "--resume", &x, note.as_str()],
+        "the note comes again until the session loads its skill"
+    );
+
+    // The note as the first turn gets no second copy; each later turn gets it until the skill loads.
+    let prompt = |prompt: &str| serde_json::json!({"session_id": x, "cwd": host.root, "hook_event_name": "UserPromptSubmit", "prompt": prompt});
+    assert!(
+        main_hook(&host, "user-prompt-submit", &prompt(&note))
+            .await
+            .stdout
+            .is_empty()
+    );
+    let skill = host.root.join(MAIN_SKILL_FILE);
+    std::fs::write(&skill, "an older fld's skill").unwrap();
+    for turn in ["what is next?", "and now?"] {
+        let told = main_hook(&host, "user-prompt-submit", &prompt(turn)).await;
+        let told: serde_json::Value = serde_json::from_slice(&told.stdout).unwrap();
+        assert_eq!(
+            told["hookSpecificOutput"]["additionalContext"],
+            note.as_str(),
+            "{turn}"
+        );
+    }
+    assert_ne!(
+        std::fs::read_to_string(&skill).unwrap(),
+        "an older fld's skill",
+        "the reminder writes the skill it names"
+    );
+    let other_skill = serde_json::json!({"session_id": x, "cwd": host.root, "tool_name": "Skill", "tool_input": {"skill": "fold"}});
+    main_hook(&host, "post-tool-use", &other_skill).await;
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), older);
+    let loads = serde_json::json!({"session_id": x, "cwd": host.root, "tool_name": "Skill", "tool_input": {"skill": "fold-main"}});
+    assert!(
+        main_hook(&host, "post-tool-use", &loads)
+            .await
+            .stdout
+            .is_empty()
+    );
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), current);
+    assert!(
+        main_hook(&host, "user-prompt-submit", &prompt("what is next?"))
+            .await
+            .stdout
+            .is_empty()
+    );
+    let loaded = fld_claude(&host, &[], &host.root).await;
+    assert_eq!(claude_args(&loaded), ["--name", "main", "--resume", &x]);
+
+    std::fs::write(&record, &older).unwrap();
+    assert!(
+        main_hook(&host, "user-prompt-submit", &prompt("/fold-main"))
+            .await
+            .stdout
+            .is_empty()
+    );
+    assert_eq!(
+        std::fs::read_to_string(&record).unwrap(),
+        current,
+        "a typed /fold-main loads the skill"
     );
 
     std::fs::remove_file(&record).unwrap();
@@ -384,9 +498,8 @@ async fn a_main_session_that_an_older_fold_started_is_told_to_load_its_skill_aga
         ],
         "the note goes before the user's own flags"
     );
-    assert_eq!(std::fs::read_to_string(&record).unwrap(), current);
+    assert!(!record.exists());
 
-    let older = format!("{x} 0000000000000000\n");
     std::fs::write(&record, &older).unwrap();
     let prompted = fld_claude(&host, &["--", "--model", "opus", "hello"], &host.root).await;
     assert_eq!(
@@ -399,17 +512,12 @@ async fn a_main_session_that_an_older_fold_started_is_told_to_load_its_skill_aga
         "{}",
         text(&prompted.stdout)
     );
-    assert_eq!(
-        std::fs::read_to_string(&record).unwrap(),
-        older,
-        "an untold note waits for a later start"
-    );
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), older);
     let later = fld_claude(&host, &[], &host.root).await;
     assert_eq!(
         claude_args(&later),
         ["--name", "main", "--resume", &x, note.as_str()]
     );
-    assert_eq!(std::fs::read_to_string(&record).unwrap(), current);
     guard.stop().await;
 }
 

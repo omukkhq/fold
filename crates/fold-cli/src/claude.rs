@@ -8,11 +8,13 @@ use clap::{Args, ValueEnum};
 use fold_cli::claude_files;
 use fold_cli::claude_user::{self, UserFiles};
 use fold_cli::daemon_client::{self, ClientError, DaemonClient, Response};
+use fold_cli::main_reload::{Current, Loaded, main_hooks, reload_due};
 use fold_core::accounts::{ACCOUNT_ENV, AccountName, AccountToken, OAUTH_TOKEN_ENV};
 use fold_core::layout::{MCP_COMMAND, session_settings};
-use fold_core::roles::{Role, needs_update_note, update_note};
+use fold_core::roles::Role;
 use fold_core::transcript::{claude_config_dir, is_session_id};
 use fold_core::{AgentName, FoldError, MAIN_TAG, ProjectConfig, ProjectPaths, codes};
+use fold_daemon::mcp::tool_schema_hashes;
 use fold_daemon::services::agents::accounts;
 use fold_daemon::services::agents::claude::transcript_path;
 use fold_daemon::services::agents::new_session_id;
@@ -142,7 +144,7 @@ pub fn run_new(args: &NewArgs, dirs: &Dirs) -> Result<(), ClaudeError> {
     }
 }
 
-/// Starts the daemon when it is not running, then replaces this process with the user's own `claude`, an interactive session in the project root that is the main agent. `FOLD_AGENT` and `--name` give the session its agent name and its messaging socket, and `FOLD_AGENT_TAGS` makes `fld mcp` register it with the `main` tag. The main agent prompt is appended to the session's system prompt on every start and resume, because a system prompt flag holds only for the `claude` run that gets it. fold chooses the id of every new session and records it, so that [`Session::Continue`] resumes the session `fld` started and never one the user started without it, which `claude --continue` could pick. It offers once to add fold to the user's Claude Code configuration, and a session of a user without that setup gets fold's server, permission and hooks as flags; it writes no project settings, and only the files of fold's skills that differ from this binary's. It returns only when it could not start `claude`.
+/// Starts the daemon when it is not running, then replaces this process with the user's own `claude`, an interactive session in the project root that is the main agent. `FOLD_AGENT` and `--name` give the session its agent name and its messaging socket, and `FOLD_AGENT_TAGS` makes `fld mcp` register it with the `main` tag. The main agent prompt is appended to the session's system prompt on every start and resume, because a system prompt flag holds only for the `claude` run that gets it. fold chooses the id of every new session and records it, so that [`Session::Continue`] resumes the session `fld` started and never one the user started without it, which `claude --continue` could pick. It offers once to add fold to the user's Claude Code configuration, and a session of a user without that setup gets fold's server, permission and hooks as flags; every session gets the main agent's own hooks, which repeat the reload note until the session loads its skill, by `--settings` unless the user's own arguments pass one; it writes no project settings, and only the files of fold's skills that differ from this binary's. It returns only when it could not start `claude`.
 pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), ClaudeError> {
     let agent = AgentName::parse(&args.name).map_err(FoldError::from)?;
     let host = host_paths(dirs)?;
@@ -215,13 +217,21 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
         )?)
     };
     let fingerprint_record = paths.main_session_fingerprint(&agent);
-    let previous = std::fs::read_to_string(&fingerprint_record).ok();
+    let previous = std::fs::read_to_string(&fingerprint_record)
+        .ok()
+        .and_then(|text| Loaded::parse(&text));
     let fingerprint = claude_files::role_fingerprint(Role::Main);
-    let stale = start
+    let tools = tool_schema_hashes();
+    let current = Current {
+        fingerprint: &fingerprint,
+        tools: &tools,
+    };
+    let note = start
         .as_ref()
-        .is_some_and(|start| stale_session(previous.as_deref(), start, &fingerprint));
-    let first_turn = (stale && takes_prompt(&args.claude_args)).then(|| update_note(Role::Main));
-    if stale && first_turn.is_none() {
+        .and_then(|start| start_note(previous.as_ref(), start, current));
+    let told = note.is_some();
+    let first_turn = note.filter(|_| takes_prompt(&args.claude_args));
+    if told && first_turn.is_none() {
         let _ = crate::output::line(
             &mut io::stdout(),
             &format!(
@@ -230,9 +240,9 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
             ),
         );
     }
-    // A note that cannot go in keeps the old record, so a later start sends it.
-    if let Some(start) = start.as_ref().filter(|_| !stale || first_turn.is_some()) {
-        record_fingerprint(&fingerprint_record, start, &fingerprint);
+    // A new session reads the installed texts and tools; a resumed one keeps its record until the session loads its skill, which the session's hooks see.
+    if let Some(Start::New(id)) = &start {
+        record_loaded(&fingerprint_record, &current.loaded_by(id));
     }
     let files = UserFiles::from_env();
     let set_up = crate::claude_setup::offer_on_terminal(
@@ -242,10 +252,11 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
         &mut io::stdout(),
     );
     crate::news::ask_once_on_terminal(dirs);
+    let own_settings = picks_settings(&args.claude_args);
     let own = if set_up {
-        None
+        OwnSetup::for_binary(Path::new("fld"), &agent, true, true, own_settings)
     } else {
-        OwnSetup::new(&agent, files.as_ref())
+        OwnSetup::new(&agent, files.as_ref(), own_settings)
     };
     let error = command(
         Path::new("claude"),
@@ -256,17 +267,10 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
         &args.claude_args,
         first_turn.as_deref(),
         socket.as_deref(),
-        own.as_ref(),
+        Some(&own),
         account.as_ref(),
     )
     .exec();
-    // The session never took the note, so the next start sends it again.
-    if first_turn.is_some() {
-        let _ = match &previous {
-            Some(text) => fold_vcs::atomic::write_atomic(&fingerprint_record, text.as_bytes()),
-            None => std::fs::remove_file(&fingerprint_record),
-        };
-    }
     Err(ClaudeError::Exec(error))
 }
 
@@ -294,6 +298,14 @@ fn picks_system_prompt(extra: &[OsString]) -> bool {
         let arg = arg.to_string_lossy();
         let flag = arg.split_once('=').map_or(arg.as_ref(), |(flag, _)| flag);
         FLAGS.contains(&flag)
+    })
+}
+
+/// Whether the user's own arguments for `claude` pass a settings file or text.
+fn picks_settings(extra: &[OsString]) -> bool {
+    extra.iter().any(|arg| {
+        let arg = arg.to_string_lossy();
+        arg == "--settings" || arg.starts_with("--settings=")
     })
 }
 
@@ -329,24 +341,17 @@ fn start(
     Ok(Start::New(id))
 }
 
-/// Whether the session of `start` last read the role text of another fld than `fingerprint`, by `previous`, the text of the fingerprint record; a new session never did. A session the record does not name is one that a fold without the record started, or one the user changed to inside Claude Code with its own `/resume`; both load the skill again.
-fn stale_session(previous: Option<&str>, start: &Start, fingerprint: &str) -> bool {
+/// The reload note for the session of `start`, by `previous`, what the fingerprint record says it last loaded; a new session gets none. A session the record does not name is one that a fold without the record started, or one the user changed to inside Claude Code with its own `/resume`; both load the skill again.
+fn start_note(previous: Option<&Loaded>, start: &Start, current: Current<'_>) -> Option<String> {
     match start {
-        Start::New(_) => false,
-        Start::Resume(id) => {
-            let recorded = previous
-                .and_then(|text| text.trim().split_once(' '))
-                .filter(|(session, _)| session == id)
-                .map(|(_, recorded)| recorded);
-            needs_update_note(recorded, Some(fingerprint))
-        }
+        Start::New(_) => None,
+        Start::Resume(id) => reload_due(previous, id, current),
     }
 }
 
-/// Records that the session of `start` reads the role text of `fingerprint`. A record that cannot be written only means that a later start tells the session again.
-fn record_fingerprint(path: &Path, start: &Start, fingerprint: &str) {
-    let (Start::New(id) | Start::Resume(id)) = start;
-    let _ = fold_vcs::atomic::write_atomic(path, format!("{id} {fingerprint}\n").as_bytes());
+/// Writes `loaded` as the fingerprint record at `path`. A record that cannot be written only means that the session is told again.
+pub(crate) fn record_loaded(path: &Path, loaded: &Loaded) {
+    let _ = fold_vcs::atomic::write_atomic(path, loaded.render().as_bytes());
 }
 
 /// Whether `claude` can take the update note as its prompt beside the user's own arguments: they hold no prompt of their own, no `--` and no `-p`. A word right after a flag without `=` counts as that flag's value and any other word as a prompt, so a flag of several values reads as a prompt too and the note waits for a later start.
@@ -389,10 +394,11 @@ pub(crate) fn follow_record(
     if continues && let Some(old) = old {
         let record = paths.main_session_fingerprint(agent);
         let text = std::fs::read_to_string(&record).unwrap_or_default();
-        if let Some((session, fingerprint)) = text.trim().split_once(' ')
-            && session == old
+        if let Some(mut loaded) = Loaded::parse(&text)
+            && loaded.session == old
         {
-            fold_vcs::atomic::write_atomic(&record, format!("{id} {fingerprint}\n").as_bytes())?;
+            loaded.session = id.to_owned();
+            fold_vcs::atomic::write_atomic(&record, loaded.render().as_bytes())?;
         }
     }
     Ok(())
@@ -480,7 +486,7 @@ fn project_account(
     }
 }
 
-/// The fold server, the fold tools' permission and fold's hooks as `claude` flags, for a session of a user whose own Claude Code configuration lacks a part of fold's setup, so that the main agent has its tools all the same. The values are JSON text, which Claude Code takes in place of a file. A part the user's configuration holds is not passed again: Claude Code defines no order between a `--mcp-config` server and a configured one of the same name, and settings add nothing to a user's settings that already allow the fold tools and run fold's hooks.
+/// The fold server, the fold tools' permission and fold's hooks as `claude` flags. The server, the permission and the hooks of every fold session go only to a session of a user whose own Claude Code configuration lacks a part of fold's setup, so that the main agent has its tools all the same. The values are JSON text, which Claude Code takes in place of a file. A part the user's configuration holds is not passed again: Claude Code defines no order between a `--mcp-config` server and a configured one of the same name, and settings add nothing to a user's settings that already allow the fold tools and run fold's hooks. The settings always hold [`main_hooks`], which only the main agent's session runs, and Claude Code merges hooks across its settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OwnSetup {
     mcp: Option<String>,
@@ -488,23 +494,25 @@ struct OwnSetup {
 }
 
 impl OwnSetup {
-    fn new(agent: &AgentName, files: Option<&UserFiles>) -> Option<Self> {
+    fn new(agent: &AgentName, files: Option<&UserFiles>, own_settings: bool) -> Self {
         let fold = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fld"));
         Self::for_binary(
             &fold,
             agent,
             files.is_some_and(claude_user::holds_server),
             files.is_some_and(claude_user::holds_settings),
+            own_settings,
         )
     }
 
-    /// `None` when the user's configuration holds both the server and the settings.
+    /// With `own_settings`, the user's own arguments set `--settings`: a user who holds fold's settings then gets none from fold, so the user's file is the one `claude` reads, and the main agent's own hooks wait for a start without it.
     fn for_binary(
         fold: &Path,
         agent: &AgentName,
         holds_server: bool,
         holds_settings: bool,
-    ) -> Option<Self> {
+        own_settings: bool,
+    ) -> Self {
         let mcp = (!holds_server).then(|| {
             let server = serde_json::json!({
                 "command": fold,
@@ -515,8 +523,21 @@ impl OwnSetup {
             servers.insert(claude_files::MCP_SERVER_NAME.to_owned(), server);
             serde_json::json!({ claude_files::MCP_SERVERS_KEY: servers }).to_string()
         });
-        let settings = (!holds_settings).then(|| session_settings().to_string());
-        (mcp.is_some() || settings.is_some()).then_some(Self { mcp, settings })
+        let mut settings = match (holds_settings, own_settings) {
+            (true, true) => None,
+            (true, false) => Some(serde_json::json!({"hooks": {}})),
+            (false, _) => Some(session_settings()),
+        };
+        if let Some(settings) = &mut settings
+            && let (Some(hooks), serde_json::Value::Object(main)) =
+                (settings["hooks"].as_object_mut(), main_hooks())
+        {
+            hooks.extend(main);
+        }
+        Self {
+            mcp,
+            settings: settings.map(|settings| settings.to_string()),
+        }
     }
 }
 
@@ -576,7 +597,10 @@ fn main_is_free(response: &Response, agent: &AgentName) -> Result<(), ClaudeErro
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use clap::Parser;
+    use fold_core::roles::update_note;
     use serde_json::json;
 
     use super::*;
@@ -838,42 +862,56 @@ mod tests {
     }
 
     #[test]
-    fn only_a_resumed_session_of_another_fingerprint_is_stale() {
+    fn only_a_resumed_session_of_another_fingerprint_gets_the_note() {
         let other = "11111111-2222-4333-8444-555555555555";
+        let tools = BTreeMap::from([("get_task".to_owned(), "11".to_owned())]);
+        let current = |fingerprint| Current {
+            fingerprint,
+            tools: &tools,
+        };
         let new = Start::New(ID.to_owned());
         let resume = Start::Resume(ID.to_owned());
-        let recorded = format!("{ID} aaaa\n");
-        assert!(!stale_session(Some(&recorded), &new, "bbbb"));
-        assert!(!stale_session(None, &new, "bbbb"));
-        assert!(!stale_session(Some(&recorded), &resume, "aaaa"));
-        assert!(stale_session(Some(&recorded), &resume, "bbbb"));
+        let recorded = current("aaaa").loaded_by(ID);
+        assert_eq!(start_note(Some(&recorded), &new, current("bbbb")), None);
+        assert_eq!(start_note(None, &new, current("bbbb")), None);
+        assert_eq!(start_note(Some(&recorded), &resume, current("aaaa")), None);
+        assert_eq!(
+            start_note(Some(&recorded), &resume, current("bbbb")),
+            Some(update_note(Role::Main)),
+            "no tool changed, so the note names none"
+        );
         assert!(
-            stale_session(Some(&recorded), &Start::Resume(other.to_owned()), "aaaa"),
+            start_note(
+                Some(&recorded),
+                &Start::Resume(other.to_owned()),
+                current("aaaa")
+            )
+            .is_some(),
             "a record of another session says nothing of this one"
         );
-        assert!(stale_session(None, &resume, "aaaa"));
-        assert!(stale_session(Some("garbage"), &resume, "aaaa"));
+        assert!(start_note(None, &resume, current("aaaa")).is_some());
     }
 
     #[test]
-    fn each_start_records_its_session_with_its_fingerprint() {
+    fn a_new_start_records_its_session_with_what_it_loads() {
         let project = tempfile::tempdir().unwrap();
         let paths = ProjectPaths::new(project.path());
         std::fs::create_dir_all(paths.fold_dir().join("sessions")).unwrap();
         let record = paths.main_session_fingerprint(&AgentName::parse("main").unwrap());
-        record_fingerprint(&record, &Start::New(ID.to_owned()), "aaaa");
+        let tools = BTreeMap::from([("get_task".to_owned(), "11".to_owned())]);
+        let loaded = Current {
+            fingerprint: "aaaa",
+            tools: &tools,
+        }
+        .loaded_by(ID);
+        record_loaded(&record, &loaded);
         assert_eq!(
             std::fs::read_to_string(&record).unwrap(),
-            format!("{ID} aaaa\n")
-        );
-        record_fingerprint(&record, &Start::Resume(ID.to_owned()), "bbbb");
-        assert_eq!(
-            std::fs::read_to_string(&record).unwrap(),
-            format!("{ID} bbbb\n")
+            format!("{ID} aaaa\nget_task 11\n")
         );
         std::fs::remove_dir_all(paths.fold_dir()).unwrap();
         std::fs::write(paths.fold_dir(), "a file where the folder goes").unwrap();
-        record_fingerprint(&record, &Start::Resume(ID.to_owned()), "bbbb");
+        record_loaded(&record, &loaded);
         assert!(
             !record.exists(),
             "a record that cannot be written stops nothing"
@@ -994,8 +1032,9 @@ mod tests {
     #[test]
     fn a_session_without_the_user_setup_gets_fold_by_flags_before_the_name() {
         let agent = AgentName::parse("main").unwrap();
-        let own = OwnSetup::for_binary(Path::new("/bin/fld"), &agent, false, false).unwrap();
-        let (own_mcp, own_settings) = (own.mcp.clone().unwrap(), own.settings.clone().unwrap());
+        let own = OwnSetup::for_binary(Path::new("/bin/fld"), &agent, false, false, false);
+        let own_settings = own.settings.clone().unwrap();
+        let own_mcp = own.mcp.clone().unwrap();
         let mcp: serde_json::Value = serde_json::from_str(&own_mcp).unwrap();
         assert_eq!(
             mcp,
@@ -1009,6 +1048,10 @@ mod tests {
         assert_eq!(
             settings["hooks"]["Stop"][0]["hooks"][0]["command"],
             "fld hook stop"
+        );
+        assert_eq!(
+            settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+            "fld hook user-prompt-submit"
         );
         let command = command(
             Path::new("claude"),
@@ -1035,13 +1078,19 @@ mod tests {
                 "hello"
             ]
         );
-        let server_held = OwnSetup::for_binary(Path::new("/bin/fld"), &agent, true, false).unwrap();
+        let server_held = OwnSetup::for_binary(Path::new("/bin/fld"), &agent, true, false, false);
         assert_eq!(server_held.mcp, None);
         assert_eq!(server_held.settings.as_deref(), Some(own_settings.as_str()));
-        let settings_held =
-            OwnSetup::for_binary(Path::new("/bin/fld"), &agent, false, true).unwrap();
+        let settings_held = OwnSetup::for_binary(Path::new("/bin/fld"), &agent, false, true, false);
         assert_eq!(settings_held.mcp.as_deref(), Some(own_mcp.as_str()));
-        assert_eq!(settings_held.settings, None);
+        let only_main: serde_json::Value =
+            serde_json::from_str(settings_held.settings.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            only_main,
+            serde_json::json!({"hooks": main_hooks()}),
+            "a user who runs fold's hooks gets only the main agent's own"
+        );
+        let held = OwnSetup::for_binary(Path::new("/bin/fld"), &agent, true, true, false);
         let args: Vec<_> = super::command(
             Path::new("claude"),
             Path::new("/src/app"),
@@ -1051,17 +1100,34 @@ mod tests {
             &[],
             None,
             None,
-            Some(&settings_held),
+            Some(&held),
             None,
         )
         .get_args()
         .map(ToOwned::to_owned)
         .collect();
-        assert_eq!(args, ["--mcp-config", own_mcp.as_str(), "--name", "main"]);
         assert_eq!(
-            OwnSetup::for_binary(Path::new("/bin/fld"), &agent, true, true),
-            None
+            args,
+            [
+                "--settings",
+                settings_held.settings.as_deref().unwrap(),
+                "--name",
+                "main"
+            ]
         );
+        let users_own = OwnSetup::for_binary(Path::new("/bin/fld"), &agent, true, true, true);
+        assert_eq!(
+            users_own.settings, None,
+            "the user's own --settings is the only one"
+        );
+        let lacking = OwnSetup::for_binary(Path::new("/bin/fld"), &agent, true, false, true);
+        assert_eq!(lacking.settings.as_deref(), Some(own_settings.as_str()));
+        assert!(picks_settings(&[
+            OsString::from("--settings"),
+            OsString::from("x.json")
+        ]));
+        assert!(picks_settings(&[OsString::from("--settings=x.json")]));
+        assert!(!picks_settings(&[OsString::from("--model")]));
     }
 
     #[test]
