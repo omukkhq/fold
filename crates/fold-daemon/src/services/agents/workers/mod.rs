@@ -809,7 +809,7 @@ impl AgentService {
         self.get_worker(agent).await
     }
 
-    /// Stops the worker `agent` as [`AgentService::stop_worker`] does and parks it: it waits for the go of the agent that calls, which `wait_for` describes in a few words. While that agent runs, fold keeps the worker's claims from going stale, and every view shows the wait instead of a stall; the caller's message resumes it in its own session. A worker that has ended already is parked without a stop. Only an agent parks a worker; `wait_for` is refused with `invalid_request` when it is blank, holds a line break or is longer than [`WAIT_FOR_MAX`] characters.
+    /// Stops the worker `agent` as [`AgentService::stop_worker`] does and parks it: it waits for the go of the agent that calls, which `wait_for` describes in a few words. While that agent runs, fold keeps the worker's claims from going stale, and every view shows the wait instead of a stall; the caller's message, or a person's, resumes it in its own session, and another agent's message waits for that go. A worker that has ended already is parked without a stop. Only an agent parks a worker; `wait_for` is refused with `invalid_request` when it is blank, holds a line break or is longer than [`WAIT_FOR_MAX`] characters.
     pub async fn park_worker(
         &self,
         actor: &Actor,
