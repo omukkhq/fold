@@ -118,14 +118,37 @@ impl ProposalIntent {
     }
 }
 
-/// Checks the shape of an intent and returns it as it is stored: every text trimmed with each line break as `\n`, so it becomes part of the version's Git commit byte for byte. The summary and what a part does may hold line breaks and tabs; a part's name, its paths and every entry are one line. A refusal is `invalid_intent`, whose details name the `field` (such as `intent.parts[1].does`) and the `reason` and never repeat the text: `empty`, `too_long` (with `max_chars`), `control_character`, `no_parts`, `too_many_parts` or `too_many_entries` (with `max`), `duplicate_part`, or `file_in_two_parts` (with at most 50 of the paths in `files` and their number in `files_count`). `again` names the call that sends it again. Whether the parts cover the version's files is [`intent_coverage`], which needs the diff.
+/// Checks the shape of an intent and returns it as it is stored: every text trimmed with each line break as `\n`, so it becomes part of the version's Git commit byte for byte. The summary and what a part does may hold line breaks and tabs; a part's name, its paths and every entry are one line. A refusal is `invalid_intent`, whose details name the `field` (such as `intent.parts[1].does`) and the `reason` and never repeat the text: `empty`, `too_long` (with `max_chars` of the first such text, and in `fields` every such text with its `field`, `length` and `max_chars`, so one refusal names them all, and `fields_count`), `control_character`, `no_parts`, `too_many_parts` or `too_many_entries` (with `max`), `duplicate_part`, or `file_in_two_parts` (with at most 50 of the paths in `files` and their number in `files_count`). `again` names the call that sends it again. Whether the parts cover the version's files is [`intent_coverage`], which needs the diff.
 pub fn proposal_intent(intent: ProposalIntent, again: &str) -> Result<ProposalIntent, FoldError> {
+    let mut long = Vec::new();
+    let checked = check_intent(intent, again, &mut long);
+    if long.is_empty() {
+        checked
+    } else {
+        Err(too_long_refusal(&long, again))
+    }
+}
+
+/// A text that broke its limit: the field, its length in characters and the limit.
+struct TooLong {
+    field: String,
+    length: usize,
+    max_chars: usize,
+}
+
+/// The walk of [`proposal_intent`]. A text that is too long goes into `long` and the walk goes on, so one refusal names every such text; any other refusal ends the walk, and the caller reports `long` instead when it holds a text.
+fn check_intent(
+    intent: ProposalIntent,
+    again: &str,
+    long: &mut Vec<TooLong>,
+) -> Result<ProposalIntent, FoldError> {
     let summary = text(
         &intent.summary,
         "intent.summary",
         MAX_SUMMARY_CHARS,
         true,
         again,
+        long,
     )?;
     if intent.parts.is_empty() {
         return Err(refusal(again, "intent.parts", "no_parts", []));
@@ -150,6 +173,7 @@ pub fn proposal_intent(intent: ProposalIntent, again: &str) -> Result<ProposalIn
             MAX_PART_NAME_CHARS,
             false,
             again,
+            long,
         )?;
         if !names.insert(name.clone()) {
             return Err(refusal(
@@ -165,6 +189,7 @@ pub fn proposal_intent(intent: ProposalIntent, again: &str) -> Result<ProposalIn
             MAX_PART_CHARS,
             true,
             again,
+            long,
         )?;
         let mut files = Vec::with_capacity(part.files.len());
         for (position, path) in part.files.iter().enumerate() {
@@ -174,6 +199,7 @@ pub fn proposal_intent(intent: ProposalIntent, again: &str) -> Result<ProposalIn
                 usize::MAX,
                 false,
                 again,
+                long,
             )?;
             if owners.insert(path.clone(), index).is_some() {
                 twice.insert(path.clone());
@@ -195,14 +221,15 @@ pub fn proposal_intent(intent: ProposalIntent, again: &str) -> Result<ProposalIn
     }
     let mut contracts = Contracts::default();
     for (kind, entries) in intent.contracts.by_kind() {
-        *contracts.entries_mut(kind) = list(entries, &format!("intent.contracts.{kind}"), again)?;
+        *contracts.entries_mut(kind) =
+            list(entries, &format!("intent.contracts.{kind}"), again, long)?;
     }
     Ok(ProposalIntent {
         summary,
         parts,
         contracts,
-        decisions: list(&intent.decisions, "intent.decisions", again)?,
-        not_changed: list(&intent.not_changed, "intent.not_changed", again)?,
+        decisions: list(&intent.decisions, "intent.decisions", again, long)?,
+        not_changed: list(&intent.not_changed, "intent.not_changed", again, long)?,
     })
 }
 
@@ -300,18 +327,26 @@ fn first_paths(paths: &[&str]) -> String {
     text
 }
 
-/// A trimmed text with each line break as `\n`, refused when it is empty, longer than `max` characters or holds a control character: any but a line break or a tab when `lines` allows them, any at all otherwise.
-fn text(raw: &str, field: &str, max: usize, lines: bool, again: &str) -> Result<String, FoldError> {
+/// A trimmed text with each line break as `\n`, refused when it is empty or holds a control character: any but a line break or a tab when `lines` allows them, any at all otherwise. A text longer than `max` characters is recorded in `long` and gives an empty text, so the walk finds the other long texts too.
+fn text(
+    raw: &str,
+    field: &str,
+    max: usize,
+    lines: bool,
+    again: &str,
+    long: &mut Vec<TooLong>,
+) -> Result<String, FoldError> {
     let normal = raw.trim().replace("\r\n", "\n").replace('\r', "\n");
+    let length = normal.chars().count();
     let reason = if normal.is_empty() {
         "empty"
-    } else if normal.chars().count() > max {
-        return Err(refusal(
-            again,
-            field,
-            "too_long",
-            [("max_chars", json!(max))],
-        ));
+    } else if length > max {
+        long.push(TooLong {
+            field: field.to_owned(),
+            length,
+            max_chars: max,
+        });
+        return Ok(String::new());
     } else if normal
         .chars()
         .any(|c| c.is_control() && !(lines && (c == '\n' || c == '\t')))
@@ -323,7 +358,12 @@ fn text(raw: &str, field: &str, max: usize, lines: bool, again: &str) -> Result<
     Err(refusal(again, field, reason, []))
 }
 
-fn list(entries: &[String], field: &str, again: &str) -> Result<Vec<String>, FoldError> {
+fn list(
+    entries: &[String],
+    field: &str,
+    again: &str,
+    long: &mut Vec<TooLong>,
+) -> Result<Vec<String>, FoldError> {
     if entries.len() > MAX_ENTRIES {
         return Err(refusal(
             again,
@@ -342,9 +382,42 @@ fn list(entries: &[String], field: &str, again: &str) -> Result<Vec<String>, Fol
                 MAX_ENTRY_CHARS,
                 false,
                 again,
+                long,
             )
         })
         .collect()
+}
+
+/// The `too_long` refusal for every text in `long`, which is never empty. The top-level `field` and `max_chars` are the first text's; `fields` lists each text with its `field`, its `length` and its `max_chars`, and `fields_count` counts them. The message names the count and the first field.
+fn too_long_refusal(long: &[TooLong], again: &str) -> FoldError {
+    let first = &long[0];
+    let message = if long.len() > 1 {
+        format!(
+            "{} texts of the intent are too long, the first is {}",
+            long.len(),
+            first.field
+        )
+    } else {
+        format!("{}: {}", first.field, problem("too_long"))
+    };
+    refusal_with_message(
+        message,
+        again,
+        &first.field,
+        "too_long",
+        [
+            ("max_chars", json!(first.max_chars)),
+            (
+                "fields",
+                json!(
+                    long.iter()
+                        .map(|text| json!({"field": text.field, "length": text.length, "max_chars": text.max_chars}))
+                        .collect::<Vec<_>>()
+                ),
+            ),
+            ("fields_count", json!(long.len())),
+        ],
+    )
 }
 
 /// An `invalid_intent` refusal whose details name the field, the reason and `extra`, such as the limit the value broke or the paths of a file reason; never the text.
@@ -354,12 +427,25 @@ fn refusal<const N: usize>(
     reason: &str,
     extra: [(&'static str, serde_json::Value); N],
 ) -> FoldError {
+    refusal_with_message(
+        format!("{field}: {}", problem(reason)),
+        again,
+        field,
+        reason,
+        extra,
+    )
+}
+
+fn refusal_with_message<const N: usize>(
+    message: String,
+    again: &str,
+    field: &str,
+    reason: &str,
+    extra: [(&'static str, serde_json::Value); N],
+) -> FoldError {
     let mut details = vec![("field", json!(field)), ("reason", json!(reason))];
     details.extend(extra);
-    FoldError::new(
-        codes::INVALID_INTENT,
-        format!("{field}: {}", problem(reason)),
-    )
+    FoldError::new(codes::INVALID_INTENT, message)
     .with_details(details)
     .with_hint(format!(
         "call {again} again with `intent`: a summary of how the change works in the code (at most {MAX_SUMMARY_CHARS} characters) and 1 to {MAX_PARTS} parts, each with a name, what that part of the code does and its files, so every changed file is in exactly one part; add contracts, decisions and not_changed only when they apply"
@@ -479,7 +565,7 @@ mod tests {
                     summary: "x".repeat(MAX_SUMMARY_CHARS + 1),
                     ..base()
                 },
-                json!({"field": "intent.summary", "reason": "too_long", "max_chars": MAX_SUMMARY_CHARS}),
+                json!({"field": "intent.summary", "reason": "too_long", "max_chars": MAX_SUMMARY_CHARS, "fields": [{"field": "intent.summary", "length": MAX_SUMMARY_CHARS + 1, "max_chars": MAX_SUMMARY_CHARS}], "fields_count": 1}),
             ),
             (
                 ProposalIntent {
@@ -509,7 +595,7 @@ mod tests {
                     does: "d".repeat(MAX_PART_CHARS + 1),
                     ..part("Board", &[])
                 }]),
-                json!({"field": "intent.parts[0].does", "reason": "too_long", "max_chars": MAX_PART_CHARS}),
+                json!({"field": "intent.parts[0].does", "reason": "too_long", "max_chars": MAX_PART_CHARS, "fields": [{"field": "intent.parts[0].does", "length": MAX_PART_CHARS + 1, "max_chars": MAX_PART_CHARS}], "fields_count": 1}),
             ),
             (
                 intent(vec![part("Board", &["a"]), part("Board", &["b"])]),
@@ -538,7 +624,7 @@ mod tests {
                     decisions: vec!["ok".to_owned(), "x".repeat(MAX_ENTRY_CHARS + 1)],
                     ..base()
                 },
-                json!({"field": "intent.decisions[1]", "reason": "too_long", "max_chars": MAX_ENTRY_CHARS}),
+                json!({"field": "intent.decisions[1]", "reason": "too_long", "max_chars": MAX_ENTRY_CHARS, "fields": [{"field": "intent.decisions[1]", "length": MAX_ENTRY_CHARS + 1, "max_chars": MAX_ENTRY_CHARS}], "fields_count": 1}),
             ),
             (
                 ProposalIntent {
@@ -570,6 +656,87 @@ mod tests {
                 .unwrap()
                 .starts_with("call submit_review_fix again")
         );
+    }
+
+    #[test]
+    fn one_refusal_lists_every_text_that_is_too_long() {
+        let raw = ProposalIntent {
+            summary: "s".repeat(MAX_SUMMARY_CHARS + 5),
+            parts: vec![
+                IntentPart {
+                    does: "d".repeat(MAX_PART_CHARS + 1),
+                    ..part("Board", &["a"])
+                },
+                part("Cards", &["b"]),
+                IntentPart {
+                    name: "n".repeat(MAX_PART_NAME_CHARS + 2),
+                    ..part("Routes", &["c"])
+                },
+            ],
+            decisions: vec!["x".repeat(MAX_ENTRY_CHARS + 3)],
+            ..ProposalIntent::default()
+        };
+        let error = proposal_intent(raw, "create_proposal").unwrap_err();
+        assert_eq!(error.code(), codes::INVALID_INTENT);
+        assert_eq!(
+            error.message(),
+            "4 texts of the intent are too long, the first is intent.summary"
+        );
+        assert_eq!(
+            details(&error),
+            json!({
+                "field": "intent.summary",
+                "reason": "too_long",
+                "max_chars": MAX_SUMMARY_CHARS,
+                "fields": [
+                    {"field": "intent.summary", "length": MAX_SUMMARY_CHARS + 5, "max_chars": MAX_SUMMARY_CHARS},
+                    {"field": "intent.parts[0].does", "length": MAX_PART_CHARS + 1, "max_chars": MAX_PART_CHARS},
+                    {"field": "intent.parts[2].name", "length": MAX_PART_NAME_CHARS + 2, "max_chars": MAX_PART_NAME_CHARS},
+                    {"field": "intent.decisions[0]", "length": MAX_ENTRY_CHARS + 3, "max_chars": MAX_ENTRY_CHARS},
+                ],
+                "fields_count": 4,
+            })
+        );
+        assert!(!error.to_string().contains("xxx"));
+    }
+
+    #[test]
+    fn a_summary_and_two_parts_that_are_too_long_give_one_refusal_with_all_three() {
+        let long_part = |name: &str, file: &str| IntentPart {
+            does: "d".repeat(MAX_PART_CHARS + 10),
+            ..part(name, &[file])
+        };
+        let raw = ProposalIntent {
+            summary: "s".repeat(MAX_SUMMARY_CHARS + 1),
+            parts: vec![long_part("Board", "a"), long_part("Cards", "b")],
+            ..ProposalIntent::default()
+        };
+        let error = proposal_intent(raw, "update_proposal").unwrap_err();
+        assert_eq!(
+            error.message(),
+            "3 texts of the intent are too long, the first is intent.summary"
+        );
+        assert_eq!(
+            details(&error)["fields"],
+            json!([
+                {"field": "intent.summary", "length": MAX_SUMMARY_CHARS + 1, "max_chars": MAX_SUMMARY_CHARS},
+                {"field": "intent.parts[0].does", "length": MAX_PART_CHARS + 10, "max_chars": MAX_PART_CHARS},
+                {"field": "intent.parts[1].does", "length": MAX_PART_CHARS + 10, "max_chars": MAX_PART_CHARS},
+            ])
+        );
+        assert_eq!(details(&error)["fields_count"], 3);
+    }
+
+    #[test]
+    fn a_text_that_is_too_long_comes_before_a_refusal_that_follows_it() {
+        let raw = ProposalIntent {
+            summary: "s".repeat(MAX_SUMMARY_CHARS + 1),
+            ..ProposalIntent::default()
+        };
+        let error = proposal_intent(raw, "create_proposal").unwrap_err();
+        assert_eq!(details(&error)["reason"], "too_long");
+        assert_eq!(details(&error)["fields_count"], 1);
+        assert_eq!(error.message(), "intent.summary: the text is too long");
     }
 
     #[test]

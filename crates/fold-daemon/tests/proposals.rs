@@ -1190,7 +1190,7 @@ async fn every_version_holds_its_own_checked_intent_whose_parts_cover_its_files(
                 summary: "x".repeat(1201),
                 ..report.clone()
             },
-            json!({"field": "intent.summary", "reason": "too_long", "max_chars": 1200}),
+            json!({"field": "intent.summary", "reason": "too_long", "max_chars": 1200, "fields": [{"field": "intent.summary", "length": 1201, "max_chars": 1200}], "fields_count": 1}),
         ),
         (
             intent_of(
