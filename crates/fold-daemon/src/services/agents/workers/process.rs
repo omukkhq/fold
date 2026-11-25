@@ -445,6 +445,17 @@ impl Supervisor {
         lock(&self.inner.running).contains_key(agent)
     }
 
+    /// Waits until the agent's process that has exited leaves `running`. Its exit publishes `worker.stopped` before the process is dropped from `running`, so a handler of that event would otherwise still find it running. A reaped entry is always such a process; a newer process is not reaped and is left alone.
+    pub(super) async fn until_exit_done(&self, agent: &AgentName) {
+        let exited = lock(&self.inner.running)
+            .get(agent)
+            .filter(|run| run.reaped.load(Ordering::SeqCst))
+            .map(|run| run.exited.clone());
+        if let Some(mut exited) = exited {
+            let _ = exited.wait_for(|done| *done).await;
+        }
+    }
+
     /// The agents whose worker process runs now, ordered by name.
     pub fn running_agents(&self) -> Vec<AgentName> {
         let mut agents: Vec<AgentName> = lock(&self.inner.running).keys().cloned().collect();

@@ -245,7 +245,10 @@ impl Supervisor {
             agents::find_worker_process(&mut conn, &agent).await
         };
         match main.await {
-            Ok(Some(row)) if row.role == Role::Main => self.catch_up_main().await,
+            Ok(Some(row)) if row.role == Role::Main => {
+                self.until_exit_done(&agent).await;
+                self.catch_up_main().await;
+            }
             Ok(_) => {}
             Err(error) => tracing::warn!(
                 code = error.log_code(),
