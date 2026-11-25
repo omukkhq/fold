@@ -308,6 +308,7 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
         env: chosen.workers,
         fingerprints: claude_files::worker_fingerprints(),
         accounts: Some(config.accounts_dir()),
+        ..Launcher::default()
     }
     .with_claude_location(|name| std::env::var_os(name));
     let runtime = tokio::runtime::Builder::new_multi_thread()

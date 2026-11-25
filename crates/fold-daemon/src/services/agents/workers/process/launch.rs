@@ -12,8 +12,9 @@ use fold_core::layout::{
     worker_settings,
 };
 use fold_core::roles::{
-    CLAUDE_NOT_FOUND, FLD_MISSING, area_prompt, needs_restart, needs_update_note, with_update_note,
+    CLAUDE_NOT_FOUND, FLD_MISSING, area_prompt, needs_restart, needs_update_note, reload_note,
 };
+use fold_core::tool_schemas::changed_tools;
 use fold_core::{
     AgentName, AreaName, EventActor, FoldError, NewEvent, ProjectPaths, Role, WorkerState, codes,
 };
@@ -101,6 +102,11 @@ impl Supervisor {
             },
         };
         let fingerprint = launcher.fingerprints.get(&row.role).cloned();
+        let tools: Vec<(String, String)> = launcher
+            .tools
+            .iter()
+            .map(|(name, hash)| (name.clone(), hash.clone()))
+            .collect();
         let files = write_files(
             &self.inner.paths,
             &launcher,
@@ -282,6 +288,7 @@ impl Supervisor {
                     && !resume
                 {
                     agents::set_fold_fingerprint(tx, row.id, fingerprint).await?;
+                    agents::record_tool_schema_hashes(tx, fingerprint, &tools).await?;
                 }
                 if let Some(found) = found.as_ref().filter(|_| !paused) {
                     agents::set_worker_pid(tx, row.id, pid).await?;
@@ -289,13 +296,23 @@ impl Supervisor {
                     if idle {
                         agents::set_worker_state(tx, row.id, WorkerState::Idle, now).await?;
                     }
+                    // An area lead or the review lead keeps the older fingerprint until the check after its turn asks it to hand off into a fresh session.
                     if let Some(fingerprint) = &fingerprint
                         && resume
+                        && !hands_off_on_update(row.role)
                         && needs_update_note(found.fold_fingerprint.as_deref(), Some(fingerprint))
                     {
+                        let changed = match found.fold_fingerprint.as_deref() {
+                            Some(older) => {
+                                let older = agents::tool_schema_hashes(tx.conn(), older).await?;
+                                (!older.is_empty()).then(|| changed_tools(&older, &launcher.tools))
+                            }
+                            None => None,
+                        };
                         update = Some(Update {
-                            role: row.role,
+                            note: reload_note(row.role, changed.as_deref()),
                             fingerprint: fingerprint.clone(),
+                            tools: tools.clone(),
                         });
                     }
                 }
@@ -426,7 +443,7 @@ impl Supervisor {
                 Input::Turn(text) | Input::KeptTurn(text) => {
                     let noted = update.take();
                     let text = match &noted {
-                        Some(noted) => with_update_note(noted.role, &text),
+                        Some(noted) => format!("{}\n\n{text}", noted.note),
                         None => text,
                     };
                     match ClaudeInput::user(text).to_line() {
@@ -448,6 +465,8 @@ impl Supervisor {
                     .write(async |tx| {
                         if let Some(noted) = &noted {
                             agents::set_fold_fingerprint(tx, process.id, &noted.fingerprint)
+                                .await?;
+                            agents::record_tool_schema_hashes(tx, &noted.fingerprint, &noted.tools)
                                 .await?;
                         }
                         agents::mark_worker_working(tx, process.id).await
@@ -484,8 +503,16 @@ fn claude_missing(error: &std::io::Error, program: &Path, launcher: &Launcher) -
 
 /// The fingerprint a resumed worker's first turn records, with the role whose update note starts that turn.
 struct Update {
-    role: Role,
+    /// The reload note that starts the turn.
+    note: String,
     fingerprint: String,
+    /// The tool schema hashes of `fingerprint`, recorded with it so a later update can name the tools that changed.
+    tools: Vec<(String, String)>,
+}
+
+/// Whether a session of `role` under an older fold hands off into a fresh session instead of taking the update note: a lead's long session keeps the habits of the older text whatever a note says. The supervised main keeps its session, as the interactive main agent does.
+pub(super) fn hands_off_on_update(role: Role) -> bool {
+    matches!(role, Role::AreaLead | Role::ReviewLead)
 }
 
 /// Why a worker's files were not written.

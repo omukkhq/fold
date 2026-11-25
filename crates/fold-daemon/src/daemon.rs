@@ -179,7 +179,9 @@ impl Daemon {
             pid: std::process::id(),
             started_by,
         };
-        let launcher = launcher.with_own_binary();
+        let launcher = launcher
+            .with_own_binary()
+            .with_tools(crate::mcp::tool_schema_hashes());
         if let Some(dir) = launcher.accounts.clone() {
             let removed =
                 tokio::task::spawn_blocking(move || accounts::remove_leftovers(&dir)).await;

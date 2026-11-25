@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fold_core::accounts::AccountStamp;
+use fold_core::roles::session_fingerprint;
 use fold_core::transcript::claude_config_dir;
 use fold_core::{AgentName, Clock, ProjectPaths, Role};
 use fold_store::Store;
@@ -63,8 +64,10 @@ pub struct Launcher {
     pub fold: Option<PathBuf>,
     /// Extra environment for every worker process.
     pub env: Vec<(String, String)>,
-    /// The fingerprint of the skill texts that the fld which runs the daemon writes for a session of each role (see [`fold_core::roles::session_fingerprint`]), given by the caller because the skills ship only in the binary that writes the skill files. A worker records it with its session, and a resume under another one tells the worker to load its role skill again. A role without one is never told.
+    /// The fingerprint of what a session of each role reads from the fld which runs the daemon (see [`fold_core::roles::session_fingerprint`]): the skill texts, given by the caller because the skills ship only in the binary that writes the skill files, and, after [`Launcher::with_tools`], the role's prompt and the tool schemas too. A worker records it with its session. A resume under another one tells a task worker or a reviewer to load its role skill again, and asks an area lead or the review lead to hand off into a fresh session. A role without one is never told.
     pub fingerprints: BTreeMap<Role, String>,
+    /// A hash of each MCP tool's schemas by tool name, as the running binary serves them; see [`Launcher::with_tools`].
+    pub tools: BTreeMap<String, String>,
     /// The folder of the host's Claude accounts, whose token a worker of a project that names an account starts with; `None` knows no account, so such a worker cannot start.
     pub accounts: Option<PathBuf>,
 }
@@ -76,6 +79,7 @@ impl Default for Launcher {
             fold: None,
             env: Vec::new(),
             fingerprints: BTreeMap::new(),
+            tools: BTreeMap::new(),
             accounts: None,
         }
     }
@@ -88,6 +92,20 @@ impl Launcher {
         if self.fold.is_none() {
             self.fold = own_binary();
         }
+        self
+    }
+
+    /// The launcher with the tool schema hashes `tools` of the running binary, and each role's fingerprint widened from the skill texts to the skill texts, the role's prompt that ships with fold and the tool schemas. Computed once, at the daemon's start, so an upgrade that changes any of them changes the fingerprint.
+    #[must_use]
+    pub fn with_tools(mut self, tools: BTreeMap<String, String>) -> Self {
+        let schemas: String = tools
+            .iter()
+            .map(|(name, hash)| format!("{name} {hash}\n"))
+            .collect();
+        for (role, fingerprint) in &mut self.fingerprints {
+            *fingerprint = session_fingerprint(&[fingerprint, role.prompt(), &schemas]);
+        }
+        self.tools = tools;
         self
     }
 
@@ -514,6 +532,45 @@ mod tests {
         );
         let own = Launcher::default().with_own_binary().fold.unwrap();
         assert!(own.is_file(), "{}", own.display());
+    }
+
+    #[test]
+    fn the_tools_widen_each_fingerprint_by_the_role_prompt_and_every_tool_schema() {
+        let skills = |text: &str| Launcher {
+            fingerprints: [Role::AreaLead, Role::TaskWorker]
+                .into_iter()
+                .map(|role| (role, text.to_owned()))
+                .collect(),
+            ..Launcher::default()
+        };
+        let tools = |hash: &str| -> BTreeMap<String, String> {
+            [("get_task", "1111"), ("send_message", hash)]
+                .into_iter()
+                .map(|(name, hash)| (name.to_owned(), hash.to_owned()))
+                .collect()
+        };
+        let base = skills("aaaa").with_tools(tools("2222"));
+        assert_eq!(base.tools, tools("2222"));
+        assert_ne!(base.fingerprints[&Role::AreaLead], "aaaa");
+        assert_ne!(
+            base.fingerprints[&Role::AreaLead],
+            base.fingerprints[&Role::TaskWorker],
+            "each role's prompt counts"
+        );
+        assert_eq!(skills("aaaa").with_tools(tools("2222")), base);
+        let schema = skills("aaaa").with_tools(tools("3333"));
+        let skill = skills("bbbb").with_tools(tools("2222"));
+        for role in [Role::AreaLead, Role::TaskWorker] {
+            assert_ne!(schema.fingerprints[&role], base.fingerprints[&role]);
+            assert_ne!(skill.fingerprints[&role], base.fingerprints[&role]);
+        }
+        assert!(
+            Launcher::default()
+                .with_tools(tools("2222"))
+                .fingerprints
+                .is_empty(),
+            "a role without a skill fingerprint stays without one"
+        );
     }
 
     #[test]

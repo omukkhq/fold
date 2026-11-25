@@ -23,6 +23,9 @@ const SUMMARY_TITLE: usize = 100;
 /// The turn fold sends a lead whose context passed its role's `handoff_at`.
 pub const HANDOFF_REQUEST: &str = "fold: your context is large, so fold will start you again with a fresh context. Call write_handoff now with a short hand-off note for your next session: what you are doing, your open decisions and what comes next. Tasks, proposals, reviews and messages stay in fold, so do not copy them. Then end your turn.";
 
+/// The turn fold sends an area lead or the review lead whose session started under another fold: its role, skill and tool text came from an older fold, and a long session keeps the habits of that text whatever a reload note says, so it goes on in a fresh session instead.
+pub const UPGRADE_HANDOFF_REQUEST: &str = "fold: fold was updated, and your session holds the old role, skill and tool text, so fold will start you again in a fresh session. Call write_handoff now with a short hand-off note for your next session: what you are doing, your open decisions and what comes next. Tasks, proposals, reviews and messages stay in fold, so do not copy them. Then end your turn.";
+
 /// The smallest window, in tokens, for which a lead hands off by default at [`DEFAULT_HANDOFF_LARGE_PERCENT`] instead of [`DEFAULT_HANDOFF_SMALL_PERCENT`].
 pub const DEFAULT_HANDOFF_LARGE_WINDOW: u64 = 220_000;
 
@@ -214,6 +217,16 @@ fn list(text: &mut String, heading: &str, count: u64, lines: impl Iterator<Item 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_upgrade_request_gives_its_own_reason_and_the_same_steps() {
+        assert!(UPGRADE_HANDOFF_REQUEST.contains("fold was updated"));
+        assert!(!UPGRADE_HANDOFF_REQUEST.contains("context is large"));
+        let steps =
+            |text: &'static str| text.split_once("Call write_handoff").map(|(_, rest)| rest);
+        assert_eq!(steps(UPGRADE_HANDOFF_REQUEST), steps(HANDOFF_REQUEST));
+        assert!(steps(HANDOFF_REQUEST).is_some());
+    }
 
     #[test]
     fn a_hand_off_is_due_at_the_share_of_the_window() {
