@@ -10,13 +10,16 @@ pub enum FooterPart {
     Unread,
     NewEvents,
     ClaimsNearStale,
+    /// The items that wait for the user, counted for the main agent only.
+    WaitForUser,
 }
 
 impl FooterPart {
-    pub const ORDER: [FooterPart; 3] = [
+    pub const ORDER: [FooterPart; 4] = [
         FooterPart::Unread,
         FooterPart::NewEvents,
         FooterPart::ClaimsNearStale,
+        FooterPart::WaitForUser,
     ];
 
     fn label(self) -> &'static str {
@@ -24,6 +27,7 @@ impl FooterPart {
             FooterPart::Unread => "unread",
             FooterPart::NewEvents => "new events",
             FooterPart::ClaimsNearStale => "claims near stale",
+            FooterPart::WaitForUser => "wait for the user",
         }
     }
 
@@ -32,13 +36,14 @@ impl FooterPart {
             FooterPart::Unread => 0,
             FooterPart::NewEvents => 1,
             FooterPart::ClaimsNearStale => 2,
+            FooterPart::WaitForUser => 3,
         }
     }
 }
 
-/// The three counts one tool result reports.
+/// The counts one tool result reports.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct FooterCounts([u64; 3]);
+pub struct FooterCounts([u64; 4]);
 
 impl FooterCounts {
     #[must_use]

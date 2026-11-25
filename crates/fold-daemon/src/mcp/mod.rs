@@ -49,6 +49,8 @@ pub struct FoldServer {
     reviews: Option<ReviewService>,
     /// The open project, for the tools that run a project folder command; a weak link, so a session never keeps a closed project open.
     project: Option<std::sync::Weak<crate::projects::ProjectHandle>>,
+    /// The host's notice settings, whose targets fold turned off are items of `get_needs_you`.
+    notify: Option<crate::services::projects::notify::NotifySettings>,
     /// Held across the `register_agent` command, which binds the session.
     session: Mutex<SessionContext>,
     footer: Vec<Arc<dyn FooterSource>>,
@@ -88,6 +90,7 @@ impl FoldServer {
             messages,
             reviews: None,
             project: None,
+            notify: None,
             session: Mutex::new(session),
             footer: vec![unread, new_events, near_stale],
         }
@@ -114,6 +117,16 @@ impl FoldServer {
         project: std::sync::Weak<crate::projects::ProjectHandle>,
     ) -> Self {
         self.project = Some(project);
+        self
+    }
+
+    /// Reads the notice targets that fold turned off from `notify`, as the web app's Needs you does.
+    #[must_use]
+    pub fn with_notify(
+        mut self,
+        notify: Option<crate::services::projects::notify::NotifySettings>,
+    ) -> Self {
+        self.notify = notify;
         self
     }
 
@@ -236,6 +249,7 @@ impl FoldServer {
             (messages::LIST_OPEN_ASKS, Some(_)) => {
                 messages::list_open_asks(self, arguments).await?
             }
+            (agents::GET_NEEDS_YOU, Some(_)) => agents::get_needs_you(self, arguments).await?,
             (workspaces::GET_REPOSITORY_STATE, Some(_)) => {
                 workspaces::get_repository_state(self, arguments).await?
             }

@@ -14,10 +14,7 @@ use super::super::error::{ApiError, ApiJson, ErrorEnvelope};
 use super::super::messages::MessageChoice;
 use crate::daemon::AppState;
 use crate::live::LiveActivity;
-use crate::services::agents::{
-    NeedsYouAction, NeedsYouItem, NeedsYouKind, Screen, with_folder_attention,
-};
-use crate::services::projects::notify;
+use crate::services::agents::{NeedsYouAction, NeedsYouItem, NeedsYouKind, Screen};
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -470,17 +467,7 @@ pub async fn list_needs_you(
     State(state): State<AppState>,
     project: Project,
 ) -> Result<Json<NeedsYouList>, ApiError> {
-    let mut items = with_folder_attention(
-        project.0.agents().needs_you().await?,
-        project.0.git_attention.head_moved(),
-        project.0.git_attention.folder_held(),
-    );
-    if let Some(settings) = state.projects.notify() {
-        items = notify::with_notify_attention(
-            items,
-            notify::off_items(settings, &project.0.slug).await?,
-        );
-    }
+    let items = project.0.needs_you(state.projects.notify()).await?;
     Ok(Json(NeedsYouList {
         items: items.into_iter().map(Into::into).collect(),
     }))

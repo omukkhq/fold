@@ -95,6 +95,7 @@ pub(crate) async fn forward_in_tx(
             questions: None,
             asks_human: false,
             lines: None,
+            answers: None,
             recipients,
             now,
         },
@@ -135,6 +136,7 @@ pub(crate) async fn tell_lead_in_tx(
             choices: None,
             questions: None,
             lines: None,
+            answers: None,
             asks_human: false,
             recipients: vec![Recipient {
                 target: Target::Worker(WorkerName::main(&lead)),
@@ -180,6 +182,7 @@ pub(crate) async fn tell_review_decider_in_tx(
             choices: None,
             questions: None,
             lines: None,
+            answers: None,
             asks_human: false,
             recipients: vec![Recipient {
                 target: Target::Worker(WorkerName::main(&lead)),
@@ -235,6 +238,7 @@ pub(crate) async fn tell_actor_in_tx(
             choices: None,
             questions: None,
             lines: None,
+            answers: None,
             asks_human: false,
             recipients: vec![recipient],
             now,

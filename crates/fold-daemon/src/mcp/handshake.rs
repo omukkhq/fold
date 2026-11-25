@@ -12,6 +12,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
 
 use super::FoldServer;
+use super::agents::NeedsYouFooter;
 use super::error::{ErrorBody, from_agent, from_project};
 use crate::daemon::AppState;
 use crate::services::agents::{AgentService, SessionContext, peers};
@@ -145,7 +146,13 @@ where
             session.clone(),
         )
         .with_reviews(reviews)
-        .with_project(handle);
+        .with_footer_source(Arc::new(NeedsYouFooter::new(
+            agents.clone(),
+            handle.clone(),
+            state.projects.notify().cloned(),
+        )))
+        .with_project(handle)
+        .with_notify(state.projects.notify().cloned());
         // Bytes the client sent after its line belong to MCP.
         let read = Cursor::new(rest).chain(read);
         match server.serve((read, write)).await {

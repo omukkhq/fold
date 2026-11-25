@@ -419,6 +419,38 @@ impl ProjectHandle {
             .with_workspace_locks(self.workspace_locks.clone())
     }
 
+    /// Every item that waits for a human, oldest first: the stored items with the stalls, the project folder's items and, with `notify`, the notice targets fold turned off. The web app's Needs you, the notices and the main agent's `get_needs_you` read this one list, so they name the same items.
+    pub async fn needs_you(
+        &self,
+        notify: Option<&crate::services::projects::notify::NotifySettings>,
+    ) -> Result<Vec<crate::services::agents::NeedsYouItem>, FoldError> {
+        let items = crate::services::agents::with_folder_attention(
+            self.agents().needs_you().await.map_err(FoldError::from)?,
+            self.git_attention.head_moved(),
+            self.git_attention.folder_held(),
+        );
+        let Some(settings) = notify else {
+            return Ok(items);
+        };
+        Ok(crate::services::projects::notify::with_notify_attention(
+            items,
+            crate::services::projects::notify::off_items(settings, &self.slug).await?,
+        ))
+    }
+
+    /// [`ProjectHandle::needs_you`] for the main agent or a human; another agent is `main_agent_required`, as for every agent's open asks.
+    pub async fn needs_you_for(
+        &self,
+        actor: &Actor,
+        notify: Option<&crate::services::projects::notify::NotifySettings>,
+    ) -> Result<Vec<crate::services::agents::NeedsYouItem>, FoldError> {
+        let standing = fold_store::agents::standing_of(self.store.read(), actor)
+            .await
+            .map_err(crate::services::error::from_store)?;
+        fold_core::policy::can_list_open_asks(actor, standing)?;
+        self.needs_you(notify).await
+    }
+
     /// The message service of this project, which reaches the humans of `registry`.
     pub fn messages(&self, registry: &Store) -> MessageService {
         MessageService::new(

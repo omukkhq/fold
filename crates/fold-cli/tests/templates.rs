@@ -68,7 +68,7 @@ fn skill_identifiers() -> BTreeSet<String> {
         .collect()
 }
 
-const FOLD_TOOLS: [&str; 100] = [
+const FOLD_TOOLS: [&str; 101] = [
     "register_agent",
     "list_agents",
     "define_area",
@@ -167,6 +167,7 @@ const FOLD_TOOLS: [&str; 100] = [
     "list_review_plans",
     "integrate_review_batch",
     "list_open_asks",
+    "get_needs_you",
     "settle_agent_changes",
     "share_paths",
 ];
@@ -566,6 +567,7 @@ fn role_steps(role: Role) -> &'static [&'static str] {
             "list_review_batches",
             "get_review_batch",
             "list_open_asks",
+            "get_needs_you",
             "share_paths",
         ],
         Role::AreaLead => &[

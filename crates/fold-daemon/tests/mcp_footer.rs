@@ -48,20 +48,31 @@ fn each_combination_of_counts_gives_its_exact_line() {
 #[test]
 fn the_order_on_the_line_is_fixed_whatever_the_order_of_the_counts() {
     let reversed = FooterCounts::default()
+        .with(FooterPart::WaitForUser, 4)
         .with(FooterPart::ClaimsNearStale, 3)
         .with(FooterPart::NewEvents, 2)
         .with(FooterPart::Unread, 1);
     assert_eq!(
         footer(&reversed).as_deref(),
-        Some("fold: 1 unread · 2 new events · 3 claims near stale")
+        Some("fold: 1 unread · 2 new events · 3 claims near stale · 4 wait for the user")
     );
     assert_eq!(
         FooterPart::ORDER,
         [
             FooterPart::Unread,
             FooterPart::NewEvents,
-            FooterPart::ClaimsNearStale
+            FooterPart::ClaimsNearStale,
+            FooterPart::WaitForUser
         ]
+    );
+}
+
+#[test]
+fn the_items_that_wait_for_the_user_show_alone_as_their_own_part() {
+    let counts = FooterCounts::default().with(FooterPart::WaitForUser, 3);
+    assert_eq!(
+        footer(&counts).as_deref(),
+        Some("fold: 3 wait for the user")
     );
 }
 

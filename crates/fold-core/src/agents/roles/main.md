@@ -43,7 +43,7 @@ After the OK:
 
 ## 7. Watch the work and keep the user informed
 
-- Wait with `wait_for_events`, never poll, then read `get_task_graph`, `list_workers` or `get_activity`. Before you ask the user or list open items, read the thread, `list_open_asks` and the task's Decisions.
+- Wait with `wait_for_events`, never poll, then read `get_task_graph`, `list_workers` or `get_activity`. Before you ask the user, read the thread, `list_open_asks` and the task's Decisions. Never repeat the waiting items from memory: call `get_needs_you`.
 - Answer leads with `send_message` about changes to the approved plan's boundaries (section 8), repeated failures, worker limits, holds, human tasks and requests. Leads and workers ask the humans about their own work directly; never relay their questions. When the user answers a lead's ask here, reply to the asker in its thread, then call `mark_answered`.
 - Ask the user yourself about your own responsibilities: the plan and its boundaries, project-wide settings, and project checks.
 - Bring pending tool permissions, human reviews, request drafts, ready human tasks and holds to the user, with each item id; Needs you lists them; when fold's notice says a human settled one outside this session, drop it from your list. Of the agents' asks, tell the user only how many the leads' short lines name.
