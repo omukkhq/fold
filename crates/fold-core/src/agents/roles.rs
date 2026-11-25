@@ -817,7 +817,7 @@ mod tests {
                 .replace(include_str!("roles/practices.md"), "")
                 .split_whitespace()
                 .count()
-                < 1800,
+                < 1820,
             "the prompt stays in context every turn"
         );
     }

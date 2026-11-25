@@ -63,6 +63,14 @@ pub struct PushContext {
     pub planned: bool,
     /// For `proposal.opened`, and for `proposal.version_added` without a review claim, of a proposal that waits in no review plan: the related open proposals that can be reviewed with it and the related tasks that a plan for it can wait for, strongest link first; empty once the proposal has a verdict.
     pub plan_candidates: Vec<PlanCandidate>,
+    /// For `message.sent` by a human, the open asks of agents to the humans that the message answers in their thread.
+    pub answered_asks: Vec<MessageId>,
+    /// For `review.submitted`, the event's task has the human review mark.
+    pub human_review: bool,
+    /// For `request.closed`, a draft of the request waited for its human requester.
+    pub draft_waiting: bool,
+    /// For `task.completed`, the event's task is a human task.
+    pub human_task: bool,
 }
 
 /// One line for one agent's Claude Code session. `text` holds public ids and the next tool only.
@@ -125,6 +133,9 @@ pub fn is_pushed(event: &Event) -> bool {
         types::WORKER_STALLED,
         types::CLAIM_STALE,
         types::REQUEST_ESCALATED,
+        types::REQUEST_CLOSED,
+        types::MESSAGE_ASK_CLOSED,
+        types::TASK_COMPLETED,
     ]
     .contains(&event.event_type)
 }
@@ -149,6 +160,7 @@ pub fn notice_for(event: &Event, ctx: &PushContext) -> Vec<Notice> {
         Some(rules) => rules,
         None => rule(event, ctx).into_iter().collect(),
     };
+    let rules = rules.into_iter().chain(human_act_rule(event, ctx));
     let own = event.actor.agent();
     let mut seen = BTreeSet::new();
     let mut notices = Vec::new();
@@ -165,6 +177,79 @@ pub fn notice_for(event: &Event, ctx: &PushContext) -> Vec<Notice> {
         );
     }
     notices
+}
+
+/// A human who acts on an item that waits for them, outside the main agent's session, ends that item; the main agent hears of it so it stops telling the user that the item waits. A human's act in the main agent's session has the main agent as its actor and sends nothing, and so does a human's act on their own items: a reply that answers no agent's ask, the close of a request with no draft that waits, the review of a proposal without the human review mark and the completion of any task but a human task.
+fn human_act_rule(
+    event: &Event,
+    ctx: &PushContext,
+) -> Option<(Vec<AgentName>, String, &'static str)> {
+    if !event.actor.is_human() || ctx.main_agents.is_empty() {
+        return None;
+    }
+    let human = event.actor.as_str();
+    let kind = event.event_type;
+    let (act, tool) = if kind == types::MESSAGE_SENT {
+        let message = event.data.get("message")?.as_str()?;
+        let asks: Vec<String> = ctx.answered_asks.iter().map(ToString::to_string).collect();
+        if asks.is_empty() {
+            return None;
+        }
+        let spelled = listed(&asks, asks.len(), "ask", "asks", true);
+        let text = act_text(human, &format!("answered {spelled} in {message}"));
+        if format!("fold: {text}. Call get_thread.").len() <= MAX_NOTICE_LEN {
+            return Some((
+                ctx.main_agents.iter().cloned().collect(),
+                text,
+                "get_thread",
+            ));
+        }
+        let counted = listed(&asks, asks.len(), "ask", "asks", false);
+        (format!("answered {counted} in {message}"), "get_thread")
+    } else if kind == types::MESSAGE_ASK_CLOSED {
+        let ask = event.data.get("message")?.as_str()?;
+        (format!("marked {ask} answered"), "get_thread")
+    } else if kind == types::REQUEST_APPROVED {
+        (
+            format!("approved the draft of {}", request_of(event)?),
+            "get_request",
+        )
+    } else if kind == types::REQUEST_CLOSED && ctx.draft_waiting {
+        (
+            format!("closed {} and its draft", request_of(event)?),
+            "get_request",
+        )
+    } else if kind == types::REVIEW_SUBMITTED && ctx.human_review {
+        let proposal = event.proposal?;
+        let done = match verdict(event)? {
+            "approve" => "approved",
+            "request_changes" => "requested changes on",
+            _ => "commented on",
+        };
+        let version = event
+            .data
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+            .map(|version| format!(" v{version}"))
+            .unwrap_or_default();
+        (format!("{done} {proposal}{version}"), "get_proposal")
+    } else if kind == types::TASK_COMPLETED && ctx.human_task {
+        (
+            format!("marked the human task {} Done", event.task?),
+            "get_task",
+        )
+    } else {
+        return None;
+    };
+    Some((
+        ctx.main_agents.iter().cloned().collect(),
+        act_text(human, &act),
+        tool,
+    ))
+}
+
+fn act_text(human: &str, act: &str) -> String {
+    format!("{human} {act} outside your session; it does not wait for the user now")
 }
 
 /// The longest file or task list a human-change notice spells out; a longer one is counted, so the notice stays within [`MAX_NOTICE_LEN`].
@@ -1315,6 +1400,10 @@ mod tests {
             held_batches: Vec::new(),
             planned: false,
             plan_candidates: Vec::new(),
+            answered_asks: Vec::new(),
+            human_review: false,
+            draft_waiting: false,
+            human_task: false,
         }
     }
 
@@ -3334,5 +3423,195 @@ mod tests {
         }
         assert!(notices[0].text.contains(": 400 files; touches 30 tasks"));
         assert!(notices[2].text.contains("in 9 files"));
+    }
+
+    fn to_main(notices: &[Notice]) -> Vec<(String, String, &'static str)> {
+        sent(notices)
+            .into_iter()
+            .filter(|(agent, _, _)| agent == "main")
+            .collect()
+    }
+
+    fn ask(number: u32) -> MessageId {
+        MessageId::from_number(number).unwrap()
+    }
+
+    #[test]
+    fn a_human_answer_to_an_agents_ask_tells_the_main_agent() {
+        let ctx = PushContext {
+            answered_asks: vec![ask(30)],
+            ..main_ctx()
+        };
+        let event = with_data(
+            event(types::MESSAGE_SENT, "human:ana"),
+            json!({"message": "m-31", "reply_to": "m-30"}),
+        );
+        assert_eq!(
+            to_main(&notice_for(&event, &ctx)),
+            vec![row(
+                "main",
+                "fold: human:ana answered m-30 in m-31 outside your session; it does not wait for the user now. Call get_thread.",
+                "get_thread"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_human_marking_an_ask_answered_tells_the_main_agent() {
+        let event = with_data(
+            event(types::MESSAGE_ASK_CLOSED, "human:ana"),
+            json!({"message": "m-30", "thread": "m-30", "reason": "dismissed"}),
+        );
+        assert_eq!(
+            sent(&notice_for(&event, &main_ctx())),
+            vec![row(
+                "main",
+                "fold: human:ana marked m-30 answered outside your session; it does not wait for the user now. Call get_thread.",
+                "get_thread"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_human_approving_or_closing_a_request_draft_tells_the_main_agent() {
+        let approved = with_data(
+            event(types::REQUEST_APPROVED, "human:ana"),
+            json!({"request": "RQ-4", "version": 2, "tasks": ["T-40"]}),
+        );
+        assert_eq!(
+            sent(&notice_for(&approved, &main_ctx())),
+            vec![row(
+                "main",
+                "fold: human:ana approved the draft of RQ-4 outside your session; it does not wait for the user now. Call get_request.",
+                "get_request"
+            )]
+        );
+        let closed = with_data(
+            event(types::REQUEST_CLOSED, "human:ana"),
+            json!({"request": "RQ-4"}),
+        );
+        let waiting = PushContext {
+            draft_waiting: true,
+            ..main_ctx()
+        };
+        assert_eq!(
+            sent(&notice_for(&closed, &waiting)),
+            vec![row(
+                "main",
+                "fold: human:ana closed RQ-4 and its draft outside your session; it does not wait for the user now. Call get_request.",
+                "get_request"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_human_review_of_a_marked_proposal_tells_the_main_agent() {
+        let marked = PushContext {
+            human_review: true,
+            ..main_ctx()
+        };
+        for (verdict, done) in [
+            ("approve", "approved"),
+            ("request_changes", "requested changes on"),
+            ("comment", "commented on"),
+        ] {
+            let event = with_data(
+                event(types::REVIEW_SUBMITTED, "human:ana"),
+                json!({"verdict": verdict, "version": 2}),
+            );
+            assert_eq!(
+                to_main(&notice_for(&event, &marked)),
+                vec![row(
+                    "main",
+                    &format!(
+                        "fold: human:ana {done} P-3 v2 outside your session; it does not wait for the user now. Call get_proposal."
+                    ),
+                    "get_proposal"
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn a_human_completing_a_human_task_tells_the_main_agent() {
+        let ctx = PushContext {
+            human_task: true,
+            ..main_ctx()
+        };
+        let event = with_data(
+            event(types::TASK_COMPLETED, "human:ana"),
+            json!({"kind": "human"}),
+        );
+        assert_eq!(
+            sent(&notice_for(&event, &ctx)),
+            vec![row(
+                "main",
+                "fold: human:ana marked the human task T-12 Done outside your session; it does not wait for the user now. Call get_task.",
+                "get_task"
+            )]
+        );
+    }
+
+    #[test]
+    fn the_main_agents_own_act_for_the_human_sends_no_notice() {
+        let ctx = PushContext {
+            answered_asks: vec![ask(30)],
+            human_review: true,
+            draft_waiting: true,
+            human_task: true,
+            ..main_ctx()
+        };
+        for (kind, data) in [
+            (types::MESSAGE_SENT, json!({"message": "m-31"})),
+            (types::MESSAGE_ASK_CLOSED, json!({"message": "m-30"})),
+            (types::REQUEST_APPROVED, json!({"request": "RQ-4"})),
+            (types::REQUEST_CLOSED, json!({"request": "RQ-4"})),
+            (types::REVIEW_SUBMITTED, json!({"verdict": "approve"})),
+            (types::TASK_COMPLETED, json!({"kind": "human"})),
+        ] {
+            for actor in ["main", "main/session"] {
+                let notices = notice_for(&with_data(event(kind, actor), data.clone()), &ctx);
+                assert!(to_main(&notices).is_empty(), "{kind:?} by {actor}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_humans_act_on_their_own_items_sends_no_notice() {
+        let ctx = main_ctx();
+        for (kind, data) in [
+            (types::MESSAGE_SENT, json!({"message": "m-31"})),
+            (types::REQUEST_CLOSED, json!({"request": "RQ-4"})),
+            (types::REVIEW_SUBMITTED, json!({"verdict": "approve"})),
+            (types::TASK_COMPLETED, json!({"kind": "check"})),
+        ] {
+            let notices = notice_for(&with_data(event(kind, "human:ana"), data), &ctx);
+            assert!(to_main(&notices).is_empty(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_long_human_act_notice_counts_the_asks_to_fit() {
+        let human = format!("human:{}", "a".repeat(58));
+        let ctx = PushContext {
+            answered_asks: (100_001..100_008).map(ask).collect(),
+            ..main_ctx()
+        };
+        let answer = with_data(
+            event(types::MESSAGE_SENT, &human),
+            json!({"message": "m-100009"}),
+        );
+        let notices = notice_for(&answer, &ctx);
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].text.contains("answered 7 asks in m-100009"));
+        assert!(notices[0].text.len() <= MAX_NOTICE_LEN);
+        for kind in [types::MESSAGE_ASK_CLOSED, types::REQUEST_APPROVED] {
+            let act = with_data(
+                event(kind, &human),
+                json!({"message": "m-100009", "request": "RQ-100009"}),
+            );
+            let notices = notice_for(&act, &ctx);
+            assert!(notices[0].text.len() <= MAX_NOTICE_LEN, "{kind:?}");
+        }
     }
 }
