@@ -5,7 +5,9 @@ use std::time::Duration;
 use clap::{Args, Subcommand};
 use fold_cli::claude_files;
 use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient};
+use fold_cli::main_reload::{self, Current, Loaded, Turn, prompt_turn};
 use fold_core::layout::{SHELL_TOOLS, START_DIR_ENV};
+use fold_core::roles::Role;
 use fold_core::{AgentName, ProjectPaths, codes};
 use hyper::Method;
 use serde_json::{Value, json};
@@ -37,6 +39,10 @@ enum HookCommand {
     Stop(HookOptions),
     /// Claude Code PreToolUse hook for the file tools: refuse an edit of the project folder outside the workspaces in .fold/ws/, and an edit of a review checkout other than the session's own; for a worker in its start folder, also a shell command that would run in the project folder outside the workspaces
     PreToolUse(HookOptions),
+    /// Claude Code UserPromptSubmit hook of the main agent's session that fld claude starts: repeat the reload note at each turn until the session loads its skill after an update
+    UserPromptSubmit,
+    /// Claude Code PostToolUse hook of the main agent's session for the Skill tool: record that the session loaded its skill
+    PostToolUse,
 }
 
 #[derive(Args, Debug)]
@@ -59,6 +65,8 @@ pub fn run(args: &HookArgs, out: &mut impl Write) {
         HookCommand::SessionStart(options) => ("session-start", session_start(options, &agent)),
         HookCommand::Stop(options) => ("stop", stop(options, &agent, &mut carried)),
         HookCommand::PreToolUse(options) => ("pre-tool-use", pre_tool_use(options, &agent)),
+        HookCommand::UserPromptSubmit => ("user-prompt-submit", user_prompt_submit(&agent)),
+        HookCommand::PostToolUse => ("post-tool-use", post_tool_use(&agent)),
     };
     let failed = |code: String| {
         output::line(
@@ -201,6 +209,92 @@ fn stop(
     };
     // A Stop hook keeps the turn going only through a block decision; Claude Code then sets `stop_hook_active` on the next stop.
     Ok(Some(json!({"decision": "block", "reason": reason})))
+}
+
+/// The main agent's session that a hook of [`main_reload::main_hooks`] runs in: the fingerprint record of `agent` and what it says the session last loaded. `None` for an agent that `fld claude` never started, which has no session record.
+struct MainSession {
+    root: PathBuf,
+    record: PathBuf,
+    session: String,
+    loaded: Option<Loaded>,
+}
+
+impl MainSession {
+    fn of(input: &Value, agent: &str) -> Option<Self> {
+        let session = input["session_id"].as_str()?;
+        let cwd = std::fs::canonicalize(input["cwd"].as_str()?).ok()?;
+        let agent = AgentName::parse(agent).ok()?;
+        let root = project_root_at_or_above(&cwd)?;
+        let paths = ProjectPaths::new(&root);
+        if !paths.main_session(&agent).is_file() {
+            return None;
+        }
+        let record = paths.main_session_fingerprint(&agent);
+        let loaded = std::fs::read_to_string(&record)
+            .ok()
+            .and_then(|text| Loaded::parse(&text));
+        Some(Self {
+            root,
+            record,
+            session: session.to_owned(),
+            loaded,
+        })
+    }
+
+    /// Records that the session loaded what this fld gives, so that later turns get no note.
+    fn loads(&self, current: Current<'_>) {
+        claude::record_loaded(&self.record, &current.loaded_by(&self.session));
+    }
+}
+
+/// Runs only on this machine, without the daemon, so a turn never waits for it.
+fn user_prompt_submit(agent: &str) -> Result<Option<Value>, String> {
+    let input = input()?;
+    let Some(main) = MainSession::of(&input, agent) else {
+        return Ok(None);
+    };
+    let fingerprint = claude_files::role_fingerprint(Role::Main);
+    let tools = fold_daemon::mcp::tool_schema_hashes();
+    let current = Current {
+        fingerprint: &fingerprint,
+        tools: &tools,
+    };
+    let prompt = input["prompt"].as_str().unwrap_or_default();
+    let turn = prompt_turn(main.loaded.as_ref(), &main.session, prompt, current);
+    // A newer fld may be installed while neither the daemon nor `fld claude` has run it, so the skill the session is told to load is written first, when it can be, by the fld whose fingerprint the load records.
+    if turn != Turn::Quiet {
+        let _ = claude_files::write_skills(&main.root, Dirs::from_env().home.as_deref());
+    }
+    match turn {
+        Turn::Loads => {
+            main.loads(current);
+            Ok(None)
+        }
+        Turn::Remind(note) => Ok(Some(json!({
+            "hookSpecificOutput": {
+                "hookEventName": main_reload::PROMPT_HOOK_EVENT,
+                "additionalContext": note,
+            }
+        }))),
+        Turn::Quiet => Ok(None),
+    }
+}
+
+fn post_tool_use(agent: &str) -> Result<Option<Value>, String> {
+    let input = input()?;
+    let tool = input["tool_name"].as_str().unwrap_or_default();
+    if !main_reload::loads_main_skill(tool, &input["tool_input"]) {
+        return Ok(None);
+    }
+    if let Some(main) = MainSession::of(&input, agent) {
+        let fingerprint = claude_files::role_fingerprint(Role::Main);
+        let tools = fold_daemon::mcp::tool_schema_hashes();
+        main.loads(Current {
+            fingerprint: &fingerprint,
+            tools: &tools,
+        });
+    }
+    Ok(None)
 }
 
 /// Claude Code reads a deny decision from this hook even where no permission rule could express it: its path rules cannot deny a folder but one folder below it, and they would bind the human's own sessions too, while this hook runs for agents only.

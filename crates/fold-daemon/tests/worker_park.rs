@@ -478,3 +478,188 @@ async fn a_claim_whose_holders_turn_waits_for_the_network_keeps_its_lease_and_co
         .unwrap();
     assert_eq!(sweep(&harness).await, 1, "then the lease counts again");
 }
+
+/// The runs of the task worker so far.
+fn runs_of(fake: &FakeClaude) -> usize {
+    fake.runs()
+        .iter()
+        .filter(|run| run.agent() == TASK_WORKER)
+        .count()
+}
+
+/// The `worker.stalled` events stored so far.
+async fn stalls(harness: &Harness) -> usize {
+    harness
+        .events()
+        .await
+        .iter()
+        .filter(|event| event.kind == "worker.stalled")
+        .count()
+}
+
+/// The order of events that made fold call a parked worker stalled: the worker asks the main agent a question and starts a check run, `web-lead` parks it, its process exits with code 1, and the run ends with a failure one stall window after the park. fold's message with the result goes to the worker and resumes nobody. Returns the time of the park and the question.
+async fn parked_while_its_checks_run(
+    fake: &FakeClaude,
+) -> (Harness, Work, fold_core::Timestamp, String) {
+    let mut harness = task_worker_for(fake, &["Add the report table"], WorkerState::Idle).await;
+    let work = harness.start_work(TASK_WORKER, "T-1").await;
+    let gate = tempfile::tempdir().unwrap();
+    let gate = gate.path().join("go");
+    let checks = format!(
+        "[[check]]\nname = \"slow\"\nrun = \"until [ -e '{}' ]; do sleep 0.05; done; exit 1\"\n",
+        gate.display()
+    );
+    work.write(&[("fold-checks.toml", &checks)]);
+    let started = harness
+        .call(TASK_WORKER, "run_checks", json!({"task": "T-1"}))
+        .await;
+    assert_eq!(started["checks"], "running", "{started}");
+    let question = harness
+        .send(TASK_WORKER, &[MAIN], "T-1: may I update that expectation?")
+        .await;
+
+    harness
+        .call(
+            "web-lead",
+            "stop_worker",
+            json!({"name": TASK_WORKER, "wait_for": WAIT_FOR}),
+        )
+        .await;
+    let stopped = until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
+    assert_eq!(
+        stopped.exit_code,
+        Some(1),
+        "Claude Code exits 1 on the stop"
+    );
+    let park = stopped.park.expect("the row records the park");
+    harness.disconnect(TASK_WORKER).await;
+
+    harness.project.clock().advance(STALL).unwrap();
+    std::fs::write(&gate, "").unwrap();
+    let finished = eventually(WAIT, async || {
+        harness
+            .events()
+            .await
+            .into_iter()
+            .find(|event| event.kind == "checks.finished")
+            .map(|event| event.data)
+            .ok_or(())
+    })
+    .await;
+    assert_eq!(finished["state"], "failed", "{finished}");
+    eventually(WAIT, async || {
+        let live = harness
+            .handle
+            .live
+            .get(work.workspace.parse().unwrap())
+            .unwrap();
+        live.view.check_run.map_or(Ok(()), Err)
+    })
+    .await;
+    assert_eq!(
+        harness.fold_messages(TASK_WORKER).await.len(),
+        1,
+        "fold tells the worker the result"
+    );
+    (harness, work, park.at, question)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_parked_worker_whose_check_run_ends_after_the_park_or_that_another_agent_messages_never_stalls()
+ {
+    let fake = FakeClaude::new("result").exiting_on_eof_with(1);
+    let (harness, work, parked_at, question) = parked_while_its_checks_run(&fake).await;
+    for window in 0..4 {
+        harness.project.clock().advance(STALL).unwrap();
+        let seen = decide(&harness, &work).await.expect("the wait shows");
+        assert_eq!(seen.state, ActivityState::Parked, "window {window}");
+        assert_eq!(seen.since, parked_at);
+    }
+    assert_eq!(
+        stalls(&harness).await,
+        0,
+        "the check end gives no turn while parked"
+    );
+    assert_eq!(runs_of(&fake), 1, "fold's result message resumes nobody");
+    assert_eq!(
+        worker(&harness, TASK_WORKER).await.park.map(|park| park.at),
+        Some(parked_at)
+    );
+
+    let note = harness
+        .send_with(
+            MAIN,
+            json!({"to": [TASK_WORKER], "body": "go: update that expectation", "reply_to": question}),
+        )
+        .await;
+    for window in 0..4 {
+        harness.project.clock().advance(STALL).unwrap();
+        let seen = decide(&harness, &work).await.expect("the wait shows");
+        assert_eq!(
+            seen.state,
+            ActivityState::Parked,
+            "window {window} after the note"
+        );
+        assert_eq!(seen.since, parked_at);
+    }
+    assert_eq!(
+        stalls(&harness).await,
+        0,
+        "another agent's message is no go"
+    );
+
+    harness
+        .send(
+            "web-lead",
+            &[TASK_WORKER],
+            "Go: the T-2 migration is in main",
+        )
+        .await;
+    let runs = until_runs(&fake, TASK_WORKER, 2).await;
+    let turn = runs[1].stdin.join("\n");
+    assert!(
+        turn.contains(&note) && turn.contains("from web-lead"),
+        "the note did not resume the worker, and the go's turn names it with the go: {turn}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_parkers_go_ends_the_park_and_resumes_the_worker_in_its_session() {
+    let fake = FakeClaude::new("result").exiting_on_eof_with(1);
+    let (harness, work, _, _) = parked_while_its_checks_run(&fake).await;
+    let session = worker(&harness, TASK_WORKER).await.session_id;
+    harness.project.clock().advance(STALL).unwrap();
+    assert_eq!(
+        decide(&harness, &work).await.map(|seen| seen.state),
+        Some(ActivityState::Parked)
+    );
+
+    harness
+        .send(
+            "web-lead",
+            &[TASK_WORKER],
+            "Go: the T-2 migration is in main",
+        )
+        .await;
+    let runs = until_runs(&fake, TASK_WORKER, 2).await;
+    assert_eq!(
+        runs[1].flag("--resume"),
+        Some(session.as_str()),
+        "the go resumes it in its own session"
+    );
+    eventually(WAIT, async || {
+        let row = worker(&harness, TASK_WORKER).await;
+        if row.park.is_none() {
+            Ok(())
+        } else {
+            Err(row.state)
+        }
+    })
+    .await;
+    assert_ne!(
+        decide(&harness, &work).await.map(|seen| seen.state),
+        Some(ActivityState::Parked),
+        "the start ends the park first"
+    );
+    assert_eq!(stalls(&harness).await, 0);
+}

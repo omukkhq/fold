@@ -34,7 +34,7 @@ impl Supervisor {
             .map(|_| ())
     }
 
-    /// [`Supervisor::stop`] that parks the worker for `park`: in the transaction that marks it `stopping`, or at once when it has ended already, the row records the agent that parked it and what it waits for, with `worker.parked`. The worker keeps its session and claims, and the parking agent's message resumes it as any message to a stopped worker does.
+    /// [`Supervisor::stop`] that parks the worker for `park`: in the transaction that marks it `stopping`, or at once when it has ended already, the row records the agent that parked it and what it waits for, with `worker.parked`. The worker keeps its session and claims, and only the parking agent's message or a person's resumes it; another agent's message waits for that go.
     pub(in crate::services::agents::workers) async fn stop_and_park(
         &self,
         agent: &AgentName,
@@ -255,6 +255,7 @@ impl Supervisor {
 
     /// Ends every worker process the way a stop does, all at once, but keeps each row's state, so the next daemon start or the resume of a pause runs the workers that were working or idle again in their own sessions. A pause leaves a worker that is `stopping` to finish its stop.
     pub(in crate::services::agents::workers) async fn detach_all(&self, leave_stopping: bool) {
+        self.forget_queued();
         let rows = match self.inner.store.read().acquire().await {
             Ok(mut conn) => agents::list_running_worker_processes(&mut conn)
                 .await

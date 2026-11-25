@@ -32,7 +32,7 @@ pub use asks::{DismissScope, OpenAskView};
 pub(crate) use forward::{
     forward_in_tx, tell_actor_in_tx, tell_lead_in_tx, tell_review_decider_in_tx,
 };
-pub use inbox::{InboxItem, StopCarry, unread_count};
+pub use inbox::{Acknowledged, InboxItem, StopCarry, unread_count};
 pub(crate) use inbox::{carry_for_push, record_pushed};
 pub use threads::{
     DEFAULT_THREAD_LIMIT, Feedback, MAX_THREAD_LIMIT, ThreadPage, ThreadQuery, ThreadView,
@@ -429,15 +429,11 @@ impl MessageService {
                     questions: send.questions.as_ref(),
                     asks_human: send.asks_human,
                     lines: None,
+                    answers: send.answers.as_deref().zip(parent.map(|parent| parent.id)),
                     recipients,
                     now,
                 };
-                let mut view = write_message(tx, &mut buffer, draft).await?;
-                if let (Some(answers), Some(parent)) = (&send.answers, parent) {
-                    messages::insert_answers(tx, view.id, parent.id, answers).await?;
-                    view.answers.clone_from(answers);
-                    view.answers_ask = Some(parent.id);
-                }
+                let view = write_message(tx, &mut buffer, draft).await?;
                 // A reply also acknowledges the message it answers for a sender that received it.
                 if let (Some(worker), Some(parent)) = (&sender_worker, parent) {
                     let changed =
@@ -509,6 +505,7 @@ impl MessageService {
                     questions: None,
                     asks_human: false,
                     lines: None,
+                    answers: None,
                     recipients,
                     now,
                 };
@@ -546,6 +543,8 @@ struct Draft<'a> {
     asks_human: bool,
     /// The lines of a version of `proposal` the message asks about.
     lines: Option<MessageLines>,
+    /// The answers the message gives, one per question, to the open ask it replies to.
+    answers: Option<(&'a [String], MessageId)>,
     recipients: Vec<Recipient>,
     now: Timestamp,
 }
@@ -577,12 +576,22 @@ fn ask_without_human() -> FoldError {
     .with_hint("send the ask to humans or human:<name>, or leave out asks_human")
 }
 
-/// Allocates the number, writes the message and its recipient rows, and appends `message.sent`, whose data names the recipients and never holds the body.
+/// Allocates the number, writes the message, its answers and its recipient rows, and appends `message.sent`, whose data names the recipients and never holds the body. A human's message also names in `answered` the agents' asks to the humans that it ends, which the asks of its thread open before it and not after it show.
 async fn write_message(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     draft: Draft<'_>,
 ) -> Result<MessageView, MessageError> {
+    let by_human = matches!(draft.sender, Sender::Human(_));
+    let joined = draft.parent.map(|parent| parent.thread).or(draft.join);
+    let open_before: Vec<MessageId> = match joined.filter(|_| by_human) {
+        Some(thread) => messages::open_asks(tx.conn(), AskScope::Thread(thread))
+            .await?
+            .into_iter()
+            .map(|ask| ask.id)
+            .collect(),
+        None => Vec::new(),
+    };
     let number = counters::allocate(tx, IdKind::Message).await?;
     let id = MessageId::from_number(number).ok_or(StoreError::Corrupt("counters.next"))?;
     let thread = draft
@@ -607,6 +616,9 @@ async fn write_message(
         },
     )
     .await?;
+    if let Some((answers, ask)) = draft.answers {
+        messages::insert_answers(tx, id, ask, answers).await?;
+    }
     for recipient in &draft.recipients {
         messages::insert_recipient(tx, id, recipient).await?;
     }
@@ -648,6 +660,21 @@ async fn write_message(
     if let Some(request) = draft.request {
         data["request"] = json!(request.to_string());
     }
+    if !open_before.is_empty() {
+        let open_after: Vec<MessageId> = messages::open_asks(tx.conn(), AskScope::Thread(thread))
+            .await?
+            .into_iter()
+            .map(|ask| ask.id)
+            .collect();
+        let answered: Vec<String> = open_before
+            .iter()
+            .filter(|ask| !open_after.contains(ask))
+            .map(ToString::to_string)
+            .collect();
+        if !answered.is_empty() {
+            data["answered"] = json!(answered);
+        }
+    }
     let mut event = NewEvent::new(types::MESSAGE_SENT, draft.actor.event_actor())?
         .message(id)
         .data(data)?;
@@ -686,8 +713,11 @@ async fn write_message(
         asks_human: draft.asks_human,
         lines: draft.lines,
         questions,
-        answers: Vec::new(),
-        answers_ask: None,
+        answers: draft
+            .answers
+            .map(|(answers, _)| answers.to_vec())
+            .unwrap_or_default(),
+        answers_ask: draft.answers.map(|(_, ask)| ask),
         worker_question: false,
     })
 }
@@ -714,6 +744,7 @@ pub(crate) async fn send_from_fold_in_tx(
         questions: None,
         asks_human: false,
         lines: None,
+        answers: None,
         recipients,
         now,
     };
@@ -754,6 +785,7 @@ pub(crate) async fn ask_author_in_tx(
         questions: None,
         asks_human: false,
         lines: question.lines,
+        answers: None,
         recipients,
         now: question.now,
     };
@@ -799,6 +831,7 @@ pub(crate) async fn ask_humans_in_tx(
         questions: question.questions,
         asks_human: false,
         lines: None,
+        answers: None,
         recipients,
         now: question.now,
     };

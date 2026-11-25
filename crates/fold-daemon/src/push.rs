@@ -1159,7 +1159,8 @@ pub(crate) async fn push_input<'a>(
     store: &Store,
     event: &'a Event,
 ) -> Result<(Cow<'a, Event>, PushContext), StoreError> {
-    let (ctx, body) = loaded(store, event).await?;
+    let (mut ctx, body) = loaded(store, event).await?;
+    human_act(store, event, &mut ctx).await?;
     let announces =
         event.event_type == types::REQUEST_CREATED || event.event_type == types::REQUEST_ESCALATED;
     let Some(body) = body.filter(|_| announces) else {
@@ -1177,6 +1178,64 @@ pub(crate) async fn push_input<'a>(
         );
     }
     Ok((Cow::Owned(copy), ctx))
+}
+
+/// For a human's act on an item that waited for a human, what the main agents need to hear of it: the asks a reply answered and whether a closed request's draft waited, both of which the event's data holds because the act ended them, whether a review was of a task with the human review mark and whether a completed task is a human task. It reads the main agents only for such an act, so no other rule sees them.
+async fn human_act(store: &Store, event: &Event, ctx: &mut PushContext) -> Result<(), StoreError> {
+    if !event.actor.is_human() {
+        return Ok(());
+    }
+    let kind = event.event_type;
+    let acts = if kind == types::MESSAGE_SENT {
+        ctx.answered_asks = event
+            .data
+            .get("answered")
+            .and_then(serde_json::Value::as_array)
+            .map(|asks| {
+                asks.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .filter_map(|ask| ask.parse::<fold_core::MessageId>().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        !ctx.answered_asks.is_empty()
+    } else if kind == types::MESSAGE_ASK_CLOSED || kind == types::REQUEST_APPROVED {
+        true
+    } else if kind == types::REQUEST_CLOSED {
+        ctx.draft_waiting = event
+            .data
+            .get("draft_waiting")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+        ctx.draft_waiting
+    } else if kind == types::REVIEW_SUBMITTED {
+        let task = match (event.task, event.proposal) {
+            (Some(task), _) => Some(task),
+            (None, Some(proposal)) => reviews::get_proposal(store.read(), proposal)
+                .await?
+                .map(|row| row.task),
+            (None, None) => None,
+        };
+        if let Some(task) = task {
+            ctx.human_review = tasks::get_by_number(store.read(), task)
+                .await?
+                .is_some_and(|row| row.human_review.is_some());
+        }
+        ctx.human_review
+    } else if kind == types::TASK_COMPLETED {
+        if let Some(task) = event.task {
+            ctx.human_task = tasks::get_by_number(store.read(), task)
+                .await?
+                .is_some_and(|row| row.kind == TaskKind::Human);
+        }
+        ctx.human_task
+    } else {
+        false
+    };
+    if acts && ctx.main_agents.is_empty() {
+        ctx.main_agents = tagged(store, Tag::is_main).await?;
+    }
+    Ok(())
 }
 
 /// Reads only what the event's rule needs, with the body of the event's request when it names one.

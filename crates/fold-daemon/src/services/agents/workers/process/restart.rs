@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use fold_core::dag::Dag;
@@ -30,7 +31,7 @@ pub const MCP_RETRY_TURN: &str = "fold resumed you after your fold MCP server fa
 pub const PAUSE_TURN: &str = "fold resumed you after a pause of every agent of the project. Your claims kept their leases. Check your inbox, your claims and your workspace, then continue your work.";
 
 impl Supervisor {
-    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped, and every worker that could not reach fold: `--resume` of its session, with a turn that tells a working one to go on and a turn that tells the other one that its fold connection failed. A lead hears in the same turn of the work that waits for it, and an idle lead with nothing waiting gets no turn. A worker whose fld binary was gone resumes only once the fld path names a file again. A start reads the rows once, so a worker that fails the same way again stays failed until the next start. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes, failed integration checks, send-backs, reviews of new versions that the worker limits held back and the conflicts of approved versions whose reviewer has not taken them are then served, and the turns that wait for the network, a usage limit or a working login are run again when due. A start in a paused project does none of this: the resume of the pause runs the workers again, those that could not reach fold among them.
+    /// Queues, after a daemon start, every worker that was working or idle when the daemon stopped, and every worker that could not reach fold, in the project's [`ResumeGroups`](super::ResumeGroups), which run them again a group at a time across every project, owed work and leads first; [`ResumeGroups::run_due`](super::ResumeGroups::run_due) runs each group: `--resume` of its session, with a turn that tells a working one to go on and a turn that tells the other one that its fold connection failed. A lead hears in the same turn of the work that waits for it, and an idle lead with nothing waiting gets no turn. A worker whose fld binary was gone resumes only once the fld path names a file again. A start reads the rows once, so a worker that fails the same way again stays failed until the next start. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes, failed integration checks, send-backs, reviews of new versions that the worker limits held back, the conflicts of approved versions whose reviewer has not taken them, the messages of stopped workers and the work of the supervised main are then served, each in the groups before the rows and within the worker limits when its group comes; the start returns once each of these sweeps has queued its first resume or ended, and the turns that wait for the network, a usage limit or a working login are run again when due. A start in a paused project does none of this: the resume of the pause runs the workers again, those that could not reach fold among them.
     pub async fn resume_after_restart(&self) -> Result<(), AgentError> {
         if self.is_paused().await? {
             self.inner.unreachable_owed.store(true, Ordering::SeqCst);
@@ -54,25 +55,33 @@ impl Supervisor {
             })
             .map(|row| row.agent.clone())
             .collect();
+        let kept = Arc::new(kept);
         for row in rows {
+            if kept.contains(&row.agent) {
+                self.queue_resume(&row, &kept, fld);
+                continue;
+            }
             if let Err(error) = self.restart_row(&row, fld, &kept).await {
                 tracing::warn!(agent = %row.agent, code = code_of(&error), "could not serve a worker after the daemon start");
             }
         }
-        tokio::spawn(self.clone().resume_pending());
-        tokio::spawn(self.clone().resume_owed_send_backs());
-        tokio::spawn(self.clone().resume_owed_gate_runs());
-        tokio::spawn(self.clone().resume_owed_reviewers(None));
-        tokio::spawn(self.clone().give_owed_conflicts());
-        tokio::spawn(self.clone().resume_owed_messages());
-        tokio::spawn(self.clone().catch_up_main());
+        self.start_sweeps(vec![
+            Box::pin(self.clone().resume_pending()),
+            Box::pin(self.clone().resume_owed_send_backs()),
+            Box::pin(self.clone().resume_owed_gate_runs()),
+            Box::pin(self.clone().resume_owed_reviewers(None)),
+            Box::pin(self.clone().give_owed_conflicts()),
+            Box::pin(self.clone().resume_owed_messages()),
+            Box::pin(self.clone().catch_up_main()),
+        ])
+        .await;
         // A new token or login that came while the daemon was down shows in no change the loop sees, and a refused login costs no usage, so each turn that waits for a login runs again once its process is up.
         self.owed_turns_changed(vec![fold_core::turn_waits::WaitGroup::LOGIN]);
         Ok(())
     }
 
     /// What a daemon start does with one row; see [`Supervisor::resume_after_restart`]. `fld` tells whether the fld binary of the workers' MCP configuration is there, and `kept` names the workers the start runs again.
-    async fn restart_row(
+    pub(super) async fn restart_row(
         &self,
         row: &WorkerProcessRow,
         fld: bool,

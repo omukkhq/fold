@@ -885,6 +885,76 @@ fn low_inotify_limits_warn_and_never_fail_the_report() {
 }
 
 #[test]
+fn a_unit_without_the_memory_lines_warns_and_the_current_unit_does_not() {
+    let current = crate::service::render_unit(Path::new("/usr/bin/fld"), &[]);
+    let ok = unit::unit_check(&current);
+    assert_eq!(ok.status, Status::Ok);
+    assert_eq!(ok.fix, None);
+
+    let older = current.replace("OOMPolicy=continue\n", "");
+    let warn = unit::unit_check(&older);
+    assert_eq!(warn.status, Status::Warn);
+    assert!(
+        warn.message.contains("OOMPolicy=continue"),
+        "{}",
+        warn.message
+    );
+    assert!(!warn.message.contains("MemoryMax"), "{}", warn.message);
+    assert_eq!(
+        warn.fix.as_deref(),
+        Some("`fld setup` writes the unit again")
+    );
+
+    let bare = unit::unit_check("[Service]\nExecStart=/usr/bin/fld serve\n");
+    assert_eq!(bare.status, Status::Warn);
+    for line in ["OOMPolicy=continue", "MemoryHigh=65%", "MemoryMax=80%"] {
+        assert!(bare.message.contains(line), "{}", bare.message);
+    }
+}
+
+#[test]
+fn the_memory_lines_count_only_in_the_service_section_and_the_last_value_wins() {
+    let missing = |text: &str| unit::missing_memory_lines(text);
+    assert_eq!(
+        missing("[Unit]\nOOMPolicy=continue\nMemoryHigh=1G\nMemoryMax=2G\n[Service]\n"),
+        ["OOMPolicy=continue", "MemoryHigh=65%", "MemoryMax=80%"]
+    );
+    assert_eq!(
+        missing("[Service]\nOOMPolicy=stop\nMemoryHigh=1G\nMemoryMax=2G\n"),
+        ["OOMPolicy=continue"]
+    );
+    assert_eq!(
+        missing("[Service]\nOOMPolicy=stop\nOOMPolicy=continue\nMemoryHigh=1G\nMemoryMax=\n"),
+        ["MemoryMax=80%"]
+    );
+    assert!(
+        missing("[Service]\n OOMPolicy = continue \nMemoryHigh=50%\nMemoryMax=infinity\n")
+            .is_empty()
+    );
+}
+
+#[test]
+fn the_unit_check_reads_the_installed_unit_on_systemd_hosts_only() {
+    let fixture = Fixture::new();
+    let host = fixture.linux_host(65_536);
+    let not_installed = unit::service_unit_check(&host);
+    assert_eq!(not_installed.status, Status::Ok);
+    assert!(not_installed.message.contains("not installed"));
+    fixture.install_unit();
+    assert_eq!(unit::service_unit_check(&host).status, Status::Warn);
+    let unit_path = host.unit_path().unwrap();
+    std::fs::write(
+        unit_path,
+        crate::service::render_unit(Path::new("/usr/bin/fld"), &[]),
+    )
+    .unwrap();
+    assert_eq!(unit::service_unit_check(&host).status, Status::Ok);
+    let mut other = host;
+    other.platform.linux = false;
+    assert_eq!(unit::service_unit_check(&other).message, NOT_APPLICABLE);
+}
+
+#[test]
 fn linger_warns_only_for_an_installed_service() {
     let fixture = Fixture::new();
     let host = fixture.linux_host(65_536);
@@ -2068,5 +2138,29 @@ fn the_fold_name_shows_where_it_comes_from() {
     assert_eq!(
         (none.status, none.message.as_str()),
         (Status::Warn, "fld cannot tell who you are")
+    );
+}
+
+#[test]
+fn personal_skills_need_a_home_and_fail_for_each_fold_name() {
+    assert_eq!(
+        personal_skills_check(None),
+        Check::not_applicable("personal skills")
+    );
+    let home = TempDir::new().unwrap();
+    assert_eq!(personal_skills_check(Some(home.path())).status, Status::Ok);
+    let skills = home.path().join(".claude/skills");
+    std::fs::create_dir_all(skills.join("fold-reviewer")).unwrap();
+    std::fs::create_dir_all(skills.join("fold")).unwrap();
+    let check = personal_skills_check(Some(home.path()));
+    assert_eq!(check.status, Status::Fail);
+    let fix = check.fix.unwrap();
+    assert!(
+        fix.contains(&skills.join("fold").display().to_string()),
+        "{fix}"
+    );
+    assert!(
+        fix.contains(&skills.join("fold-reviewer").display().to_string()),
+        "{fix}"
     );
 }

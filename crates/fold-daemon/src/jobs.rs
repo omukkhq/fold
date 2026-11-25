@@ -755,6 +755,12 @@ async fn live(
             .iter()
             .map(|handle| handle.live.tick())
             .sum();
+        let groups = state.projects.resume_groups().clone();
+        if groups.waiting() > 0 {
+            let now = state.clock.now();
+            // In a task of its own, so the tick never waits for the starts of a group.
+            tokio::spawn(async move { groups.run_due(now).await });
+        }
         progress.send_modify(|seen| {
             seen.checks += 1;
             seen.cycles += u64::from(reached > 0);

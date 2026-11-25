@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 
 use fold_core::events::types;
 use fold_core::roles::check_limits;
-use fold_core::{AgentName, Event, LiveEvent, Role, WorkerState, codes};
+use fold_core::{AgentName, Event, LiveEvent, Role, Sender, WorkerState, codes};
 use fold_store::agents::{self, WorkerProcessRow};
 use fold_store::messages::{self, OwedMessage};
 use fold_store::reviews::checks;
@@ -47,8 +47,11 @@ impl Supervisor {
         }
     }
 
-    /// Resumes the worker of `agent` in its own session for one turn that names the messages it owes. A worker whose own resume is owed, such as requested changes to a task worker or a new version to a reviewer, waits for that resume, which moves its start, and answers once it stops again: a start for a message first would move the start too and leave the owed work untold. When the worker cannot start, because a worker limit refuses it or the owed resume, because its session is gone or because its process ends before it runs, every message goes on to a lead; see [`forward_in_tx`].
+    /// Resumes the worker of `agent` in its own session for one turn that names the messages it owes. A parked worker starts only for a message from the agent that parked it or from a person; the turn then names every message it owes. A worker whose own resume is owed, such as requested changes to a task worker or a new version to a reviewer, waits for that resume, which moves its start, and answers once it stops again: a start for a message first would move the start too and leave the owed work untold. When the worker cannot start, because a worker limit refuses it or the owed resume, because its session is gone or because its process ends before it runs, every message goes on to a lead; see [`forward_in_tx`].
     async fn answer_messages(&self, agent: &AgentName) -> Result<(), AgentError> {
+        if !self.start_ticket().await {
+            return Ok(());
+        }
         if !lock(&self.inner.message_starts).insert(agent.clone()) {
             return Ok(());
         }
@@ -76,6 +79,11 @@ impl Supervisor {
         }
         let owed = messages::owed_to_stopped(read, Some(agent)).await?;
         if owed.is_empty() {
+            return Ok(());
+        }
+        if let Some(park) = &row.park
+            && !owed.iter().any(|owed| is_go(&owed.sender, &park.by))
+        {
             return Ok(());
         }
         if row.state == WorkerState::Failed && row.failed_reason.as_deref() == Some(SESSION_LOST) {
@@ -318,6 +326,15 @@ async fn still_owed(tx: &mut WriteTx, owed: &OwedMessage) -> Result<bool, StoreE
         .await?
         .iter()
         .any(|other| other.message == owed.message))
+}
+
+/// Whether a message from `sender` ends the park of a worker that `parker` parked: the parker's own message, or a person's. Another agent's message stays owed, and the go's turn names it.
+fn is_go(sender: &Sender, parker: &AgentName) -> bool {
+    match sender {
+        Sender::Worker(worker) => worker.agent() == *parker,
+        Sender::Human(_) => true,
+        Sender::Fold => false,
+    }
 }
 
 /// The turn of a worker that fold started again for `owed`. A worker can have stopped while its work waited for the answer, such as one that asked a human, so it goes on with that work.

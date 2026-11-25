@@ -100,6 +100,9 @@ enum Given {
 impl Supervisor {
     /// Gives the conflict of `version` to `agent`, the reviewer that approved it: a running reviewer gets the conflict report as its next turn, and a stopped or failed one is resumed in its own session with it, with `worker.resumed` of reason `conflict` once that session runs. When the reviewer cannot take it, because it lost the review claim, the worker limits refuse its start, its session is gone or its process ends before it runs, the review lead gets the notice to start a reviewer for the conflict instead. A version that moved on, or a proposal that left `open`, is left alone, and so is a start that a pause refuses: the resume of the pause gives the conflict.
     pub(super) async fn give_conflict_to_reviewer(self, owed: Owed) {
+        if !self.start_ticket().await {
+            return;
+        }
         if let Err(error) = self.give_conflict(&owed).await {
             tracing::warn!(agent = %owed.agent, proposal = %owed.proposal, code = crate::services::agents::code_of(&error), "could not give a conflict to its reviewer");
         }

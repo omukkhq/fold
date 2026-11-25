@@ -1305,6 +1305,41 @@ async fn a_restart_that_cannot_read_the_configuration_fails_each_worker_and_goes
 }
 
 #[tokio::test]
+async fn a_start_after_150_workers_of_one_prefix_takes_the_next_free_name() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    let now = harness.handle.clock.now();
+    harness
+        .handle
+        .store
+        .write(async |tx| {
+            for number in 1..=150 {
+                let agent = match number {
+                    1 => name("web-worker"),
+                    n => name(&format!("web-worker-{n}")),
+                };
+                fold_store::agents::insert_agent(tx, &agent, now).await?;
+            }
+            Ok::<_, fold_store::StoreError>(())
+        })
+        .await
+        .unwrap();
+    let started = harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    assert_eq!(started["worker"]["name"], "web-worker-151", "{started}");
+    let view = harness.call(MAIN, "get_task", json!({"id": "T-1"})).await;
+    assert_eq!(view["claim"]["holder"], "web-worker-151", "{view}");
+}
+
+#[tokio::test]
 async fn a_start_gives_the_task_worker_its_claims_or_starts_nothing() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;

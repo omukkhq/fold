@@ -15,10 +15,10 @@ use tokio::sync::watch;
 
 use super::items::{item_key, notice_item};
 use super::settings::{Applying, NotifySettings};
-use super::{attempt, body, links, off_items, webhook_id_prefix, with_notify_attention};
+use super::{attempt, body, links, webhook_id_prefix};
 use crate::jobs::JobProgress;
 use crate::projects::ProjectHandle;
-use crate::services::agents::{NeedsYouKind, with_folder_attention};
+use crate::services::agents::NeedsYouKind;
 use crate::services::error::from_store;
 use crate::services::events::BusMessage;
 
@@ -275,14 +275,7 @@ async fn queue_needs_you(
     seq: u64,
     pass: &mut NotifyPass,
 ) -> Result<(), FoldError> {
-    let items = with_notify_attention(
-        with_folder_attention(
-            handle.agents().needs_you().await.map_err(FoldError::from)?,
-            handle.git_attention.head_moved(),
-            handle.git_attention.folder_held(),
-        ),
-        off_items(settings, &handle.slug).await?,
-    );
+    let items = handle.needs_you(Some(settings)).await?;
     let mut open = BTreeMap::new();
     for item in items {
         open.entry(item_key(&item)).or_insert(item);

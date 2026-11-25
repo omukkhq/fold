@@ -232,7 +232,8 @@ async fn send_then_inbox_returns_the_message_until_it_is_acknowledged() {
     .await;
     assert_eq!(reply["thread"], "m-1");
     let acknowledged = call(&backend, "acknowledge_message", json!({"ids": ["m-1"]})).await;
-    assert_eq!(acknowledged, json!({"acknowledged": []}));
+    assert_eq!(acknowledged["acknowledged"], json!([]));
+    assert_eq!(acknowledged["already_read"], json!(["m-1"]));
     let empty = call(&backend, "get_inbox", json!({})).await;
     assert_eq!(empty, json!({"messages": []}));
     let thread = call(&frontend, "get_thread", json!({"thread": "m-1"})).await;
@@ -361,7 +362,46 @@ async fn acknowledge_with_up_to_clears_every_earlier_message() {
         json!({"ids": ["m-3"], "up_to": true}),
     )
     .await;
-    assert_eq!(repeat, json!({"acknowledged": []}));
+    assert_eq!(repeat["acknowledged"], json!([]));
+    assert_eq!(repeat["already_read"], json!(["m-3"]));
+}
+
+#[tokio::test]
+async fn acknowledging_a_message_get_thread_gave_whole_names_it_already_read() {
+    let fixture = Fixture::new().await;
+    let frontend = fixture.connect("frontend").await;
+    let backend = fixture.connect("backend").await;
+    for body in ["first", "second"] {
+        call(
+            &frontend,
+            "send_message",
+            json!({"to": ["backend"], "body": body}),
+        )
+        .await;
+    }
+    call(&backend, "get_thread", json!({"thread": "m-1"})).await;
+    let done = call(
+        &backend,
+        "acknowledge_message",
+        json!({"ids": ["m-1", "m-2"]}),
+    )
+    .await;
+    assert_eq!(done["acknowledged"], json!(["m-2"]));
+    assert_eq!(done["already_read"], json!(["m-1"]));
+    let hint = done["hint"].as_str().unwrap();
+    assert!(hint.contains("get_thread"), "{hint}");
+    assert!(hint.contains("get_inbox"), "{hint}");
+    assert!(hint.contains("cut message"), "{hint}");
+
+    let fresh = call(
+        &frontend,
+        "send_message",
+        json!({"to": ["backend"], "body": "third"}),
+    )
+    .await;
+    let id = fresh["id"].as_str().unwrap().to_owned();
+    let only_new = call(&backend, "acknowledge_message", json!({"ids": [id]})).await;
+    assert_eq!(only_new, json!({"acknowledged": [id]}));
 }
 
 #[tokio::test]

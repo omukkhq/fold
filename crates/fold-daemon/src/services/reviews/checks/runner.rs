@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -5,12 +7,13 @@ use std::time::Duration;
 
 use fold_core::layout::{AGENT_ENV, AGENT_TAGS_ENV};
 use fold_core::reviews::checks::{CHECK_TIMEOUT, ChecksFile, Outcome, Planned};
-use fold_core::{AgentName, Clock};
+use fold_core::{AgentName, CheckRunId, Clock, Timestamp};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 use tokio::sync::{OwnedRwLockReadGuard, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
+use super::memory::{self, MemorySource};
 use crate::services::agents::peers::{self, PeerWorker};
 use crate::support::{lock, remove_daemon_context};
 
@@ -44,30 +47,104 @@ impl Default for RunLimits {
     }
 }
 
-/// How many runs of checks may go at the same time on this machine. Every project the daemon opens shares one set, so a machine with many projects never runs more test suites at once than half its processors.
-#[derive(Debug, Clone)]
-pub struct CheckPermits(Arc<Semaphore>);
+/// The host's settings of check runs, the same for every project the daemon opens.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CheckSettings {
+    /// The most runs at once on the machine; `None` is half the processors the daemon may use.
+    pub max_runs: Option<NonZeroUsize>,
+    /// The free memory in bytes a run waits for before its commands start; `None` is the larger of 4 GiB and 10% of the total.
+    pub memory_floor: Option<u64>,
+}
 
-impl CheckPermits {
-    /// At least one run.
-    pub fn new(runs: usize) -> Self {
-        Self(Arc::new(Semaphore::new(runs.max(1))))
-    }
+/// How often a run that waits for free memory reads the machine's memory again.
+pub const MEMORY_TICK: Duration = Duration::from_secs(10);
 
-    /// Half the processors the daemon may use, at least one.
-    pub fn for_machine() -> Self {
-        let processors = std::thread::available_parallelism().map_or(2, usize::from);
-        Self::new(processors / 2)
-    }
+/// The memory a run with its permit waits for before its commands start.
+#[derive(Clone)]
+struct MemoryGate {
+    /// `None` skips the gate.
+    source: Option<MemorySource>,
+    floor: Option<u64>,
+    tick: Duration,
+}
 
-    pub(crate) async fn acquire(&self) -> Option<OwnedSemaphorePermit> {
-        Arc::clone(&self.0).acquire_owned().await.ok()
+impl std::fmt::Debug for MemoryGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryGate")
+            .field("source", &self.source.is_some())
+            .field("floor", &self.floor)
+            .field("tick", &self.tick)
+            .finish()
     }
 }
 
+/// How many runs of checks may go at the same time on this machine, and the free memory each waits for. Every project the daemon opens shares one set, so a machine with many projects never runs more test suites at once than the host allows.
+#[derive(Debug, Clone)]
+pub struct CheckPermits {
+    runs: Arc<Semaphore>,
+    memory: MemoryGate,
+}
+
+impl CheckPermits {
+    /// At least one run, with no memory gate.
+    pub fn new(runs: usize) -> Self {
+        Self {
+            runs: Arc::new(Semaphore::new(runs.max(1))),
+            memory: MemoryGate {
+                source: None,
+                floor: None,
+                tick: MEMORY_TICK,
+            },
+        }
+    }
+
+    /// The permits of the host's settings, with the memory gate of this machine's `/proc/meminfo` on Linux.
+    pub fn from_settings(settings: CheckSettings) -> Self {
+        let runs = settings
+            .max_runs
+            .map_or_else(half_the_processors, NonZeroUsize::get);
+        let mut permits = Self::new(runs);
+        permits.memory.source = memory::system_source();
+        permits.memory.floor = settings.memory_floor;
+        permits
+    }
+
+    /// The permits with the memory gate reading `source`, waiting for `floor` and reading again every `tick`.
+    #[must_use]
+    pub fn with_memory_gate(
+        mut self,
+        source: MemorySource,
+        floor: Option<u64>,
+        tick: Duration,
+    ) -> Self {
+        self.memory = MemoryGate {
+            source: Some(source),
+            floor,
+            tick,
+        };
+        self
+    }
+
+    /// How many runs may go at once while none goes.
+    pub fn available(&self) -> usize {
+        self.runs.available_permits()
+    }
+
+    pub(crate) async fn acquire(&self) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(&self.runs).acquire_owned().await.ok()
+    }
+}
+
+/// Half the processors the daemon may use, at least one.
+fn half_the_processors() -> usize {
+    let processors = std::thread::available_parallelism().map_or(2, usize::from);
+    (processors / 2).max(1)
+}
+
+/// Half the processors with no memory gate; the daemon builds its permits with [`CheckPermits::from_settings`].
 impl Default for CheckPermits {
     fn default() -> Self {
-        Self::for_machine()
+        Self::new(half_the_processors())
     }
 }
 
@@ -85,6 +162,22 @@ pub struct CheckRunner {
     dir_work: Arc<tokio::sync::RwLock<()>>,
     queue: Arc<Queue>,
     held: Arc<Mutex<Vec<HeldRequest>>>,
+    /// The runs of the project that wait, with what each waits for and the time it began to wait.
+    memory_waits: Waits,
+    /// The permits of each check with a `max_parallel`, by check name, with the limit they were made for.
+    check_limits: CheckLimits,
+}
+
+/// The permits of each check with a `max_parallel`, by check name, with the limit they were made for.
+type CheckLimits = Arc<Mutex<HashMap<String, (NonZeroUsize, Arc<Semaphore>)>>>;
+
+type Waits = Arc<Mutex<HashMap<CheckRunId, (Waiting, Timestamp)>>>;
+
+/// What a running run waits for. A run waits for memory before its first command and for a check's limit only before that check, so it never waits for both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Waiting {
+    Memory,
+    Check(String),
 }
 
 /// A queued integration that waits for a valid checks file on main. Its stored request keeps no end, so a daemon start serves it again; while the daemon runs, the next revision of main does.
@@ -153,6 +246,8 @@ impl CheckRunner {
             dir_work: Arc::default(),
             queue: Arc::default(),
             held: Arc::default(),
+            memory_waits: Arc::default(),
+            check_limits: Arc::default(),
         }
     }
 
@@ -182,8 +277,74 @@ impl CheckRunner {
         self.limits
     }
 
-    pub(crate) fn permits(&self) -> &CheckPermits {
+    pub fn permits(&self) -> &CheckPermits {
         &self.permits
+    }
+
+    /// The machine-wide permit of `run`, once the machine has the free memory for it: while it has not, the run keeps its permit, shows as waiting for memory, logs that once and reads the memory again on every tick. A failed read starts the run, so a broken `/proc` never stops the checks.
+    pub(crate) async fn start_permit(
+        &self,
+        run: CheckRunId,
+        clock: &dyn Clock,
+    ) -> Option<OwnedSemaphorePermit> {
+        let permit = self.permits.acquire().await;
+        let gate = &self.permits.memory;
+        let Some(source) = gate.source.clone() else {
+            return permit;
+        };
+        let mut wait = None;
+        loop {
+            let read = Arc::clone(&source);
+            let info = tokio::task::spawn_blocking(move || read())
+                .await
+                .ok()
+                .flatten();
+            let Some(info) = info else {
+                return permit;
+            };
+            if memory::enough_memory(info, gate.floor) {
+                return permit;
+            }
+            if wait.is_none() {
+                tracing::info!(
+                    run = %run,
+                    available_mib = info.available >> 20,
+                    floor_mib = memory::memory_floor(info.total, gate.floor) >> 20,
+                    "the check run waits for free memory before its commands start"
+                );
+                lock(&self.memory_waits).insert(run, (Waiting::Memory, clock.now()));
+                wait = Some(MemoryWait {
+                    waits: Arc::clone(&self.memory_waits),
+                    run,
+                });
+            }
+            tokio::time::sleep(gate.tick).await;
+        }
+    }
+
+    /// Since when `run` holds its permit and waits for free memory; `None` when it does not wait.
+    pub fn waiting_for_memory(&self, run: CheckRunId) -> Option<Timestamp> {
+        match lock(&self.memory_waits).get(&run) {
+            Some((Waiting::Memory, since)) => Some(*since),
+            _ => None,
+        }
+    }
+
+    /// The check whose `max_parallel` `run` waits for before its command starts, and since when; `None` when it does not wait.
+    pub fn waiting_for_check(&self, run: CheckRunId) -> Option<(String, Timestamp)> {
+        match lock(&self.memory_waits).get(&run) {
+            Some((Waiting::Check(name), since)) => Some((name.clone(), *since)),
+            _ => None,
+        }
+    }
+
+    /// The per-check limits of the project as `run` meets them.
+    pub(crate) fn gate(&self, run: CheckRunId) -> RunGate {
+        RunGate {
+            run,
+            limits: Arc::clone(&self.check_limits),
+            waits: Arc::clone(&self.memory_waits),
+        }
     }
 
     /// A place at the end of the project's integration queue, taken at once so the order is the order of the calls.
@@ -245,6 +406,57 @@ impl CheckRunner {
     }
 }
 
+/// A run's place among the runs that wait, left when the wait ends or the run is aborted.
+struct MemoryWait {
+    waits: Waits,
+    run: CheckRunId,
+}
+
+/// The per-check limits of a project as one run meets them: before the command of a check with `max_parallel`, the run takes one of the check's permits and holds it until the command ends.
+#[derive(Debug, Clone)]
+pub struct RunGate {
+    run: CheckRunId,
+    limits: CheckLimits,
+    waits: Waits,
+}
+
+impl RunGate {
+    /// The permit of `check` under `max`, once fewer than `max` runs of the project run its command. While it waits, the run shows as waiting for the check. A changed `max` starts a new set of permits for the check; the runs that hold the old ones end as they are.
+    async fn enter(
+        &self,
+        check: &str,
+        max: NonZeroUsize,
+        clock: &dyn Clock,
+    ) -> Option<OwnedSemaphorePermit> {
+        let permits = {
+            let mut limits = lock(&self.limits);
+            let entry = limits
+                .entry(check.to_owned())
+                .or_insert_with(|| (max, Arc::new(Semaphore::new(max.get()))));
+            if entry.0 != max {
+                *entry = (max, Arc::new(Semaphore::new(max.get())));
+            }
+            Arc::clone(&entry.1)
+        };
+        if let Ok(permit) = Arc::clone(&permits).try_acquire_owned() {
+            return Some(permit);
+        }
+        tracing::info!(run = %self.run, check, max = max.get(), "the check run waits for the max_parallel of a check");
+        lock(&self.waits).insert(self.run, (Waiting::Check(check.to_owned()), clock.now()));
+        let _wait = MemoryWait {
+            waits: Arc::clone(&self.waits),
+            run: self.run,
+        };
+        permits.acquire_owned().await.ok()
+    }
+}
+
+impl Drop for MemoryWait {
+    fn drop(&mut self) {
+        lock(&self.waits).remove(&self.run);
+    }
+}
+
 /// One command of a run: the setup (`check` is `None`) or a check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandSpec {
@@ -255,6 +467,8 @@ pub struct CommandSpec {
     pub runs: bool,
     /// The check's own `timeout`; `None` takes the runner's.
     pub timeout: Option<Duration>,
+    /// The most runs of the project that run this check's command at once; `None` is no limit.
+    pub max_parallel: Option<NonZeroUsize>,
 }
 
 /// What one command did.
@@ -271,6 +485,8 @@ pub struct CommandResult {
     pub log_bytes: u64,
     /// fold could not start the command or wait for it, so its failure is fold's and says nothing of the tree.
     pub fault: bool,
+    /// A SIGKILL that fold did not send ended the command, such as the kernel's OOM killer, so its failure says nothing of the tree either.
+    pub killed: bool,
 }
 
 impl CommandResult {
@@ -288,6 +504,7 @@ pub fn commands(file: &ChecksFile, plan: &[Planned<'_>]) -> Vec<CommandSpec> {
         required: true,
         runs: true,
         timeout: None,
+        max_parallel: None,
     });
     let checks = plan.iter().map(|planned| CommandSpec {
         check: Some(planned.check.name.clone()),
@@ -295,6 +512,7 @@ pub fn commands(file: &ChecksFile, plan: &[Planned<'_>]) -> Vec<CommandSpec> {
         required: planned.check.required,
         runs: planned.runs,
         timeout: planned.check.timeout,
+        max_parallel: planned.check.max_parallel,
     });
     setup.chain(checks).collect()
 }
@@ -313,8 +531,35 @@ pub async fn run_commands(
     run_commands_for(&nobody, dir, specs, limits, clock).await
 }
 
+/// [`run_commands`] of `gate`'s run: a check with `max_parallel` waits for its limit before its command.
+pub async fn run_gated_commands(
+    gate: &RunGate,
+    dir: &Path,
+    specs: Vec<CommandSpec>,
+    limits: RunLimits,
+    clock: &dyn Clock,
+) -> Vec<CommandResult> {
+    let nobody = PeerWorker {
+        project: String::new(),
+        agent: None,
+    };
+    run_gated_commands_for(Some(gate), &nobody, dir, specs, limits, clock).await
+}
+
 /// Runs `specs` one after another in `dir`. A skipped check is not started; after a failed setup no check is started. Every command is a `sh -c` of its own in a process group of its own, registered for the peer checks while it runs: a process under it that calls fold acts as `owner` and never as a human.
 pub async fn run_commands_for(
+    owner: &PeerWorker,
+    dir: &Path,
+    specs: Vec<CommandSpec>,
+    limits: RunLimits,
+    clock: &dyn Clock,
+) -> Vec<CommandResult> {
+    run_gated_commands_for(None, owner, dir, specs, limits, clock).await
+}
+
+/// [`run_commands_for`] under `gate`, when the run has one: a check with `max_parallel` waits for its limit before its command, and the wait counts in neither its duration nor its timeout.
+pub async fn run_gated_commands_for(
+    gate: Option<&RunGate>,
     owner: &PeerWorker,
     dir: &Path,
     specs: Vec<CommandSpec>,
@@ -333,6 +578,7 @@ pub async fn run_commands_for(
             log: Vec::new(),
             log_bytes: 0,
             fault: false,
+            killed: false,
         };
         if setup_failed {
             results.push(skipped(Outcome::NotRun));
@@ -342,12 +588,17 @@ pub async fn run_commands_for(
             results.push(skipped(Outcome::Skipped));
             continue;
         }
+        let limit = match (gate, &spec.check, spec.max_parallel) {
+            (Some(gate), Some(check), Some(max)) => gate.enter(check, max, clock).await,
+            _ => None,
+        };
         let started = clock.now();
         let own = RunLimits {
             timeout: spec.timeout.unwrap_or(limits.timeout),
             ..limits
         };
         let ran = run_command(dir.to_path_buf(), &spec.run, own, owner).await;
+        drop(limit);
         let duration_ms = clock
             .now()
             .as_millis()
@@ -363,6 +614,7 @@ pub async fn run_commands_for(
             log: ran.log,
             log_bytes: ran.log_bytes,
             fault: ran.fault,
+            killed: ran.killed,
         };
         setup_failed = spec.check.is_none() && result.outcome.is_failure();
         results.push(result);
@@ -376,6 +628,7 @@ struct Ran {
     log: Vec<u8>,
     log_bytes: u64,
     fault: bool,
+    killed: bool,
 }
 
 /// The end of a stream of output, at most `limit` bytes, and the size of the whole.
@@ -441,6 +694,7 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
                 log,
                 log_bytes,
                 fault: true,
+                killed: false,
             };
         }
     };
@@ -459,42 +713,46 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
     if let Some(stderr) = child.stderr.take() {
         readers.spawn(read_into(stderr, Arc::clone(&tail)));
     }
-    let (outcome, exit_code, fault) = match tokio::time::timeout(limits.timeout, child.wait()).await
-    {
-        Ok(Ok(status)) => {
-            let outcome = if status.success() {
-                Outcome::Passed
-            } else {
-                Outcome::Failed
-            };
-            (outcome, status.code(), false)
-        }
-        Ok(Err(error)) => {
-            note(
-                &tail,
-                &format!("\nfold could not wait for the command: {}\n", error.kind()),
-            );
-            (Outcome::Failed, None, true)
-        }
-        Err(_) => {
-            signal(group, rustix::process::Signal::TERM);
-            if tokio::time::timeout(limits.kill_grace, child.wait())
-                .await
-                .is_err()
-            {
-                signal(group, rustix::process::Signal::KILL);
-                let _ = child.wait().await;
+    let (outcome, exit_code, fault, killed) =
+        match tokio::time::timeout(limits.timeout, child.wait()).await {
+            Ok(Ok(status)) => {
+                let outcome = if status.success() {
+                    Outcome::Passed
+                } else {
+                    Outcome::Failed
+                };
+                let killed = killed_by_sigkill(status);
+                if killed {
+                    note(&tail, KILLED_NOTE);
+                }
+                (outcome, status.code(), false, killed)
             }
-            note(
-                &tail,
-                &format!(
-                    "\nfold stopped the command after {} s\n",
-                    limits.timeout.as_secs()
-                ),
-            );
-            (Outcome::TimedOut, None, false)
-        }
-    };
+            Ok(Err(error)) => {
+                note(
+                    &tail,
+                    &format!("\nfold could not wait for the command: {}\n", error.kind()),
+                );
+                (Outcome::Failed, None, true, false)
+            }
+            Err(_) => {
+                signal(group, rustix::process::Signal::TERM);
+                if tokio::time::timeout(limits.kill_grace, child.wait())
+                    .await
+                    .is_err()
+                {
+                    signal(group, rustix::process::Signal::KILL);
+                    let _ = child.wait().await;
+                }
+                note(
+                    &tail,
+                    &format!(
+                        "\nfold stopped the command after {} s\n",
+                        limits.timeout.as_secs()
+                    ),
+                );
+                (Outcome::TimedOut, None, false, false)
+            }
+        };
     drop(guard);
     let drained = tokio::time::timeout(DRAIN_WAIT, async {
         while readers.join_next().await.is_some() {}
@@ -510,7 +768,21 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
         log,
         log_bytes,
         fault,
+        killed,
     }
+}
+
+/// The line a command's log ends with when a SIGKILL that fold did not send ended it.
+pub const KILLED_NOTE: &str = "\nkilled: out of memory or by a signal\n";
+
+/// The `oom_score_adj` of a check command's shell, which every process it starts inherits: the kernel's OOM killer ends a check before the daemon or a worker, whose score stays near 0.
+pub const CHECK_OOM_SCORE_ADJ: &str = "800";
+
+/// The command ended by SIGKILL: its shell, or the process the shell waited for last, which the shell reports as exit 137. fold sends SIGKILL only after a timeout, whose status this never reads, so this one came from the kernel's OOM killer or another process.
+fn killed_by_sigkill(status: std::process::ExitStatus) -> bool {
+    use std::os::unix::process::ExitStatusExt as _;
+    let kill = rustix::process::Signal::KILL.as_raw();
+    status.signal() == Some(kill) || status.code() == Some(128 + kill)
 }
 
 /// Kills the command's process group when it is dropped: at the command's end, so what it left running, such as a server a test started, ends with it, and when a stopping daemon aborts the run, which `kill_on_drop` alone does only for the shell.
@@ -528,12 +800,29 @@ fn signal(group: Option<rustix::process::Pid>, signal: rustix::process::Signal) 
     }
 }
 
+/// The shell on Linux raises its own OOM score, then `exec`s the `sh -c` of the command in the same process, so the score is set before the command's first instruction and every child inherits it. The command keeps its text, its `$0`, its empty arguments, its pid and its exit code; a failed write is silent and the command runs as it is.
+#[cfg(target_os = "linux")]
+fn shell_args(run: &str) -> [String; 4] {
+    [
+        "-c".to_owned(),
+        format!(
+            "{{ echo {CHECK_OOM_SCORE_ADJ} >/proc/self/oom_score_adj; }} 2>/dev/null; exec /bin/sh -c \"$1\""
+        ),
+        "/bin/sh".to_owned(),
+        run.to_owned(),
+    ]
+}
+
+#[cfg(not(target_os = "linux"))]
+fn shell_args(run: &str) -> [String; 2] {
+    ["-c".to_owned(), run.to_owned()]
+}
+
 /// The `sh -c` of one command in `dir`, with stdin closed and without the daemon's session and identity variables.
 fn shell(dir: &Path, run: &str) -> Command {
     let mut command = Command::new("/bin/sh");
     command
-        .arg("-c")
-        .arg(run)
+        .args(shell_args(run))
         .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -575,6 +864,7 @@ mod tests {
             required: true,
             runs: true,
             timeout: None,
+            max_parallel: None,
         }
     }
 
@@ -832,5 +1122,247 @@ mod tests {
             CheckPermits::new(0).acquire().await.is_some(),
             "at least one run"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_check_command_runs_with_a_high_oom_score() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = run_commands(
+            dir.path(),
+            vec![spec("oom", "cat /proc/self/oom_score_adj")],
+            quick(),
+            &clock(),
+        )
+        .await;
+        assert_eq!(
+            String::from_utf8_lossy(&results[0].log).trim(),
+            CHECK_OOM_SCORE_ADJ
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_child_that_a_check_command_starts_at_once_has_the_high_oom_score() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = run_commands(
+            dir.path(),
+            vec![spec(
+                "child",
+                "cat /proc/self/oom_score_adj & wait; sh -c 'cat /proc/self/oom_score_adj'",
+            )],
+            quick(),
+            &clock(),
+        )
+        .await;
+        let log = String::from_utf8_lossy(&results[0].log).into_owned();
+        let lines: Vec<&str> = log.lines().collect();
+        assert_eq!(lines, [CHECK_OOM_SCORE_ADJ, CHECK_OOM_SCORE_ADJ], "{log}");
+    }
+
+    #[tokio::test]
+    async fn a_command_keeps_its_text_arguments_and_exit_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = run_commands(
+            dir.path(),
+            vec![spec(
+                "args",
+                "echo \"$0|$#|$1\"; echo 'it'\\''s \"q\"'; exit 7",
+            )],
+            quick(),
+            &clock(),
+        )
+        .await;
+        assert_eq!(results[0].exit_code, Some(7));
+        assert_eq!(results[0].log, b"/bin/sh|0|\nit's \"q\"\n");
+    }
+
+    #[tokio::test]
+    async fn a_command_that_a_sigkill_ended_is_killed_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = run_commands(
+            dir.path(),
+            vec![
+                spec("self", "kill -KILL $$"),
+                spec("child", "sh -c 'kill -KILL $$'"),
+                spec("red", "exit 1"),
+            ],
+            quick(),
+            &clock(),
+        )
+        .await;
+        for killed in &results[..2] {
+            assert_eq!(killed.outcome, Outcome::Failed);
+            assert!(killed.killed, "{:?}", killed.check);
+            assert!(!killed.fault);
+            assert!(
+                String::from_utf8_lossy(&killed.log)
+                    .contains("killed: out of memory or by a signal")
+            );
+        }
+        assert!(!results[2].killed);
+    }
+
+    #[tokio::test]
+    async fn a_timeout_is_not_a_kill() {
+        let dir = tempfile::tempdir().unwrap();
+        let limits = RunLimits {
+            timeout: Duration::from_millis(200),
+            kill_grace: Duration::from_millis(100),
+            ..quick()
+        };
+        let results = run_commands(
+            dir.path(),
+            vec![spec("stubborn", "trap '' TERM; sleep 30")],
+            limits,
+            &clock(),
+        )
+        .await;
+        assert_eq!(results[0].outcome, Outcome::TimedOut);
+        assert!(!results[0].killed);
+    }
+
+    #[test]
+    fn the_host_setting_sets_the_number_of_permits() {
+        let three = CheckPermits::from_settings(CheckSettings {
+            max_runs: NonZeroUsize::new(3),
+            memory_floor: None,
+        });
+        assert_eq!(three.available(), 3);
+        assert_eq!(
+            CheckPermits::from_settings(CheckSettings::default()).available(),
+            half_the_processors()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_waits_for_memory_with_its_permit_and_starts_when_it_frees() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let free = Arc::new(AtomicU64::new(GIB));
+        let read = Arc::clone(&free);
+        let source: MemorySource = Arc::new(move || {
+            Some(memory::MemInfo {
+                total: 16 * GIB,
+                available: read.load(Ordering::SeqCst),
+            })
+        });
+        let permits =
+            CheckPermits::new(1).with_memory_gate(source, Some(2 * GIB), Duration::from_millis(10));
+        let runner = CheckRunner::new(permits);
+        let run = CheckRunId::from_number(7).unwrap();
+        let clock = clock();
+        let waiting = runner.clone();
+        let start = tokio::spawn(async move { waiting.start_permit(run, &clock).await.is_some() });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while runner.waiting_for_memory(run).is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            runner.permits().available(),
+            0,
+            "the waiting run holds its permit"
+        );
+        free.store(2 * GIB, Ordering::SeqCst);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), start)
+                .await
+                .unwrap()
+                .unwrap()
+        );
+        assert_eq!(runner.waiting_for_memory(run), None);
+    }
+
+    #[tokio::test]
+    async fn a_check_with_max_parallel_runs_in_one_run_at_a_time_and_others_in_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = CheckRunner::new(CheckPermits::new(2));
+        let heavy = CommandSpec {
+            max_parallel: NonZeroUsize::new(1),
+            ..spec(
+                "heavy",
+                "mkdir lock || echo overlap >> overlaps; until [ -e go ]; do sleep 0.02; done; rmdir lock",
+            )
+        };
+        let runs = [("a", "b", 1), ("b", "a", 2)].map(|(own, other, number)| {
+            let light = spec(
+                "light",
+                &format!("touch light-{own}; until [ -e light-{other} ]; do sleep 0.02; done"),
+            );
+            let gate = runner.gate(CheckRunId::from_number(number).unwrap());
+            let specs = vec![light, heavy.clone()];
+            let work = dir.path().to_path_buf();
+            tokio::spawn(
+                async move { run_gated_commands(&gate, &work, specs, quick(), &clock()).await },
+            )
+        });
+        let ids = [1, 2].map(|number| CheckRunId::from_number(number).unwrap());
+        let waiting = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(found) = ids
+                    .iter()
+                    .find_map(|run| runner.waiting_for_check(*run).map(|wait| (*run, wait.0)))
+                {
+                    return found;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(waiting.1, "heavy");
+        assert_eq!(runner.waiting_for_memory(waiting.0), None);
+        std::fs::write(dir.path().join("go"), "").unwrap();
+        for run in runs {
+            let results = tokio::time::timeout(Duration::from_secs(20), run)
+                .await
+                .unwrap()
+                .unwrap();
+            let outcomes: Vec<Outcome> = results.iter().map(|result| result.outcome).collect();
+            assert_eq!(outcomes, [Outcome::Passed, Outcome::Passed]);
+        }
+        assert!(
+            !dir.path().join("overlaps").exists(),
+            "heavy ran twice at once"
+        );
+        assert!(
+            ids.iter()
+                .all(|run| runner.waiting_for_check(*run).is_none())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_changed_max_parallel_takes_new_permits() {
+        let runner = CheckRunner::new(CheckPermits::new(1));
+        let gate = runner.gate(CheckRunId::from_number(1).unwrap());
+        let one = NonZeroUsize::new(1).unwrap();
+        let held = gate.enter("heavy", one, &clock()).await;
+        assert!(held.is_some());
+        let two = NonZeroUsize::new(2).unwrap();
+        let other =
+            tokio::time::timeout(Duration::from_secs(5), gate.enter("heavy", two, &clock()))
+                .await
+                .unwrap();
+        assert!(other.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_failed_memory_read_starts_the_run() {
+        let permits = CheckPermits::new(1).with_memory_gate(
+            Arc::new(|| None),
+            Some(u64::MAX),
+            Duration::from_millis(10),
+        );
+        let runner = CheckRunner::new(permits);
+        let started = tokio::time::timeout(
+            Duration::from_secs(5),
+            runner.start_permit(CheckRunId::from_number(1).unwrap(), &clock()),
+        )
+        .await
+        .unwrap();
+        assert!(started.is_some());
     }
 }

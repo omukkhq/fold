@@ -469,7 +469,7 @@ pub struct WorkspaceEntryView {
     /// UTC milliseconds.
     #[schema(value_type = Option<i64>, required = true)]
     pub closed_at: Option<Timestamp>,
-    /// The working changes now; null for a missing or closed workspace and for a review checkout.
+    /// The working changes now; null for a missing or closed workspace, for a review checkout, and for an active workspace whose first scan has not run yet after the project opened.
     #[schema(required = true)]
     pub live: Option<LiveWorkspace>,
     /// How the daemon follows the working files; null when `live` is null. A `workspace.watch_degraded` event reports the change to `degraded`, and a `workspace.watch_restored` event the change back to `watching` after an overflow.

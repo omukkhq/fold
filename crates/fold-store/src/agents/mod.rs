@@ -19,6 +19,7 @@ mod pause;
 mod previous_sessions;
 mod questions;
 mod start_queue;
+mod tool_schemas;
 mod turns;
 mod workers;
 
@@ -41,6 +42,7 @@ pub use start_queue::{
     DropReason, NewQueuedStart, QueueEnd, QueuedStartRow, drop_queued_start, insert_queued_start,
     last_queued_starts_by_area, mark_queued_start_started, queued_start, waiting_starts,
 };
+pub use tool_schemas::{record_tool_schema_hashes, tool_schema_hashes};
 pub use turns::{CostSlot, CostTotals, cost_groups, cost_slots, cost_totals};
 pub use workers::{
     AreaRow, BoundWorker, NewWorkerProcess, ProcessEnd, TurnTotals, WorkerPark, WorkerProcessRow,

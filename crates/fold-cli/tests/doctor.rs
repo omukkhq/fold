@@ -394,3 +394,44 @@ async fn doctor_names_the_running_daemon_and_a_startup_file_changed_after_its_sh
     guard.stop().await;
     let _ = child.wait().await;
 }
+
+#[test]
+fn a_personal_fold_skill_fails_with_the_folder_to_remove_and_stays() {
+    let sandbox = Sandbox::new().unwrap();
+    let skill = sandbox.path("home/.claude/skills/fold-main");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(skill.join("SKILL.md"), "old\n").unwrap();
+    let socket = sandbox.path("absent.sock");
+    let output = sandbox
+        .fold(&["doctor", "--socket", socket.to_str().unwrap()])
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let text = stdout(&output);
+    let shown = skill.display().to_string();
+    assert!(text.contains("fail personal skills: "), "{text}");
+    assert!(
+        text.contains(&format!(
+            "fix: remove these folders; fold never deletes them: {shown}"
+        )),
+        "{text}"
+    );
+    assert!(stderr(&output).contains("personal skills"), "{output:?}");
+    assert!(skill.join("SKILL.md").is_file());
+}
+
+#[test]
+fn a_clean_home_has_no_personal_skill_finding() {
+    let sandbox = Sandbox::new().unwrap();
+    std::fs::create_dir_all(sandbox.path("home/.claude/skills/my-own")).unwrap();
+    let socket = sandbox.path("absent.sock");
+    let output = sandbox
+        .fold(&["doctor", "--socket", socket.to_str().unwrap()])
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let text = stdout(&output);
+    assert!(
+        text.contains("ok   personal skills: no personal Claude Code skill hides fold's skills"),
+        "{text}"
+    );
+    assert!(!text.contains("fail "), "{text}");
+}

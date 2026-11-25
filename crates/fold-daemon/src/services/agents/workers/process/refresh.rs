@@ -2,14 +2,16 @@ use std::sync::atomic::Ordering;
 
 use fold_core::events::types;
 use fold_core::roles::{
-    HANDOFF_REQUEST, RefreshFacts, SUMMARY_ITEMS, SummaryProposal, SummaryTask, handoff_due,
-    handoff_overdue, handoff_reask_due, refresh_turn,
+    HANDOFF_REQUEST, RefreshFacts, SUMMARY_ITEMS, SummaryProposal, SummaryTask,
+    UPGRADE_HANDOFF_REQUEST, handoff_due, handoff_overdue, handoff_reask_due, needs_update_note,
+    refresh_turn,
 };
 use fold_core::{AgentName, AreaName, EventActor, NewEvent, Role, WorkerState};
 use fold_store::agents::{self, ProcessEnd, SessionEnd, WorkerProcessRow};
 use fold_store::{StoreError, messages};
 use serde_json::json;
 
+use super::launch::hands_off_on_update;
 use super::stop::stopped_event;
 use super::{Input, Supervisor, lock};
 use crate::services::agents::AgentError;
@@ -33,7 +35,7 @@ fn context_window(windows: &[(String, u64)], model: Option<&str>) -> u64 {
 }
 
 impl Supervisor {
-    /// After each turn of a long-lived worker: a note of its session starts it fresh; otherwise a context past its role's `handoff_at` asks once for a note, and a lead that let [`fold_core::roles::HANDOFF_TURNS`] turns pass since the ask without one starts fresh with the fold summary alone. A worker that fold started to answer a message stops once it has answered, and a worker whose process started with another account than the project's continues with the project's.
+    /// After each turn of a long-lived worker: a note of its session starts it fresh; otherwise a context past its role's `handoff_at`, or a lead's session that started under another fold, asks once for a note, and a lead that let [`fold_core::roles::HANDOFF_TURNS`] turns pass since the ask without one starts fresh with the fold summary alone. A worker that fold started to answer a message stops once it has answered, and a worker whose process started with another account than the project's continues with the project's.
     pub(super) async fn after_turn(&self, agent: &AgentName, windows: &[(String, u64)]) {
         lock(&self.inner.windows).extend(
             windows
@@ -90,13 +92,30 @@ impl Supervisor {
             return Ok(());
         }
         drop(conn);
-        if !self.past_handoff_at(&row, windows).await? {
+        let Some(request) = self.handoff_request(&row, windows).await? else {
             return Ok(());
-        }
+        };
         if self.mark_handoff_asked(&row).await? {
-            self.send_turn(agent, HANDOFF_REQUEST);
+            self.send_turn(agent, request);
         }
         Ok(())
+    }
+
+    /// The request for a hand-off note that the row's session is due, if any: [`HANDOFF_REQUEST`] for a context past its role's `handoff_at`, else [`UPGRADE_HANDOFF_REQUEST`] for an area lead or the review lead whose session read the role, skill and tool text of another fold than the one that runs.
+    async fn handoff_request(
+        &self,
+        row: &WorkerProcessRow,
+        windows: &[(String, u64)],
+    ) -> Result<Option<&'static str>, AgentError> {
+        if self.past_handoff_at(row, windows).await? {
+            return Ok(Some(HANDOFF_REQUEST));
+        }
+        let upgraded = hands_off_on_update(row.role)
+            && needs_update_note(
+                row.fold_fingerprint.as_deref(),
+                self.fingerprint(row.role).as_deref(),
+            );
+        Ok(upgraded.then_some(UPGRADE_HANDOFF_REQUEST))
     }
 
     /// Whether the row's context has reached its role's `handoff_at` in the window of its model among `windows`.
@@ -123,7 +142,7 @@ impl Supervisor {
             .await?)
     }
 
-    /// The hand-off request for a `wait_for_events` of a lead that returns, by the rule of the check after each turn: a lead or the review lead whose session wrote no note yet and whose context has reached its role's `handoff_at`, in the window that the last result of its model reported. A lead can wait inside one turn for hours, so the check at the turn's end alone never asks it. The ask is recorded as that check records it, so the turns it then has to write the note count from it.
+    /// The hand-off request for a `wait_for_events` of a lead that returns, by the rule of the check after each turn: a lead or the review lead whose session wrote no note yet and whose context has reached its role's `handoff_at`, in the window that the last result of its model reported, or whose session started under another fold. A lead can wait inside one turn for hours, so the check at the turn's end alone never asks it. The ask is recorded as that check records it, so the turns it then has to write the note count from it.
     pub(in crate::services::agents) async fn wait_handoff(
         &self,
         agent: &AgentName,
@@ -152,11 +171,11 @@ impl Supervisor {
             .iter()
             .map(|(model, window)| (model.clone(), *window))
             .collect();
-        if !self.past_handoff_at(&row, &windows).await? {
+        let Some(request) = self.handoff_request(&row, &windows).await? else {
             return Ok(None);
-        }
+        };
         self.mark_handoff_asked(&row).await?;
-        Ok(Some(HANDOFF_REQUEST))
+        Ok(Some(request))
     }
 
     /// Sends `text` as the next user turn of the agent's running process, if it has one.

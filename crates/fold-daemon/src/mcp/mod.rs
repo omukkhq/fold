@@ -10,14 +10,14 @@ pub mod reviews;
 pub mod tasks;
 pub mod workspaces;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, LazyLock};
 
 use fold_core::{FoldError, codes};
 use fold_store::agents::WorkerRow;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-    JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig,
+    JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
@@ -49,6 +49,8 @@ pub struct FoldServer {
     reviews: Option<ReviewService>,
     /// The open project, for the tools that run a project folder command; a weak link, so a session never keeps a closed project open.
     project: Option<std::sync::Weak<crate::projects::ProjectHandle>>,
+    /// The host's notice settings, whose targets fold turned off are items of `get_needs_you`.
+    notify: Option<crate::services::projects::notify::NotifySettings>,
     /// Held across the `register_agent` command, which binds the session.
     session: Mutex<SessionContext>,
     footer: Vec<Arc<dyn FooterSource>>,
@@ -88,6 +90,7 @@ impl FoldServer {
             messages,
             reviews: None,
             project: None,
+            notify: None,
             session: Mutex::new(session),
             footer: vec![unread, new_events, near_stale],
         }
@@ -114,6 +117,16 @@ impl FoldServer {
         project: std::sync::Weak<crate::projects::ProjectHandle>,
     ) -> Self {
         self.project = Some(project);
+        self
+    }
+
+    /// Reads the notice targets that fold turned off from `notify`, as the web app's Needs you does.
+    #[must_use]
+    pub fn with_notify(
+        mut self,
+        notify: Option<crate::services::projects::notify::NotifySettings>,
+    ) -> Self {
+        self.notify = notify;
         self
     }
 
@@ -236,6 +249,7 @@ impl FoldServer {
             (messages::LIST_OPEN_ASKS, Some(_)) => {
                 messages::list_open_asks(self, arguments).await?
             }
+            (agents::GET_NEEDS_YOU, Some(_)) => agents::get_needs_you(self, arguments).await?,
             (workspaces::GET_REPOSITORY_STATE, Some(_)) => {
                 workspaces::get_repository_state(self, arguments).await?
             }
@@ -386,6 +400,35 @@ pub(crate) fn parse<T: for<'de> Deserialize<'de>>(arguments: &JsonObject) -> Res
     })
 }
 
+/// Every tool of a fold session as `tools/list` gives it before the loading marks; the review tools only with `reviews`.
+fn all_tools(reviews: bool) -> Vec<Tool> {
+    let mut tools = identity::tools();
+    tools.extend(agents::tools());
+    tools.extend(events::tools());
+    tools.extend(workspaces::tools());
+    tools.extend(tasks::tools());
+    tools.extend(tasks::requests::tools());
+    tools.extend(messages::tools());
+    if reviews {
+        tools.extend(reviews::tools());
+    }
+    tools
+}
+
+/// A hash of each tool's name, description and schemas, by tool name, as this binary serves them. A session lists the tools once, at its start, so a tool whose hash differs from the one a session's fold recorded is one that session knows in an older shape.
+pub fn tool_schema_hashes() -> BTreeMap<String, String> {
+    all_tools(true)
+        .into_iter()
+        .map(|tool| {
+            let text = serde_json::to_string(&tool).unwrap_or_default();
+            (
+                tool.name.to_string(),
+                fold_core::roles::session_fingerprint(&[&text]),
+            )
+        })
+        .collect()
+}
+
 /// The `initialize` instructions of [`OutsideProject`].
 pub const OUTSIDE_INSTRUCTIONS: &str = "This folder is in no fold project, so fold offers no tools here. Run fld init in a folder to make it a fold project, then start Claude Code there.";
 
@@ -426,16 +469,7 @@ impl ServerHandler for FoldServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let mut tools = identity::tools();
-        tools.extend(agents::tools());
-        tools.extend(events::tools());
-        tools.extend(workspaces::tools());
-        tools.extend(tasks::tools());
-        tools.extend(tasks::requests::tools());
-        tools.extend(messages::tools());
-        if self.reviews.is_some() {
-            tools.extend(reviews::tools());
-        }
+        let mut tools = all_tools(self.reviews.is_some());
         loading::mark(&mut tools, self.seat().await);
         Ok(ListToolsResult::with_all_items(tools))
     }

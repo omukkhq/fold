@@ -30,7 +30,7 @@ use crate::push::starter_agent;
 use crate::services::events::{BusMessage, EventBuffer, EventBus};
 use crate::services::projects::load_config;
 
-/// Decides what fold saw of the worker of every live workspace of `project` at `now`, with the project's `stall_minutes`, sets it in the live state with the check run that goes in each workspace, and tells the worker's lead of each new stall. A workspace whose files are its open proposal's newest version never stalls while the proposal waits on others; once it comes back to its author, the stall time counts from that moment at the earliest. A workspace whose checks run never stalls, and the stall time counts from the end of its newest run at the earliest, so the worker gets the whole window to act on the result. A worker never stalls while an ask about its task or one of its permission questions waits for a person, and the stall time counts from a person's newest answer and the start of its current process at the earliest. A worker whose process fold supervises counts from its newest output too: an open call is work, a call that runs long, a silence of `stall_minutes` and a process that ended without anyone asking and without a report are stalls, and a stop that a person, an agent or fold asked for is not. A worker whose resume fold owes while the worker limits hold it waits for a slot, which is never a stall; once a place is free for it, the stall time counts from the newest stop of a worker of its role or change of the limits at the earliest. Each new stall appends `worker.stalled`, which tells the worker's lead, or else the main agents; the stall needs a person once one more `stall_minutes` passed after that, or at once when no agent can act. A stall that a `worker.stalled` from before the daemon started already told is not told again, and its person's window counts from that event. A change publishes `workspace.changed`. Returns how many workspaces changed, the ones a starting run cleared included. While the project's agents are paused no worker stalls: the pause clears every activity and stalled flag and appends no `worker.stalled`, and after a resume the stall time counts from the resume at the earliest, so the paused time never stalls a worker.
+/// Decides what fold saw of the worker of every live workspace of `project` at `now`, with the project's `stall_minutes`, sets it in the live state with the check run that goes in each workspace, and tells the worker's lead of each new stall. A workspace whose files are its open proposal's newest version never stalls while the proposal waits on others; once it comes back to its author, the stall time counts from that moment at the earliest. A workspace whose checks run never stalls, and the stall time counts from the end of its newest run at the earliest, so the worker gets the whole window to act on the result. A worker never stalls while an ask about its task or one of its permission questions waits for a person, and the stall time counts from a person's newest answer and the start of its current process at the earliest. A worker whose process fold supervises counts from its newest output too: an open call is work, a call that runs long, a silence of `stall_minutes` and a process that ended without anyone asking and without a report are stalls, and a stop that a person, an agent or fold asked for is not. A worker whose resume fold owes while the worker limits hold it, or that waits for its resume group after a daemon start, waits for a slot, which is never a stall; once a place is free for it, the stall time counts from the newest stop of a worker of its role or change of the limits at the earliest. Each new stall appends `worker.stalled`, which tells the worker's lead, or else the main agents; the stall needs a person once one more `stall_minutes` passed after that, or at once when no agent can act. A stall that a `worker.stalled` from before the daemon started already told is not told again, and its person's window counts from that event. A change publishes `workspace.changed`. Returns how many workspaces changed, the ones a starting run cleared included. While the project's agents are paused no worker stalls: the pause clears every activity and stalled flag and appends no `worker.stalled`, and after a resume the stall time counts from the resume at the earliest, so the paused time never stalls a worker.
 pub async fn check_stalls(
     project: &ProjectHandle,
     now: Timestamp,
@@ -134,9 +134,9 @@ pub(super) async fn decide_stalls(
                 .is_some_and(|task| inputs.reported.contains(&task)),
             explained: process.is_some_and(|process| process.explained),
             paused: inputs.paused,
-            owed: agent
-                .as_ref()
-                .and_then(|agent| inputs.owed_turn(agent, limits)),
+            owed: agent.as_ref().and_then(|agent| {
+                waits_for_group(live, agent, process).or_else(|| inputs.owed_turn(agent, limits))
+            }),
             given_at: turn_given_at(turn, checks, worker_turn),
             returned_at: match turn {
                 Some(ProposalTurn::Author { since }) => Some(since),
@@ -215,6 +215,18 @@ pub(super) async fn decide_stalls(
     tell_stalls(store, live, now, new_stalls).await;
     live.mark_stalls_decided();
     Ok(changed)
+}
+
+/// A worker that a daemon start runs again waits for its resume group like a resume that the limits hold: it waits for a place, which is never a stall. Its row shows a running state without a process meanwhile.
+fn waits_for_group(
+    live: &LiveState,
+    agent: &AgentName,
+    process: Option<&ProcessFacts>,
+) -> Option<OwedTurn> {
+    let since = live.streams()?.queued_since(agent)?;
+    // A lead or the supervised main has no place of its own; it waits as a task worker would.
+    let slot = Slot::of(process?.role).unwrap_or(Slot::TaskWorker);
+    Some(OwedTurn::WaitsForPlace { slot, since })
 }
 
 /// The start of a stall.

@@ -623,6 +623,8 @@ async fn a_remote_the_map_does_not_continue_is_export_diverged() {
     let first = host.remote("first.git");
     project.set_remote(&first);
     project.push().await.unwrap();
+    // The Git job writes the commit and map line of each new revision under this lock, at its start and at each tick that sees `HEAD` change. Held from before r2 to the end, the job never writes r2 into the old repository, and never runs Git in the repository while it is removed and made again.
+    let _folder = project.handle.folder_lock.clone().lock_owned().await;
     project.add_revision(&[("a.txt", b"one\n")], None).await;
     let other = host.remote("other.git");
     let config = project.paths.config();

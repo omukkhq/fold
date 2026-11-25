@@ -11,6 +11,7 @@ pub mod presence;
 pub mod push;
 pub mod roles;
 pub mod start_queue;
+pub mod tool_schemas;
 pub mod transcript;
 pub mod turn_errors;
 pub mod turn_waits;

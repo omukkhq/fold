@@ -26,6 +26,20 @@ pub const FOLDERS: [&str; 8] = [
     ".claude/skills/fold-reviewer",
 ];
 
+/// The name of each of fold's skills, the last part of its folder in [`FOLDERS`].
+pub const SKILL_NAMES: [&str; 6] = [
+    "fold",
+    "fold-main",
+    "fold-area-lead",
+    "fold-review-lead",
+    "fold-task-worker",
+    "fold-reviewer",
+];
+/// Claude Code's personal skill folder below `HOME`. A personal skill wins over a project skill of the same name, so fold never writes there, and a personal skill with the name of one of fold's skills hides the project's skill from every session on the machine.
+pub const PERSONAL_SKILLS_DIR: &str = ".claude/skills";
+/// `details.reason` of a refused write into [`PERSONAL_SKILLS_DIR`].
+pub const PERSONAL_SKILLS_REASON: &str = "personal_skill_folder";
+
 /// The project's Claude Code settings. A folder whose settings allow tools makes Claude Code warn when the folder is first trusted, so fold keeps its permission and hooks in the user's settings and a refresh removes the ones an earlier fold wrote here.
 pub const SETTINGS_FILE: &str = ".claude/settings.json";
 /// The `permissions.deny` rules an earlier fold wrote, which a refresh removes. An agent's edits are checked by the `PreToolUse` hook instead: Claude Code reads an `Edit` path as a gitignore pattern, a deny rule always wins over an allow rule, and a `!` carve-out never reopens a path below a folder a deny rule matches, so no rule denies the project folder but `.fold/ws/` (<https://code.claude.com/docs/en/permissions#read-and-edit>).
@@ -164,6 +178,9 @@ pub enum ClaudeFileError {
     /// `invalid_path`: the instructions file is a symbolic link that does not lead to a regular file inside the project folder; every file is left as it is.
     #[error(transparent)]
     Link(FoldError),
+    /// `invalid_request` with `details.reason` [`PERSONAL_SKILLS_REASON`]: the project's skill folder is the personal skill folder of `HOME`; no file is written.
+    #[error(transparent)]
+    PersonalSkills(FoldError),
     #[error("cannot write {}: {source}", path.display())]
     Io {
         path: PathBuf,
@@ -175,14 +192,18 @@ pub enum ClaudeFileError {
 impl ClaudeFileError {
     pub fn code(&self) -> Option<&'static str> {
         match self {
-            Self::Malformed(error) | Self::Link(error) => Some(error.code()),
+            Self::Malformed(error) | Self::Link(error) | Self::PersonalSkills(error) => {
+                Some(error.code())
+            }
             Self::Io { .. } => None,
         }
     }
 
     pub fn hint(&self) -> Option<&str> {
         match self {
-            Self::Malformed(error) | Self::Link(error) => error.hint(),
+            Self::Malformed(error) | Self::Link(error) | Self::PersonalSkills(error) => {
+                error.hint()
+            }
             Self::Io { .. } => None,
         }
     }
@@ -224,7 +245,9 @@ pub fn stale_section(root: &Path) -> Option<&'static str> {
 }
 
 /// Writes or refreshes fold's Claude Code files in the project root, keeping everything in them that fold does not own: the marked section in [`instructions_file`], the fold skill with its reference and the skill of each role. The other root instructions file loses a section an earlier write left there, so the project holds one, and [`MCP_FILE`] and [`SETTINGS_FILE`] lose the entries an earlier fold wrote; a file that held nothing else goes. Every file is checked and every symbolic link followed before the first file changes, so a refusal leaves all of them untouched. A file whose content would not change is not written, so its modification time stays.
-pub fn write(root: &Path) -> Result<(), ClaudeFileError> {
+/// `home` is the user's `HOME`: a project whose skill folder is the personal one of `home` is refused before any file changes.
+pub fn write(root: &Path, home: Option<&Path>) -> Result<(), ClaudeFileError> {
+    refuse_personal_skills(root, home)?;
     let project = std::fs::canonicalize(root).map_err(|source| ClaudeFileError::Io {
         path: root.to_owned(),
         source,
@@ -250,11 +273,103 @@ pub fn write(root: &Path) -> Result<(), ClaudeFileError> {
 }
 
 /// Writes the files of fold's skills, which fold owns whole, and nothing else: `fld claude` and the daemon call it on every start, so a project that an older fold set up gets the skills its prompts name without a refresh, while the files that hold the user's text change only through [`write`]. A file whose content would not change is not written, and a file the user added next to the skills stays.
-pub fn write_skills(root: &Path) -> Result<(), ClaudeFileError> {
+/// A project whose skill folder is the personal one of `home` is refused, as in [`write`].
+pub fn write_skills(root: &Path, home: Option<&Path>) -> Result<(), ClaudeFileError> {
+    refuse_personal_skills(root, home)?;
     for change in skill_changes(root)? {
         change.apply()?;
     }
     Ok(())
+}
+
+/// Whether the skill folder of the project at `root` is the personal skill folder of `home`, compared by the paths their symbolic links lead to. Either path may be missing: its nearest existing folder is resolved and the rest appended, so a project that has no `.claude` yet is caught too.
+pub fn is_personal_skill_folder(root: &Path, home: &Path) -> bool {
+    resolved(&root.join(PERSONAL_SKILLS_DIR)) == resolved(&home.join(PERSONAL_SKILLS_DIR))
+}
+
+/// `path` with its longest existing ancestor made canonical and the missing rest appended.
+fn resolved(path: &Path) -> PathBuf {
+    for ancestor in path.ancestors() {
+        if let Ok(canonical) = std::fs::canonicalize(ancestor) {
+            return match path.strip_prefix(ancestor) {
+                Ok(rest) if !rest.as_os_str().is_empty() => canonical.join(rest),
+                _ => canonical,
+            };
+        }
+    }
+    path.to_owned()
+}
+
+/// The refusal of a write into the personal skill folder of `home`; no `home` refuses nothing.
+pub fn refuse_personal_skills(root: &Path, home: Option<&Path>) -> Result<(), ClaudeFileError> {
+    let Some(home) = home else {
+        return Ok(());
+    };
+    if !is_personal_skill_folder(root, home) {
+        return Ok(());
+    }
+    let skills = home.join(PERSONAL_SKILLS_DIR);
+    Err(ClaudeFileError::PersonalSkills(
+        FoldError::new(
+            codes::INVALID_REQUEST,
+            format!(
+                "{} is Claude Code's personal skill folder; fold skills written there would hide the skills of every project",
+                skills.display()
+            ),
+        )
+        .with_details([
+            ("reason", json!(PERSONAL_SKILLS_REASON)),
+            ("path", json!(skills.display().to_string())),
+        ])
+        .with_hint(format!(
+            "use a project folder other than {}, such as a new folder below it",
+            root.display()
+        )),
+    ))
+}
+
+/// The personal skills below `home` whose names are fold's skill names, each the folder (or link) to remove. fold never removes them.
+pub fn personal_fold_skills(home: &Path) -> Vec<PathBuf> {
+    SKILL_NAMES
+        .into_iter()
+        .map(|name| home.join(PERSONAL_SKILLS_DIR).join(name))
+        .filter(|path| std::fs::symlink_metadata(path).is_ok())
+        .collect()
+}
+
+/// The problem that [`personal_fold_skills`] found, for the warning of `fld claude` and `fld serve` and the failure of `fld doctor`.
+pub fn personal_skills_problem(skills: &[PathBuf]) -> String {
+    format!(
+        "personal Claude Code skills hide fold's project skills from every session on this machine: {}",
+        joined(skills)
+    )
+}
+
+/// The fix of [`personal_skills_problem`].
+pub fn personal_skills_fix(skills: &[PathBuf]) -> String {
+    format!(
+        "remove these folders; fold never deletes them: {}",
+        joined(skills)
+    )
+}
+
+/// The line `fld claude` and `fld serve` print at start when [`personal_fold_skills`] finds any.
+pub fn personal_skills_warning(skills: &[PathBuf]) -> Option<String> {
+    (!skills.is_empty()).then(|| {
+        format!(
+            "warning: {}; {}",
+            personal_skills_problem(skills),
+            personal_skills_fix(skills)
+        )
+    })
+}
+
+fn joined(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The writes of [`SKILL_FILES`], each to the end of any link at its path.
@@ -830,7 +945,7 @@ mod tests {
         std::fs::write(elsewhere.join("rules.md"), "# mine\n").unwrap();
         let link = root.path().join(AGENTS_FILE);
         std::os::unix::fs::symlink(elsewhere.join("rules.md"), &link).unwrap();
-        write(root.path()).unwrap();
+        write(root.path(), None).unwrap();
         assert!(
             std::fs::symlink_metadata(&link)
                 .unwrap()
@@ -847,7 +962,7 @@ mod tests {
         std::fs::create_dir_all(root.path().join(FOLDERS[2])).unwrap();
         let link = root.path().join(SKILL_FILE);
         std::os::unix::fs::symlink("../../../skill.md", &link).unwrap();
-        write(root.path()).unwrap();
+        write(root.path(), None).unwrap();
         assert!(
             std::fs::symlink_metadata(&link)
                 .unwrap()
@@ -865,7 +980,7 @@ mod tests {
         std::os::unix::fs::symlink("other.md", &link).unwrap();
         std::os::unix::fs::symlink(AGENTS_FILE, root.path().join("other.md")).unwrap();
         assert!(link_end(&link).is_err());
-        assert!(write(root.path()).is_err());
+        assert!(write(root.path(), None).is_err());
         assert!(
             std::fs::symlink_metadata(&link)
                 .unwrap()
@@ -886,6 +1001,64 @@ mod tests {
             assert_eq!(parent(folder), Some(PathBuf::from(FOLDERS[1])), "{folder}");
         }
         assert_eq!(parent(FOLDERS[1]), Some(PathBuf::from(FOLDERS[0])));
+        let names: Vec<&str> = FOLDERS[2..]
+            .iter()
+            .filter_map(|folder| folder.strip_prefix(".claude/skills/"))
+            .collect();
+        assert_eq!(names, SKILL_NAMES);
+        assert_eq!(PERSONAL_SKILLS_DIR, FOLDERS[1]);
+    }
+
+    #[test]
+    fn the_home_folder_and_a_link_to_it_are_the_personal_skill_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        assert!(is_personal_skill_folder(&home, &home));
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&home, &link).unwrap();
+        assert!(is_personal_skill_folder(&link, &home));
+        assert!(is_personal_skill_folder(&home, &link));
+        assert!(!is_personal_skill_folder(&home.join("app"), &home));
+        assert!(!is_personal_skill_folder(dir.path(), &home));
+        let error = write_skills(&link, Some(&home)).unwrap_err();
+        assert_eq!(error.code(), Some(codes::INVALID_REQUEST));
+        assert!(error.hint().unwrap().contains(&link.display().to_string()));
+        assert!(!home.join(".claude").exists());
+        write_skills(&home.join("app"), Some(&home)).unwrap();
+        write_skills(&home, None).unwrap();
+    }
+
+    #[test]
+    fn a_skill_folder_that_links_into_home_is_the_personal_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::os::unix::fs::symlink(home.join(".claude"), project.join(".claude")).unwrap();
+        assert!(is_personal_skill_folder(&project, &home));
+    }
+
+    #[test]
+    fn only_personal_skills_with_fold_names_are_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        assert!(personal_fold_skills(home).is_empty());
+        assert_eq!(personal_skills_warning(&[]), None);
+        let skills = home.join(PERSONAL_SKILLS_DIR);
+        std::fs::create_dir_all(skills.join("fold-main")).unwrap();
+        std::fs::create_dir_all(skills.join("folder")).unwrap();
+        std::os::unix::fs::symlink(home.join("gone"), skills.join("fold")).unwrap();
+        let found = personal_fold_skills(home);
+        assert_eq!(found, vec![skills.join("fold"), skills.join("fold-main")]);
+        let warning = personal_skills_warning(&found).unwrap();
+        assert!(warning.starts_with("warning: "), "{warning}");
+        assert!(warning.contains(&skills.join("fold-main").display().to_string()));
+        assert!(
+            !warning.contains(&skills.join("folder").display().to_string()),
+            "{warning}"
+        );
     }
 
     #[test]

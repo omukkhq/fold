@@ -1,6 +1,6 @@
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::num::NonZeroU16;
+use std::num::{NonZeroU16, NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,6 +14,7 @@ use fold_daemon::config::{LOCK_FILE, SOCKET_FILE};
 use fold_daemon::projects::FolderFiles;
 use fold_daemon::services::agents::Launcher;
 use fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME;
+use fold_daemon::services::reviews::checks::CheckSettings;
 use fold_daemon::{Daemon, DaemonConfig, DaemonError, SystemClock, shutdown_signal};
 use serde::Deserialize;
 use thiserror::Error;
@@ -50,6 +51,8 @@ pub enum ServeError {
         path: PathBuf,
         source: toml::de::Error,
     },
+    #[error("check_memory_gb = {0} is too large: its size in bytes does not fit in 64 bits")]
+    CheckMemoryTooLarge(u64),
     #[error("cannot start the async runtime: {0}")]
     Runtime(io::Error),
     #[error("cannot listen for signals: {0}")]
@@ -76,6 +79,28 @@ pub(crate) struct FileConfig {
     pub(crate) socket: Option<PathBuf>,
     /// How many days a web sign-in lasts.
     pub(crate) session_days: Option<NonZeroU16>,
+    /// The most check runs at once across all projects.
+    pub(crate) check_runs: Option<NonZeroUsize>,
+    /// The free memory, in GiB, a check run waits for before its commands start.
+    pub(crate) check_memory_gb: Option<NonZeroU64>,
+}
+
+const BYTES_PER_GIB: u64 = 1024 * 1024 * 1024;
+
+/// The check run limits of the host. A key the file leaves out stays `None`, so the daemon picks its own default.
+fn check_settings(file: &FileConfig) -> Result<CheckSettings, ServeError> {
+    let memory_floor = file
+        .check_memory_gb
+        .map(|gb| {
+            gb.get()
+                .checked_mul(BYTES_PER_GIB)
+                .ok_or(ServeError::CheckMemoryTooLarge(gb.get()))
+        })
+        .transpose()?;
+    Ok(CheckSettings {
+        max_runs: file.check_runs,
+        memory_floor,
+    })
 }
 
 /// The directories the daemon uses, read from the environment once so the rules below stay pure.
@@ -233,9 +258,21 @@ fn log_filter(from_env: Option<tracing_subscriber::EnvFilter>) -> tracing_subscr
         .fold(filter, tracing_subscriber::EnvFilter::add_directive)
 }
 
+/// Prints the warning of [`claude_files::personal_skills_warning`] for the personal skills below `HOME` that hide fold's project skills. The warning only tells: a terminal that cannot take it stops nothing.
+pub(crate) fn warn_personal_skills(dirs: &Dirs, out: &mut impl std::io::Write) {
+    let Some(home) = dirs.home.as_deref() else {
+        return;
+    };
+    if let Some(warning) =
+        claude_files::personal_skills_warning(&claude_files::personal_fold_skills(home))
+    {
+        let _ = crate::output::line(out, &warning);
+    }
+}
+
 /// A project whose skills cannot be written still opens: its workers then find the skills a refresh or an earlier fold wrote.
-fn write_skills(root: &Path) {
-    if let Err(error) = claude_files::write_skills(root) {
+fn write_skills(root: &Path, home: Option<&Path>) {
+    if let Err(error) = claude_files::write_skills(root, home) {
         tracing::warn!(
             root = %root.display(),
             code = error.code(),
@@ -263,8 +300,10 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
         }
     }
     let dirs = Dirs::from_env();
+    warn_personal_skills(&dirs, &mut std::io::stdout());
     let file = read_file_config(&dirs.config_file()?)?;
     let config = build_config(args, &dirs, &file)?;
+    let checks = check_settings(&file)?;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let (chosen, started_by) = crate::shell_env::from_host(clock.as_ref());
     crate::shell_env::log(&chosen.environment);
@@ -282,21 +321,24 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
         env: chosen.workers,
         fingerprints: claude_files::worker_fingerprints(),
         accounts: Some(config.accounts_dir()),
+        ..Launcher::default()
     }
     .with_claude_location(|name| std::env::var_os(name));
+    let home = dirs.home.clone();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(ServeError::Runtime)?;
     block_on_then_end(runtime, RUNTIME_END_LIMIT, async {
         let signals = shutdown_signal().map_err(ServeError::Signals)?;
-        let daemon = Daemon::start_on_host(
+        let daemon = Daemon::start_with_checks(
             config,
             clock,
             launcher,
             chosen.environment,
             started_by,
-            FolderFiles::new(write_skills),
+            FolderFiles::new(move |root: &Path| write_skills(root, home.as_deref())),
+            checks,
         )
         .await?;
         signals.await;
@@ -392,6 +434,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_start_warning_names_each_personal_fold_skill_once_and_needs_a_home() {
+        let home = tempfile::tempdir().unwrap();
+        let with_home = Dirs {
+            home: Some(home.path().to_owned()),
+            ..dirs()
+        };
+        let mut out = Vec::new();
+        warn_personal_skills(&with_home, &mut out);
+        assert!(out.is_empty());
+        let skills = home.path().join(claude_files::PERSONAL_SKILLS_DIR);
+        std::fs::create_dir_all(skills.join("fold-main")).unwrap();
+        std::fs::create_dir_all(skills.join("mine")).unwrap();
+        warn_personal_skills(&with_home, &mut out);
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(text.lines().count(), 1, "{text}");
+        assert!(text.starts_with("warning: "), "{text}");
+        assert!(
+            text.contains(&skills.join("fold-main").display().to_string()),
+            "{text}"
+        );
+        assert!(
+            !text.contains(&skills.join("mine").display().to_string()),
+            "{text}"
+        );
+        assert!(skills.join("fold-main").is_dir());
+        let mut homeless = Vec::new();
+        warn_personal_skills(
+            &Dirs {
+                home: None,
+                ..dirs()
+            },
+            &mut homeless,
+        );
+        assert!(homeless.is_empty());
+    }
+
     fn args(listen: Option<&str>, socket: Option<&str>) -> ServeArgs {
         ServeArgs {
             listen: listen.map(|text| text.parse().unwrap()),
@@ -457,6 +536,66 @@ mod tests {
         assert_eq!(week.session_lifetime, Duration::from_secs(7 * 24 * 60 * 60));
         assert!(parse_file_config("session_days = 0").is_err());
         assert!(parse_file_config("session_days = -1").is_err());
+    }
+
+    #[test]
+    fn check_limits_stay_unset_when_the_file_leaves_them_out() {
+        let file = parse_file_config("listen = \"127.0.0.1:9000\"\n").unwrap();
+        assert_eq!(check_settings(&file).unwrap(), CheckSettings::default());
+        assert_eq!(
+            check_settings(&FileConfig::default()).unwrap(),
+            CheckSettings {
+                max_runs: None,
+                memory_floor: None
+            }
+        );
+    }
+
+    #[test]
+    fn check_limits_from_the_file_reach_the_settings_in_bytes() {
+        let file = parse_file_config("check_runs = 3\ncheck_memory_gb = 8\n").unwrap();
+        let settings = check_settings(&file).unwrap();
+        assert_eq!(settings.max_runs, NonZeroUsize::new(3));
+        assert_eq!(settings.memory_floor, Some(8 * 1024 * 1024 * 1024));
+        let one = parse_file_config("check_memory_gb = 1").unwrap();
+        assert_eq!(
+            check_settings(&one).unwrap().memory_floor,
+            Some(1_073_741_824)
+        );
+        assert_eq!(check_settings(&one).unwrap().max_runs, None);
+    }
+
+    #[test]
+    fn a_zero_negative_or_mistyped_check_limit_is_refused_by_key() {
+        for text in [
+            "check_runs = 0",
+            "check_runs = -2",
+            "check_runs = \"4\"",
+            "check_runs = 1.5",
+            "check_memory_gb = 0",
+            "check_memory_gb = -1",
+            "check_memory_gb = \"8\"",
+            "check_memory_gb = true",
+        ] {
+            let error = parse_file_config(text).unwrap_err().to_string();
+            let key = text.split(' ').next().unwrap();
+            assert!(error.contains(key), "{text}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_memory_floor_that_overflows_is_refused_by_key() {
+        let file = parse_file_config("check_memory_gb = 9223372036854775807").unwrap();
+        let error = check_settings(&file).unwrap_err();
+        assert!(matches!(error, ServeError::CheckMemoryTooLarge(_)));
+        assert!(error.to_string().contains("check_memory_gb"));
+        let edge = parse_file_config("check_memory_gb = 17179869183").unwrap();
+        assert_eq!(
+            check_settings(&edge).unwrap().memory_floor,
+            Some(17_179_869_183 * BYTES_PER_GIB)
+        );
+        let over = parse_file_config("check_memory_gb = 17179869184").unwrap();
+        assert!(check_settings(&over).is_err());
     }
 
     #[test]

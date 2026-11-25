@@ -17,9 +17,10 @@ use crate::config::{DaemonConfig, LockOwner};
 use crate::http::{self, assets::AssetSource};
 use crate::jobs::{self, Job};
 use crate::mcp;
-use crate::projects::{FolderFiles, Projects, resume_workers};
+use crate::projects::{FolderFiles, Projects, queue_workers};
 use crate::services::agents::environment::WorkerEnvironment;
 use crate::services::agents::{Launcher, accounts};
+use crate::services::reviews::checks::{CheckPermits, CheckSettings};
 use crate::shutdown;
 use crate::socket::SocketServer;
 
@@ -142,7 +143,7 @@ impl Daemon {
         .await
     }
 
-    /// Takes the host lock, opens the registry, binds the HTTP listener, opens every registered project through its start-up sequence, binds the socket, starts the jobs and the HTTP server, and only then resumes the workers of the projects, so a resumed worker's adapter finds the socket. A failed bind leaves no socket file, no worker and no open project database behind. `clock` goes to every project handle; `launcher` names the programs every worker process runs, and `environment` what the caller found about the environment they run in, and `started_by` what started this process; `folder_files` writes the program's own files into each project folder as the project opens.
+    /// [`Daemon::start_with_checks`] with the default check settings.
     pub async fn start_on_host(
         config: DaemonConfig,
         clock: Arc<dyn Clock>,
@@ -151,12 +152,36 @@ impl Daemon {
         started_by: StartedBy,
         folder_files: FolderFiles,
     ) -> Result<RunningDaemon, DaemonError> {
+        Self::start_with_checks(
+            config,
+            clock,
+            launcher,
+            environment,
+            started_by,
+            folder_files,
+            CheckSettings::default(),
+        )
+        .await
+    }
+
+    /// Takes the host lock, opens the registry, binds the HTTP listener, opens every registered project through its start-up sequence, binds the socket, queues the workers of every project in the shared resume groups, starts the jobs and the HTTP server, and only then runs the first group, so a resumed worker's adapter finds the socket; the live job runs each later group once its gap has passed. A failed bind leaves no socket file, no worker and no open project database behind. `clock` goes to every project handle; `launcher` names the programs every worker process runs, and `environment` what the caller found about the environment they run in, and `started_by` what started this process; `folder_files` writes the program's own files into each project folder as the project opens; `checks` limits the check runs of every project.
+    pub async fn start_with_checks(
+        config: DaemonConfig,
+        clock: Arc<dyn Clock>,
+        launcher: Launcher,
+        environment: WorkerEnvironment,
+        started_by: StartedBy,
+        folder_files: FolderFiles,
+        checks: CheckSettings,
+    ) -> Result<RunningDaemon, DaemonError> {
         let start = DaemonStart {
             started_at: clock.now(),
             pid: std::process::id(),
             started_by,
         };
-        let launcher = launcher.with_own_binary();
+        let launcher = launcher
+            .with_own_binary()
+            .with_tools(crate::mcp::tool_schema_hashes());
         if let Some(dir) = launcher.accounts.clone() {
             let removed =
                 tokio::task::spawn_blocking(move || accounts::remove_leftovers(&dir)).await;
@@ -202,7 +227,8 @@ impl Daemon {
                 .with_push_files(config.push_dir())
                 .with_notify_dir(config.notify_dir())
                 .with_closing_dir(config.closing_dir())
-                .with_folder_files(folder_files),
+                .with_folder_files(folder_files)
+                .with_check_permits(CheckPermits::from_settings(checks)),
             registry,
             clock: clock.clone(),
             assets: config
@@ -239,6 +265,10 @@ impl Daemon {
                 return Err(error);
             }
         };
+        // Every project queues its workers before the jobs start, so no tick of the live job runs a group before the last project queued and the first group takes the owed work and the leads of all projects.
+        for handle in &opened {
+            queue_workers(handle).await;
+        }
         let gc_daily = jobs::spawn_gc_daily(state.clone(), jobs::JOB_TICK, stopped.clone());
         let presence = jobs::spawn_presence(state.clone(), jobs::PRESENCE_TICK, stopped.clone());
         let live = jobs::spawn_live(state.clone(), jobs::LIVE_TICK, stopped.clone());
@@ -262,9 +292,11 @@ impl Daemon {
             stopped.clone(),
         );
         let http = tokio::spawn(serve_http(listener, http::router(state.clone()), stopped));
-        for handle in &opened {
-            resume_workers(handle).await;
-        }
+        state
+            .projects
+            .resume_groups()
+            .run_due(state.clock.now())
+            .await;
         tracing::info!(%http_addr, "daemon started");
         Ok(RunningDaemon {
             config,

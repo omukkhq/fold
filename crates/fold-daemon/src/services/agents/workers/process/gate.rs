@@ -66,6 +66,9 @@ impl Supervisor {
     }
 
     async fn resume_for_run(&self, run: CheckRunId) -> Result<(), AgentError> {
+        if !self.start_ticket().await {
+            return Ok(());
+        }
         let read = self.inner.store.read();
         let Some(row) = checks::get_run(read, run).await? else {
             return Ok(());

@@ -465,6 +465,7 @@ impl RunningCheck {
             required: true,
             runs: true,
             timeout: None,
+            max_parallel: None,
         };
         let work = dir.path().to_path_buf();
         let run = tokio::spawn(async move {

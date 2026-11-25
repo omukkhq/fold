@@ -76,6 +76,7 @@ done
 if [ -n "$FOLD_FAKE_CLAUDE_STUBBORN" ]; then
   while :; do sleep 1; done
 fi
+exit "${FOLD_FAKE_CLAUDE_EOF_EXIT:-0}"
 "#;
 
 /// The recorded fixture a user turn replays.
@@ -147,13 +148,14 @@ impl FakeClaude {
         Self { dir, launcher }
     }
 
-    /// Every role's sessions read the role text of `fingerprint`, as the launcher of an installed fld gives them.
+    /// Every role's sessions read the role text of `fingerprint` and the tool schemas of this binary, as the launcher of an installed fld gives them.
     #[must_use]
     pub fn with_fingerprint(mut self, fingerprint: &str) -> Self {
         self.launcher.fingerprints = fold_core::roles::Role::ALL
             .into_iter()
             .map(|role| (role, fingerprint.to_owned()))
             .collect();
+        self.launcher.tools = fold_daemon::mcp::tool_schema_hashes();
         self
     }
 
@@ -191,6 +193,15 @@ impl FakeClaude {
         self.launcher
             .env
             .push(("FOLD_FAKE_CLAUDE_STDERR".to_owned(), text.to_owned()));
+        self
+    }
+
+    /// Each run exits with `code` once its stdin closes, as Claude Code does when fold stops it.
+    #[must_use]
+    pub fn exiting_on_eof_with(mut self, code: u8) -> Self {
+        self.launcher
+            .env
+            .push(("FOLD_FAKE_CLAUDE_EOF_EXIT".to_owned(), code.to_string()));
         self
     }
 

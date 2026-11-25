@@ -68,7 +68,7 @@ fn skill_identifiers() -> BTreeSet<String> {
         .collect()
 }
 
-const FOLD_TOOLS: [&str; 100] = [
+const FOLD_TOOLS: [&str; 101] = [
     "register_agent",
     "list_agents",
     "define_area",
@@ -167,6 +167,7 @@ const FOLD_TOOLS: [&str; 100] = [
     "list_review_plans",
     "integrate_review_batch",
     "list_open_asks",
+    "get_needs_you",
     "settle_agent_changes",
     "share_paths",
 ];
@@ -371,13 +372,14 @@ const FOLD_ERROR_CODES: [&str; 189] = [
 const PENDING_ERROR_CODES: [&str; 1] = ["too_large"];
 
 /// The `invalid_request` reasons that have a name.
-const INVALID_REQUEST_REASONS: [&str; 15] = [
+const INVALID_REQUEST_REASONS: [&str; 16] = [
     "self_dependency",
     "checklist_origin",
     "linked_item",
     "task_has_history",
     "proposal_open",
     "malformed_claude_file",
+    "personal_skill_folder",
     "no_service_manager",
     "too_many_attachments",
     "attachment_too_large",
@@ -389,7 +391,7 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 75] = [
+const NON_TOOL_NAMES: [&str; 78] = [
     "next_offset",
     "file_count",
     "human_review",
@@ -465,6 +467,9 @@ const NON_TOOL_NAMES: [&str; 75] = [
     "reviewed_alone",
     "wait_for",
     "needs_person",
+    "waiting_for",
+    "max_parallel",
+    "waiting_check",
 ];
 
 /// The sections of the index before the shared ones.
@@ -563,6 +568,7 @@ fn role_steps(role: Role) -> &'static [&'static str] {
             "list_review_batches",
             "get_review_batch",
             "list_open_asks",
+            "get_needs_you",
             "share_paths",
         ],
         Role::AreaLead => &[
@@ -1328,8 +1334,10 @@ const REFERENCE_SECTIONS: [&str; 8] = [
 ];
 
 /// Backticked names of the reference that are neither tools, codes, config or checks keys nor run states, but the values and fields it explains.
-const REFERENCE_NAMES: [&str; 9] = [
+const REFERENCE_NAMES: [&str; 11] = [
     "session_days",
+    "check_runs",
+    "check_memory_gb",
     "needs_you",
     "sent_back",
     "changes_requested",

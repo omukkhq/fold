@@ -174,6 +174,8 @@ pub struct NeedsYouItem {
     pub header: Option<String>,
     /// How many questions a `Question` asks as one set; 0 for every other kind.
     pub questions: usize,
+    /// The first line of a `Question`'s body, for the main agent's list; `None` for every other kind.
+    pub first_line: Option<String>,
     /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft; the task title of a `HumanTask` or a `Hold`; Claude Code's error of a `WorkerModelUnreachable`; what fold saw of a `WorkerStalled` at the read, in the words of the board's chip.
     pub title: Option<String>,
     /// The reason of a `Hold`; the command that brings the branch back for `HeadMoved`, records the folder's changes for `FolderHeld`, ends the conflict for `UnstashConflicted`, or lets a `WorkerUnreachable` worker reach fold again; what to check for a `WorkerModelUnreachable`.
@@ -237,6 +239,7 @@ impl NeedsYouItem {
             choices: Vec::new(),
             header: None,
             questions: 0,
+            first_line: None,
             title: None,
             reason: None,
             commit: None,
@@ -412,6 +415,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         item.request = row.request;
         item.humans = asked_humans(&row.recipients);
         item.questions = crate::services::messages::row_questions(&row).len();
+        item.first_line = Some(fold_core::messages::first_line(&row.body));
         item.choices = row.choices;
         item.header = row.header;
         items.push(item);

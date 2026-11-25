@@ -721,8 +721,13 @@ impl TaskService {
                 row.state.after(RequestStep::Close, request)?;
                 let reason = request_text(reason, "reason", false)?.unwrap_or_default();
                 requests::close(tx, request, &reason, now).await?;
-                let event = NewEvent::new(types::REQUEST_CLOSED, actor.event_actor())?
-                    .data(json!({"request": request.to_string()}))?;
+                let mut data = json!({"request": request.to_string()});
+                // The draft waited for the requester, so the close ends an item of a human's Needs you.
+                if row.state == RequestState::DraftReady {
+                    data["draft_waiting"] = json!(true);
+                }
+                let event =
+                    NewEvent::new(types::REQUEST_CLOSED, actor.event_actor())?.data(data)?;
                 buffer.append(tx, &event, now).await?;
                 Ok::<_, TaskError>(())
             })

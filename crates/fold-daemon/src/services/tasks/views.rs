@@ -432,6 +432,9 @@ impl TaskService {
             .remove(&id)
             .unwrap_or_default();
         tx.commit().await.map_err(StoreError::from)?;
+        if let Some(row) = &live {
+            self.scan_waiting(row.id, row.state).await;
+        }
 
         let edge = |(task, origin): &(TaskId, DependencyOrigin)| {
             refs.get(task).map(|task| DetailEdge {
@@ -507,6 +510,19 @@ impl TaskService {
             history,
             hold_allowed,
         })
+    }
+
+    /// Scans an active workspace that has no live entry yet, because its first scan still waits for its watch group after the project opened. The scan publishes `workspace.changed`, so a reader of the event stream gets the working changes instead of an empty list until the group comes.
+    async fn scan_waiting(&self, workspace: WorkspaceId, state: workspaces::WorkspaceState) {
+        let Some(live) = &self.live else {
+            return;
+        };
+        if state != workspaces::WorkspaceState::Active || live.get(workspace).is_some() {
+            return;
+        }
+        if let Err(error) = live.attach(workspace).await {
+            tracing::warn!(workspace = %workspace, code = error.log_code(), "the first scan for the task read failed; the watch group scans it later");
+        }
     }
 
     /// The last edit of a live workspace: the time from the live state when it holds the workspace, else the stored column, and the file when the live state names exactly one changed. `None` for a workspace without an edit: its last activity starts at its creation, `created`, and only a scan that sees an edit moves it.

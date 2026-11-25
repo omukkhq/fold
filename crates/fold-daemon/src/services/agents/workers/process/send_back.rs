@@ -133,6 +133,9 @@ impl Supervisor {
     }
 
     async fn resume_reporter(&self, agent: &AgentName, tasks: &[TaskId]) -> Result<(), AgentError> {
+        if !self.start_ticket().await {
+            return Ok(());
+        }
         // The row is read under the lock, so a second event finds the task worker running and leaves it to its stdin notices.
         let resuming = self.inner.resuming.lock().await;
         let mut conn = self

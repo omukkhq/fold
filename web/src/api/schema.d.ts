@@ -2520,12 +2520,17 @@ export interface components {
              * @description The version an integration run checks.
              */
             version: number | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds since the running run holds its permit and waits for free memory before its commands start. Absent while it does not wait.
+             */
+            waiting_for_memory_since?: number | null;
         };
         /**
          * @description Why a run failed or stopped.
          * @enum {string}
          */
-        CheckRunReason: "check_failed" | "setup_failed" | "checks_file_invalid" | "files_changed" | "workspace_changed" | "refused" | "daemon_stopped" | "superseded" | "fold_failed";
+        CheckRunReason: "check_failed" | "setup_failed" | "checks_file_invalid" | "files_changed" | "workspace_changed" | "refused" | "daemon_stopped" | "superseded" | "fold_failed" | "killed";
         /**
          * @description Where a run stands.
          * @enum {string}

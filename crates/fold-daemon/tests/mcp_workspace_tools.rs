@@ -493,6 +493,30 @@ async fn the_write_tools_refuse_a_closed_workspace_and_bad_input() {
 }
 
 #[tokio::test]
+async fn a_task_without_a_workspace_is_an_answer_and_an_unknown_ws_an_error() {
+    let fx = Fixture::new().await;
+    let frontend = fx.connect("frontend").await;
+    call(&frontend, "claim_task", json!({"id": "T-2"})).await;
+
+    let got = call(&frontend, "get_workspace", json!({"task": "T-2"})).await;
+    assert_eq!(got["workspace"], Value::Null);
+    assert_eq!(got["task"], "T-2");
+    assert!(
+        got["hint"].as_str().unwrap().contains("create_workspace"),
+        "{got}"
+    );
+
+    let error = call_err(&frontend, "get_workspace", json!({"ws": "ws-9"})).await;
+    assert_eq!(error["code"], "workspace_not_found");
+    let error = call_err(&frontend, "get_workspace", json!({"task": "T-9"})).await;
+    assert_eq!(error["code"], "task_not_found");
+
+    call(&frontend, "create_workspace", json!({"task": "T-2"})).await;
+    let got = call(&frontend, "get_workspace", json!({"task": "T-2"})).await;
+    assert_eq!(got["workspace"], "ws-1");
+}
+
+#[tokio::test]
 async fn the_workspace_tools_need_a_registered_agent() {
     let fx = Fixture::new().await;
     let events = EventService::new(fx.project.store().clone(), fx.bus.clone());

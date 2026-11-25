@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT tool, hash FROM tool_schema_hashes WHERE fingerprint = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "tool",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tool_schema_hashes",
+            "name": "tool"
+          }
+        }
+      },
+      {
+        "name": "hash",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tool_schema_hashes",
+            "name": "hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "35de1d9ae1540e3fabb37816a1c503c312154e8ba320fa2769173ec95c51b53b"
+}

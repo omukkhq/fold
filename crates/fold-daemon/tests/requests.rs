@@ -983,7 +983,7 @@ async fn release_close_and_invalid_drafts() {
     assert_eq!(closed.close_reason.as_deref(), Some("Fixed elsewhere"));
     assert_eq!(
         fx.events_after(before).await[0].2,
-        json!({"request": "RQ-1"})
+        json!({"request": "RQ-1", "draft_waiting": true})
     );
     let reopened = fx
         .tasks

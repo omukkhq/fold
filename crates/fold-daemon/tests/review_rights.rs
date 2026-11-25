@@ -183,43 +183,39 @@ async fn reviews_of_p1(fx: &Fixture) -> i64 {
         .unwrap()
 }
 
+/// The refusals change nothing, so they share `P-1` of one scene; each verdict that decides gets a proposal of its own, because a rejection closes it.
 #[tokio::test]
 async fn a_verdict_that_decides_follows_the_role() {
-    for who in EVERYONE {
+    let fx = scene().await;
+    for who in EVERYONE.into_iter().filter(|who| !who.decides()) {
         for verdict in [Verdict::Approve, Verdict::Reject] {
-            let fx = scene().await;
             let acting = actor(&fx, who).await;
             let result = fx
                 .reviews()
                 .submit_review(&acting, p(1), 1, verdict, "decided", Vec::new())
                 .await;
-            match who {
-                _ if who.decides() => {
-                    assert_eq!(result.unwrap().verdict, verdict, "{who:?} {verdict}");
-                }
-                Who::ReviewLead => {
-                    assert_eq!(
-                        review_code(result.unwrap_err()),
-                        codes::REVIEW_LEAD_DELEGATES,
-                        "{verdict}"
-                    );
-                    assert_eq!(reviews_of_p1(&fx).await, 0);
-                }
-                Who::Author => {
-                    assert_eq!(
-                        review_code(result.unwrap_err()),
-                        codes::AUTHOR_CANNOT_REVIEW
-                    );
-                }
-                _ => {
-                    assert_eq!(
-                        review_code(result.unwrap_err()),
-                        codes::INTEGRATOR_REQUIRED,
-                        "{who:?} {verdict}"
-                    );
-                    assert_eq!(reviews_of_p1(&fx).await, 0);
-                }
-            }
+            let expected = match who {
+                Who::ReviewLead => codes::REVIEW_LEAD_DELEGATES,
+                Who::Author => codes::AUTHOR_CANNOT_REVIEW,
+                _ => codes::INTEGRATOR_REQUIRED,
+            };
+            assert_eq!(
+                review_code(result.unwrap_err()),
+                expected,
+                "{who:?} {verdict}"
+            );
+            assert_eq!(reviews_of_p1(&fx).await, 0, "{who:?} {verdict}");
+        }
+    }
+    for who in EVERYONE.into_iter().filter(|who| who.decides()) {
+        for verdict in [Verdict::Approve, Verdict::Reject] {
+            let proposal = fresh_proposal(&fx).await;
+            let acting = actor(&fx, who).await;
+            let result = fx
+                .reviews()
+                .submit_review(&acting, proposal, 1, verdict, "decided", Vec::new())
+                .await;
+            assert_eq!(result.unwrap().verdict, verdict, "{who:?} {verdict}");
         }
     }
 }
@@ -263,101 +259,104 @@ async fn any_reviewer_but_the_author_comments_and_asks_for_changes() {
     assert_eq!(review_code(error), codes::AUTHOR_CANNOT_REVIEW);
 }
 
+#[cfg(test)]
+fn batch_verdicts(members: [ProposalId; 2], verdict: Verdict) -> Vec<BatchVerdict> {
+    members
+        .map(|proposal| BatchVerdict {
+            proposal,
+            verdict,
+            body: "decided".to_owned(),
+        })
+        .to_vec()
+}
+
+/// The refusals share `P-1` and `P-2` of one scene, the review lead's last because its batch holds them; each batch verdict that decides gets two proposals of its own.
 #[tokio::test]
 async fn a_batch_verdict_that_decides_follows_the_role() {
-    for who in EVERYONE {
+    let fx = scene().await;
+    second_proposal(&fx).await;
+    let shared = [p(1), p(2)];
+    for who in [Who::Human, Who::Author, Who::AreaLead, Who::TaskWorker] {
+        let acting = actor(&fx, who).await;
+        let batch = fx
+            .reviews()
+            .create_review_batch(&acting, shared.to_vec())
+            .await;
+        let (expected, why) = match who {
+            Who::Human => (
+                codes::ACTOR_CANNOT_CLAIM,
+                "a human reviews each proposal on its own",
+            ),
+            Who::Author => (codes::AUTHOR_CANNOT_REVIEW, "the author never reviews"),
+            _ => (
+                codes::INTEGRATOR_REQUIRED,
+                "only a review role claims the members",
+            ),
+        };
+        assert_eq!(review_code(batch.unwrap_err()), expected, "{who:?}: {why}");
+    }
+    let lead = actor(&fx, Who::ReviewLead).await;
+    let batch = fx
+        .reviews()
+        .create_review_batch(&lead, shared.to_vec())
+        .await;
+    assert_eq!(
+        review_code(batch.unwrap_err()),
+        codes::REVIEW_LEAD_DELEGATES,
+        "the review lead gives the group to a reviewer"
+    );
+    // A batch the review lead holds still never lets it check out or submit.
+    let batch = give_batch(
+        &fx.handle.store,
+        "review-lead",
+        &shared,
+        fx.handle.clock.now(),
+    )
+    .await;
+    let checkout = fx.reviews().create_batch_checkout(&lead, batch).await;
+    assert_eq!(
+        review_code(checkout.unwrap_err()),
+        codes::REVIEW_LEAD_DELEGATES
+    );
+    for verdict in [Verdict::Approve, Verdict::Reject] {
+        let submitted = fx
+            .reviews()
+            .submit_batch_review(&lead, batch, batch_verdicts(shared, verdict), Vec::new())
+            .await;
+        assert_eq!(
+            review_code(submitted.unwrap_err()),
+            codes::REVIEW_LEAD_DELEGATES,
+            "{verdict}"
+        );
+    }
+    assert_eq!(reviews_of_p1(&fx).await, 0);
+    for who in [Who::MainAgent, Who::Reviewer] {
         for verdict in [Verdict::Approve, Verdict::Reject] {
-            let fx = scene().await;
-            second_proposal(&fx).await;
+            let members = [fresh_proposal(&fx).await, fresh_proposal(&fx).await];
             let acting = actor(&fx, who).await;
             let batch = fx
                 .reviews()
-                .create_review_batch(&acting, vec![p(1), p(2)])
+                .create_review_batch(&acting, members.to_vec())
                 .await;
-            let batch = match who {
-                Who::Human => {
-                    assert_eq!(
-                        review_code(batch.unwrap_err()),
-                        codes::ACTOR_CANNOT_CLAIM,
-                        "a human reviews each proposal on its own"
-                    );
-                    continue;
-                }
-                Who::Author => {
-                    assert_eq!(review_code(batch.unwrap_err()), codes::AUTHOR_CANNOT_REVIEW);
-                    continue;
-                }
-                Who::ReviewLead => {
-                    assert_eq!(
-                        review_code(batch.unwrap_err()),
-                        codes::REVIEW_LEAD_DELEGATES,
-                        "the review lead gives the group to a reviewer"
-                    );
-                    // A batch the review lead holds still never lets it check out or submit.
-                    let batch = give_batch(
-                        &fx.handle.store,
-                        "review-lead",
-                        &[p(1), p(2)],
-                        fx.handle.clock.now(),
-                    )
-                    .await;
-                    let checkout = fx.reviews().create_batch_checkout(&acting, batch).await;
-                    assert_eq!(
-                        review_code(checkout.unwrap_err()),
-                        codes::REVIEW_LEAD_DELEGATES
-                    );
-                    let verdicts = [p(1), p(2)]
-                        .map(|proposal| BatchVerdict {
-                            proposal,
-                            verdict,
-                            body: "decided".to_owned(),
-                        })
-                        .to_vec();
-                    let submitted = fx
-                        .reviews()
-                        .submit_batch_review(&acting, batch, verdicts, Vec::new())
-                        .await;
-                    assert_eq!(
-                        review_code(submitted.unwrap_err()),
-                        codes::REVIEW_LEAD_DELEGATES
-                    );
-                    assert_eq!(reviews_of_p1(&fx).await, 0);
-                    continue;
-                }
-                Who::AreaLead | Who::TaskWorker => {
-                    assert_eq!(
-                        review_code(batch.unwrap_err()),
-                        codes::INTEGRATOR_REQUIRED,
-                        "only a review role claims the members"
-                    );
-                    continue;
-                }
-                Who::Reviewer => {
-                    assert_eq!(
-                        review_code(batch.unwrap_err()),
-                        codes::WORKER_CLAIM_DENIED,
-                        "a reviewer gets its batch from the review lead"
-                    );
-                    give_batch(
-                        &fx.handle.store,
-                        "reviewer-1",
-                        &[p(1), p(2)],
-                        fx.handle.clock.now(),
-                    )
-                    .await
-                }
-                _ => batch.unwrap().id,
+            let batch = if who == Who::Reviewer {
+                assert_eq!(
+                    review_code(batch.unwrap_err()),
+                    codes::WORKER_CLAIM_DENIED,
+                    "a reviewer gets its batch from the review lead"
+                );
+                give_batch(
+                    &fx.handle.store,
+                    "reviewer-1",
+                    &members,
+                    fx.handle.clock.now(),
+                )
+                .await
+            } else {
+                batch.unwrap().id
             };
-            let verdicts = [p(1), p(2)]
-                .map(|proposal| BatchVerdict {
-                    proposal,
-                    verdict,
-                    body: "decided".to_owned(),
-                })
-                .to_vec();
             let result = fx
                 .reviews()
-                .submit_batch_review(&acting, batch, verdicts, Vec::new())
+                .submit_batch_review(&acting, batch, batch_verdicts(members, verdict), Vec::new())
                 .await;
             assert_eq!(result.unwrap().reviewed.len(), 2, "{who:?} {verdict}");
         }
@@ -466,6 +465,32 @@ async fn second_proposal(fx: &Fixture) {
         .unwrap();
     let author = actor(fx, Who::Author).await;
     fx.proposal(&author, 3, "pub fn z() {}\n").await;
+}
+
+#[cfg(test)]
+/// A new task of the author's area with the author's open proposal on it, which is the newest proposal.
+async fn fresh_proposal(fx: &Fixture) -> ProposalId {
+    let task = fx
+        .handle
+        .tasks
+        .create_task(
+            &human("tanim"),
+            CreateTask {
+                title: TaskTitle::parse("import").unwrap(),
+                description: TaskDescription::new("what to build"),
+                labels: crate::common::roles::work_labels_of("backend"),
+            },
+        )
+        .await
+        .unwrap();
+    let author = actor(fx, Who::Author).await;
+    fx.proposal(&author, task.id.number(), "pub fn z() {}\n")
+        .await;
+    let newest: i64 = sqlx::query_scalar("SELECT MAX(number) FROM proposals")
+        .fetch_one(fx.handle.store.read())
+        .await
+        .unwrap();
+    p(u32::try_from(newest).unwrap())
 }
 
 #[tokio::test]

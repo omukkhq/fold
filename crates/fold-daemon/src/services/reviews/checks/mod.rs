@@ -13,6 +13,7 @@ use fold_store::tasks::claims;
 use fold_store::workspaces::{self, WorkspaceRow, WorkspaceState};
 use fold_store::{SqliteConnection, Store, StoreError, WriteTx, counters, tasks};
 use serde_json::json;
+use tracing::Instrument as _;
 
 use super::proposals::{
     Proposed, VersionInput, add_version_in_tx, no_task_workspace, open_in_tx, usable_workspace,
@@ -24,13 +25,15 @@ use crate::services::tasks::{TaskError, closed_refusal, proposal_kind_refusal, t
 use crate::services::workspaces::ProposalSnapshot;
 
 mod integration;
+pub mod memory;
 mod runner;
 
 pub(crate) use integration::{Integrating, IntegrationChecks, PassedRun, fold_failed_refusal};
 pub(crate) use runner::HeldRequest;
 pub use runner::{
-    CheckPermits, CheckRunner, CommandResult, CommandSpec, LOG_LIMIT, RunLimits, commands,
-    run_commands, run_commands_for,
+    CheckPermits, CheckRunner, CheckSettings, CommandResult, CommandSpec, LOG_LIMIT, MEMORY_TICK,
+    RunGate, RunLimits, commands, run_commands, run_commands_for, run_gated_commands,
+    run_gated_commands_for,
 };
 
 /// The most lines of a failed command's log a result message carries.
@@ -45,6 +48,10 @@ pub struct CheckRunView {
     pub run: CheckRunRow,
     /// In run order; each log is empty unless the read asked for logs.
     pub results: Vec<CheckResultRow>,
+    /// Since when the running run holds its permit and waits for free memory before its commands start.
+    pub waiting_for_memory: Option<Timestamp>,
+    /// The check whose `max_parallel` the running run waits for before that check's command starts, and since when.
+    pub waiting_for_check: Option<(String, Timestamp)>,
 }
 
 /// What a request for checks started.
@@ -82,8 +89,14 @@ impl Verdict {
         }
     }
 
-    /// From the commands' results alone: a blocking setup failure, then a blocking check failure, else a pass.
+    /// From the commands' results alone: a blocking command that a SIGKILL ended, then a blocking setup failure, then a blocking check failure, else a pass.
     pub(super) fn of(results: &[CommandResult]) -> Self {
+        if results
+            .iter()
+            .any(|result| result.killed && result.blocks())
+        {
+            return Self::failed(RunReason::Killed);
+        }
         if results
             .iter()
             .any(|result| result.check.is_none() && result.blocks())
@@ -160,7 +173,14 @@ impl ReviewService {
             .ok_or_else(|| run_not_found(run))?;
         let results = checks::list_results(&mut *read, run, logs).await?;
         read.commit().await.map_err(StoreError::from)?;
-        Ok(CheckRunView { run: row, results })
+        let waiting_for_memory = self.checks.waiting_for_memory(run);
+        let waiting_for_check = self.checks.waiting_for_check(run);
+        Ok(CheckRunView {
+            run: row,
+            results,
+            waiting_for_memory,
+            waiting_for_check,
+        })
     }
 
     /// The task workspace a worker runs checks in: the task is open and of a kind with a proposal, and the actor's worker owns its active workspace.
@@ -344,18 +364,20 @@ impl ReviewService {
         let row = workspaces::get_workspace(self.store.read(), workspace)
             .await?
             .ok_or(StoreError::Corrupt("check_runs.workspace_id"))?;
-        let permit = self.checks.permits().acquire().await;
+        let permit = self.checks.start_permit(run.id, &*self.clock).await;
         let dir = self.workspaces.workspace_dir(&row);
         let owner = self
             .checks
             .owner(run.worker.as_ref().map(WorkerName::agent));
-        let results = run_commands_for(
+        let results = run_gated_commands_for(
+            Some(&self.checks.gate(run.id)),
             &owner,
             &dir,
             job.specs.clone(),
             self.checks.limits(),
             &*self.clock,
         )
+        .instrument(tracing::info_span!("check_run", run = %run.id))
         .await;
         drop(permit);
         let (mut verdict, checked) = self.recheck_workspace(&run, &results).await?;
@@ -523,6 +545,7 @@ impl ReviewService {
     /// The runs of one version of a proposal, newest first, without logs, on `conn`.
     pub(super) async fn version_checks(
         conn: &mut SqliteConnection,
+        runner: &CheckRunner,
         task: TaskId,
         proposal: ProposalId,
         version: u32,
@@ -531,7 +554,14 @@ impl ReviewService {
         let mut views = Vec::with_capacity(runs.len());
         for run in runs {
             let results = checks::list_results(&mut *conn, run.id, false).await?;
-            views.push(CheckRunView { run, results });
+            let waiting_for_memory = runner.waiting_for_memory(run.id);
+            let waiting_for_check = runner.waiting_for_check(run.id);
+            views.push(CheckRunView {
+                run,
+                results,
+                waiting_for_memory,
+                waiting_for_check,
+            });
         }
         Ok(views)
     }
@@ -803,10 +833,13 @@ pub(super) fn result_message(
         ),
         Some(reason) => {
             let failed = failed_names(results, true);
-            let what = if reason == RunReason::SetupFailed {
-                "the setup failed, so no check ran".to_owned()
-            } else {
-                failed.join(", ")
+            let what = match reason {
+                RunReason::SetupFailed => "the setup failed, so no check ran".to_owned(),
+                RunReason::Killed => format!(
+                    "{} killed: out of memory or by a signal, not a test failure; run the checks again when the machine has free memory",
+                    failed.join(", ")
+                ),
+                _ => failed.join(", "),
             };
             let mut text = format!("{subject} failed: {what}.");
             if let Some(gate) = gate_sentence(run) {
@@ -984,6 +1017,7 @@ mod tests {
             log: b"line 1\nline 2\nboom\n".to_vec(),
             log_bytes: 19,
             fault: false,
+            killed: false,
         }
     }
 
@@ -1028,6 +1062,20 @@ mod tests {
             Verdict::failed(RunReason::SetupFailed)
         );
         assert_eq!(Verdict::of(&[]), Verdict::passed());
+        let killed = CommandResult {
+            killed: true,
+            ..result(Some("test"), Outcome::Failed, true)
+        };
+        let red = result(Some("lint"), Outcome::Failed, true);
+        assert_eq!(
+            Verdict::of(&[red, killed.clone()]),
+            Verdict::failed(RunReason::Killed)
+        );
+        let optional = CommandResult {
+            required: false,
+            ..killed
+        };
+        assert_eq!(Verdict::of(&[optional]), Verdict::passed());
     }
 
     #[test]

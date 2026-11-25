@@ -16,7 +16,7 @@ use crate::live::{LiveConfig, LiveState, WatchStart, follow_watch_owners};
 use crate::push::{self, PushTargets, PushTask};
 use crate::services::agents::environment::WorkerEnvironment;
 use crate::services::agents::{
-    AgentService, Launcher, SeenPresence, Supervisor, code_of, follow_queued_starts,
+    AgentService, Launcher, ResumeGroups, SeenPresence, Supervisor, code_of, follow_queued_starts,
 };
 use crate::services::events::EventBus;
 use crate::services::messages::MessageService;
@@ -419,6 +419,38 @@ impl ProjectHandle {
             .with_workspace_locks(self.workspace_locks.clone())
     }
 
+    /// Every item that waits for a human, oldest first: the stored items with the stalls, the project folder's items and, with `notify`, the notice targets fold turned off. The web app's Needs you, the notices and the main agent's `get_needs_you` read this one list, so they name the same items.
+    pub async fn needs_you(
+        &self,
+        notify: Option<&crate::services::projects::notify::NotifySettings>,
+    ) -> Result<Vec<crate::services::agents::NeedsYouItem>, FoldError> {
+        let items = crate::services::agents::with_folder_attention(
+            self.agents().needs_you().await.map_err(FoldError::from)?,
+            self.git_attention.head_moved(),
+            self.git_attention.folder_held(),
+        );
+        let Some(settings) = notify else {
+            return Ok(items);
+        };
+        Ok(crate::services::projects::notify::with_notify_attention(
+            items,
+            crate::services::projects::notify::off_items(settings, &self.slug).await?,
+        ))
+    }
+
+    /// [`ProjectHandle::needs_you`] for the main agent or a human; another agent is `main_agent_required`, as for every agent's open asks.
+    pub async fn needs_you_for(
+        &self,
+        actor: &Actor,
+        notify: Option<&crate::services::projects::notify::NotifySettings>,
+    ) -> Result<Vec<crate::services::agents::NeedsYouItem>, FoldError> {
+        let standing = fold_store::agents::standing_of(self.store.read(), actor)
+            .await
+            .map_err(crate::services::error::from_store)?;
+        fold_core::policy::can_list_open_asks(actor, standing)?;
+        self.needs_you(notify).await
+    }
+
     /// The message service of this project, which reaches the humans of `registry`.
     pub fn messages(&self, registry: &Store) -> MessageService {
         MessageService::new(
@@ -656,6 +688,8 @@ pub struct Projects {
     registry: Option<Store>,
     /// The runs of checks that may go at once across every project.
     check_permits: CheckPermits,
+    /// The groups in which a daemon start runs the workers of every project again.
+    resume_groups: ResumeGroups,
     /// The root of each project removed because its `.fold/` was gone, kept until the next answer for its slug, so that answer carries the `fld init` hint also when the live job removed the project.
     removed: RwLock<HashMap<String, PathBuf>>,
     /// The projects that are unavailable because their folder is missing, which the live job opens again when the folder is back.
@@ -674,6 +708,13 @@ pub struct Projects {
 struct InitRunning;
 
 impl Projects {
+    /// Every project's check runs take `permits`, the host's.
+    #[must_use]
+    pub fn with_check_permits(mut self, permits: CheckPermits) -> Self {
+        self.check_permits = permits;
+        self
+    }
+
     #[must_use]
     pub fn with_launcher(mut self, launcher: Launcher) -> Self {
         self.launcher = launcher;
@@ -776,7 +817,7 @@ impl Projects {
             .collect()
     }
 
-    /// Opens `row` unless it is already open, in which case the same handle comes back. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold instead, with `project_not_found`; a missing folder or a `.fold/` without its database leaves the project registered and unavailable. An open handle whose database was replaced is closed first, with its workers, and leaves the slot, so the new project that `fld init` made there opens fresh. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect; the inbox socket that the daemon kept for each agent, outside the project folder, is then restored while its session still listens, so a session that outlived the daemon gets its notices again. The handle's commit writer runs as it starts, which writes the commit of a revision an integration cut off after its own commit never got and brings the project folder to it, and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. Once the handle is in place and the open lock is let go, fold's own revision stops tracking its skill files where main still holds them ([`keep_fold_skills_out`]), and then every worker that was working or idle runs again with its session resumed; a resumed worker's adapter connects through the daemon's socket, which is bound by then, and its handshake opens this same project, so the resume runs after the open has let go of its lock.
+    /// Opens `row` unless it is already open, in which case the same handle comes back. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold instead, with `project_not_found`; a missing folder or a `.fold/` without its database leaves the project registered and unavailable. An open handle whose database was replaced is closed first, with its workers, and leaves the slot, so the new project that `fld init` made there opens fresh. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect; the inbox socket that the daemon kept for each agent, outside the project folder, is then restored while its session still listens, so a session that outlived the daemon gets its notices again. The handle's commit writer runs as it starts, which writes the commit of a revision an integration cut off after its own commit never got and brings the project folder to it, and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. Once the handle is in place and the open lock is let go, fold's own revision stops tracking its skill files where main still holds them ([`keep_fold_skills_out`]), and then every worker that was working or idle is queued in the resume groups that every project shares, whose first due group runs at once, and runs again with its session resumed; a resumed worker's adapter connects through the daemon's socket, which is bound by then, and its handshake opens this same project, so the resume runs after the open has let go of its lock.
     pub async fn open(
         &self,
         row: &ProjectRow,
@@ -844,6 +885,7 @@ impl Projects {
             if let Some(registry) = &self.registry {
                 handle.workers.set_registry(registry.clone());
             }
+            handle.workers.set_resume_groups(self.resume_groups.clone());
             jobs::reconcile_workspaces(handle).await;
             handle.remove_closed_directories();
             if let Err(error) = recover_check_runs(&handle.store, &handle.bus, &*handle.clock).await
@@ -1023,6 +1065,11 @@ impl Projects {
         unpoisoned(self.removed.write()).remove(slug)
     }
 
+    /// The groups in which a daemon start runs the workers of every project again; the live job runs the group that is due.
+    pub fn resume_groups(&self) -> &ResumeGroups {
+        &self.resume_groups
+    }
+
     /// [`Projects::remove_locked`] for a registered project, under the open lock.
     pub async fn remove_if_deleted(&self, row: &ProjectRow) -> bool {
         let _opening = self.opening.lock().await;
@@ -1071,8 +1118,18 @@ async fn close_holding(handle: Arc<ProjectHandle>, folder: Option<FolderLock>) {
     }
 }
 
-/// Runs again every worker of `handle` that was working or idle when the last daemon stopped.
+/// Runs again every worker of `handle` that was working or idle when the last daemon stopped: queues them with [`queue_workers`] and runs the group that is due now. The live job runs the later groups.
 pub async fn resume_workers(handle: &ProjectHandle) {
+    queue_workers(handle).await;
+    handle
+        .workers
+        .resume_groups()
+        .run_due(handle.clock.now())
+        .await;
+}
+
+/// Queues every worker of `handle` that was working or idle when the last daemon stopped in the groups the daemon's projects share, and serves the rest of what a daemon start owes the project.
+pub async fn queue_workers(handle: &ProjectHandle) {
     if let Err(error) = handle.workers.resume_after_restart().await {
         tracing::error!(project = %handle.slug, code = code_of(&error), "could not resume the workers");
     }

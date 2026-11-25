@@ -319,10 +319,23 @@ impl WorkspaceService {
         })
     }
 
-    /// [`WorkspaceService::get`] with the conflicted paths and the newest unpruned checkpoint and changeset.
-    pub async fn details(&self, target: WorkspaceRef) -> Result<WorkspaceDetails, WorkspaceError> {
-        let workspace = self.get(target).await?;
+    /// [`WorkspaceService::get`] with the conflicted paths and the newest unpruned checkpoint and changeset. `None` for a task that exists but never had a workspace: a new task worker asks this before its first `create_workspace`, so it is an answer, not an error. An unknown workspace id still fails with `workspace_not_found`, and an unknown task with `task_not_found`.
+    pub async fn details(
+        &self,
+        target: WorkspaceRef,
+    ) -> Result<Option<WorkspaceDetails>, WorkspaceError> {
         let read = self.store.read();
+        if let WorkspaceRef::Task(task) = target
+            && workspaces::latest_task_workspace(read, task)
+                .await?
+                .is_none()
+        {
+            tasks::get_by_number(read, task)
+                .await?
+                .ok_or_else(|| task_not_found(task))?;
+            return Ok(None);
+        }
+        let workspace = self.get(target).await?;
         let conflicted = workspaces::list_conflicts(read, workspace.id)
             .await?
             .iter()
@@ -335,12 +348,12 @@ impl WorkspaceService {
         let latest_changeset = workspaces::latest_changeset(read, workspace.id)
             .await?
             .map(|changeset| changeset.id);
-        Ok(WorkspaceDetails {
+        Ok(Some(WorkspaceDetails {
             workspace,
             conflicted,
             latest_checkpoint,
             latest_changeset,
-        })
+        }))
     }
 
     /// Step 1 of a create: the refusals that need no files, read before anything is written, and whether an orphaned workspace is adopted instead. The transaction checks the claim and the live workspace again.

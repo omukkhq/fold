@@ -14,14 +14,20 @@ use rmcp::schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::FoldServer;
+use std::future::Future;
+use std::pin::Pin;
+
+use fold_core::Timestamp;
+
 use super::error::{from_agent, from_review};
 use super::parse;
+use super::{FoldServer, FooterPart, FooterSource};
 use crate::services::agents::{
     AgentOverview, ClaimSummary, OverviewFilter, PauseState, ProposalSummary, QueueEntry,
     QueuedWorkerStart, RestartOutcome, StartOutcome, StartWorker, StartedWorker, WorkerOverview,
     WorkspaceSummary,
 };
+use crate::services::agents::{AgentService, NeedsYouItem, SessionContext};
 
 pub const GET_ACTIVITY: &str = "get_activity";
 pub const LIST_AGENTS: &str = "list_agents";
@@ -35,6 +41,7 @@ pub const WRITE_HANDOFF: &str = "write_handoff";
 pub const PAUSE_PROJECT: &str = "pause_project";
 pub const RESUME_PROJECT: &str = "resume_project";
 pub const RESTART_WORKER: &str = "restart_worker";
+pub const GET_NEEDS_YOU: &str = "get_needs_you";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -251,6 +258,11 @@ pub fn tools() -> Vec<Tool> {
             RESTART_WORKER,
             "Start a worker again in a new Claude Code session, for example when its session is broken or fold says it stalled: the main agent for a worker of any role, when fold tells it that the worker stalled and otherwise only when the user asks, and a lead for a worker it started (an area lead's task workers, the review lead's reviewers); any other caller is refused with main_agent_required. fold stops a running worker first. The worker keeps its name, claims, tasks, proposals and workers; list_workers shows its newest old session ids in previous_sessions with previous_session_count, and the new session gets the role's first turn. Refused with project_paused while paused and over the worker limits, also when the free place goes first to a worker that fold resumes for owed work (worker_limit_reached with details.reason owed_resume_waits); with queue true the restart of a task worker or reviewer waits instead and gives queued with its position, and fold restarts it when a place frees and tells you.",
             schema_for_type::<RestartWorkerInput>(),
+        ),
+        Tool::new(
+            GET_NEEDS_YOU,
+            "Main agent only: list every item that waits for the user, oldest first, the same items as Needs you in the web app: open asks, permission questions, human reviews, request drafts, ready human tasks, holds, stalls, stale claims, worker and folder problems. Each item has its kind, its id, its agent, its age and one line. Call it before you list open items for the user; never repeat such a list from memory.",
+            schema_for_type::<GetNeedsYouInput>(),
         ),
     ]
 }
@@ -767,5 +779,160 @@ mod tests {
         assert!(text.ends_with('…'));
         assert_eq!(shown["chars"], HANDOFF_PREVIEW_CHARS + 50);
         assert_eq!(shown["session"], "s1");
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct GetNeedsYouInput {}
+
+pub async fn get_needs_you(
+    server: &FoldServer,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let _: GetNeedsYouInput = parse(arguments)?;
+    let actor = server.actor().await?;
+    let project = server.project()?;
+    let items = project
+        .needs_you_for(&actor, server.notify.as_ref())
+        .await?;
+    let now = project.clock.now();
+    Ok(json!({
+        "items": items.iter().map(|item| needs_you_json(item, now)).collect::<Vec<_>>()
+    }))
+}
+
+/// The longest `line` of a Needs you item in the main agent's list.
+const NEEDS_YOU_LINE: usize = 120;
+
+/// One item, compact: its kind, the public id a person answers it by, the agent it is about, its age and one line; a field the item does not have is left out.
+fn needs_you_json(item: &NeedsYouItem, now: Timestamp) -> Value {
+    let mut object = serde_json::Map::new();
+    object.insert("kind".into(), json!(item.kind.as_str()));
+    if let Some(id) = needs_you_id(item) {
+        object.insert("id".into(), json!(id));
+    }
+    if let Some(agent) = item.agent.as_ref().or(item.agents.first()) {
+        object.insert("agent".into(), json!(agent.as_str()));
+    }
+    if item.agents.len() > 1 {
+        let agents: Vec<&str> = item.agents.iter().map(AgentName::as_str).collect();
+        object.insert("agents".into(), json!(agents));
+    }
+    if let (Some(task), true) = (
+        item.task,
+        needs_you_id(item) != item.task.map(|t| t.to_string()),
+    ) {
+        object.insert("task".into(), json!(task.to_string()));
+    }
+    object.insert("age".into(), json!(age(item.since, now)));
+    if let Some(line) = needs_you_line(item) {
+        object.insert("line".into(), json!(shorten(&line, NEEDS_YOU_LINE)));
+    }
+    Value::Object(object)
+}
+
+/// The id a person answers the item by: the ask's message, the permission question, the proposal of a review, the request of a draft, else the task.
+fn needs_you_id(item: &NeedsYouItem) -> Option<String> {
+    if let Some((message, _)) = item.message {
+        return Some(message.to_string());
+    }
+    if let Some(question) = item.question {
+        return Some(question.to_string());
+    }
+    if let Some(proposal) = item.proposal {
+        return Some(proposal.to_string());
+    }
+    if let Some(request) = item.request {
+        return Some(request.to_string());
+    }
+    item.task.map(|task| task.to_string())
+}
+
+fn needs_you_line(item: &NeedsYouItem) -> Option<String> {
+    if let Some(line) = &item.first_line {
+        return Some(line.clone());
+    }
+    if let Some(tool) = &item.tool {
+        return Some(format!("asks to use {tool}"));
+    }
+    match (&item.title, &item.reason) {
+        (Some(title), Some(reason)) => Some(format!("{title}: {reason}")),
+        (Some(line), None) | (None, Some(line)) => Some(line.clone()),
+        (None, None) => (!item.paths.is_empty()).then(|| item.paths.join(", ")),
+    }
+}
+
+/// How long an item has waited: seconds under a minute, minutes under an hour, hours under two days, else days, such as `40s`, `12m`, `30h` or `2d`.
+fn age(since: Timestamp, now: Timestamp) -> String {
+    let seconds = (now.as_millis() - since.as_millis()).max(0) / 1000;
+    match seconds {
+        0..60 => format!("{seconds}s"),
+        60..3600 => format!("{}m", seconds / 60),
+        3600..172_800 => format!("{}h", seconds / 3600),
+        _ => format!("{}d", seconds / 86_400),
+    }
+}
+
+/// The `wait for the user` part of the main agent's footer: how many items of [`get_needs_you`] wait. Every other agent counts none, without reading the list.
+pub struct NeedsYouFooter {
+    agents: AgentService,
+    project: std::sync::Weak<crate::projects::ProjectHandle>,
+    notify: Option<crate::services::projects::notify::NotifySettings>,
+}
+
+impl NeedsYouFooter {
+    pub fn new(
+        agents: AgentService,
+        project: std::sync::Weak<crate::projects::ProjectHandle>,
+        notify: Option<crate::services::projects::notify::NotifySettings>,
+    ) -> Self {
+        Self {
+            agents,
+            project,
+            notify,
+        }
+    }
+
+    async fn waiting(&self, session: &SessionContext) -> Result<u64, FoldError> {
+        let Some(project) = self.project.upgrade() else {
+            return Ok(0);
+        };
+        let actor = self.agents.actor(session).await.map_err(from_agent)?;
+        let standing = fold_store::agents::standing_of(project.store.read(), &actor)
+            .await
+            .map_err(crate::services::error::from_store)?;
+        if !standing.is_main_agent() {
+            return Ok(0);
+        }
+        let items = project.needs_you_for(&actor, self.notify.as_ref()).await?;
+        Ok(u64::try_from(items.len()).unwrap_or(u64::MAX))
+    }
+}
+
+impl FooterSource for NeedsYouFooter {
+    fn part(&self) -> FooterPart {
+        FooterPart::WaitForUser
+    }
+
+    fn count<'a>(
+        &'a self,
+        session: &'a SessionContext,
+    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
+        Box::pin(async move {
+            if session.agent.is_none() {
+                return 0;
+            }
+            match self.waiting(session).await {
+                Ok(count) => count,
+                Err(error) => {
+                    tracing::warn!(
+                        code = error.code(),
+                        "could not count the items that wait for the user"
+                    );
+                    0
+                }
+            }
+        })
     }
 }

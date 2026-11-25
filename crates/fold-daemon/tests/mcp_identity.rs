@@ -302,6 +302,7 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
             "resume_project",
             "write_handoff",
             "restart_worker",
+            "get_needs_you",
             "get_events",
             "wait_for_events",
             "get_repository_state",

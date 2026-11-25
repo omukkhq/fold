@@ -714,6 +714,28 @@ async fn a_read_or_a_call_of_its_worker_watches_a_waiting_workspace_at_once() {
 }
 
 #[tokio::test]
+async fn a_task_read_scans_its_waiting_workspace_and_leaves_the_others_waiting() {
+    let fx = Fixture::new().await;
+    let (first, first_dir) = fx.create(&fx.frontend, 1).await;
+    let (second, _) = fx.create(&fx.backend, 2).await;
+    for workspace in [first, second] {
+        fx.live.detach(workspace).await;
+        fx.live.attach_in_group(workspace).await.unwrap();
+    }
+    fs::write(first_dir.join("edit.txt"), "made before the open\n").unwrap();
+
+    let detail = fx.tasks.get_view(t(1)).await.unwrap();
+    assert_eq!(detail.workspace, Some(first));
+    let state = fx.live.get(first).expect("the task read scanned it");
+    assert_eq!(
+        files(&state.view),
+        [row("edit.txt", None, ChangeKind::Added, 1, 0)]
+    );
+    assert!(fx.live.get(second).is_none());
+    assert_eq!(fx.live.waiting(), 1);
+}
+
+#[tokio::test]
 async fn a_workspace_whose_owner_left_rests_on_the_timer_scan_and_shows_its_changes_within_rescan_seconds()
  {
     let counting = Counting::default();

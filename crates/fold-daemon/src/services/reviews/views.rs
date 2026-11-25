@@ -110,6 +110,7 @@ impl ReviewService {
         let holder = reviews::unreleased_review_claim(&mut *read, proposal).await?;
         let checks = ReviewService::version_checks(
             &mut read,
+            &self.checks,
             facts.proposal.task,
             proposal,
             detail.selected.version,
