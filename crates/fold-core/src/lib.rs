@@ -37,8 +37,8 @@ pub use config::{
 };
 pub use error::{FoldError, codes};
 pub use events::{
-    AgentEventFacts, Event, EventActor, EventError, EventFilter, EventType, LiveEvent, NewEvent,
-    concerns,
+    AgentEventFacts, Event, EventActor, EventError, EventFilter, EventType, LIFECYCLE, LiveEvent,
+    NewEvent, concerns,
 };
 pub use ids::{
     ChangesetId, CheckRunId, ChecklistItemId, CheckpointId, CommentId, IdKind, IdParseError,
