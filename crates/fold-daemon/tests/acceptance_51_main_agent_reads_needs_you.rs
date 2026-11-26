@@ -54,7 +54,7 @@ async fn footer(h: &Harness) -> String {
         .unwrap_or_default()
 }
 
-/// Acceptance 51, the main agent reads what waits for the user: two agents ask the humans and a task waits for a person. The main agent's `get_needs_you` lists the same items as the web app's Needs you, each with its id, agent, age and one line, and its footer counts them; another agent is refused. A human answers one ask in the web app, and fold tells the main agent, whose list and count drop that ask.
+/// Acceptance 51, the main agent reads what waits for the user: two agents ask the humans and a task waits for a person. The main agent's `get_needs_you` lists the same items as the web app's Needs you, each with its id, agent, age and one line, and its footer counts them; another agent is refused. A human answers one ask in the web app, and fold tells the main agent in its digest of notices that need no action, and its list and count drop that ask.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acceptance_51_the_main_agent_lists_what_waits_for_the_user_and_hears_a_human_answer() {
     let h = Harness::start_without_leads().await;
@@ -132,8 +132,25 @@ async fn acceptance_51_the_main_agent_lists_what_waits_for_the_user_and_hears_a_
     assert_eq!(status, StatusCode::CREATED, "{reply}");
     let reply = reply["id"].as_str().unwrap().to_owned();
     let expected = format!(
-        "fold: human:{HUMAN} answered {color} in {reply} outside your session; it does not wait for the user now. Call get_thread."
+        "fold digest, no action needed (1): human:{HUMAN} answered {color} in {reply} outside your session; it does not wait for the user now. Call get_thread."
     );
+    // The notice needs no action, so it waits in the main agent's digest until fifteen minutes pass.
+    let main = fold_core::AgentName::parse(MAIN).unwrap();
+    eventually(WAIT, async || {
+        match h.handle.push.waiting_in_digest(&main) {
+            1 => Ok(()),
+            waiting => Err(waiting),
+        }
+    })
+    .await;
+    let due = h
+        .project
+        .clock()
+        .advance(std::time::Duration::from_millis(
+            u64::try_from(fold_daemon::push::DIGEST_WAIT_MS).unwrap(),
+        ))
+        .unwrap();
+    h.handle.push.send_due_digests(due);
     let notice = tokio::time::timeout(WAIT, async {
         loop {
             let post = inbox.next().await;
