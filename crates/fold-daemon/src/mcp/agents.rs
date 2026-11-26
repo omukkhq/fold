@@ -21,13 +21,13 @@ use fold_core::Timestamp;
 
 use super::error::{from_agent, from_review};
 use super::parse;
-use super::{FoldServer, FooterPart, FooterSource};
+use super::{FoldServer, FooterCounts, FooterPart, FooterSource};
 use crate::services::agents::{
     AgentOverview, ClaimSummary, OverviewFilter, PauseState, ProposalSummary, QueueEntry,
     QueuedWorkerStart, RestartOutcome, StartOutcome, StartWorker, StartedWorker, WorkerOverview,
     WorkspaceSummary,
 };
-use crate::services::agents::{AgentService, NeedsYouItem, SessionContext};
+use crate::services::agents::{AgentService, NeedsYouGroup, NeedsYouItem, SessionContext};
 
 pub const GET_ACTIVITY: &str = "get_activity";
 pub const LIST_AGENTS: &str = "list_agents";
@@ -874,7 +874,7 @@ fn age(since: Timestamp, now: Timestamp) -> String {
     }
 }
 
-/// The `wait for the user` part of the main agent's footer: how many items of [`get_needs_you`] wait. Every other agent counts none, without reading the list.
+/// The parts of the main agent's footer that count the items of [`get_needs_you`] from one read of the list: `questions for the user`, `wait for the user` for the other items and `held` for the holds. Every other agent counts none, without reading the list.
 pub struct NeedsYouFooter {
     agents: AgentService,
     project: std::sync::Weak<crate::projects::ProjectHandle>,
@@ -894,43 +894,54 @@ impl NeedsYouFooter {
         }
     }
 
-    async fn waiting(&self, session: &SessionContext) -> Result<u64, FoldError> {
+    async fn waiting(&self, session: &SessionContext) -> Result<FooterCounts, FoldError> {
         let Some(project) = self.project.upgrade() else {
-            return Ok(0);
+            return Ok(FooterCounts::default());
         };
         let actor = self.agents.actor(session).await.map_err(from_agent)?;
         let standing = fold_store::agents::standing_of(project.store.read(), &actor)
             .await
             .map_err(crate::services::error::from_store)?;
         if !standing.is_main_agent() {
-            return Ok(0);
+            return Ok(FooterCounts::default());
         }
         let items = project.needs_you_for(&actor, self.notify.as_ref()).await?;
-        Ok(u64::try_from(items.len()).unwrap_or(u64::MAX))
+        Ok(needs_you_counts(&items))
     }
 }
 
-impl FooterSource for NeedsYouFooter {
-    fn part(&self) -> FooterPart {
-        FooterPart::WaitForUser
-    }
+/// The footer counts of the main agent's items, one part for each [`NeedsYouGroup`].
+fn needs_you_counts(items: &[NeedsYouItem]) -> FooterCounts {
+    let count = |group: NeedsYouGroup| {
+        let n = items
+            .iter()
+            .filter(|item| item.kind.group() == group)
+            .count();
+        u64::try_from(n).unwrap_or(u64::MAX)
+    };
+    FooterCounts::default()
+        .with(FooterPart::QuestionsForUser, count(NeedsYouGroup::Question))
+        .with(FooterPart::WaitForUser, count(NeedsYouGroup::Waiting))
+        .with(FooterPart::Held, count(NeedsYouGroup::Held))
+}
 
+impl FooterSource for NeedsYouFooter {
     fn count<'a>(
         &'a self,
         session: &'a SessionContext,
-    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = FooterCounts> + Send + 'a>> {
         Box::pin(async move {
             if session.agent.is_none() {
-                return 0;
+                return FooterCounts::default();
             }
             match self.waiting(session).await {
-                Ok(count) => count,
+                Ok(counts) => counts,
                 Err(error) => {
                     tracing::warn!(
                         code = error.code(),
                         "could not count the items that wait for the user"
                     );
-                    0
+                    FooterCounts::default()
                 }
             }
         })

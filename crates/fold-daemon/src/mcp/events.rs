@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 
 use super::error::{from_agent, from_events, from_message};
 use super::parse;
-use super::{FoldServer, FooterPart, FooterSource};
+use super::{FoldServer, FooterCounts, FooterPart, FooterSource, footer};
 use crate::services::agents::{AgentService, SessionContext};
 use crate::services::events::{
     EventPage, EventQuery, EventService, WaitQuery, WaitStep, cap_for_cache,
@@ -288,15 +288,11 @@ impl NewEventsFooter {
 }
 
 impl FooterSource for NewEventsFooter {
-    fn part(&self) -> FooterPart {
-        FooterPart::NewEvents
-    }
-
     fn count<'a>(
         &'a self,
         session: &'a SessionContext,
-    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
-        Box::pin(async move {
+    ) -> Pin<Box<dyn Future<Output = FooterCounts> + Send + 'a>> {
+        footer::single(FooterPart::NewEvents, async move {
             let Some(agent) = session.agent.as_ref() else {
                 return 0;
             };

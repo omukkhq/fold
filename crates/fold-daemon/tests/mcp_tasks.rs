@@ -8,7 +8,7 @@ use crate::common::roles::{give_claim, give_role};
 use fold_core::events::types;
 use fold_core::tasks::{PlanRef, PlannedReview, PlannedTask};
 use fold_core::{Actor, AgentName, HumanName, Role, Tag, TaskId, TaskStatus};
-use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
+use fold_daemon::mcp::{FoldServer, FooterCounts, FooterPart, FooterSource};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBus, EventService};
 use fold_daemon::services::messages::MessageService;
@@ -32,15 +32,11 @@ type Client = RunningService<RoleClient, ()>;
 struct One;
 
 impl FooterSource for One {
-    fn part(&self) -> FooterPart {
-        FooterPart::Unread
-    }
-
     fn count<'a>(
         &'a self,
         _session: &'a SessionContext,
-    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
-        Box::pin(async { 1 })
+    ) -> Pin<Box<dyn Future<Output = FooterCounts> + Send + 'a>> {
+        Box::pin(async move { FooterCounts::default().with(FooterPart::Unread, 1) })
     }
 }
 

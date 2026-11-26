@@ -981,6 +981,39 @@ async fn a_ready_match_wins_over_a_deadline_that_has_passed() {
 }
 
 #[tokio::test]
+async fn a_task_worker_and_a_reviewer_see_no_new_events_count() {
+    let fx = Fixture::new().await;
+    fx.create_task().await;
+    for (agent, role) in [
+        ("builder", fold_core::Role::TaskWorker),
+        ("checker", fold_core::Role::Reviewer),
+    ] {
+        crate::common::roles::give_role(fx.store(), agent, role, None).await;
+        let session = fx.connect(agent).await;
+        call(&session, "get_events", json!({})).await;
+        fx.commit(vec![
+            new_event(types::MAIN_ADVANCED, "fold"),
+            new_event(types::MAIN_ADVANCED, "fold"),
+        ])
+        .await;
+        let result = call_raw(&session, "list_agents", json!({})).await;
+        assert_eq!(
+            result.content.len(),
+            1,
+            "{agent} gets no footer line for new events: {result:?}"
+        );
+    }
+    let lead = fx.connect("backend").await;
+    fx.commit(vec![new_event(types::MAIN_ADVANCED, "fold")])
+        .await;
+    let result = call_raw(&lead, "list_agents", json!({})).await;
+    assert!(
+        result.content.len() == 2,
+        "an agent without a short-lived role still counts them: {result:?}"
+    );
+}
+
+#[tokio::test]
 async fn the_footer_counts_new_events_that_concern_the_agent() {
     let fx = Fixture::new().await;
     fx.create_task().await;

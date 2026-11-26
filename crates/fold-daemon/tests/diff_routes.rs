@@ -10,7 +10,7 @@ use std::time::Duration;
 use crate::daemon_support::{Opened, agent, t};
 use axum::http::StatusCode;
 use fold_core::{Address, HumanName, MessageBody, RevisionId};
-use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
+use fold_daemon::mcp::{FoldServer, FooterCounts, FooterPart, FooterSource};
 use fold_daemon::services::agents::SessionContext;
 use fold_daemon::services::events::EventService;
 use fold_daemon::services::messages::{MessageService, SendMessage};
@@ -454,15 +454,11 @@ async fn bad_references_unknown_ids_and_bad_paths_give_their_codes() {
 struct OneUnread;
 
 impl FooterSource for OneUnread {
-    fn part(&self) -> FooterPart {
-        FooterPart::Unread
-    }
-
     fn count<'a>(
         &'a self,
         _session: &'a SessionContext,
-    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
-        Box::pin(async { 1 })
+    ) -> Pin<Box<dyn Future<Output = FooterCounts> + Send + 'a>> {
+        Box::pin(async move { FooterCounts::default().with(FooterPart::Unread, 1) })
     }
 }
 

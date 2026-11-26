@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::common::roles::{give_main_tag, give_review_claim, give_role};
 use crate::proposal_tools_support::Fixture;
 use fold_core::roles::Role;
-use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
+use fold_daemon::mcp::{FoldServer, FooterCounts, FooterPart, FooterSource};
 use fold_daemon::services::agents::SessionContext;
 use fold_daemon::services::events::EventService;
 use fold_daemon::services::messages::MessageService;
@@ -49,15 +49,11 @@ type Client = RunningService<RoleClient, ()>;
 struct One;
 
 impl FooterSource for One {
-    fn part(&self) -> FooterPart {
-        FooterPart::Unread
-    }
-
     fn count<'a>(
         &'a self,
         _session: &'a SessionContext,
-    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
-        Box::pin(async { 1 })
+    ) -> Pin<Box<dyn Future<Output = FooterCounts> + Send + 'a>> {
+        Box::pin(async move { FooterCounts::default().with(FooterPart::Unread, 1) })
     }
 }
 

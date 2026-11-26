@@ -318,9 +318,7 @@ impl FoldServer {
             .iter()
             .filter(|s| s.before_call() == before_call)
         {
-            let part = source.part();
-            let count = source.count(&session).await;
-            counts = counts.with(part, counts.get(part) + count);
+            counts = counts.plus(source.count(&session).await);
         }
         counts
     }

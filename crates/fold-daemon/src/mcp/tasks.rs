@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use super::error::{from_agent, from_task};
 use super::parse;
-use super::{FoldServer, FooterPart, FooterSource};
+use super::{FoldServer, FooterCounts, FooterPart, FooterSource, footer};
 use crate::services::agents::{AgentService, SessionContext};
 use crate::services::tasks::{
     ChecklistItemPatch, ClaimView, Claimed, CreateTask, DetailEdge, ItemContent, LabelView,
@@ -1012,10 +1012,6 @@ impl ClaimsNearStaleFooter {
 }
 
 impl FooterSource for ClaimsNearStaleFooter {
-    fn part(&self) -> FooterPart {
-        FooterPart::ClaimsNearStale
-    }
-
     fn before_call(&self) -> bool {
         true
     }
@@ -1023,8 +1019,8 @@ impl FooterSource for ClaimsNearStaleFooter {
     fn count<'a>(
         &'a self,
         session: &'a SessionContext,
-    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
-        Box::pin(async move {
+    ) -> Pin<Box<dyn Future<Output = FooterCounts> + Send + 'a>> {
+        footer::single(FooterPart::ClaimsNearStale, async move {
             if session.agent.is_none() {
                 return 0;
             }

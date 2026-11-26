@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 
 use super::error::{from_agent, from_message};
 use super::parse;
-use super::{FoldServer, FooterPart, FooterSource};
+use super::{FoldServer, FooterCounts, FooterPart, FooterSource, footer};
 use crate::services::agents::{AgentService, SessionContext};
 use crate::services::messages::{InboxItem, MessageService, MessageView, OpenAskView, SendMessage};
 
@@ -559,15 +559,11 @@ impl UnreadFooter {
 }
 
 impl FooterSource for UnreadFooter {
-    fn part(&self) -> FooterPart {
-        FooterPart::Unread
-    }
-
     fn count<'a>(
         &'a self,
         session: &'a SessionContext,
-    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
-        Box::pin(async move {
+    ) -> Pin<Box<dyn Future<Output = FooterCounts> + Send + 'a>> {
+        footer::single(FooterPart::Unread, async move {
             if session.agent.is_none() {
                 return 0;
             }

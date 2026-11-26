@@ -146,6 +146,87 @@ impl NeedsYouKind {
     }
 }
 
+/// How the main agent counts and orders an item: an open question first, a hold apart from the rest, because it waits until a human takes it off and not for an answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NeedsYouGroup {
+    Question,
+    Waiting,
+    Held,
+}
+
+impl NeedsYouKind {
+    pub fn group(self) -> NeedsYouGroup {
+        match self {
+            NeedsYouKind::Question => NeedsYouGroup::Question,
+            NeedsYouKind::Hold => NeedsYouGroup::Held,
+            NeedsYouKind::Permission
+            | NeedsYouKind::HumanReview
+            | NeedsYouKind::RequestDraft
+            | NeedsYouKind::HumanTask
+            | NeedsYouKind::HumanChange
+            | NeedsYouKind::HeadMoved
+            | NeedsYouKind::FolderHeld
+            | NeedsYouKind::UnstashConflicted
+            | NeedsYouKind::ChecksFileInvalidOnMain
+            | NeedsYouKind::WorkerUnreachable
+            | NeedsYouKind::WorkerModelUnreachable
+            | NeedsYouKind::ClaudeNotFound
+            | NeedsYouKind::NotifyTargetOff
+            | NeedsYouKind::AgentChange
+            | NeedsYouKind::SharedChanged
+            | NeedsYouKind::WorkerStalled
+            | NeedsYouKind::UsageLimit
+            | NeedsYouKind::StaleClaim
+            | NeedsYouKind::LoginRefused => NeedsYouGroup::Waiting,
+        }
+    }
+}
+
+/// The main agent's list of `items`: one row for each thing a human does, open questions first, then the other items, then the holds, each group oldest first. A held human task shows only as its hold, and a stalled worker whose claim went stale only as the stale claim, because the human does one thing for both.
+pub fn for_the_main_agent(items: Vec<NeedsYouItem>) -> Vec<NeedsYouItem> {
+    let held: BTreeSet<TaskId> = items
+        .iter()
+        .filter(|item| item.kind == NeedsYouKind::Hold)
+        .filter_map(|item| item.task)
+        .collect();
+    let stale: BTreeSet<AgentName> = items
+        .iter()
+        .filter(|item| item.kind == NeedsYouKind::StaleClaim)
+        .filter_map(|item| item.agent.clone())
+        .collect();
+    let mut seen = BTreeSet::new();
+    let mut kept: Vec<NeedsYouItem> = items
+        .into_iter()
+        .filter(|item| match item.kind {
+            NeedsYouKind::HumanTask => item.task.is_none_or(|task| !held.contains(&task)),
+            NeedsYouKind::WorkerStalled => item
+                .agent
+                .as_ref()
+                .is_none_or(|agent| !stale.contains(agent)),
+            _ => true,
+        })
+        .filter(|item| seen.insert(row_key(item)))
+        .collect();
+    kept.sort_by_key(|item| (item.kind.group(), item.since));
+    kept
+}
+
+/// What makes two items one row: the same kind about the same ids.
+fn row_key(item: &NeedsYouItem) -> Vec<Option<String>> {
+    vec![
+        Some(item.kind.as_str().to_owned()),
+        item.message.map(|(message, _)| message.to_string()),
+        item.question.map(|question| question.to_string()),
+        item.task.map(|task| task.to_string()),
+        item.proposal.map(|proposal| proposal.to_string()),
+        item.request.map(|request| request.to_string()),
+        item.agent.as_ref().map(|agent| agent.as_str().to_owned()),
+        item.about.clone(),
+        item.target.map(|target| target.to_string()),
+        item.limit.map(|limit| limit.as_str().to_owned()),
+    ]
+}
+
 /// What a human does about a `SharedChanged` item.
 pub const SHARED_CHANGED_NEXT: &str =
     "check the shared files in the project folder, then run `fld share --dismiss`";
@@ -733,6 +814,93 @@ mod tests {
         );
         assert_eq!(NeedsYouKind::AgentChange.screen(), Screen::Repository);
         assert_eq!(NeedsYouKind::AgentChange.as_str(), "agent_change");
+    }
+
+    fn on_task(kind: NeedsYouKind, since: i64, task: u32) -> NeedsYouItem {
+        let mut item = NeedsYouItem::new(kind, at(since));
+        item.task = Some(TaskId::from_number(task).unwrap());
+        item
+    }
+
+    fn question(since: i64, message: u32, task: u32) -> NeedsYouItem {
+        let mut item = on_task(NeedsYouKind::Question, since, task);
+        let id = MessageId::from_number(message).unwrap();
+        item.message = Some((id, id));
+        item
+    }
+
+    #[test]
+    fn the_main_agent_sees_questions_first_then_the_rest_then_the_holds() {
+        let items = vec![
+            on_task(NeedsYouKind::Hold, 1, 4),
+            on_task(NeedsYouKind::HumanReview, 2, 5),
+            question(3, 9, 6),
+            question(4, 10, 6),
+        ];
+        let listed = for_the_main_agent(items);
+        assert_eq!(
+            kinds(&listed),
+            [
+                NeedsYouKind::Question,
+                NeedsYouKind::Question,
+                NeedsYouKind::HumanReview,
+                NeedsYouKind::Hold
+            ]
+        );
+        assert_eq!(
+            listed[0].message.map(|(id, _)| id.to_string()).as_deref(),
+            Some("m-9"),
+            "two questions on one task stay two rows, oldest first"
+        );
+    }
+
+    #[test]
+    fn the_main_agent_sees_one_row_for_each_thing_a_human_does() {
+        let agent = AgentName::parse("backend").unwrap();
+        let mut stalled = on_task(NeedsYouKind::WorkerStalled, 1, 3);
+        stalled.agent = Some(agent.clone());
+        let mut stale = on_task(NeedsYouKind::StaleClaim, 2, 3);
+        stale.agent = Some(agent);
+        let items = vec![
+            on_task(NeedsYouKind::HumanTask, 1, 7),
+            on_task(NeedsYouKind::Hold, 2, 7),
+            on_task(NeedsYouKind::HumanTask, 3, 8),
+            on_task(NeedsYouKind::HumanTask, 3, 8),
+            stalled,
+            stale,
+        ];
+        let listed = for_the_main_agent(items);
+        assert_eq!(
+            kinds(&listed),
+            [
+                NeedsYouKind::StaleClaim,
+                NeedsYouKind::HumanTask,
+                NeedsYouKind::Hold
+            ]
+        );
+        assert_eq!(
+            listed[1].task.map(|t| t.to_string()).as_deref(),
+            Some("T-8")
+        );
+        assert_eq!(
+            listed[2].task.map(|t| t.to_string()).as_deref(),
+            Some("T-7")
+        );
+        let mut lone = NeedsYouItem::new(NeedsYouKind::WorkerStalled, at(1));
+        lone.agent = Some(AgentName::parse("web").unwrap());
+        assert_eq!(
+            kinds(&for_the_main_agent(vec![lone])),
+            [NeedsYouKind::WorkerStalled]
+        );
+    }
+
+    #[test]
+    fn every_kind_but_questions_and_holds_waits_in_the_middle_group() {
+        assert_eq!(NeedsYouKind::Question.group(), NeedsYouGroup::Question);
+        assert_eq!(NeedsYouKind::Hold.group(), NeedsYouGroup::Held);
+        assert_eq!(NeedsYouKind::LoginRefused.group(), NeedsYouGroup::Waiting);
+        assert!(NeedsYouGroup::Question < NeedsYouGroup::Waiting);
+        assert!(NeedsYouGroup::Waiting < NeedsYouGroup::Held);
     }
 
     #[test]

@@ -44,7 +44,8 @@ pub use cost::{ProjectCost, cost_totals};
 pub use fold_core::worker_folders::{FolderDecision, FolderKeep};
 pub use folders::{WorkerFolder, collect_worker_folders};
 pub use needs_you::{
-    NeedsYouAction, NeedsYouItem, NeedsYouKind, Screen, needs_you, with_folder_attention,
+    NeedsYouAction, NeedsYouGroup, NeedsYouItem, NeedsYouKind, Screen, for_the_main_agent,
+    needs_you, with_folder_attention,
 };
 pub use overview::{
     AgentAttention, AgentOverview, ClaimSummary, MAX_OVERVIEW_EVENTS, OverviewFilter,

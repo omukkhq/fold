@@ -438,7 +438,7 @@ impl ProjectHandle {
         ))
     }
 
-    /// [`ProjectHandle::needs_you`] for the main agent or a human; another agent is `main_agent_required`, as for every agent's open asks.
+    /// [`ProjectHandle::needs_you`] as the main agent reads it ([`crate::services::agents::for_the_main_agent`]), for the main agent or a human; another agent is `main_agent_required`, as for every agent's open asks.
     pub async fn needs_you_for(
         &self,
         actor: &Actor,
@@ -448,7 +448,9 @@ impl ProjectHandle {
             .await
             .map_err(crate::services::error::from_store)?;
         fold_core::policy::can_list_open_asks(actor, standing)?;
-        self.needs_you(notify).await
+        Ok(crate::services::agents::for_the_main_agent(
+            self.needs_you(notify).await?,
+        ))
     }
 
     /// The message service of this project, which reaches the humans of `registry`.

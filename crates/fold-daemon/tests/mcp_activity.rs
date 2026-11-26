@@ -8,7 +8,7 @@ use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{
     Actor, AgentActor, AgentName, EventFilter, TaskDescription, TaskId, TaskTitle, WorkerName,
 };
-use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
+use fold_daemon::mcp::{FoldServer, FooterCounts, FooterPart, FooterSource};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBus, EventService};
 use fold_daemon::services::messages::MessageService;
@@ -35,15 +35,11 @@ type Client = RunningService<RoleClient, ()>;
 struct Fixed;
 
 impl FooterSource for Fixed {
-    fn part(&self) -> FooterPart {
-        FooterPart::Unread
-    }
-
     fn count<'a>(
         &'a self,
         _session: &'a SessionContext,
-    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
-        Box::pin(async move { 2 })
+    ) -> Pin<Box<dyn Future<Output = FooterCounts> + Send + 'a>> {
+        Box::pin(async move { FooterCounts::default().with(FooterPart::Unread, 2) })
     }
 }
 

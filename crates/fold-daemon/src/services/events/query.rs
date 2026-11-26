@@ -249,13 +249,17 @@ impl EventService {
         read_since_cursor(&self.store, worker, query).await
     }
 
-    /// How many events after the worker's cursor concern its agent by the rule of `fold_core::concerns`, counted up to one more than [`NEW_EVENTS_CAP`]. It only reads, in one read transaction, so building a footer never moves the cursor and never loads the events it counts.
+    /// How many events after the worker's cursor concern its agent by the rule of `fold_core::concerns`, counted up to one more than [`NEW_EVENTS_CAP`]. A task worker or a reviewer counts none: fold pushes it what its work needs, and it never acted on the count. It only reads, in one read transaction, so building a footer never moves the cursor and never loads the events it counts.
     pub async fn new_event_count(
         &self,
         worker: &WorkerRow,
         agent: &AgentName,
     ) -> Result<u64, EventsError> {
         let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
+        let standing = fold_store::agents::standing(&mut *tx, agent).await?;
+        if standing.role.is_some_and(|role| !role.is_long_lived()) {
+            return Ok(0);
+        }
         let after = events::cursor(&mut *tx, worker.id).await?;
         let facts = events::agent_facts(&mut tx, worker.agent_id, agent).await?;
         let mut tasks = facts.claimed.clone();
