@@ -250,7 +250,13 @@ async fn a_lead_past_its_threshold_hands_off_to_a_fresh_session() {
             .all(|(kind, _)| kind != "worker.stopped" && kind != "worker.failed"),
         "a refresh is not a stop"
     );
-    let listed = harness.call(MAIN, "list_workers", json!({})).await;
+    let short = harness.call(MAIN, "list_workers", json!({})).await;
+    let short = &short["workers"][0];
+    assert!(short["handoff"].get("text").is_none(), "{short}");
+    assert_eq!(short["handoff"]["chars"], note.chars().count());
+    let listed = harness
+        .call(MAIN, "list_workers", json!({"include_handoffs": true}))
+        .await;
     let listed = &listed["workers"][0];
     assert_eq!(listed["handoff"]["text"], note);
     assert_eq!(listed["handoff"]["chars"], note.chars().count());

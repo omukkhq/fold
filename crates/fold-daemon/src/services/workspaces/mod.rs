@@ -49,7 +49,7 @@ pub(crate) use adoption::{adopt_if_orphaned, hand_over_proposal};
 pub use attachments::WorkspaceFile;
 pub use auto::{AutoCheckpoint, QuietCheckpoint};
 pub(crate) use auto::{auto_checkpoint_in_tx, pruned_event};
-pub use changes::{WorkspaceChanges, WorkspaceEntry};
+pub use changes::{ChangesView, CheckoutChanges, WorkspaceChanges, WorkspaceEntry};
 pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};

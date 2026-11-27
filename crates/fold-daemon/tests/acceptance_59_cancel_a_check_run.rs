@@ -181,7 +181,11 @@ async fn acceptance_59_an_outside_signal_stops_the_run() {
     assert_eq!(event["data"]["reason"], "killed", "{event}");
     ended(child).await;
     let read = harness
-        .call("backend", "get_check_run", json!({"run": run}))
+        .call(
+            "backend",
+            "get_check_run",
+            json!({"run": run, "detail": "full"}),
+        )
         .await;
     let outcomes: Vec<&str> = read["results"]
         .as_array()

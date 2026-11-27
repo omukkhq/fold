@@ -156,6 +156,9 @@ pub struct ListWorkersInput {
     /// True gives each area's instructions. Leave it out to give only instructions_chars, their length.
     #[serde(default)]
     pub include_instructions: bool,
+    /// True gives the start of each worker's newest hand-off note in handoff.text. Leave it out to give only the note's session, created_at and chars, its length.
+    #[serde(default)]
+    pub include_handoffs: bool,
     /// Only this area and its workers, such as web, with stopped_count counting its stopped workers. Leave it out for every area.
     #[serde(default)]
     pub area: Option<String>,
@@ -231,7 +234,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_WORKERS,
-            "List the areas with their leads, models and MCP servers, and the workers that run or failed, each with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human. A worker whose last turn ended because Claude Code could not reach the model or reached a usage limit, or whose login the API refused, has waits_for, network, usage_limit or login: fold runs that turn again in its session once the cause has passed (for login, once a person gives the account a working token or switches the account), so do not restart or replace it. stopped_count counts the stopped workers; pass include_stopped true to list them, such as to read a finished worker's sessions, and include_instructions true for each area's instructions. queue lists the worker starts that wait for a place, in the order fold runs them. A reviewer that fixes a member of a serial lane on main, after a conflict or failed integration checks once the lane moved, has lane_fix: each proposal with its lane name, position and held reason.",
+            "List the areas with their leads, models and MCP servers, and the workers that run or failed, each with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note (its session, time and length; pass include_handoffs true for the start of its text) and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human. A worker whose last turn ended because Claude Code could not reach the model or reached a usage limit, or whose login the API refused, has waits_for, network, usage_limit or login: fold runs that turn again in its session once the cause has passed (for login, once a person gives the account a working token or switches the account), so do not restart or replace it. stopped_count counts the stopped workers; pass include_stopped true to list them, such as to read a finished worker's sessions, and include_instructions true for each area's instructions. queue lists the worker starts that wait for a place, in the order fold runs them. A reviewer that fixes a member of a serial lane on main, after a conflict or failed integration checks once the lane moved, has lane_fix: each proposal with its lane name, position and held reason.",
             schema_for_type::<ListWorkersInput>(),
         ),
         Tool::new(
@@ -587,9 +590,9 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
         value["cache_ttl"] = config.as_ref().map_or(Value::Null, |config| {
             json!(config.role(worker.role).cache_ttl.as_str())
         });
-        value["handoff"] = notes
-            .remove(&worker.agent)
-            .map_or(Value::Null, |note| handoff_json(&note));
+        value["handoff"] = notes.remove(&worker.agent).map_or(Value::Null, |note| {
+            handoff_json(&note, input.include_handoffs)
+        });
         if let Some(sessions) = previous.remove(&worker.agent) {
             add_previous_sessions(&mut value, &sessions);
         }
@@ -650,13 +653,16 @@ fn add_previous_sessions(value: &mut Value, sessions: &[PreviousSessionRow]) {
 /// How much of a hand-off note `list_workers` shows. The whole note goes to the lead's next session; the list only lets the main agent see what each lead was doing.
 const HANDOFF_PREVIEW_CHARS: usize = 300;
 
-fn handoff_json(note: &HandoffRow) -> Value {
-    json!({
+fn handoff_json(note: &HandoffRow, with_text: bool) -> Value {
+    let mut value = json!({
         "session": note.session_id,
         "created_at": note.created_at,
-        "text": shorten(&note.body, HANDOFF_PREVIEW_CHARS),
         "chars": note.body.chars().count(),
-    })
+    });
+    if with_text {
+        value["text"] = json!(shorten(&note.body, HANDOFF_PREVIEW_CHARS));
+    }
+    value
 }
 
 fn claim_json(claim: &ClaimSummary) -> Value {
@@ -773,12 +779,16 @@ mod tests {
             body: "é".repeat(HANDOFF_PREVIEW_CHARS + 50),
             created_at: Timestamp::from_millis(5).unwrap(),
         };
-        let shown = handoff_json(&note);
+        let shown = handoff_json(&note, true);
         let text = shown["text"].as_str().unwrap();
         assert_eq!(text.chars().count(), HANDOFF_PREVIEW_CHARS);
         assert!(text.ends_with('…'));
         assert_eq!(shown["chars"], HANDOFF_PREVIEW_CHARS + 50);
         assert_eq!(shown["session"], "s1");
+        let short = handoff_json(&note, false);
+        assert!(short.get("text").is_none(), "{short}");
+        assert_eq!(short["chars"], HANDOFF_PREVIEW_CHARS + 50);
+        assert_eq!(short["session"], "s1");
     }
 }
 

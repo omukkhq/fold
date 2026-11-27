@@ -1776,7 +1776,7 @@ async fn a_stall_type_in_types_matches_only_the_stalls_fold_tells_the_waiter_of(
 }
 
 #[tokio::test]
-async fn an_undeclared_type_is_refused_with_the_declared_types_and_the_nearest_one() {
+async fn an_undeclared_type_is_refused_with_the_five_closest_types_and_the_nearest_one() {
     let fx = Fixture::new().await;
     let session = fx.connect("frontend").await;
     for tool in ["wait_for_events", "get_events"] {
@@ -1785,13 +1785,20 @@ async fn an_undeclared_type_is_refused_with_the_declared_types_and_the_nearest_o
         assert_eq!(error["code"], json!("invalid_event_filter"), "{tool}");
         assert_eq!(error["details"]["type"], "proposal.created");
         assert_eq!(error["details"]["nearest"], "proposal.opened", "{error}");
-        let declared: Vec<&str> = error["details"]["declared"]
+        let closest: Vec<&str> = error["details"]["closest"]
             .as_array()
             .unwrap()
             .iter()
             .map(|name| name.as_str().unwrap())
             .collect();
-        let all: Vec<&str> = EventType::ALL.iter().map(|name| name.as_str()).collect();
-        assert_eq!(declared, all);
+        assert_eq!(closest.len(), 5, "{error}");
+        assert_eq!(closest[0], "proposal.opened");
+        assert!(closest.iter().all(|name| {
+            EventType::ALL
+                .iter()
+                .any(|declared| declared.as_str() == *name)
+        }));
+        assert!(error["details"].get("declared").is_none());
+        assert_eq!(error["details"]["declared_count"], EventType::ALL.len());
     }
 }

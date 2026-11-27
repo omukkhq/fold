@@ -1,13 +1,15 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use fold_core::{CheckpointId, FoldError, TaskId, TaskTitle, WorkspaceId, codes};
+use fold_core::{
+    Actor, CheckpointId, FoldError, ProposalId, RevisionId, TaskId, TaskTitle, WorkspaceId, codes,
+};
 use fold_store::StoreError;
 use fold_store::tasks;
 use fold_store::workspaces::{self, WorkspaceKind, WorkspaceState};
 use serde_json::json;
 
-use super::{WorkspaceError, WorkspaceService, WorkspaceView};
+use super::{StateComparison, StateRef, WorkspaceError, WorkspaceService, WorkspaceView};
 use crate::live::WorkspaceLive;
 use crate::services::tasks::{AttentionItem, attention, stalled_tasks};
 
@@ -30,7 +32,60 @@ pub struct WorkspaceChanges {
     pub unfinished: Option<CheckpointId>,
 }
 
+/// The working changes of a review checkout after a fresh scan, against the checkout's base revision. A review checkout has no live state, so they come from one scan of its files.
+#[derive(Debug, Clone)]
+pub struct CheckoutChanges {
+    pub workspace: WorkspaceId,
+    pub base: RevisionId,
+    /// `None` for a batch checkout.
+    pub proposal: Option<ProposalId>,
+    pub comparison: StateComparison,
+}
+
+/// What `get_workspace_changes` reads: the live state of a task or main workspace, or one scan of a review checkout.
+#[derive(Debug, Clone)]
+pub enum ChangesView {
+    Live(WorkspaceChanges),
+    Checkout(CheckoutChanges),
+}
+
 impl WorkspaceService {
+    /// The working changes of `workspace` for `actor`: [`Self::changes`] for a task or main workspace, and for a review checkout one scan of its files against its base revision. A review checkout is read only by the agent whose worker owns it, as for every other review-checkout tool; any other caller gets `workspace_not_found`, the answer for an unknown id. A closed checkout of the caller is `workspace_not_active`.
+    pub async fn changes_for(
+        &self,
+        actor: &Actor,
+        workspace: WorkspaceId,
+    ) -> Result<ChangesView, WorkspaceError> {
+        let row = workspaces::get_workspace(self.store.read(), workspace)
+            .await?
+            .ok_or_else(|| not_found(workspace))?;
+        if row.kind != WorkspaceKind::Review {
+            return Ok(ChangesView::Live(self.changes(workspace).await?));
+        }
+        let owned = match actor {
+            Actor::Agent(agent) => row
+                .worker
+                .as_ref()
+                .is_some_and(|worker| worker.belongs_to(&agent.agent)),
+            Actor::Human { .. } | Actor::System => false,
+        };
+        if !owned {
+            return Err(not_found(workspace).into());
+        }
+        if row.state != WorkspaceState::Active {
+            return Err(not_active(workspace, WorkspaceKind::Task, row.state).into());
+        }
+        let comparison = self
+            .compare_states(StateRef::Revision(row.base), StateRef::Workspace(workspace))
+            .await?;
+        Ok(ChangesView::Checkout(CheckoutChanges {
+            workspace,
+            base: row.base,
+            proposal: row.proposal,
+            comparison,
+        }))
+    }
+
     /// Every task workspace in state `active` or `missing`, and the live main workspace, by id.
     pub async fn list_workspaces(&self) -> Result<Vec<WorkspaceEntry>, WorkspaceError> {
         let read = self.store.read();

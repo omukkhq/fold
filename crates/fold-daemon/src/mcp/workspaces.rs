@@ -13,7 +13,8 @@ use super::error::from_workspace;
 use super::{FoldServer, parse};
 use crate::services::reviews::checks::SetupState;
 use crate::services::workspaces::{
-    RevisionSummary, StateRef, StateSummary, WorkspaceChanges, WorkspaceRef,
+    ChangesView, CheckoutChanges, RevisionSummary, StateRef, StateSummary, WorkspaceChanges,
+    WorkspaceRef,
 };
 
 pub const GET_REPOSITORY_STATE: &str = "get_repository_state";
@@ -78,7 +79,7 @@ pub struct GetWorkspaceInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct GetWorkspaceChangesInput {
-    /// The workspace, such as ws-9.
+    /// The workspace, such as ws-9: a task workspace, or a review checkout of your own.
     pub ws: String,
 }
 
@@ -196,7 +197,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_WORKSPACE_CHANGES,
-            "Scan a workspace now and list its working changes against its base revision: a summary line, each changed file with its kind and line counts, the last activity time, the checkpoint count and the open proposal. These are unrecorded changes, not history.",
+            "Scan a workspace now and list its working changes against its base revision: a summary line, each changed file with its kind and line counts, the last activity time, the checkpoint count and the open proposal. These are unrecorded changes, not history. It also reads a review checkout of your own, against the checkout's base revision, with kind review_checkout and totals in place of the summary line; a checkout of another agent is workspace_not_found, as for an unknown id.",
             schema_for_type::<GetWorkspaceChangesInput>(),
         ),
         Tool::new(
@@ -319,6 +320,32 @@ fn changes_value(changes: &WorkspaceChanges) -> Value {
     }
     if let Some(checkpoint) = changes.unfinished {
         value["unfinished_write"] = json!(checkpoint.to_string());
+    }
+    value
+}
+
+fn checkout_changes_value(changes: &CheckoutChanges) -> Value {
+    let comparison = &changes.comparison;
+    let mut value = json!({
+        "workspace": changes.workspace.to_string(),
+        "kind": "review_checkout",
+        "base": changes.base.to_string(),
+        "files": comparison.files.iter().map(file_line).collect::<Vec<_>>(),
+        "totals": {
+            "files": comparison.totals.files,
+            "added": comparison.totals.added_lines,
+            "removed": comparison.totals.removed_lines,
+        },
+        "proposal": changes.proposal.map(|id| id.to_string()),
+    });
+    if !comparison.warnings.is_empty() {
+        value["unreadable"] = json!(
+            comparison
+                .warnings
+                .iter()
+                .map(|warning| warning.path.to_string())
+                .collect::<Vec<_>>()
+        );
     }
     value
 }
@@ -540,12 +567,16 @@ pub async fn call(
         GET_WORKSPACE_CHANGES => {
             let input: GetWorkspaceChangesInput = parse(arguments)?;
             let workspace = id::<WorkspaceId>(&input.ws, "ws", "ws-9")?;
+            let actor = server.actor().await?;
             let changes = server
                 .workspaces
-                .changes(workspace)
+                .changes_for(&actor, workspace)
                 .await
                 .map_err(from_workspace)?;
-            changes_value(&changes)
+            match changes {
+                ChangesView::Live(changes) => changes_value(&changes),
+                ChangesView::Checkout(changes) => checkout_changes_value(&changes),
+            }
         }
         RECORD_CHECKPOINT => {
             let input: RecordCheckpointInput = parse(arguments)?;

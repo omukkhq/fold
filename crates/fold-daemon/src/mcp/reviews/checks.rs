@@ -1,4 +1,4 @@
-use fold_core::{Actor, CheckRunId, FoldError};
+use fold_core::{Actor, CheckRunId, FoldError, codes};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -15,11 +15,17 @@ pub const RUN_CHECKS: &str = "run_checks";
 pub const GET_CHECK_RUN: &str = "get_check_run";
 pub const CANCEL_CHECK_RUN: &str = "cancel_check_run";
 
-/// The most lines of a failed result's log that `get_check_run` returns.
+/// The most lines of a failed result's log that `get_check_run` returns with `detail: full`.
 const RESULT_TAIL_LINES: usize = 200;
 
-/// The most characters of a failed result's log that `get_check_run` returns.
+/// The most characters of a failed result's log that `get_check_run` returns with `detail: full`.
 const RESULT_TAIL_CHARS: usize = 20_000;
+
+/// The most lines of a failed result's log in the short form: the end of a compiler or test report, where the cause is.
+const SHORT_TAIL_LINES: usize = 60;
+
+/// The most characters of a failed result's log in the short form, so a red run with several failed checks stays a few thousand characters.
+const SHORT_TAIL_CHARS: usize = 3_000;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -33,6 +39,9 @@ pub struct RunChecksInput {
 pub struct GetCheckRunInput {
     /// The check run, such as cr-4, from run_checks, a result message or get_proposal.
     pub run: String,
+    /// full lists every command of the run, and gives each failed one the last 200 lines (at most 20000 characters) of its log. Leave it out for the short form: only the failed commands, each with the last 60 lines (at most 3000 characters) of its log, and not_shown, the number of the other commands.
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -51,7 +60,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_CHECK_RUN,
-            "Read one check run: its stage, state and reason, and each command's outcome, exit code and duration, with the end of the log of each command that failed. A running run with waiting_for memory holds its permit and waits until the machine has enough free memory to start its commands; with waiting_for check, it waits before the command of waiting_check until fewer runs than that check's max_parallel run it; with waiting_for run_slot, it waits at position (1 is next) until fewer runs of the project than [runs] max_parallel_runs of fold-checks.toml run.",
+            "Read one check run: its stage, state and reason, and each command that failed with its outcome, exit code, duration and the end of its log (the last 60 lines, at most 3000 characters), with not_shown counting the other commands; pass detail full for every command and the last 200 lines of each failed log. A running run with waiting_for memory holds its permit and waits until the machine has enough free memory to start its commands; with waiting_for check, it waits before the command of waiting_check until fewer runs than that check's max_parallel run it; with waiting_for run_slot, it waits at position (1 is next) until fewer runs of the project than [runs] max_parallel_runs of fold-checks.toml run.",
             schema_for_type::<GetCheckRunInput>(),
         ),
         Tool::new(
@@ -132,6 +141,24 @@ async fn get_check_run(
         &input.run,
         "pass a check run id such as cr-4; get_proposal lists the runs of a proposal",
     )?;
+    let full = match input.detail.as_deref() {
+        None => false,
+        Some("full") => true,
+        Some(_) => {
+            return Err(
+                FoldError::new(codes::INVALID_REQUEST, "detail is full or left out")
+                    .with_details([("field", json!("detail"))])
+                    .with_hint(
+                        "call get_check_run with detail full, or leave detail out for the failed commands only",
+                    ),
+            );
+        }
+    };
+    let (tail_lines, tail_chars) = if full {
+        (RESULT_TAIL_LINES, RESULT_TAIL_CHARS)
+    } else {
+        (SHORT_TAIL_LINES, SHORT_TAIL_CHARS)
+    };
     let view = reviews
         .get_check_run(run, true)
         .await
@@ -139,9 +166,17 @@ async fn get_check_run(
     let mut value = run_json(&view);
     value["task"] = json!(view.run.task);
     value["workspace"] = json!(view.run.workspace);
+    let shown: Vec<_> = view
+        .results
+        .iter()
+        .filter(|result| full || result.outcome.is_failure())
+        .collect();
+    if !full {
+        value["not_shown"] = json!(view.results.len() - shown.len());
+    }
     value["results"] = json!(
-        view.results
-            .iter()
+        shown
+            .into_iter()
             .map(|result| {
                 let mut line = json!({
                     "name": result.check.as_deref().unwrap_or("setup"),
@@ -151,8 +186,7 @@ async fn get_check_run(
                     "duration_ms": result.duration_ms,
                 });
                 if result.outcome.is_failure() {
-                    line["log_tail"] =
-                        json!(log_tail(&result.log, RESULT_TAIL_LINES, RESULT_TAIL_CHARS));
+                    line["log_tail"] = json!(log_tail(&result.log, tail_lines, tail_chars));
                     line["log_bytes"] = json!(result.log_bytes);
                 }
                 line

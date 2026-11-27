@@ -448,7 +448,7 @@ fn refusal_with_message<const N: usize>(
     FoldError::new(codes::INVALID_INTENT, message)
     .with_details(details)
     .with_hint(format!(
-        "call {again} again with `intent`: a summary of how the change works in the code (at most {MAX_SUMMARY_CHARS} characters) and 1 to {MAX_PARTS} parts, each with a name, what that part of the code does and its files, so every changed file is in exactly one part; add contracts, decisions and not_changed only when they apply"
+        "call {again} again with `intent`: a summary of how the change works in the code (at most {MAX_SUMMARY_CHARS} characters) and 1 to {MAX_PARTS} parts, each with a name, what that part of the code does and its files, so every changed file is in exactly one part; add contracts, decisions and not_changed only when they apply, each list entry one line of at most {MAX_ENTRY_CHARS} characters"
     ))
 }
 
@@ -656,6 +656,9 @@ mod tests {
                 .unwrap()
                 .starts_with("call submit_review_fix again")
         );
+        assert!(missing.hint().unwrap().contains(&format!(
+            "each list entry one line of at most {MAX_ENTRY_CHARS} characters"
+        )));
     }
 
     #[test]

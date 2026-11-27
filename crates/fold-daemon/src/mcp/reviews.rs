@@ -157,46 +157,12 @@ impl From<IntentInput> for ProposalIntent {
     }
 }
 
-/// The intent argument of `tool` decoded: a missing or `null` intent is `invalid_intent` with the reason `missing`, and one that does not have the form of [`IntentInput`] is `invalid_intent` with the reason `shape` and the path of the first value that does not fit, such as `intent.parts[0].files`. The path stops before the first key that is not one of the schema's field names, such as an unknown key, so it never holds the agent's text.
+/// The intent argument of `tool` decoded: a missing or `null` intent is `invalid_intent` with the reason `missing`, and one that does not have the form of [`IntentInput`] is `invalid_intent` with the reason `shape` and the path of the value that does not fit, such as `intent.parts[0].files`, the missing field or the unknown key, such as `intent.parts[0].why`, by [`super::shape_field`].
 fn intent_arg(intent: Option<Value>, tool: &str) -> Result<ProposalIntent, FoldError> {
     let intent = intent.ok_or_else(|| missing_intent(tool))?;
     serde_path_to_error::deserialize::<_, IntentInput>(intent)
         .map(ProposalIntent::from)
-        .map_err(|error| misshapen_intent(tool, &intent_field(error.path())))
-}
-
-/// The names of the fields of [`IntentInput`] and the types inside it.
-const INTENT_FIELDS: [&str; 15] = [
-    "summary",
-    "parts",
-    "contracts",
-    "decisions",
-    "not_changed",
-    "name",
-    "does",
-    "files",
-    "routes",
-    "database",
-    "rights",
-    "config",
-    "errors",
-    "events",
-    "commands",
-];
-
-fn intent_field(path: &serde_path_to_error::Path) -> String {
-    let mut field = "intent".to_owned();
-    for segment in path.iter() {
-        match segment {
-            serde_path_to_error::Segment::Seq { index } => field.push_str(&format!("[{index}]")),
-            serde_path_to_error::Segment::Map { key } if INTENT_FIELDS.contains(&key.as_str()) => {
-                field.push('.');
-                field.push_str(key);
-            }
-            _ => break,
-        }
-    }
-    field
+        .map_err(|error| misshapen_intent(tool, &super::shape_field("intent", &error)))
 }
 
 /// An intent as `get_proposal` gives it. The short form holds the summary and each part's name with its `file_count`; the full form adds what each part does, its files, and the contracts, decisions and not_changed the intent has. A section without entries is left out.

@@ -745,6 +745,50 @@ async fn create_review_checkout_gives_the_path_and_version() {
 }
 
 #[tokio::test]
+async fn get_workspace_changes_reads_the_callers_own_review_checkout_only() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    let review = reviewer(&fx).await;
+    open_p1(&fx, &frontend).await;
+    give_p1(&fx).await;
+    let checkout = ok(&review, "create_review_checkout", json!({"id": "P-1"})).await;
+    let ws = checkout["workspace"].clone();
+    let root = fx.project.paths().root().join(".fold/ws/review-p-1");
+    std::fs::write(root.join("src/lib.rs"), "pub fn y() -> u8 { 1 }\n").unwrap();
+    std::fs::write(root.join("notes.txt"), "one\ntwo\n").unwrap();
+
+    let changes = ok(&review, "get_workspace_changes", json!({"ws": ws})).await;
+    assert_eq!(changes["workspace"], ws);
+    assert_eq!(changes["kind"], "review_checkout");
+    let paths: Vec<&str> = changes["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, ["notes.txt", "src/lib.rs"], "{changes}");
+    assert_eq!(changes["files"][0]["change"], "added");
+    assert_eq!(changes["files"][0]["added"], 2);
+    assert_eq!(changes["totals"]["files"], 2);
+
+    let other = err(&frontend, "get_workspace_changes", json!({"ws": ws})).await;
+    let missing = err(&frontend, "get_workspace_changes", json!({"ws": "ws-99"})).await;
+    assert_eq!(other["code"], "workspace_not_found");
+    assert_eq!(missing["code"], "workspace_not_found");
+    assert_eq!(other["hint"], missing["hint"]);
+    assert_eq!(
+        other["message"]
+            .as_str()
+            .unwrap()
+            .replace(ws.as_str().unwrap(), "ws-99"),
+        missing["message"]
+    );
+
+    let own = ok(&frontend, "get_workspace_changes", json!({"ws": "ws-1"})).await;
+    assert!(own.get("kind").is_none(), "{own}");
+}
+
+#[tokio::test]
 async fn submit_review_fix_makes_the_reviewers_version_and_the_reviewer_approves_it() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
@@ -1050,6 +1094,25 @@ async fn every_result_ends_with_the_footer() {
 }
 
 #[tokio::test]
+async fn an_input_shape_error_names_the_missing_or_wrong_key() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    for arguments in [json!({}), json!({"run": 4}), json!({"run": ["cr-1"]})] {
+        let refused = err(&frontend, "get_check_run", arguments.clone()).await;
+        assert_eq!(refused["code"], "invalid_request", "{arguments}");
+        assert_eq!(refused["details"]["field"], "run", "{arguments}: {refused}");
+    }
+    let refused = err(
+        &frontend,
+        "get_check_run",
+        json!({"run": "cr-1", "detail": {"Secret text": 1}}),
+    )
+    .await;
+    assert_eq!(refused["details"]["field"], "detail", "{refused}");
+    assert!(!refused.to_string().contains("Secret text"), "{refused}");
+}
+
+#[tokio::test]
 async fn errors_carry_code_message_and_hint() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
@@ -1245,6 +1308,67 @@ async fn run_checks_answers_at_once_and_get_check_run_reads_the_result() {
     let review = connect(&fx, "review").await;
     let other = err(&review, "run_checks", json!({"task": "T-1"})).await;
     assert_eq!(other["code"], "not_workspace_owner");
+}
+
+#[tokio::test]
+async fn get_check_run_gives_only_the_failed_commands_and_a_short_tail_unless_detail_is_full() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    ok(&frontend, "create_workspace", json!({"task": "T-1"})).await;
+    fx.write(
+        1,
+        "fold-checks.toml",
+        "[[check]]\nname = \"fine\"\nrun = \"echo ok\"\n\n[[check]]\nname = \"red\"\nrun = \"for i in $(seq 1 500); do echo line-$i-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done; exit 1\"\n",
+    );
+    let started = ok(&frontend, "run_checks", json!({"task": "T-1"})).await;
+    let short = ended_run(&frontend, &started["run"]).await;
+    assert_eq!(short["state"], "failed");
+    let results = short["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "{short}");
+    assert_eq!(results[0]["name"], "red");
+    let tail = results[0]["log_tail"].as_str().unwrap();
+    assert!(tail.chars().count() <= 3_000, "{}", tail.len());
+    assert!(tail.ends_with("line-500-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"));
+    assert_eq!(short["not_shown"], 1);
+    assert!(
+        short.to_string().len() < 4_000,
+        "{}",
+        short.to_string().len()
+    );
+
+    let full = ok(
+        &frontend,
+        "get_check_run",
+        json!({"run": started["run"], "detail": "full"}),
+    )
+    .await;
+    let names: Vec<&str> = full["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|result| result["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"fine") && names.contains(&"red"),
+        "{names:?}"
+    );
+    assert!(full.get("not_shown").is_none());
+    let red = full["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|result| result["name"] == "red")
+        .unwrap();
+    assert_eq!(red["log_tail"].as_str().unwrap().lines().count(), 200);
+
+    let bad = err(
+        &frontend,
+        "get_check_run",
+        json!({"run": started["run"], "detail": "all"}),
+    )
+    .await;
+    assert_eq!(bad["code"], "invalid_request");
+    assert_eq!(bad["details"]["field"], "detail");
 }
 
 #[tokio::test]
@@ -1491,14 +1615,14 @@ async fn every_proposal_version_tool_requires_an_intent_and_get_proposal_shows_i
     let summary = "Renames x to y.";
     for (intent, field) in [
         (json!("Renames x to y."), "intent"),
-        (json!({"summary": summary}), "intent"),
+        (json!({"summary": summary}), "intent.parts"),
         (
             json!({"summary": summary, "parts": [{"name": "Rename", "does": "Renames.", "files": "src/lib.rs"}]}),
             "intent.parts[0].files",
         ),
         (
             json!({"summary": summary, "parts": [{"name": "Rename", "files": ["src/lib.rs"]}]}),
-            "intent.parts[0]",
+            "intent.parts[0].does",
         ),
         (
             json!({"summary": summary, "parts": [part], "notChanged": ["the API"]}),
@@ -1506,10 +1630,14 @@ async fn every_proposal_version_tool_requires_an_intent_and_get_proposal_shows_i
         ),
         (
             json!({"summary": summary, "parts": [part], "contracts": {"api": ["GET /x"]}}),
-            "intent.contracts",
+            "intent.contracts.api",
         ),
         (
             json!({"summary": summary, "parts": [{"name": "Rename", "does": "Renames.", "files": [], "why": "it reads better"}]}),
+            "intent.parts[0].why",
+        ),
+        (
+            json!({"summary": summary, "parts": [{"name": "Rename", "does": "Renames.", "files": [], "Why not?": "it reads better"}]}),
             "intent.parts[0]",
         ),
     ] {
@@ -1532,7 +1660,13 @@ async fn every_proposal_version_tool_requires_an_intent_and_get_proposal_shows_i
                 .starts_with("call create_proposal again with `intent`"),
             "{refused}"
         );
-        for text in ["Renames x to y.", "it reads better", "GET /x", "the API"] {
+        for text in [
+            "Renames x to y.",
+            "it reads better",
+            "GET /x",
+            "the API",
+            "Why not?",
+        ] {
             assert!(!refused.to_string().contains(text), "{refused}");
         }
     }

@@ -28,7 +28,7 @@ pub struct GetEventsInput {
     /// Return events after this seq and leave your cursor where it is. Leave it out to read after your cursor and move the cursor to the last event returned.
     #[serde(default)]
     pub after: Option<u64>,
-    /// Only these exact event types, such as task.created or claim.acquired. Leave it out for every type.
+    /// Only these exact event types, such as task.created or claim.acquired. Leave it out for every type. An undeclared type is invalid_event_filter with the nearest type and the 5 closest declared types in details.
     #[serde(default)]
     pub types: Vec<String>,
     /// Only events about this task, such as T-12.
@@ -45,7 +45,7 @@ pub struct GetEventsInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct WaitForEventsInput {
-    /// Wake only for these exact event types, such as proposal.integrated; a worker.stalled or claim.stale named here wakes you only for the workers fold tells you of. Leave it out to wake for every type. A new message to you ends the wait whatever this says, and so does a worker.stalled or claim.stale that fold tells you, and, for the main agent and an area lead, a request that waits for a drafter.
+    /// Wake only for these exact event types, such as proposal.integrated; a worker.stalled or claim.stale named here wakes you only for the workers fold tells you of. Leave it out to wake for every type; an undeclared type is invalid_event_filter with the nearest type and the 5 closest declared types in details. A new message to you ends the wait whatever this says, and so does a worker.stalled or claim.stale that fold tells you, and, for the main agent and an area lead, a request that waits for a drafter.
     #[serde(default)]
     pub types: Vec<String>,
     /// Wake only for events about this task, such as T-12.
