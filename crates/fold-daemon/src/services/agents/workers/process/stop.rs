@@ -33,25 +33,21 @@ const DONE_GRACE: Duration = Duration::from_secs(120);
 const DONE_POLL: Duration = Duration::from_millis(100);
 
 impl Supervisor {
-    /// Marks the agent's running worker `stopping`, then ends its process: the interrupt of a working turn and a closed stdin, then SIGINT, SIGTERM and SIGKILL, each after its timeout. It returns once the process has exited and its exit is recorded. A worker that is not running is left as it is; one whose row runs without a process here ends `stopped` at once.
+    /// Marks the agent's running worker `stopping`, then ends its process: the interrupt of a working turn and a closed stdin, then SIGINT, SIGTERM and SIGKILL, each after its timeout. It returns once the process has exited and its exit is recorded, with whether it stopped a running worker. A worker that is not running is left as it is; one whose row runs without a process here ends `stopped` at once.
     pub(in crate::services::agents::workers) async fn stop(
         &self,
         agent: &AgentName,
-    ) -> Result<(), AgentError> {
-        self.stop_when(agent, |_| true, false, None)
-            .await
-            .map(|_| ())
+    ) -> Result<bool, AgentError> {
+        self.stop_when(agent, |_| true, false, None).await
     }
 
-    /// [`Supervisor::stop`] that parks the worker for `park`: in the transaction that marks it `stopping`, or at once when it has ended already, the row records the agent that parked it and what it waits for, with `worker.parked`. The worker keeps its session and claims, and only the parking agent's message or a person's resumes it; another agent's message waits for that go.
+    /// [`Supervisor::stop`] that parks the worker for `park`: in the transaction that marks it `stopping`, or at once when it has ended already, the row records the agent that parked it and what it waits for, with `worker.parked`. The worker keeps its session and claims, and only the parking agent's message or a person's resumes it; another agent's message waits for that go. Returns whether it stopped a running worker.
     pub(in crate::services::agents::workers) async fn stop_and_park(
         &self,
         agent: &AgentName,
         park: &Park,
-    ) -> Result<(), AgentError> {
-        self.stop_when(agent, |_| true, false, Some(park))
-            .await
-            .map(|_| ())
+    ) -> Result<bool, AgentError> {
+        self.stop_when(agent, |_| true, false, Some(park)).await
     }
 
     /// [`Supervisor::stop_and_park`] of a worker that `still` holds for, read in the transaction that marks it `stopping`, so a row that changed since the caller read it is left running.
@@ -64,14 +60,12 @@ impl Supervisor {
         self.stop_when(agent, still, false, Some(park)).await
     }
 
-    /// [`Supervisor::stop`] of the supervised main for a human, who wants it to stay stopped: the row is held in the transaction that marks it `stopping`, or at once when it has ended already, so no notice, message or catch-up starts it until a human starts it again.
+    /// [`Supervisor::stop`] of the supervised main for a human, who wants it to stay stopped: the row is held in the transaction that marks it `stopping`, or at once when it has ended already, so no notice, message or catch-up starts it until a human starts it again. Returns whether it stopped a running worker.
     pub(in crate::services::agents::workers) async fn stop_and_hold(
         &self,
         agent: &AgentName,
-    ) -> Result<(), AgentError> {
-        self.stop_when(agent, |_| true, true, None)
-            .await
-            .map(|_| ())
+    ) -> Result<bool, AgentError> {
+        self.stop_when(agent, |_| true, true, None).await
     }
 
     /// [`Supervisor::stop`] of a worker that `still` holds for, read in the transaction that marks it `stopping`; with `hold`, a supervised main is also held (see [`Supervisor::stop_and_hold`]); with `park`, the worker is parked (see [`Supervisor::stop_and_park`]). Returns whether it stopped the worker.

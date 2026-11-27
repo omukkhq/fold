@@ -16,7 +16,7 @@ use crate::live::LiveState;
 use crate::push::PushTargets;
 use crate::services::events::{EventBuffer, EventBus};
 use crate::services::projects::{Lease, ProjectError};
-use crate::services::reviews::ReviewError;
+use crate::services::reviews::{ReviewError, ReviewService};
 use crate::services::tasks::{TaskError, renew_leases};
 use crate::services::workspaces::WorkspaceLocks;
 
@@ -148,6 +148,8 @@ pub struct AgentService {
     main_sessions: Arc<MainSessions>,
     /// The project's workspace locks (`ProjectHandle::workspace_locks`): a start that gives a task worker a released workspace waits for a sync, restore or record there to finish.
     ops: Arc<WorkspaceLocks>,
+    /// The project's review service, through which a stop, a park and a pause cancel the check runs nobody reads any more. Without it they cancel none.
+    reviews: Option<ReviewService>,
 }
 
 impl std::fmt::Debug for AgentService {
@@ -170,7 +172,15 @@ impl AgentService {
             workers: None,
             ops: Arc::new(WorkspaceLocks::default()),
             main_sessions: Arc::default(),
+            reviews: None,
         }
+    }
+
+    /// Lets a stop, a park and a pause cancel the open check runs they leave without a reader, through the cancel command of `reviews`.
+    #[must_use]
+    pub fn with_reviews(mut self, reviews: ReviewService) -> Self {
+        self.reviews = Some(reviews);
+        self
     }
 
     /// Shares the project's live main connections, so a main handshake of any session can take over another.

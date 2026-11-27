@@ -1,9 +1,12 @@
 use std::time::Duration;
 
 use fold_core::reviews::checks::{RunReason, RunState, Stage};
-use fold_core::{Actor, CheckRunId, EventActor, FoldError, LabelName, TaskId, codes, policy};
+use fold_core::{
+    Actor, AgentName, CheckRunId, EventActor, FoldError, LabelName, TaskId, codes, policy,
+};
 use fold_store::reviews::checks::{self, CheckRunRow};
-use fold_store::{StoreError, WriteTx, tasks};
+use fold_store::tasks::claims::{self, ClaimTarget};
+use fold_store::{StoreError, WriteTx, agents, tasks};
 use serde_json::json;
 
 use super::runner::CancelRequest;
@@ -15,7 +18,7 @@ use crate::services::tasks::{areas_of, task_not_found};
 const CANCEL_WAIT: Duration = Duration::from_secs(30);
 
 /// The running check runs a cancel names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CancelTarget {
     /// One run, which must still run.
     Run(CheckRunId),
@@ -23,6 +26,10 @@ pub enum CancelTarget {
     Task(TaskId),
     /// Every running proposal-stage run of the project; only a human names them all.
     All,
+    /// Every running proposal-stage run that the worker of the agent asked for or that checks a task the agent claims: the runs a stop or a park of that worker leaves without a reader.
+    Worker(AgentName),
+    /// Every running proposal-stage run of the project when the project is paused; the pause's own policy decides who pauses, and each run's cancel right is checked as for the other targets.
+    Pause,
 }
 
 impl ReviewService {
@@ -35,7 +42,7 @@ impl ReviewService {
         let by = actor.event_actor();
         let runs = self
             .store
-            .write(async |tx| cancellable_runs(tx, actor, target).await)
+            .write(async |tx| cancellable_runs(tx, actor, &target).await)
             .await?;
         let mut cancelled = Vec::with_capacity(runs.len());
         for run in runs {
@@ -71,9 +78,9 @@ impl ReviewService {
 async fn cancellable_runs(
     tx: &mut WriteTx,
     actor: &Actor,
-    target: CancelTarget,
+    target: &CancelTarget,
 ) -> Result<Vec<CheckRunRow>, ReviewError> {
-    let runs = match target {
+    let runs = match *target {
         CancelTarget::Run(id) => {
             let run = checks::get_run(tx.conn(), id)
                 .await?
@@ -103,6 +110,8 @@ async fn cancellable_runs(
             }
             running_proposal_runs(tx, None).await?
         }
+        CancelTarget::Worker(ref agent) => worker_runs(tx, agent).await?,
+        CancelTarget::Pause => running_proposal_runs(tx, None).await?,
     };
     let starter = starter_of(tx, actor).await?;
     for run in &runs {
@@ -126,6 +135,31 @@ async fn cancellable_runs(
         })?;
     }
     Ok(runs)
+}
+
+/// The running proposal-stage runs that a worker of `agent` asked for or whose task `agent` holds the implementation claim of, oldest first.
+async fn worker_runs(tx: &mut WriteTx, agent: &AgentName) -> Result<Vec<CheckRunRow>, StoreError> {
+    let Some(row) = agents::find_agent(tx.conn(), agent).await? else {
+        return Ok(Vec::new());
+    };
+    let claimed: Vec<TaskId> = claims::unreleased_of_agent(tx.conn(), row.id)
+        .await?
+        .into_iter()
+        .filter_map(|claim| match claim.target {
+            ClaimTarget::Task(task) => Some(task),
+            ClaimTarget::Review { .. } => None,
+        })
+        .collect();
+    Ok(running_proposal_runs(tx, None)
+        .await?
+        .into_iter()
+        .filter(|run| {
+            run.worker
+                .as_ref()
+                .is_some_and(|worker| worker.belongs_to(agent))
+                || claimed.contains(&run.task)
+        })
+        .collect())
 }
 
 /// The running proposal-stage runs of `task`, or of the project for `None`, oldest first.

@@ -420,7 +420,7 @@ impl ProjectHandle {
         self.cleanup_due.notify_one();
     }
 
-    /// The agent service of this project: its store, bus, clock, configured lease, seen presence and push targets.
+    /// The agent service of this project: its store, bus, clock, configured lease, seen presence, push targets and the review service of its check cancels.
     pub fn agents(&self) -> AgentService {
         AgentService::new(self.store.clone(), self.bus.clone(), self.clock.clone())
             .with_project_config(self.paths.clone())
@@ -430,6 +430,19 @@ impl ProjectHandle {
             .with_workers(self.workers.clone())
             .with_workspace_locks(self.workspace_locks.clone())
             .with_main_sessions(self.main_sessions.clone())
+            .with_reviews(self.cancel_reviews())
+    }
+
+    /// The review service that the agent service cancels check runs with: it shares the project's check runner, and it needs no registry, because a cancel tells only the worker of the run.
+    fn cancel_reviews(&self) -> ReviewService {
+        ReviewService::new(
+            self.store.clone(),
+            self.bus.clone(),
+            self.clock.clone(),
+            WorkspaceService::for_project(self),
+            self.integration.clone(),
+        )
+        .with_checks(self.checks.clone())
     }
 
     /// Every item that waits for a human, oldest first: the stored items with the stalls, the project folder's items and, with `notify`, the notice targets fold turned off. The web app's Needs you, the notices and the main agent's `get_needs_you` read this one list, so they name the same items.
@@ -479,15 +492,7 @@ impl ProjectHandle {
 
     /// The review service of this project. Every transport builds it here, per request or session, so it always shares the project's integration mutex, object lock and workspace locks, and knows the humans of `registry`.
     pub fn reviews(&self, registry: &Store) -> ReviewService {
-        ReviewService::new(
-            self.store.clone(),
-            self.bus.clone(),
-            self.clock.clone(),
-            WorkspaceService::for_project(self),
-            self.integration.clone(),
-        )
-        .with_registry(registry.clone())
-        .with_checks(self.checks.clone())
+        self.cancel_reviews().with_registry(registry.clone())
     }
 
     /// The handle with its check runs taking `permits`, the ones every project of the daemon shares.

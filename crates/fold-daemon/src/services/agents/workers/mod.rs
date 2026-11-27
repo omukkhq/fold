@@ -20,6 +20,7 @@ use serde_json::json;
 use super::{AgentError, AgentService, SessionContext, main_actor};
 use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
+use crate::services::reviews::checks::CancelTarget;
 use crate::services::reviews::{Assignment, assign_reviews_in_tx};
 use crate::services::tasks::assign_in_tx;
 use tokio::sync::OwnedMutexGuard;
@@ -791,7 +792,7 @@ impl AgentService {
         }
     }
 
-    /// Stops a running worker on request: see [`Supervisor`] for the steps. Whoever may start a worker of its role may stop it. A worker that is not running is returned as it is. A human's stop of the supervised main holds it: fold starts it for no work of its own until a human starts it again.
+    /// Stops a running worker on request: see [`Supervisor`] for the steps. Whoever may start a worker of its role may stop it. A worker that is not running is returned as it is. When the call stopped a running worker, each running proposal-stage check run of the worker or of its claimed tasks is then cancelled by `actor`, as [`AgentService::cancel_check_runs`] does; a worker that had ended already, such as one fold stopped once its proposal was sent, keeps its runs, because fold resumes it with their result. A human's stop of the supervised main holds it: fold starts it for no work of its own until a human starts it again.
     pub async fn stop_worker(
         &self,
         actor: &Actor,
@@ -801,15 +802,19 @@ impl AgentService {
         let row = self.get_worker(agent).await?;
         let starter = self.starter(actor).await?;
         policy::can_stop_worker(&starter, row.role, row.area.as_ref()).map_err(FoldError::from)?;
-        if row.role == Role::Main && matches!(actor, Actor::Human { .. }) {
-            supervisor.stop_and_hold(agent).await?;
+        let stopped = if row.role == Role::Main && matches!(actor, Actor::Human { .. }) {
+            supervisor.stop_and_hold(agent).await?
         } else {
-            supervisor.stop(agent).await?;
+            supervisor.stop(agent).await?
+        };
+        if stopped {
+            self.cancel_check_runs(actor, CancelTarget::Worker(agent.clone()))
+                .await;
         }
         self.get_worker(agent).await
     }
 
-    /// Stops the worker `agent` as [`AgentService::stop_worker`] does and parks it: it waits for the go of the agent that calls, which `wait_for` describes in a few words. While that agent runs, fold keeps the worker's claims from going stale, and every view shows the wait instead of a stall; the caller's message, or a person's, resumes it in its own session, and another agent's message waits for that go. A worker that has ended already is parked without a stop. Only an agent parks a worker; `wait_for` is refused with `invalid_request` when it is blank, holds a line break or is longer than [`WAIT_FOR_MAX`] characters.
+    /// Stops the worker `agent` as [`AgentService::stop_worker`] does and parks it: it waits for the go of the agent that calls, which `wait_for` describes in a few words. While that agent runs, fold keeps the worker's claims from going stale, and every view shows the wait instead of a stall; the caller's message, or a person's, resumes it in its own session, and another agent's message waits for that go. A worker that has ended already is parked without a stop and keeps its check runs; a worker that the park stops has its running check runs cancelled as for a stop. Only an agent parks a worker; `wait_for` is refused with `invalid_request` when it is blank, holds a line break or is longer than [`WAIT_FOR_MAX`] characters.
     pub async fn park_worker(
         &self,
         actor: &Actor,
@@ -841,8 +846,26 @@ impl AgentService {
             by: parker.agent.clone(),
             wait_for: wait_for.to_owned(),
         };
-        supervisor.stop_and_park(agent, &park).await?;
+        if supervisor.stop_and_park(agent, &park).await? {
+            self.cancel_check_runs(actor, CancelTarget::Worker(agent.clone()))
+                .await;
+        }
         self.get_worker(agent).await
+    }
+
+    /// Cancels the running check runs of `target` as `actor`, through the cancel command of the review service. A stop or a pause has happened already, so no failure of the cancel undoes or fails it: a run that ended meanwhile is no cancel, and a refusal or an error is logged by its code.
+    pub(super) async fn cancel_check_runs(&self, actor: &Actor, target: CancelTarget) {
+        let Some(reviews) = &self.reviews else {
+            return;
+        };
+        match reviews.cancel_check_runs(actor, target).await {
+            Ok(runs) if runs.is_empty() => {}
+            Ok(runs) => tracing::info!(runs = runs.len(), "a stop cancelled check runs"),
+            Err(error) => {
+                let error = FoldError::from(error);
+                tracing::warn!(code = error.code(), "a stop left its check runs running");
+            }
+        }
     }
 
     /// Starts a stopped or failed worker again in the same agent and session with `--resume`, and sends it `turn`. Whoever may stop the worker may resume it. The worker counts against the limits again, and an agent's resume lets the resumes fold owes other workers of the role go first; a person's obeys only the limits. A running worker is refused with `worker_exists`.
