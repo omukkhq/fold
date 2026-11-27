@@ -65,6 +65,7 @@ mod acceptance_51_main_agent_reads_needs_you;
 mod acceptance_52_rename_the_git_branch;
 mod acceptance_53_calculated_holds;
 mod acceptance_54_an_edit_stops_the_check_run;
+mod acceptance_55_a_reviewer_waits_parked_for_a_humans_answer;
 mod acceptance_5_review_and_integrate;
 mod acceptance_6_dependency_unblocks;
 mod acceptance_7_conflicting_proposals;

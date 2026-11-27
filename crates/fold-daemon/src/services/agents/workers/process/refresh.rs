@@ -35,7 +35,7 @@ fn context_window(windows: &[(String, u64)], model: Option<&str>) -> u64 {
 }
 
 impl Supervisor {
-    /// After each turn of a long-lived worker: a note of its session starts it fresh; otherwise a context past its role's `handoff_at`, or a lead's session that started under another fold, asks once for a note, and a lead that let [`fold_core::roles::HANDOFF_TURNS`] turns pass since the ask without one starts fresh with the fold summary alone. A worker that fold started to answer a message stops once it has answered, and a worker whose process started with another account than the project's continues with the project's.
+    /// After each turn of a long-lived worker: a note of its session starts it fresh; otherwise a context past its role's `handoff_at`, or a lead's session that started under another fold, asks once for a note, and a lead that let [`fold_core::roles::HANDOFF_TURNS`] turns pass since the ask without one starts fresh with the fold summary alone. A worker that fold started to answer a message stops once it has answered, a reviewer that waits only for a person's answer is parked (see [`Supervisor::park_if_asking`]), and a worker whose process started with another account than the project's continues with the project's.
     pub(super) async fn after_turn(&self, agent: &AgentName, windows: &[(String, u64)]) {
         lock(&self.inner.windows).extend(
             windows
@@ -47,6 +47,7 @@ impl Supervisor {
             tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not check a worker's context size");
         }
         self.stop_if_answered(agent).await;
+        self.park_if_asking(agent).await;
         self.switch_soon(agent);
     }
 

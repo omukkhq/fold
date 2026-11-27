@@ -195,3 +195,17 @@ pub(super) fn not_open(message: MessageId) -> FoldError {
     .with_details([("message", json!(message.to_string()))])
     .with_hint("call get_thread to see the thread; a human's reply or an earlier close already ended the ask")
 }
+
+/// The proposals that an open ask of `agent` to the humans names, by the rule of the `open_human_questions` view.
+pub(crate) async fn asked_proposals(
+    store: &fold_store::Store,
+    agent: &AgentName,
+) -> Result<std::collections::BTreeSet<ProposalId>, StoreError> {
+    let mut conn = store.read().acquire().await.map_err(StoreError::from)?;
+    Ok(messages::awaiting_human(&mut conn)
+        .await?
+        .into_iter()
+        .filter(|ask| matches!(&ask.sender, Sender::Worker(worker) if worker.agent() == *agent))
+        .filter_map(|ask| ask.proposal)
+        .collect())
+}

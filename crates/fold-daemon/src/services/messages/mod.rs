@@ -28,6 +28,7 @@ mod forward;
 mod inbox;
 mod threads;
 
+pub(crate) use asks::asked_proposals;
 pub use asks::{DismissScope, OpenAskView};
 pub(crate) use forward::{
     forward_in_tx, tell_actor_in_tx, tell_lead_in_tx, tell_review_decider_in_tx,

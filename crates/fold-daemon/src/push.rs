@@ -1736,7 +1736,7 @@ async fn integrated_reviewer(
     Ok(fold_core::reviews::standing_agent_approval(&reviews))
 }
 
-/// The proposals that a reviewer which ended leaves without a verdict and without a resume that fold owes it, so nobody would give them to a reviewer; none while the project is paused, since the resume of the pause runs the reviewer again.
+/// The proposals that a reviewer which ended leaves without a verdict, without a resume that fold owes it and without an open ask of its own to the humans, so nobody would give them to a reviewer; none while the project is paused, since the resume of the pause runs the reviewer again.
 async fn unreviewed_of(
     store: &Store,
     agent: &AgentName,
@@ -1755,9 +1755,11 @@ async fn unreviewed_of(
             .filter(|review| review.agent == *agent)
             .map(|review| review.proposal)
             .collect();
+    // A reviewer that asked the humans about a proposal waits for their answer, which resumes it.
+    let asked = crate::services::messages::asked_proposals(store, agent).await?;
     Ok(held
         .into_iter()
-        .filter(|proposal| !owed.contains(proposal))
+        .filter(|proposal| !owed.contains(proposal) && !asked.contains(proposal))
         .collect())
 }
 

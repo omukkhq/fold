@@ -54,6 +54,16 @@ impl Supervisor {
             .map(|_| ())
     }
 
+    /// [`Supervisor::stop_and_park`] of a worker that `still` holds for, read in the transaction that marks it `stopping`, so a row that changed since the caller read it is left running.
+    pub(in crate::services::agents::workers) async fn stop_and_park_when(
+        &self,
+        agent: &AgentName,
+        park: &Park,
+        still: impl Fn(&WorkerProcessRow) -> bool,
+    ) -> Result<bool, AgentError> {
+        self.stop_when(agent, still, false, Some(park)).await
+    }
+
     /// [`Supervisor::stop`] of the supervised main for a human, who wants it to stay stopped: the row is held in the transaction that marks it `stopping`, or at once when it has ended already, so no notice, message or catch-up starts it until a human starts it again.
     pub(in crate::services::agents::workers) async fn stop_and_hold(
         &self,
