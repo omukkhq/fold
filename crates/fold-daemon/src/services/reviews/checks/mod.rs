@@ -32,7 +32,7 @@ pub(crate) use integration::{Integrating, IntegrationChecks, PassedRun, fold_fai
 pub(crate) use runner::HeldRequest;
 pub use runner::{
     CheckPermits, CheckRunner, CheckSettings, CommandResult, CommandSpec, LOG_LIMIT, MEMORY_TICK,
-    RunGate, RunLimits, commands, run_commands, run_commands_for, run_gated_commands,
+    RunGate, RunLimits, SlotTicket, commands, run_commands, run_commands_for, run_gated_commands,
     run_gated_commands_for,
 };
 
@@ -52,6 +52,8 @@ pub struct CheckRunView {
     pub waiting_for_memory: Option<Timestamp>,
     /// The check whose `max_parallel` the running run waits for before that check's command starts, and since when.
     pub waiting_for_check: Option<(String, Timestamp)>,
+    /// The run's place in the queue for a run place under `[runs] max_parallel_runs`, from 1 at the front; `None` when it does not wait for one.
+    pub waiting_for_run_slot: Option<usize>,
 }
 
 /// What a request for checks started.
@@ -117,6 +119,8 @@ pub(super) struct GateJob {
     pub checks_changed: bool,
     /// The reviewer's fix a `review_fix` run waits to make.
     pub fix: Option<FixJob>,
+    /// The `[runs] max_parallel_runs` of the checked tree's file.
+    pub max_parallel_runs: Option<std::num::NonZeroUsize>,
 }
 
 /// What a reviewer's fix needs at the end of its run, beyond the stored run.
@@ -149,15 +153,22 @@ impl ReviewService {
         let Some(job) = job else {
             return Ok(Started::NoChecks);
         };
+        let ticket = self.checks.slot_ticket(job.max_parallel_runs);
         let run = self
-            .start_proposal_run(actor, &workspace, tree, Purpose::Check, Waiting::default())
+            .start_proposal_run(
+                actor,
+                &workspace,
+                tree,
+                Purpose::Check,
+                (Waiting::default(), &ticket),
+            )
             .await?;
         let started = Started::Running {
             run: run.id,
             task,
             workspace: workspace.id,
         };
-        self.spawn_proposal_run(run, job, actor.clone());
+        self.spawn_proposal_run(run, job, actor.clone(), ticket);
         Ok(started)
     }
 
@@ -175,11 +186,13 @@ impl ReviewService {
         read.commit().await.map_err(StoreError::from)?;
         let waiting_for_memory = self.checks.waiting_for_memory(run);
         let waiting_for_check = self.checks.waiting_for_check(run);
+        let waiting_for_run_slot = self.checks.waiting_for_run_slot(run);
         Ok(CheckRunView {
             run: row,
             results,
             waiting_for_memory,
             waiting_for_check,
+            waiting_for_run_slot,
         })
     }
 
@@ -235,6 +248,7 @@ impl ReviewService {
             specs: runner::commands(&file, &plan),
             checks_changed,
             fix: None,
+            max_parallel_runs: file.max_parallel_runs,
         };
         Ok((Some(job), checks_changed))
     }
@@ -281,26 +295,27 @@ impl ReviewService {
         waiting: Waiting<'_>,
         job: GateJob,
     ) -> Result<Proposed, ReviewError> {
+        let ticket = self.checks.slot_ticket(job.max_parallel_runs);
         let run = self
-            .start_proposal_run(actor, snapped, tree, purpose, waiting)
+            .start_proposal_run(actor, snapped, tree, purpose, (waiting, &ticket))
             .await?;
         let checking = Proposed::Checking {
             run: run.id,
             task: run.task,
             workspace: snapped.id,
         };
-        self.spawn_proposal_run(run, job, actor.clone());
+        self.spawn_proposal_run(run, job, actor.clone(), ticket);
         Ok(checking)
     }
 
-    /// Writes the running run of `tree` in `snapped`, with `checks.started`, after the same refusals again on the writer: the task's active workspace is still `snapped` on the same base and owned by the actor's worker.
+    /// Writes the running run of `tree` in `snapped`, with `checks.started`, after the same refusals again on the writer: the task's active workspace is still `snapped` on the same base and owned by the actor's worker. `ticket` is the run's place under `[runs] max_parallel_runs`, which `checks.started` shows while the run waits for it and which is bound to the run once it is written.
     pub(super) async fn start_proposal_run(
         &self,
         actor: &Actor,
         snapped: &WorkspaceRow,
         tree: ObjectHash,
         purpose: Purpose,
-        waiting: Waiting<'_>,
+        (waiting, ticket): (Waiting<'_>, &SlotTicket),
     ) -> Result<CheckRunRow, ReviewError> {
         let task = snapped
             .task
@@ -327,21 +342,30 @@ impl ReviewService {
                     tree,
                     actor: &label,
                     waiting,
+                    slot: ticket.position(),
                 };
                 insert_proposal_run(tx, &mut buffer, &new, now).await
             })
             .await?;
+        ticket.bind(run.id);
         self.bus.publish(buffer);
         self.workspaces.checks_changed().await;
         tracing::info!(run = %run.id, task = %task, workspace = %snapped.id, purpose = purpose.as_str(), "check run started");
         Ok(run)
     }
 
-    /// Runs the commands of `run` in the background and ends it.
-    pub(super) fn spawn_proposal_run(&self, run: CheckRunRow, job: GateJob, actor: Actor) {
+    /// Runs the commands of `run` in the background and ends it. The run waits for its place under `[runs] max_parallel_runs` first and holds it until it ends.
+    pub(super) fn spawn_proposal_run(
+        &self,
+        run: CheckRunRow,
+        job: GateJob,
+        actor: Actor,
+        ticket: SlotTicket,
+    ) {
         let service = self.clone();
         self.checks.spawn(async move {
             let id = run.id;
+            ticket.ready().await;
             if let Err(error) = service.complete_proposal_run(run, job, actor).await {
                 tracing::warn!(run = %id, code = error.log_code(), "a check run could not end; the next start of the daemon ends it as stopped");
             }
@@ -629,11 +653,13 @@ impl ReviewService {
             let results = checks::list_results(&mut *conn, run.id, false).await?;
             let waiting_for_memory = runner.waiting_for_memory(run.id);
             let waiting_for_check = runner.waiting_for_check(run.id);
+            let waiting_for_run_slot = runner.waiting_for_run_slot(run.id);
             views.push(CheckRunView {
                 run,
                 results,
                 waiting_for_memory,
                 waiting_for_check,
+                waiting_for_run_slot,
             });
         }
         Ok(views)
@@ -679,6 +705,8 @@ pub(super) struct NewProposalRun<'a> {
     pub tree: ObjectHash,
     pub actor: &'a EventActor,
     pub waiting: Waiting<'a>,
+    /// The place of the run in the queue for a run place when it is written, from 1 at the front; `None` when it holds one.
+    pub slot: Option<usize>,
 }
 
 /// Writes a running proposal-stage run with `checks.started` in the caller's write, and refuses a second one of the same workspace with `checks_running`, which the run's unique index also decides.
@@ -728,16 +756,24 @@ pub(super) async fn insert_proposal_run(
     if let Some(proposal) = new.waiting.proposal {
         event = event.proposal(proposal);
     }
-    let event = event.data(json!({
+    let mut data = json!({
         "run": id.to_string(),
         "stage": Stage::Proposal.as_str(),
         "purpose": new.purpose.as_str(),
-    }))?;
+    });
+    if let Some(position) = new.slot {
+        data["waiting_for"] = json!(RUN_SLOT);
+        data["position"] = json!(position);
+    }
+    let event = event.data(data)?;
     buffer.append(tx, &event, now).await?;
     Ok(checks::get_run(tx.conn(), id)
         .await?
         .ok_or(StoreError::Corrupt("check_runs.number"))?)
 }
+
+/// What a run that waits for its place under `[runs] max_parallel_runs` shows as `waiting_for`.
+pub const RUN_SLOT: &str = "run_slot";
 
 /// A passed run of a proposal command with what its version needs.
 struct Gated<'a> {

@@ -9,7 +9,7 @@ use super::super::error::from_review;
 use super::super::parse;
 use super::{id, task_id, version};
 use crate::services::reviews::ReviewService;
-use crate::services::reviews::checks::{CheckRunView, Started, log_tail};
+use crate::services::reviews::checks::{CheckRunView, RUN_SLOT, Started, log_tail};
 
 pub const RUN_CHECKS: &str = "run_checks";
 pub const GET_CHECK_RUN: &str = "get_check_run";
@@ -43,7 +43,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_CHECK_RUN,
-            "Read one check run: its stage, state and reason, and each command's outcome, exit code and duration, with the end of the log of each command that failed. A running run with waiting_for memory holds its permit and waits until the machine has enough free memory to start its commands; with waiting_for check, it waits before the command of waiting_check until fewer runs than that check's max_parallel run it.",
+            "Read one check run: its stage, state and reason, and each command's outcome, exit code and duration, with the end of the log of each command that failed. A running run with waiting_for memory holds its permit and waits until the machine has enough free memory to start its commands; with waiting_for check, it waits before the command of waiting_check until fewer runs than that check's max_parallel run it; with waiting_for run_slot, it waits at position (1 is next) until fewer runs of the project than [runs] max_parallel_runs of fold-checks.toml run.",
             schema_for_type::<GetCheckRunInput>(),
         ),
     ]
@@ -161,6 +161,10 @@ pub fn run_json(view: &CheckRunView) -> Value {
         line["waiting_for"] = json!("check");
         line["waiting_check"] = json!(check);
         line["waiting_since"] = json!(since.as_millis());
+    }
+    if let Some(position) = view.waiting_for_run_slot {
+        line["waiting_for"] = json!(RUN_SLOT);
+        line["position"] = json!(position);
     }
     line
 }

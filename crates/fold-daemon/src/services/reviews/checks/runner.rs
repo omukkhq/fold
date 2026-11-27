@@ -166,6 +166,137 @@ pub struct CheckRunner {
     memory_waits: Waits,
     /// The permits of each check with a `max_parallel`, by check name, with the limit they were made for.
     check_limits: CheckLimits,
+    /// The project's places for runs under `[runs] max_parallel_runs`.
+    slots: Arc<RunSlots>,
+}
+
+/// The places of a project's runs under `[runs] max_parallel_runs`. Every run that holds a place counts, with or without a limit of its own; a run with a limit waits in the order it asked until fewer runs than its limit hold one, and a run without one takes its place at once, so a file without `[runs]` changes nothing.
+#[derive(Debug, Default)]
+pub struct RunSlots {
+    state: Mutex<SlotState>,
+    changed: tokio::sync::watch::Sender<u64>,
+}
+
+#[derive(Debug, Default)]
+struct SlotState {
+    next: u64,
+    /// How many runs hold a place.
+    holding: usize,
+    /// The tickets that hold a place.
+    granted: std::collections::HashSet<u64>,
+    /// The tickets that wait, in the order they asked, each with its limit.
+    queue: std::collections::VecDeque<(u64, NonZeroUsize)>,
+    /// The ticket of each run that has one.
+    runs: HashMap<CheckRunId, u64>,
+}
+
+impl SlotState {
+    /// Gives a place to each ticket at the front of the queue while fewer runs than its limit hold one.
+    fn grant(&mut self) -> bool {
+        let mut moved = false;
+        while let Some((number, limit)) = self.queue.front().copied() {
+            if self.holding >= limit.get() {
+                break;
+            }
+            self.queue.pop_front();
+            self.holding += 1;
+            self.granted.insert(number);
+            moved = true;
+        }
+        moved
+    }
+
+    fn position(&self, number: u64) -> Option<usize> {
+        self.queue
+            .iter()
+            .position(|(waiting, _)| *waiting == number)
+            .map(|index| index + 1)
+    }
+}
+
+impl RunSlots {
+    /// A ticket for a run under `limit`, which holds a place at once when the run has no limit or fewer runs than its limit hold one and none waits before it.
+    pub fn ticket(self: &Arc<Self>, limit: Option<NonZeroUsize>) -> SlotTicket {
+        let mut state = lock(&self.state);
+        let number = state.next;
+        state.next += 1;
+        match limit {
+            None => {
+                state.holding += 1;
+                state.granted.insert(number);
+            }
+            Some(limit) => {
+                state.queue.push_back((number, limit));
+                state.grant();
+            }
+        }
+        SlotTicket {
+            slots: Arc::clone(self),
+            number,
+        }
+    }
+
+    /// The place in the queue of `run`, from 1 at the front; `None` when it holds a place or has no ticket.
+    pub fn waiting(&self, run: CheckRunId) -> Option<usize> {
+        let state = lock(&self.state);
+        state
+            .runs
+            .get(&run)
+            .and_then(|number| state.position(*number))
+    }
+
+    fn notify(&self) {
+        self.changed
+            .send_modify(|count| *count = count.wrapping_add(1));
+    }
+}
+
+/// A run's place, or its wait for one, under `[runs] max_parallel_runs`. Dropping it gives the place, or the place in the queue, to the next run.
+#[derive(Debug)]
+pub struct SlotTicket {
+    slots: Arc<RunSlots>,
+    number: u64,
+}
+
+impl SlotTicket {
+    /// The place in the queue, from 1 at the front; `None` once the ticket holds a place.
+    pub fn position(&self) -> Option<usize> {
+        lock(&self.slots.state).position(self.number)
+    }
+
+    /// Names the run the ticket is for, so the run shows its place in the queue.
+    pub fn bind(&self, run: CheckRunId) {
+        lock(&self.slots.state).runs.insert(run, self.number);
+    }
+
+    /// Waits until the ticket holds a place.
+    pub async fn ready(&self) {
+        let mut changed = self.slots.changed.subscribe();
+        loop {
+            if lock(&self.slots.state).granted.contains(&self.number) {
+                return;
+            }
+            if changed.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+impl Drop for SlotTicket {
+    fn drop(&mut self) {
+        let mut state = lock(&self.slots.state);
+        if state.granted.remove(&self.number) {
+            state.holding = state.holding.saturating_sub(1);
+        } else {
+            state.queue.retain(|(waiting, _)| *waiting != self.number);
+        }
+        let number = self.number;
+        state.runs.retain(|_, ticket| *ticket != number);
+        state.grant();
+        drop(state);
+        self.slots.notify();
+    }
 }
 
 /// The permits of each check with a `max_parallel`, by check name, with the limit they were made for.
@@ -248,7 +379,18 @@ impl CheckRunner {
             held: Arc::default(),
             memory_waits: Arc::default(),
             check_limits: Arc::default(),
+            slots: Arc::default(),
         }
+    }
+
+    /// A ticket of the project's run places under `limit`, the `[runs] max_parallel_runs` of the run's checks file.
+    pub fn slot_ticket(&self, limit: Option<NonZeroUsize>) -> SlotTicket {
+        self.slots.ticket(limit)
+    }
+
+    /// The place of `run` in the queue for a run place, from 1 at the front; `None` when it does not wait for one.
+    pub fn waiting_for_run_slot(&self, run: CheckRunId) -> Option<usize> {
+        self.slots.waiting(run)
     }
 
     /// The runner of the project `slug`. A runner without one runs checks that act as no agent of any project.
@@ -866,6 +1008,67 @@ mod tests {
             timeout: None,
             max_parallel: None,
         }
+    }
+
+    fn run(number: u32) -> CheckRunId {
+        CheckRunId::from_number(number).unwrap()
+    }
+
+    #[tokio::test]
+    async fn runs_over_the_limit_wait_in_order_and_start_when_a_place_frees() {
+        let runner = CheckRunner::new(CheckPermits::new(4));
+        let two = NonZeroUsize::new(2);
+        let tickets: Vec<SlotTicket> = (1..=4)
+            .map(|number| {
+                let ticket = runner.slot_ticket(two);
+                ticket.bind(run(number));
+                ticket
+            })
+            .collect();
+        let positions: Vec<_> = tickets.iter().map(SlotTicket::position).collect();
+        assert_eq!(positions, [None, None, Some(1), Some(2)]);
+        assert_eq!(runner.waiting_for_run_slot(run(3)), Some(1));
+        assert_eq!(runner.waiting_for_run_slot(run(4)), Some(2));
+        assert_eq!(runner.waiting_for_run_slot(run(1)), None);
+        tokio::time::timeout(Duration::from_secs(1), tickets[0].ready())
+            .await
+            .unwrap();
+        let mut tickets = tickets.into_iter();
+        let first = tickets.next().unwrap();
+        let second = tickets.next().unwrap();
+        let third = tickets.next().unwrap();
+        let fourth = tickets.next().unwrap();
+        let waiter = tokio::spawn(async move {
+            third.ready().await;
+            third
+        });
+        drop(first);
+        let third = tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(third.position(), None);
+        assert_eq!(fourth.position(), Some(1));
+        drop(fourth);
+        assert_eq!(runner.waiting_for_run_slot(run(4)), None);
+        drop((second, third));
+        let after = runner.slot_ticket(two);
+        assert_eq!(after.position(), None);
+    }
+
+    #[test]
+    fn a_run_without_a_limit_never_waits_and_counts_for_the_others() {
+        let runner = CheckRunner::new(CheckPermits::new(4));
+        let mut free: Vec<SlotTicket> = (0..3).map(|_| runner.slot_ticket(None)).collect();
+        assert!(free.iter().all(|ticket| ticket.position().is_none()));
+        let limited = runner.slot_ticket(NonZeroUsize::new(3));
+        assert_eq!(limited.position(), Some(1));
+        let behind = runner.slot_ticket(None);
+        assert_eq!(behind.position(), None);
+        drop(free.pop());
+        assert_eq!(limited.position(), Some(1), "three runs still hold a place");
+        drop(behind);
+        assert_eq!(limited.position(), None);
     }
 
     fn clock() -> ManualClock {

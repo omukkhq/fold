@@ -147,6 +147,8 @@ pub struct ChecksFile {
     pub checks: Vec<Check>,
     /// The `[[serial]]` lanes in file order.
     pub lanes: Vec<Lane>,
+    /// `[runs] max_parallel_runs`: the most check runs of the project that run their commands at the same time; `None` is no limit.
+    pub max_parallel_runs: Option<NonZeroUsize>,
 }
 
 /// A check of one stage with whether it runs for the changed paths.
@@ -165,6 +167,13 @@ struct RawFile {
     check: Vec<RawCheck>,
     #[serde(default)]
     serial: Vec<RawLane>,
+    runs: Option<RawRuns>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRuns {
+    max_parallel_runs: Option<toml::Spanned<toml::Value>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -251,12 +260,7 @@ impl ChecksFile {
             let max_parallel = check
                 .max_parallel
                 .map(|value| {
-                    value
-                        .get_ref()
-                        .as_integer()
-                        .and_then(|number| usize::try_from(number).ok())
-                        .and_then(NonZeroUsize::new)
-                        .ok_or_else(|| {
+                    whole_number(value.get_ref()).ok_or_else(|| {
                             invalid(format!(
                                 "line {}: {at} ({name}) max_parallel is a whole number of 1 or more, such as 1",
                                 line_of(text, value.span().start)
@@ -275,10 +279,23 @@ impl ChecksFile {
             });
         }
         let lanes = parse_lanes(raw.serial)?;
+        let max_parallel_runs = raw
+            .runs
+            .and_then(|runs| runs.max_parallel_runs)
+            .map(|value| {
+                whole_number(value.get_ref()).ok_or_else(|| {
+                    invalid(format!(
+                        "line {}: [runs] max_parallel_runs is a whole number of 1 or more, such as 2",
+                        line_of(text, value.span().start)
+                    ))
+                })
+            })
+            .transpose()?;
         Ok(ChecksFile {
             setup,
             checks,
             lanes,
+            max_parallel_runs,
         })
     }
 
@@ -310,6 +327,14 @@ impl ChecksFile {
             .iter()
             .any(|check| check.stages.contains(&stage))
     }
+}
+
+/// A TOML integer of 1 or more.
+fn whole_number(value: &toml::Value) -> Option<NonZeroUsize> {
+    value
+        .as_integer()
+        .and_then(|number| usize::try_from(number).ok())
+        .and_then(NonZeroUsize::new)
 }
 
 /// Whether a plan runs anything. A plan with only skipped checks needs no run.
@@ -719,6 +744,26 @@ stage = "integration"
                 error.message()
             );
         }
+    }
+
+    #[test]
+    fn max_parallel_runs_is_a_whole_number_of_one_or_more_under_runs() {
+        let check = "[[check]]\nname = \"t\"\nrun = \"y\"\n";
+        assert_eq!(ChecksFile::parse(check).unwrap().max_parallel_runs, None);
+        let empty = ChecksFile::parse(&format!("[runs]\n{check}")).unwrap();
+        assert_eq!(empty.max_parallel_runs, None);
+        let limited =
+            ChecksFile::parse(&format!("[runs]\nmax_parallel_runs = 2\n{check}")).unwrap();
+        assert_eq!(limited.max_parallel_runs, NonZeroUsize::new(2));
+        for bad in ["0", "-1", "\"2\"", "1.5", "true"] {
+            let message = refusal(&format!("[runs]\nmax_parallel_runs = {bad}\n{check}"));
+            assert!(
+                message.contains("line 2: [runs] max_parallel_runs is a whole number"),
+                "{bad}: {message}"
+            );
+        }
+        let unknown = refusal(&format!("[runs]\nmax_parallel = 2\n{check}"));
+        assert!(unknown.contains("line 2"), "{unknown}");
     }
 
     #[test]

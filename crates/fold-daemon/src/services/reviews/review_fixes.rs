@@ -214,6 +214,7 @@ impl ReviewService {
         let now = self.clock.now();
         let label = actor.event_actor();
         let mut buffer = EventBuffer::new();
+        let ticket = self.checks.slot_ticket(job.max_parallel_runs);
         let run = self
             .store
             .write(async |tx| {
@@ -245,10 +246,12 @@ impl ReviewService {
                         evidence: Some(evidence),
                         intent: Some(intent),
                     },
+                    slot: ticket.position(),
                 };
                 insert_proposal_run(tx, &mut buffer, &new, now).await
             })
             .await?;
+        ticket.bind(run.id);
         self.bus.publish(buffer);
         self.workspaces.checks_changed().await;
         tracing::info!(run = %run.id, proposal = %proposal, checkout = %checkout.id, "check run of a review fix started");
@@ -257,7 +260,7 @@ impl ReviewService {
             task: run.task,
             checkout: checkout.id,
         };
-        self.spawn_proposal_run(run, job, actor.clone());
+        self.spawn_proposal_run(run, job, actor.clone(), ticket);
         Ok(checking)
     }
 

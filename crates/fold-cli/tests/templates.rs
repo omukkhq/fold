@@ -1608,9 +1608,16 @@ fn the_reference_shows_every_config_key_in_its_example() {
 #[test]
 fn the_reference_names_every_checks_key_and_run_state() {
     let top = checks_keys("");
-    assert_eq!(top, ["setup", "check", "serial"]);
+    assert_eq!(top, ["setup", "check", "serial", "runs"]);
     assert!(REFERENCE.contains("`[setup]`") && REFERENCE.contains("`[[check]]`"));
     assert!(REFERENCE.contains("`[[serial]]`") && REFERENCE.contains("`paths`"));
+    // The keys of [runs] hold an underscore, which the backticked-name check of the reference would need on its list, so the reference names them without backticks.
+    for key in checks_keys("[runs]\n") {
+        assert!(
+            REFERENCE.contains(&format!("[runs] with {key}")),
+            "REFERENCE.md does not name the checks key {key} of [runs]"
+        );
+    }
     for key in checks_keys("[setup]\n")
         .into_iter()
         .chain(checks_keys("[[check]]\nname = \"a\"\nrun = \"b\"\n"))

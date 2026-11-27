@@ -133,6 +133,8 @@ impl ReviewService {
         let specs = runner::commands(&file, &plan);
         let lock = self.checks.check_dir();
         let held = lock.lock().await;
+        // An integration holds the integration mutex, so it counts against `[runs] max_parallel_runs` but never waits for a place.
+        let slot = self.checks.slot_ticket(None);
         let permit = self.checks.start_permit(run.id, &*self.clock).await;
         let fault = Verdict {
             state: RunState::Stopped,
@@ -178,6 +180,7 @@ impl ReviewService {
             }
         };
         drop(permit);
+        drop(slot);
         drop(held);
         if verdict == fault {
             self.end_run_alone(&run, &results, verdict).await?;
