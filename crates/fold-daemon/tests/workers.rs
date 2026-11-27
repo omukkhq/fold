@@ -107,6 +107,58 @@ async fn stored_events(harness: &Harness) -> Vec<(String, Value)> {
         .collect()
 }
 
+/// `git rev-parse --show-toplevel` in `dir` with exactly `env`.
+fn toplevel(
+    dir: &std::path::Path,
+    env: &std::collections::BTreeMap<String, String>,
+) -> std::process::Output {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .env_clear()
+        .envs(env)
+        .output()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn git_in_a_workspace_with_a_workers_environment_never_reaches_the_project_repository() {
+    let mut fake = FakeClaude::new("result");
+    for name in ["GIT_DIR", "GIT_WORK_TREE"] {
+        fake.launcher
+            .env
+            .push((name.to_owned(), "/srv/inherited".to_owned()));
+    }
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    let root = std::path::Path::new(harness.root()).to_owned();
+    let run = until_runs(&fake, &lead, 1, 2).await.remove(0);
+    assert_eq!(
+        run.env["GIT_CEILING_DIRECTORIES"],
+        root.join(".fold").to_string_lossy()
+    );
+    assert!(!run.env.contains_key("GIT_DIR") && !run.env.contains_key("GIT_WORK_TREE"));
+
+    let init = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&root)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .status()
+        .unwrap();
+    assert!(init.success());
+    let workspace = root.join(".fold/ws/t-1");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let mut open = run.env.clone();
+    open.remove("GIT_CEILING_DIRECTORIES");
+    assert!(toplevel(&workspace, &open).status.success());
+    let confined = toplevel(&workspace, &run.env);
+    assert!(!confined.status.success());
+    assert!(String::from_utf8_lossy(&confined.stderr).contains("not a git repository"));
+}
+
 #[tokio::test]
 async fn an_area_lead_starts_task_workers_only_for_tasks_of_its_own_area() {
     let fake = FakeClaude::new("result");

@@ -162,10 +162,15 @@ async fn until_told(fake: &FakeClaude, text: &str) -> Run {
 
 #[tokio::test]
 async fn a_daemon_start_runs_the_supervised_main_with_its_role_and_the_main_tag() {
-    let fake = FakeClaude::new("result");
+    let mut fake = FakeClaude::new("result");
+    fake.launcher
+        .env
+        .push(("GIT_DIR".to_owned(), "/srv/kept/.git".to_owned()));
     let harness = supervised(&fake).await;
     let runs = fake.runs_of(MAIN);
     assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].env["GIT_DIR"], "/srv/kept/.git");
+    assert!(!runs[0].env.contains_key("GIT_CEILING_DIRECTORIES"));
     assert!(runs[0].has("--session-id"));
     assert!(
         runs[0].stdin[1].contains("fold started you as main, the main agent of this project"),

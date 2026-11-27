@@ -36,7 +36,7 @@ use crate::services::agents::workers::code_of;
 use crate::services::agents::{AgentError, accounts};
 use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
-use crate::support::remove_daemon_context;
+use crate::support::{confine_git, remove_daemon_context};
 
 impl Supervisor {
     /// Runs Claude Code for the row, which a committed command left in state `starting`: a new session, or `--resume` of the row's session. `turn` is the first user turn; without one a resumed worker waits idle for its next notice. A new session records the installed fld's fingerprint of the role's skill text, also when a pause ends its start; a resumed one whose recorded fingerprint differs gets the update note before its first turn, whichever turn that is, and records the new fingerprint once that turn is written. A process that cannot start, for an unreadable configuration, files that cannot be written, a failed spawn or a process that cannot be recorded, leaves the row `failed` with `worker.failed` and gives no [`StartWatch`], so no `starting` row holds a place under the limits.
@@ -194,6 +194,10 @@ impl Supervisor {
                 .env(ACCOUNT_ENV, stamp.name.as_str()),
             None => command.env_remove(ACCOUNT_ENV),
         };
+        // The supervised main works in the project folder, the human's own repository, so only a worker apart from it is kept out of that repository.
+        if start.is_some() {
+            confine_git(&mut command, &self.inner.paths.fold_dir());
+        }
         match &start {
             Some(start) => command
                 .env(START_DIR_ENV, start)

@@ -15,7 +15,7 @@ use tokio::task::JoinSet;
 
 use super::memory::{self, MemorySource};
 use crate::services::agents::peers::{self, PeerWorker};
-use crate::support::{lock, remove_daemon_context};
+use crate::support::{confine_git, lock, remove_daemon_context};
 
 /// The end of a command's output that a result keeps. The end is where a failure shows.
 pub const LOG_LIMIT: usize = 64 * 1024;
@@ -1019,6 +1019,8 @@ fn shell(dir: &Path, run: &str) -> Command {
     for name in IDENTITY_ENV {
         command.env_remove(name);
     }
+    // Every check folder is a folder of fold's without a `.git`, below the project's repository; its parent as the ceiling keeps `git` out of that repository wherever fold puts the folder.
+    confine_git(&mut command, dir.parent().unwrap_or(dir));
     command
 }
 
@@ -1148,6 +1150,35 @@ mod tests {
         assert!(results[1].blocks());
     }
 
+    #[tokio::test]
+    async fn git_in_a_check_folder_fails_instead_of_reaching_the_project_repository() {
+        let root = tempfile::tempdir().unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(root.path())
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .status()
+            .unwrap();
+        assert!(init.success());
+        let dir = root.path().join(".fold/checks/main");
+        std::fs::create_dir_all(&dir).unwrap();
+        let results = run_commands(
+            &dir,
+            vec![
+                spec("git", "git rev-parse --show-toplevel"),
+                spec("plain", "echo fine"),
+            ],
+            quick(),
+            &clock(),
+        )
+        .await;
+        assert_eq!(results[0].outcome, Outcome::Failed);
+        assert!(String::from_utf8_lossy(&results[0].log).contains("not a git repository"));
+        assert_eq!(results[1].outcome, Outcome::Passed);
+        assert_eq!(results[1].log, b"fine\n");
+    }
+
     #[test]
     fn a_command_gets_no_session_or_identity_variable_of_the_daemon() {
         let command = shell(Path::new("/"), "true");
@@ -1161,6 +1192,9 @@ mod tests {
             assert!(removed.iter().any(|gone| gone == name), "{name}");
         }
         assert!(removed.iter().any(|gone| gone == "FOLD_AGENT_TAGS"));
+        for name in crate::support::GIT_REPO_ENV {
+            assert!(removed.iter().any(|gone| gone == name), "{name}");
+        }
         assert!(
             removed
                 .iter()
