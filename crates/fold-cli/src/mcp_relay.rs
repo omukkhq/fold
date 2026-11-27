@@ -185,7 +185,7 @@ impl SessionLines {
     }
 }
 
-/// Carries the MCP session between the client's stdio and the daemon, and moves it to a new daemon connection when the daemon closes this one. `reconnect` must never start a daemon: a daemon the user stopped stays stopped, and the adapter gives up as `policy` says. Ends cleanly when the client closes its input.
+/// Carries the MCP session between the client's stdio and the daemon, and moves it to a new daemon connection when the daemon closes this one. `hello` is the line of the first connect; every reconnect sends its [`HelloLine::replay`]. `reconnect` must never start a daemon: a daemon the user stopped stays stopped, and the adapter gives up as `policy` says. Ends cleanly when the client closes its input.
 pub async fn relay<I, O>(
     stdin: I,
     mut stdout: O,
@@ -202,6 +202,7 @@ where
     let mut input_line = Vec::new();
     let mut session = SessionLines::default();
     let mut connection = connection;
+    let replay = hello.replay();
     loop {
         if serve(
             &mut input,
@@ -224,7 +225,7 @@ where
             &mut stdout,
             &mut session,
             reconnect,
-            hello,
+            &replay,
             policy,
         )
         .await?
@@ -332,7 +333,7 @@ enum Reopened {
     Refused(HandshakeError),
 }
 
-/// Connects without starting a daemon, repeats the handshake with the same line, so the daemon binds the same agent, and replays the client's `initialize` and `notifications/initialized`, which the new daemon session needs before any other request. The daemon's answer to the replayed `initialize` is the client's no longer, so it is dropped. A refused handshake is final: the daemon answered and will answer the same again.
+/// Connects without starting a daemon, repeats the handshake with the replay line, so the daemon binds the same agent and never takes over a main session on it, and replays the client's `initialize` and `notifications/initialized`, which the new daemon session needs before any other request. The daemon's answer to the replayed `initialize` is the client's no longer, so it is dropped. A refused handshake is final: the daemon answered and will answer the same again.
 async fn reopen(config: &ClientConfig, hello: &HelloLine, session: &SessionLines) -> Reopened {
     let Ok(stream) = daemon_client::connect(config).await else {
         return Reopened::Retry;

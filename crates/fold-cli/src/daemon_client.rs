@@ -270,6 +270,19 @@ pub struct HelloLine {
     pub options: HelloOptions,
 }
 
+impl HelloLine {
+    /// The same line with the replay mark, which `fld mcp` sends on every reconnect after the first connect, so the daemon never takes over a main session on it.
+    pub fn replay(&self) -> Self {
+        Self {
+            hello: self.hello.clone(),
+            options: HelloOptions {
+                reconnect: true,
+                ..self.options.clone()
+            },
+        }
+    }
+}
+
 impl From<Hello> for HelloLine {
     fn from(hello: Hello) -> Self {
         Self {

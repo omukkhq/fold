@@ -3,12 +3,14 @@ use std::time::Duration;
 
 use fold_cli::daemon_client::{self, ClientConfig, HelloLine};
 use fold_cli::mcp_relay::{ReconnectPolicy, RelayError, relay};
-use fold_core::ManualClock;
-use fold_daemon::mcp::handshake::{Hello, PROTOCOL_VERSION};
+use fold_core::{FoldError, ManualClock, codes};
+use fold_daemon::mcp::handshake::{Answer, Hello, HelloOptions, PROTOCOL_VERSION, parse_line};
 use fold_daemon::{Daemon, DaemonConfig, RunningDaemon};
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use serde_json::Value;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{UnixListener, UnixStream};
 use tokio::task::JoinHandle;
 
 use crate::common::{Client, Host};
@@ -143,4 +145,91 @@ async fn the_relay_gives_up_with_the_closed_session_message() {
         "the daemon closed the session; start a new session to reconnect"
     );
     drop(client);
+}
+
+#[cfg(test)]
+/// Accepts the next connection of a stand-in daemon, reads its handshake line and answers it.
+async fn handshake_line(listener: &UnixListener, answer: &Answer) -> (Vec<u8>, UnixStream) {
+    let (stream, _) = tokio::time::timeout(WAIT, listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut reader = BufReader::new(stream);
+    let mut line = Vec::new();
+    reader.read_until(b'\n', &mut line).await.unwrap();
+    let mut stream = reader.into_inner();
+    stream.write_all(&answer.line()).await.unwrap();
+    (line, stream)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_a_reopen_marks_its_handshake_and_a_refused_replay_stops_the_relay() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let socket = dir.path().join("fold.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let config = ClientConfig::running(socket);
+    let hello = HelloLine {
+        hello: Hello {
+            fold: PROTOCOL_VERSION,
+            cwd: dir.path().to_path_buf(),
+            pid: std::process::id(),
+            agent: Some("main".to_owned()),
+            tags: vec!["main".to_owned()],
+            inbox: None,
+        },
+        options: HelloOptions {
+            keep_others: true,
+            reconnect: false,
+        },
+    };
+
+    let accepted = Answer::accepted("app");
+    let stream = daemon_client::connect(&config).await.unwrap();
+    let (connection, (first, first_stream)) = tokio::join!(
+        daemon_client::handshake(stream, &hello),
+        handshake_line(&listener, &accepted),
+    );
+    let connection = connection.unwrap();
+    let (first_hello, first_options) = parse_line(&first).unwrap();
+    assert_eq!(first_hello, hello.hello);
+    assert!(!first_options.reconnect, "the first connect has no mark");
+    assert!(!String::from_utf8_lossy(&first).contains("reconnect"));
+
+    let (client_side, relay_side) = tokio::io::duplex(64 * 1024);
+    let (stdin, stdout) = tokio::io::split(relay_side);
+    let policy = short_policy(WAIT);
+    let relay_hello = hello.clone();
+    let relayed = tokio::spawn(async move {
+        relay(stdin, stdout, connection, &config, &relay_hello, &policy).await
+    });
+    drop(first_stream);
+
+    let taken_over = FoldError::new(
+        codes::MAIN_SESSION_TAKEN_OVER,
+        "a newer session took this one over",
+    );
+    let (replayed, _replayed_stream) =
+        handshake_line(&listener, &Answer::refused(&taken_over)).await;
+    let (replayed_hello, replayed_options) = parse_line(&replayed).unwrap();
+    assert_eq!(replayed_hello, hello.hello);
+    assert_eq!(
+        replayed_options,
+        HelloOptions {
+            keep_others: true,
+            reconnect: true,
+        },
+        "the reopen after a closed stream has the mark and keeps keep_others"
+    );
+
+    let ended = tokio::time::timeout(WAIT, relayed).await.unwrap().unwrap();
+    let error = ended.expect_err("the refused replay stops the relay");
+    assert!(
+        matches!(
+            &error,
+            RelayError::Refused(daemon_client::HandshakeError::Refused { code, .. })
+                if code == "main_session_taken_over"
+        ),
+        "{error:?}"
+    );
+    drop(client_side);
 }
