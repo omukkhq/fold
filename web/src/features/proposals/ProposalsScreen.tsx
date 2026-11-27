@@ -1,6 +1,7 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, Filter, GitPullRequest, X } from "lucide-react";
+import type { ListedProposal } from "@/api/proposals";
 import { proposalsQuery, proposalsWaitingQuery } from "@/api/queries";
 import { revisionsQuery } from "@/api/repositoryQueries";
 import { HrefLink } from "@/app/HrefLink";
@@ -42,6 +43,7 @@ import {
 import { IdLink } from "@/components/id/IdLink";
 import { integratedRevisions } from "./integration";
 import { listMeta, listPill } from "./present";
+import { queueWait } from "./queueWait";
 import { ReviewPill } from "./ReviewPill";
 
 interface ProposalsScreenProps {
@@ -326,6 +328,7 @@ export function ProposalsScreen({
                         </IdLink>{" "}
                         · <ActorText segments={listMeta(p)} />
                       </span>
+                      <QueueLine proposal={p} now={now} />
                     </div>
                   </td>
                   <td className={cn(CELL, "whitespace-nowrap max-md:hidden")}>
@@ -355,6 +358,29 @@ export function ProposalsScreen({
         </div>
       )}
     </div>
+  );
+}
+
+/** Where an approved proposal stands in the automatic integration; gold only while it waits for a person. */
+function QueueLine({
+  proposal,
+  now,
+}: {
+  proposal: ListedProposal;
+  now: number;
+}) {
+  const wait = queueWait(proposal, now);
+  if (wait === null) return null;
+  return (
+    <span
+      data-queue-wait={wait.state}
+      className={cn(
+        "pl-44 text-13",
+        wait.state === "person" ? "text-warn" : "text-text-2",
+      )}
+    >
+      {wait.text}
+    </span>
   );
 }
 

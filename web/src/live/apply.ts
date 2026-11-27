@@ -361,6 +361,24 @@ const HOLD_CHANGES: ReadonlySet<string> = new Set([
   "task.hold_cleared",
 ]);
 
+/** The events that add a proposal to the integration queue or take it out, or that change what a proposal in it waits for. */
+const QUEUE_MOVES: ReadonlySet<string> = new Set([
+  "proposal.version_added",
+  "proposal.human_edited",
+  "proposal.review_again_requested",
+  "proposal.reviewer_fixed",
+  "proposal.closed",
+  "proposal.integrated",
+  "review.submitted",
+]);
+
+/**
+ * An approved proposal's place in the integration queue and the reason it waits depend on every other proposal and on the review batches, so an event that moves one of them changes the queue text of every proposal page and list row. The board cards say nothing of the queue.
+ */
+function queueKeys(slug: string): QueryKey[] {
+  return [keys.proposals(slug), keys.proposalPages(slug)];
+}
+
 function invalidationKeys(
   slug: string,
   type: string,
@@ -415,6 +433,7 @@ function invalidationKeys(
             ...readers,
             keys.needsYou(slug),
             keys.proposals(slug),
+            keys.proposalPages(slug),
           ]
         : [board, ...taskKey, ...readers, keys.needsYou(slug)];
     }
@@ -446,8 +465,9 @@ function invalidationKeys(
       return [
         keys.proposals(slug),
         ...proposalKey,
-        ...taskKey,
+        ...(QUEUE_MOVES.has(type) ? queueKeys(slug) : []),
         board,
+        ...taskKey,
         keys.reviewBatches(slug),
         keys.needsYou(slug),
         ...(type === "proposal.integrated" ? [repository] : []),
@@ -462,13 +482,20 @@ function invalidationKeys(
           ...taskKey,
         ];
       }
+      // A ready batch takes its turn in the integration queue before the single proposals do.
       return type.startsWith("review.batch_")
-        ? [keys.reviewBatches(slug), keys.workers(slug), ...proposalKey]
+        ? [
+            keys.reviewBatches(slug),
+            keys.workers(slug),
+            ...proposalKey,
+            ...queueKeys(slug),
+          ]
         : [
             keys.proposals(slug),
             ...proposalKey,
-            ...taskKey,
+            ...(QUEUE_MOVES.has(type) ? queueKeys(slug) : []),
             board,
+            ...taskKey,
             keys.reviewBatches(slug),
             keys.needsYou(slug),
           ];
@@ -496,11 +523,15 @@ function invalidationKeys(
       ];
     }
     case "integration":
+      // A queued, unqueued, held or ended integration moves every proposal behind it; a pull names no proposal and no batch.
       return [
+        board,
+        ...(proposal === null && typeof event.data.batch !== "string"
+          ? []
+          : queueKeys(slug)),
         ...(proposal === null ? [] : [keys.proposals(slug), ...proposalKey]),
         ...taskKey,
         repository,
-        board,
         // A batch's queued integration and each member's integration change what the batch screen says about its integration.
         ...(typeof event.data.batch === "string"
           ? [keys.reviewBatches(slug)]
