@@ -14,9 +14,10 @@ import { Skeleton } from "@/components/states/Skeleton";
 import { IdText } from "@/components/text/IdText";
 import { CODE_BOX, textFlow } from "@/components/text/textFlow";
 import { cn } from "@/lib/cn";
+import { ActorText } from "@/people/ActorText";
 import { focusRing } from "@/lib/focus";
 import { runTime } from "./checkRunTime";
-import { outcomeText, reasonText, resultOf } from "./checkRuns";
+import { outcomeText, resultOf, runReasonLine } from "./checkRuns";
 import {
   chosenStep,
   firstError,
@@ -49,6 +50,16 @@ function CopyLog({ log }: { log: string }) {
         </span>
       )}
     </span>
+  );
+}
+
+function RunReason({ run }: { run: CheckRun }) {
+  const line = runReasonLine(run);
+  if (line === null) return null;
+  return (
+    <p className="px-6 text-14 text-text">
+      <ActorText segments={line} />
+    </p>
   );
 }
 
@@ -228,11 +239,7 @@ export function ChecksTab({
                 {item.run.state === "running" ? <Chip>running</Chip> : null}
                 <RunTimeLabel run={item.run} now={now} />
               </div>
-              {item.run.reason === null ? null : (
-                <p className="px-6 text-14 text-text">
-                  {reasonText(item.run.reason)}
-                </p>
-              )}
+              <RunReason run={item.run} />
               {showsStop(item.run, human) ? (
                 <StopRunButton slug={slug} run={item.run.id} />
               ) : null}

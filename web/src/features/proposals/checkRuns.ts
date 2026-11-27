@@ -4,6 +4,7 @@ import type {
   CheckRunReason,
   ProposalSummary,
 } from "@/api/proposals";
+import { actorSegment, type Segments } from "@/people/segments";
 
 const REASONS: Record<CheckRunReason, string> = {
   check_failed: "a required check failed",
@@ -23,6 +24,15 @@ const REASONS: Record<CheckRunReason, string> = {
 /** The sentence for why a run failed or stopped. */
 export function reasonText(reason: CheckRunReason): string {
   return REASONS[reason];
+}
+
+/** The line under a run header that says why it ended: who cancelled a cancelled run when the daemon names them, else the sentence for the reason. Null for a run with no reason. */
+export function runReasonLine(run: CheckRun): Segments | null {
+  if (run.reason === null) return null;
+  if (run.reason === "cancelled" && run.cancelled_by) {
+    return ["Cancelled by ", actorSegment(run.cancelled_by)];
+  }
+  return [reasonText(run.reason)];
 }
 
 function seconds(ms: number): string {
