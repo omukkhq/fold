@@ -609,9 +609,9 @@ async fn the_agents_route_gives_each_agent_the_items_of_its_own_claims() {
     let fx = Fixture::new().await;
     let (id, dir) = fx.create(&fx.frontend, 1).await;
     fx.review_claim(&dir).await;
-    // An edit after the version, so the author's workspace stalls while the reviewer holds the proposal.
-    fs::write(dir.join("README.md"), "# demo\nafter the version\n").unwrap();
-    fx.handle.live.rescan(id).await.unwrap();
+    // Failed integration checks give the proposal back to its author, so the author's workspace stalls while the reviewer holds the proposal.
+    fold_store::testing::execute(fx.project.store(), "UPDATE proposals SET checks_failed = 1")
+        .await;
     let none = BTreeMap::from([
         ("frontend".to_owned(), json!([])),
         ("backend".to_owned(), json!([])),
@@ -715,20 +715,19 @@ async fn a_worker_whose_files_are_its_sent_version_never_stalls() {
     fs::write(dir.join("README.md"), "# demo\nedited after\n").unwrap();
     fx.handle.live.rescan(id).await.unwrap();
     fx.advance(STALL);
-    assert_eq!(
-        fx.check().await,
-        1,
-        "an edit after the version counts again"
+    fx.check().await;
+    assert!(
+        !fx.stalled(id),
+        "an edit after the version does not stall a worker whose proposal waits for review"
     );
-    assert!(fx.stalled(id));
-    assert_eq!(fx.attention("T-1").await, ["stalled"]);
+    assert!(fx.attention("T-1").await.is_empty());
 
     fs::write(dir.join("README.md"), "# demo\nsent\n").unwrap();
     fx.handle.live.rescan(id).await.unwrap();
     assert_eq!(
         fx.check().await,
         0,
-        "the scan that found the change cleared it"
+        "the files are the version again and nothing changes"
     );
     assert!(!fx.stalled(id));
     assert_eq!(

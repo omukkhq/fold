@@ -352,8 +352,9 @@ impl LiveActivity {
 /// The agents fold told of a workspace's stall, and when; see [`LiveState::told`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Told {
-    /// The stall's reason and start, so a new stall of the same workspace is told again.
+    /// The stall's reason, as `worker.stalled` names it.
     pub reason: &'static str,
+    /// The stall's start. A stall of the same workspace that starts no later is the same stall; only new activity moves the start, and the later stall is told again.
     pub since: Timestamp,
     pub at: Timestamp,
     pub agents: Vec<AgentName>,
@@ -1533,7 +1534,7 @@ impl LiveState {
         lock(&self.shared.told).get(&workspace).cloned()
     }
 
-    /// Records who was told of the stall of `workspace`, or forgets it with `None` once the stall ended. A workspace that left the live state keeps no record.
+    /// Records who was told of the stall of `workspace`, or forgets it with `None`. The record outlives the stall, so a quiet time between two verdicts of one stall never tells it again. A workspace that left the live state keeps no record.
     pub fn set_told(&self, workspace: WorkspaceId, told: Option<Told>) {
         let present = told.is_some() && self.get(workspace).is_some();
         let mut all = lock(&self.shared.told);
