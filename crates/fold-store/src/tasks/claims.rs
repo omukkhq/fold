@@ -371,8 +371,16 @@ pub async fn claim_waits(
                                            AND r.version_id = (SELECT v.id FROM proposal_versions v
                                                                WHERE v.proposal_id = p.id
                                                                ORDER BY v.version DESC LIMIT 1))))) AS "sent!: bool",
-                  (c.kind = 'implementation' AND EXISTS (
-                       SELECT 1 FROM open_human_questions q WHERE q.task_id = c.task_id)) AS "asks_person!: bool",
+                  (CASE c.kind
+                       WHEN 'implementation' THEN EXISTS (
+                           SELECT 1 FROM open_human_questions q WHERE q.task_id = c.task_id)
+                       ELSE EXISTS (
+                           SELECT 1 FROM open_human_questions q
+                           JOIN messages m ON m.id = q.id
+                           JOIN workers sw ON sw.id = m.sender_worker_id
+                           WHERE m.proposal_id = c.proposal_id
+                             AND sw.agent_id = (SELECT w.agent_id FROM workers w WHERE w.id = c.worker_id))
+                   END) AS "asks_person!: bool",
                   (c.kind = 'implementation' AND EXISTS (
                        SELECT 1 FROM task_reports r
                        WHERE r.task_id = c.task_id AND r.resolution IS NULL)) AS "reported!: bool",

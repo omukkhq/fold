@@ -302,3 +302,120 @@ async fn a_waiting_holders_claim_is_renewed_once_it_is_due_or_marked() {
     assert_eq!((due.count, due.cleared.len()), (1, 0));
     assert_eq!(holder(store, id(1)).await.unwrap().renewed_at, later);
 }
+
+#[cfg(test)]
+async fn claim_asks_person(store: &Store, worker: i64) -> bool {
+    let waits = claims::claim_waits(store.read()).await.unwrap();
+    let (_, wait) = waits
+        .into_iter()
+        .find(|(holder, _)| *holder == worker)
+        .unwrap();
+    wait.asks_person
+}
+
+#[cfg(test)]
+async fn ask_human(store: &Store, number: i64, worker: i64, proposal: Option<i64>) {
+    let proposal = proposal.map_or("NULL".to_owned(), |number| number.to_string());
+    exec(
+        store,
+        &format!(
+            "INSERT INTO messages (id, number, thread_id, sender_kind, sender_worker_id, proposal_id, body, created_at, asks_human)
+             VALUES ({number}, {number}, {number}, 'worker', {worker}, {proposal}, 'which one?', 0, 1)"
+        ),
+    )
+    .await
+    .unwrap();
+    exec(
+        store,
+        &format!(
+            "INSERT INTO message_recipients (message_id, human, addressed_as) VALUES ({number}, 'ana', 'humans')"
+        ),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_review_claim_waits_while_its_holder_has_an_open_ask_on_the_proposal() {
+    let (project, [author, reviewer, other]) = setup().await;
+    let store = project.store();
+    for number in 1..=2 {
+        exec(
+            store,
+            &format!(
+                "INSERT INTO proposals (number, task_id, author_worker_id, title, state, created_at, updated_at)
+                 VALUES ({number}, {number}, {author}, 'p', 'open', 0, 0)"
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    exec(
+        store,
+        &format!(
+            "INSERT INTO claims (kind, proposal_id, worker_id, acquired_at, renewed_at)
+             VALUES ('review', 1, {reviewer}, 0, 0)"
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(!claim_asks_person(store, reviewer).await);
+
+    ask_human(store, 1, other, Some(1)).await;
+    ask_human(store, 2, reviewer, Some(2)).await;
+    ask_human(store, 3, reviewer, None).await;
+    assert!(
+        !claim_asks_person(store, reviewer).await,
+        "another agent's ask, the holder's ask on another proposal and an ask on none do not count"
+    );
+
+    ask_human(store, 4, reviewer, Some(1)).await;
+    assert!(claim_asks_person(store, reviewer).await);
+
+    exec(
+        store,
+        "INSERT INTO message_ask_closures (message_id, reason, closed_by, created_at)
+         VALUES (4, 'dismissed', 'human:ana', 0)",
+    )
+    .await
+    .unwrap();
+    assert!(!claim_asks_person(store, reviewer).await);
+
+    ask_human(store, 5, reviewer, Some(1)).await;
+    assert!(claim_asks_person(store, reviewer).await);
+    exec(
+        store,
+        "INSERT INTO messages (id, number, thread_id, reply_to, sender_kind, sender_human, body, created_at)
+         VALUES (6, 6, 5, 5, 'human', 'ana', 'the first', 0)",
+    )
+    .await
+    .unwrap();
+    assert!(
+        !claim_asks_person(store, reviewer).await,
+        "a human's reply ends the ask"
+    );
+}
+
+#[tokio::test]
+async fn an_implementation_claim_waits_on_any_open_ask_of_its_task() {
+    let (project, [author, _, other]) = setup().await;
+    let store = project.store();
+    claim(store, id(1), author, project.now()).await.unwrap();
+    assert!(!claim_asks_person(store, author).await);
+    exec(
+        store,
+        &format!(
+            "INSERT INTO messages (id, number, thread_id, sender_kind, sender_worker_id, task_id, body, created_at, asks_human)
+             VALUES (1, 1, 1, 'worker', {other}, 1, 'which one?', 0, 1)"
+        ),
+    )
+    .await
+    .unwrap();
+    exec(
+        store,
+        "INSERT INTO message_recipients (message_id, human, addressed_as) VALUES (1, 'ana', 'humans')",
+    )
+    .await
+    .unwrap();
+    assert!(claim_asks_person(store, author).await);
+}

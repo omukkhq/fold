@@ -37,7 +37,7 @@ pub fn lease_start(renewed_at: Timestamp, runs: HolderRuns, now: Timestamp) -> T
 pub struct ClaimWait {
     /// An implementation claim whose task has an open proposal that waits on reviewers or the integration: not back with its author by requested changes or failed integration checks. A conflict at integration waits on the reviewer that fixes it, so it counts as sent.
     pub sent: bool,
-    /// An implementation claim whose task has an ask that waits for a person.
+    /// An implementation claim whose task has an ask that waits for a person, or a review claim whose holder's agent has such an ask about the proposal.
     pub asks_person: bool,
     /// An implementation claim whose task has an open report that waits for the lead's check.
     pub reported: bool,
