@@ -493,7 +493,7 @@ impl From<WaitReason> for IntegrationWait {
 }
 
 /// The `queue` and `waits_for` fields of a proposal: exactly one is set for an open proposal whose latest verdict is an approval, neither for any other.
-fn queue_fields(
+pub(super) fn queue_fields(
     standing: Option<QueueStanding>,
 ) -> (Option<IntegrationQueuePlace>, Option<IntegrationWait>) {
     match standing {

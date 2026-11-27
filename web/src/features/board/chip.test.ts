@@ -33,6 +33,8 @@ const proposal = (
   revision: null,
   review_plan: null,
   review_claim: null,
+  queue: null,
+  waits_for: null,
   ...over,
 });
 

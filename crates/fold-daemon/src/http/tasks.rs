@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use axum::Json;
-use axum::extract::Path;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use fold_core::{
     CheckRunId, ChecklistItemId, ChecklistName, FoldError, IdParseError, LabelColor, LabelName,
@@ -17,8 +17,11 @@ use super::actor::Human;
 use super::error::{ApiError, ApiJson, ErrorEnvelope, fold};
 use super::events::{CheckpointSummary, DurableEventType, LiveCheckRun};
 use super::reviews::checks::{CheckPurpose, CheckStage};
-use super::reviews::{ReviewPlanWait, ReviewVerdict};
+use super::reviews::{
+    IntegrationQueuePlace, IntegrationWait, ReviewPlanWait, ReviewVerdict, queue_fields,
+};
 use crate::daemon::AppState;
+use crate::services::reviews::{IntegrationQueue, QueuedBoard};
 use crate::services::tasks::{self as service, ItemContent};
 
 pub mod requests;
@@ -382,11 +385,20 @@ pub struct BoardProposal {
     /// The worker that holds the proposal's review claim, so the proposal is being reviewed; null while no reviewer holds it.
     #[schema(required = true, example = "review-2")]
     pub review_claim: Option<String>,
+    /// The place in the automatic integration queue of an approved open proposal that the job takes; null otherwise.
+    #[schema(required = true)]
+    pub queue: Option<IntegrationQueuePlace>,
+    /// Why the automatic integration does not take an approved open proposal; null for a queued one and for any proposal that is not approved and open.
+    #[schema(required = true)]
+    pub waits_for: Option<IntegrationWait>,
 }
 
-impl From<service::CardProposal> for BoardProposal {
-    fn from(proposal: service::CardProposal) -> Self {
+impl BoardProposal {
+    fn new(proposal: service::CardProposal, queue: &IntegrationQueue) -> Self {
+        let (place, waits_for) = queue_fields(queue.standing(proposal.id).cloned());
         Self {
+            queue: place,
+            waits_for,
             id: proposal.id.to_string(),
             state: proposal.standing.into(),
             version: proposal.version,
@@ -417,8 +429,8 @@ impl From<service::Activity> for BoardActivity {
     }
 }
 
-impl From<service::BoardCard> for BoardCard {
-    fn from(card: service::BoardCard) -> Self {
+impl BoardCard {
+    fn new(card: service::BoardCard, queue: &IntegrationQueue) -> Self {
         Self {
             task: card.id.to_string(),
             title: card.title.to_string(),
@@ -440,7 +452,9 @@ impl From<service::BoardCard> for BoardCard {
             messages: card.messages,
             completed_at: card.completed_at.map(|at| at.as_millis()),
             attention: attention(card.attention),
-            proposal: card.proposal.map(BoardProposal::from),
+            proposal: card
+                .proposal
+                .map(|proposal| BoardProposal::new(proposal, queue)),
             activity: card.activity.map(BoardActivity::from),
             edits_after_version: card.edits_after_version,
             check_run: card.check_run.map(CardCheckRun::from),
@@ -1098,15 +1112,26 @@ fn label_names(names: &[String]) -> Result<Vec<LabelName>, ApiError> {
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
-pub async fn board(project: Project) -> Result<Json<BoardView>, ApiError> {
-    let board = project.0.tasks.board().await?;
+pub async fn board(
+    State(state): State<AppState>,
+    project: Project,
+) -> Result<Json<BoardView>, ApiError> {
+    let QueuedBoard { board, queue } = project
+        .0
+        .reviews(&state.registry)
+        .board_with_queue(&project.0.tasks)
+        .await?;
     Ok(Json(BoardView {
         columns: board
             .columns
             .into_iter()
             .map(|column| BoardColumn {
                 status: column.status.into(),
-                cards: column.cards.into_iter().map(BoardCard::from).collect(),
+                cards: column
+                    .cards
+                    .into_iter()
+                    .map(|card| BoardCard::new(card, &queue))
+                    .collect(),
                 total: column.total,
             })
             .collect(),

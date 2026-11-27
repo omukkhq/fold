@@ -24,6 +24,8 @@ const proposal = (
   revision,
   review_plan: null,
   review_claim: null,
+  queue: null,
+  waits_for: null,
 });
 
 describe("taskPath", () => {

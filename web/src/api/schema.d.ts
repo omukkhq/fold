@@ -2427,6 +2427,7 @@ export interface components {
             checks_failed: boolean;
             /** @example P-3 */
             id: string;
+            queue: components["schemas"]["IntegrationQueuePlace"] | null;
             /**
              * @description The worker that holds the proposal's review claim, so the proposal is being reviewed; null while no reviewer holds it.
              * @example review-2
@@ -2444,6 +2445,7 @@ export interface components {
              * @description The current version.
              */
             version: number;
+            waits_for: components["schemas"]["IntegrationWait"] | null;
         };
         /** @description The five columns in board order: backlog, todo, in_progress, review, done. Archived tasks are left out. */
         BoardView: {

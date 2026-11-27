@@ -73,7 +73,7 @@ pub use proposals::{
     ProposalSummary, Proposed, Retirement, Turn, VersionView, retire_proposal,
 };
 pub use queue::{
-    ESTIMATE_RUNS, IntegrationQueue, QueueItem, QueuePlace, QueueStanding, WaitReason,
+    ESTIMATE_RUNS, IntegrationQueue, QueueItem, QueuePlace, QueueStanding, QueuedBoard, WaitReason,
     estimate_starts, places,
 };
 pub use review_fixes::{FixOutcome, FixedVersion, MAX_CHECKS_CHARS, MAX_FIXES, ReviewFix};

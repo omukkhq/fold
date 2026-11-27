@@ -3,6 +3,7 @@ use std::fmt;
 use std::time::Duration;
 
 use fold_core::policy::GateRefusal;
+use fold_core::reviews::ProposalStanding;
 use fold_core::reviews::checks::Stage;
 use fold_core::{HumanName, ProposalId, ReviewBatchId, TaskId, TaskStatus, Timestamp};
 use fold_store::StoreError;
@@ -11,6 +12,7 @@ use fold_store::reviews::checks;
 use super::integrate::{AutomaticSkip, AutomaticTurn};
 use super::{ReviewError, ReviewService};
 use crate::services::projects::load_config;
+use crate::services::tasks::{Board, TaskService};
 
 /// How many of the newest passed integration runs the start estimate averages.
 pub const ESTIMATE_RUNS: u32 = 10;
@@ -302,6 +304,37 @@ impl ReviewService {
             })
             .collect();
         Ok(IntegrationQueue { proposals })
+    }
+}
+
+/// The board with the automatic integration queue, read once for every proposal on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueuedBoard {
+    pub board: Board,
+    pub queue: IntegrationQueue,
+}
+
+impl ReviewService {
+    /// The board of `tasks` with one [`ReviewService::integration_queue`] read, so each card's proposal takes its standing from the same queue as every other card. Only an approved open proposal has a standing, and such a card stands `approved` or `conflict`, so a board without one skips the read.
+    pub async fn board_with_queue(&self, tasks: &TaskService) -> Result<QueuedBoard, ReviewError> {
+        let board = tasks.board().await?;
+        let any_approved = board
+            .columns
+            .iter()
+            .flat_map(|column| &column.cards)
+            .filter_map(|card| card.proposal.as_ref())
+            .any(|proposal| {
+                matches!(
+                    proposal.standing,
+                    ProposalStanding::Approved | ProposalStanding::Conflict
+                )
+            });
+        let queue = if any_approved {
+            self.integration_queue().await?
+        } else {
+            IntegrationQueue::default()
+        };
+        Ok(QueuedBoard { board, queue })
     }
 }
 

@@ -1360,3 +1360,105 @@ async fn an_approved_proposal_shows_its_queue_place_or_why_it_waits() {
         json!({"reason": "prerequisites", "prerequisites": [{"task": "T-2", "status": "todo"}]})
     );
 }
+
+/// The `proposal` of the board card of `task`.
+#[cfg(test)]
+fn board_proposal(board: &Value, task: &str) -> Value {
+    board["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|column| column["cards"].as_array().unwrap())
+        .find(|card| card["task"] == task)
+        .map(|card| card["proposal"].clone())
+        .unwrap()
+}
+
+/// Asserts that the board card of each task carries the `queue` and `waits_for` of its proposal's own read.
+#[cfg(test)]
+async fn assert_board_matches_reads(fx: &Fixture, board: &Value) {
+    for (task, proposal) in [("T-1", "P-1"), ("T-2", "P-2")] {
+        let card = board_proposal(board, task);
+        let read = send(
+            fx,
+            Method::GET,
+            &format!("/proposals/{proposal}"),
+            None,
+            Some(TANIM),
+        )
+        .await;
+        assert_eq!(card["queue"], read.body["queue"], "{proposal}");
+        assert_eq!(card["waits_for"], read.body["waits_for"], "{proposal}");
+    }
+}
+
+#[tokio::test]
+async fn the_board_shows_each_proposals_queue_place_or_why_it_waits() {
+    let fx = with_p1().await;
+    let backend = fx.agent("backend").await;
+    fx.workspaces()
+        .create_workspace(&backend, t(2))
+        .await
+        .unwrap();
+    fx.write(2, "src/export.rs", "pub fn export() {}\n");
+    fx.reviews()
+        .create_proposal_covering(&backend, t(2), "Add the export", Some("tests pass"))
+        .await
+        .unwrap()
+        .detail()
+        .unwrap();
+
+    let board = send(&fx, Method::GET, "/board", None, None).await;
+    assert_eq!(board.status, StatusCode::OK, "{}", board.body);
+    for task in ["T-1", "T-2"] {
+        let card = board_proposal(&board.body, task);
+        assert_eq!(card["queue"], Value::Null, "{task}");
+        assert_eq!(card["waits_for"], Value::Null, "{task}");
+    }
+    assert_board_matches_reads(&fx, &board.body).await;
+
+    let review = fx.agent("review").await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
+    for number in [2, 1] {
+        fx.reviews()
+            .submit_review(
+                &review,
+                fold_core::ProposalId::from_number(number).unwrap(),
+                1,
+                fold_core::reviews::Verdict::Approve,
+                "ok",
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        if number == 2 {
+            fx.handle
+                .tasks
+                .add_dependency(&human(TANIM), t(1), t(2))
+                .await
+                .unwrap();
+        }
+    }
+
+    let board = send(&fx, Method::GET, "/board", None, None).await;
+    assert_eq!(board.status, StatusCode::OK, "{}", board.body);
+    let p2 = board_proposal(&board.body, "T-2");
+    assert_eq!(
+        p2["queue"],
+        json!({
+            "position": 1,
+            "integrating_now": false,
+            "ahead": null,
+            "estimated_start": null,
+            "batch": null,
+        })
+    );
+    assert_eq!(p2["waits_for"], Value::Null);
+    let p1 = board_proposal(&board.body, "T-1");
+    assert_eq!(p1["queue"], Value::Null);
+    assert_eq!(
+        p1["waits_for"],
+        json!({"reason": "prerequisites", "prerequisites": [{"task": "T-2", "status": "review"}]})
+    );
+    assert_board_matches_reads(&fx, &board.body).await;
+}

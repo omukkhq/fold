@@ -272,6 +272,8 @@ describe("activityLine", () => {
         revision: null,
         review_plan: null,
         review_claim: null,
+        queue: null,
+        waits_for: null,
       },
       edits_after_version: false,
     };
@@ -310,6 +312,8 @@ describe("activityLine", () => {
         revision: null,
         review_plan: null,
         review_claim: null,
+        queue: null,
+        waits_for: null,
       },
       edits_after_version: false,
     };
@@ -338,6 +342,8 @@ describe("activityLine", () => {
         revision: null,
         review_plan: null,
         review_claim: null,
+        queue: null,
+        waits_for: null,
       },
       edits_after_version: false,
     };
@@ -373,6 +379,8 @@ describe("activityLine", () => {
         revision: null,
         review_plan: null,
         review_claim: null,
+        queue: null,
+        waits_for: null,
       },
       edits_after_version: true,
     };

@@ -55,6 +55,8 @@ describe("cardDetails", () => {
           proposals: ["P-4"],
         },
         review_claim: null,
+        queue: null,
+        waits_for: null,
       },
       attention: [
         { kind: "stalled", closable: false, action: null },
@@ -137,6 +139,8 @@ describe("cardDetails", () => {
           revision: null,
           review_plan: null,
           review_claim: null,
+          queue: null,
+          waits_for: null,
         },
       }),
       null,
