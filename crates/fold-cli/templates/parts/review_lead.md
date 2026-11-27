@@ -5,7 +5,7 @@ description: The steps of the fold review lead: grouping proposals and starting 
 
 # fold: review lead
 
-This skill holds the steps of the review lead: its own steps, the review scope, integration and the worker agents. The shared rules of every role end it, and the `fold` skill is the index of the skills of every role.
+This skill holds the steps of the review lead: its own steps and the review scope. Files next to the `fold` skill hold integration and the worker agents; the On-demand files section below names each one and when to read it. The shared rules of every role end it, and the `fold` skill is the index of the skills of every role.
 
 ## Review lead
 
@@ -19,3 +19,11 @@ The review lead keeps the open proposals moving. It never reviews a proposal its
 6. fold integrates each approved proposal by itself in the order of its dependencies, with one Git commit each, and resumes the task worker of each proposal that needs changes. When the integration of an approved version conflicts with main, fold gives the conflict to the reviewer that approved it and still holds its review claim, not to the author. Without such a reviewer, or when fold cannot resume it, fold sends you a notice: start a reviewer for that proposal, and it fixes the conflict with `submit_review_fix`. Never run an integration queue or a serial lane by hand: fold orders them.
 7. When a person gives you a decision that changes a task's scope, values or acceptance, send it with `send_message` to the lead of the task's area, or to the main agent when the area has no lead, and that agent records it in the task's `Decisions` section.
 8. End your turn when no action is due. fold gives you each new proposal, message, stall and ended review as a new turn, so you never poll or wait in a loop. Call `wait_for_events` only for one named thing that you need in this turn, always with a `task`, `proposal` or `area` filter, and end your turn when the wait returns with nothing new. Never relay an event that its receiver gets from fold itself, such as `proposal.integrated`.
+
+## On-demand files
+
+These files are next to the `fold` skill, in `.claude/skills/fold/`. Read a file when its work comes up, before the first step of that work, and follow it as part of this skill.
+
+- `INTEGRATION.md`: how fold integrates proposals, batches and serial lanes, with `integrate_proposal` and `integrate_review_batch`. Read it before you act on an integration, a conflict or a serial lane.
+- `WORKERS.md`: the worker agents. Read it before you act on a stalled reviewer, a stale claim, a queued start or a hand-off.
+- `SHARED.md`: the shared rules in full. Read it before you ask a human or acknowledge a message, and when a request, a subagent or a recovery needs more than the shared rules below say.

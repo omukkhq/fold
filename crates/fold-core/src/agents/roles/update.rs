@@ -22,7 +22,7 @@ pub fn needs_update_note(recorded: Option<&str>, current: Option<&str>) -> bool 
 pub fn update_note(role: Role) -> String {
     let skill = role.skill();
     format!(
-        "fold was updated since this session last loaded its skill. Load the `{skill}` skill again now, and where it differs from what you remember, follow the skill."
+        "fold was updated since this session last loaded its skill. Load the `{skill}` skill again now, without a summary to the user, and where it differs from what you remember, follow the skill."
     )
 }
 
@@ -108,6 +108,7 @@ mod tests {
                 note.contains(&format!("Load the `{}` skill again", role.skill())),
                 "{note}"
             );
+            assert!(note.contains("without a summary to the user"), "{note}");
         }
         assert!(update_note(Role::ReviewLead).contains("`fold-review-lead`"));
     }

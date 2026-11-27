@@ -1531,7 +1531,16 @@ fn the_claude_files_warn_for_each_missing_fold_entry() {
             ".claude/skills/fold-review-lead/SKILL.md is missing",
             ".claude/skills/fold-task-worker/SKILL.md is missing",
             ".claude/skills/fold-reviewer/SKILL.md is missing",
-            ".claude/skills/fold/ERRORS.md is missing"
+            ".claude/skills/fold/ERRORS.md is missing",
+            ".claude/skills/fold/WORKERS.md is missing",
+            ".claude/skills/fold/DRAFTING.md is missing",
+            ".claude/skills/fold/KINDS.md is missing",
+            ".claude/skills/fold/BUILDING.md is missing",
+            ".claude/skills/fold/REVIEWING.md is missing",
+            ".claude/skills/fold/BATCHES.md is missing",
+            ".claude/skills/fold/INTEGRATION.md is missing",
+            ".claude/skills/fold/PROJECT_FOLDER.md is missing",
+            ".claude/skills/fold/SHARED.md is missing"
         ]
     );
     assert_eq!(

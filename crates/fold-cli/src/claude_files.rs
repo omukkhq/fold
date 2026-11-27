@@ -70,8 +70,20 @@ pub const TASK_WORKER_SKILL_FILE: &str = ".claude/skills/fold-task-worker/SKILL.
 pub const REVIEWER_SKILL_FILE: &str = ".claude/skills/fold-reviewer/SKILL.md";
 /// Every error code with what to do, which an agent reads only when a refusal's hint does not settle its next step.
 pub const ERRORS_FILE: &str = ".claude/skills/fold/ERRORS.md";
+/// The on-demand files beside the `fold` skill: the rarer procedures that a role skill names with the moment to read each, so that every session loads a short skill and reads a procedure only when its work comes up. They sit in the `fold` skill's folder because several roles share each one, and a worker's start folder gets a copy of every file there.
+pub const ON_DEMAND_FILES: [&str; 9] = [
+    ".claude/skills/fold/WORKERS.md",
+    ".claude/skills/fold/DRAFTING.md",
+    ".claude/skills/fold/KINDS.md",
+    ".claude/skills/fold/BUILDING.md",
+    ".claude/skills/fold/REVIEWING.md",
+    ".claude/skills/fold/BATCHES.md",
+    ".claude/skills/fold/INTEGRATION.md",
+    ".claude/skills/fold/PROJECT_FOLDER.md",
+    ".claude/skills/fold/SHARED.md",
+];
 /// The files of fold's skills, which fold owns whole.
-pub const SKILL_FILES: [&str; 8] = [
+pub const SKILL_FILES: [&str; 17] = [
     SKILL_FILE,
     REFERENCE_FILE,
     MAIN_SKILL_FILE,
@@ -80,6 +92,15 @@ pub const SKILL_FILES: [&str; 8] = [
     TASK_WORKER_SKILL_FILE,
     REVIEWER_SKILL_FILE,
     ERRORS_FILE,
+    ON_DEMAND_FILES[0],
+    ON_DEMAND_FILES[1],
+    ON_DEMAND_FILES[2],
+    ON_DEMAND_FILES[3],
+    ON_DEMAND_FILES[4],
+    ON_DEMAND_FILES[5],
+    ON_DEMAND_FILES[6],
+    ON_DEMAND_FILES[7],
+    ON_DEMAND_FILES[8],
 ];
 
 /// Not named `AGENTS.md`, so an agent working in the fold repository never loads it as rules.
@@ -97,26 +118,40 @@ macro_rules! skill {
     };
 }
 
+/// Joins the sections of one on-demand file under its title. A section that a role skill holds and another role reads on demand has one source for both.
+macro_rules! on_demand {
+    ($title:literal, $($section:literal),+) => {
+        concat!(
+            "# fold: ", $title, "\n\n",
+            "This file belongs to the skills that name it. Read it when your role skill says, and follow it as part of that skill.\n\n",
+            $(include_str!(concat!("../templates/parts/", $section, ".md")), "\n",)+
+        )
+    };
+}
+
 const SKILL: &str = skill!("index", "identity");
-/// The skill of each role: every step of that role and the shared rules, so that a worker loads only what its role needs.
-const MAIN_SKILL: &str = skill!(
-    "main",
-    "identity",
-    "planning",
-    "kinds",
-    "workers",
-    "building",
-    "reviewing",
-    "batch",
-    "scope"
-);
-const AREA_LEAD_SKILL: &str = skill!("area_lead", "planning", "kinds", "workers");
-const REVIEW_LEAD_SKILL: &str = skill!("review_lead", "scope", "workers");
-const TASK_WORKER_SKILL: &str = skill!("task_worker", "building", "kinds");
-const REVIEWER_SKILL: &str = skill!("reviewer", "batch", "reviewing", "scope");
+/// The skill of each role: the steps of that role and the shared rules it needs every turn, so that a worker loads only what its role needs. The rarer procedures are in [`ON_DEMAND_TEXTS`].
+const MAIN_SKILL: &str = skill!("main", "identity", "orchestrator", "template");
+const AREA_LEAD_SKILL: &str = skill!("area_lead", "orchestrator", "template");
+const REVIEW_LEAD_SKILL: &str = skill!("review_lead", "scope");
+const TASK_WORKER_SKILL: &str = skill!("task_worker", "building");
+const REVIEWER_SKILL: &str = skill!("reviewer", "reviewing", "scope");
+
+/// The text fold writes into each of [`ON_DEMAND_FILES`], in the same order.
+pub const ON_DEMAND_TEXTS: [&str; 9] = [
+    on_demand!("worker agents", "workers", "stalls"),
+    on_demand!("drafting requests", "drafting"),
+    on_demand!("task kinds", "kinds"),
+    on_demand!("building a task", "building"),
+    on_demand!("reviewing", "reviewing", "scope"),
+    on_demand!("review batches", "batch"),
+    on_demand!("integration", "integration"),
+    on_demand!("the project folder", "project_folder"),
+    on_demand!("shared rules in full", "shared_full"),
+];
 
 /// The text fold writes into each of [`SKILL_FILES`], in the same order.
-pub const SKILL_TEXTS: [&str; 8] = [
+pub const SKILL_TEXTS: [&str; 17] = [
     SKILL,
     REFERENCE,
     MAIN_SKILL,
@@ -125,6 +160,15 @@ pub const SKILL_TEXTS: [&str; 8] = [
     TASK_WORKER_SKILL,
     REVIEWER_SKILL,
     ERRORS,
+    ON_DEMAND_TEXTS[0],
+    ON_DEMAND_TEXTS[1],
+    ON_DEMAND_TEXTS[2],
+    ON_DEMAND_TEXTS[3],
+    ON_DEMAND_TEXTS[4],
+    ON_DEMAND_TEXTS[5],
+    ON_DEMAND_TEXTS[6],
+    ON_DEMAND_TEXTS[7],
+    ON_DEMAND_TEXTS[8],
 ];
 
 /// The skill file that holds the steps of `role`. The supervised main loads the interactive main agent's skill.
@@ -157,9 +201,13 @@ pub fn worker_fingerprints() -> BTreeMap<Role, String> {
         .collect()
 }
 
-/// The fingerprint of the skill texts a session of `role` reads: its role skill, whose sections include the shared rules, and the shared `fold` skill, reference and error list. The main agent's own session that `fld claude` starts reads the skills of [`Role::Main`].
+/// The fingerprint of the skill texts a session of `role` reads: its role skill, whose sections include the shared rules, the shared `fold` skill, reference and error list, and the on-demand files, so a change of a rule in any of them sends the reload note. The main agent's own session that `fld claude` starts reads the skills of [`Role::Main`].
 pub fn role_fingerprint(role: Role) -> String {
-    session_fingerprint(&[role_skill(role), SKILL, REFERENCE, ERRORS])
+    let texts: Vec<&str> = [role_skill(role), SKILL, REFERENCE, ERRORS]
+        .into_iter()
+        .chain(ON_DEMAND_TEXTS)
+        .collect();
+    session_fingerprint(&texts)
 }
 
 /// `details.reason` of a Claude Code file that fold cannot merge into.
@@ -926,11 +974,9 @@ mod tests {
         let fingerprints = worker_fingerprints();
         assert_eq!(fingerprints.len(), Role::ALL.len());
         for role in Role::ALL {
-            assert_eq!(
-                fingerprints[&role],
-                session_fingerprint(&[role_skill(role), SKILL, REFERENCE, ERRORS]),
-                "{role}"
-            );
+            let mut texts = vec![role_skill(role), SKILL, REFERENCE, ERRORS];
+            texts.extend(ON_DEMAND_TEXTS);
+            assert_eq!(fingerprints[&role], session_fingerprint(&texts), "{role}");
             assert_eq!(fingerprints[&role], role_fingerprint(role), "{role}");
         }
         assert_eq!(role_skill(Role::Main), MAIN_SKILL);
