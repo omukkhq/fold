@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
@@ -8,7 +8,7 @@ use fold_core::reviews::batches::{
     batch_readiness, batch_wait_cutoff, member_standing, waits_on_comment,
 };
 use fold_core::reviews::checks::RunReason;
-use fold_core::reviews::lanes::group_held;
+use fold_core::reviews::lanes::{LanePlace, group_held};
 use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{
     Actor, AddressedAs, CheckRunId, EventActor, FoldError, IdKind, IntegrationId, MessageBody,
@@ -146,6 +146,10 @@ pub(super) struct BatchHolds {
     pub held: HashSet<ProposalId>,
     /// In number order.
     pub ready: Vec<ReviewBatchId>,
+    /// The batch that holds each member of `held` that a batch holds.
+    pub by_batch: HashMap<ProposalId, ReviewBatchId>,
+    /// The places of the lane members, which hold the members behind each front.
+    pub lanes: Vec<LanePlace>,
 }
 
 /// One member as the batch's procedure merges and publishes it.
@@ -393,6 +397,7 @@ impl ReviewService {
             for member in batches::members(&mut *read, open.id).await? {
                 if member.is_open() {
                     holds.held.insert(member.proposal);
+                    holds.by_batch.insert(member.proposal, open.id);
                 }
             }
         }
@@ -404,6 +409,7 @@ impl ReviewService {
             for member in &standing.members {
                 if readiness.holds(&standing.members, member.proposal) {
                     holds.held.insert(member.proposal);
+                    holds.by_batch.insert(member.proposal, batch);
                 }
             }
             let BatchReadiness::Final { members: ready } = readiness else {
@@ -436,6 +442,7 @@ impl ReviewService {
             holds.ready.push(batch);
         }
         read.commit().await.map_err(StoreError::from)?;
+        holds.lanes = places;
         Ok(holds)
     }
 

@@ -30,8 +30,8 @@ use super::workspaces::{
 use crate::daemon::AppState;
 use crate::services::reviews::{
     self as service, ChangeRange, CheckoutTarget, CommentInput, CommentLocation,
-    IntegrationOutcome, LaneListing, ListedCheckout, ProposalFilter, ReviewService, Turn,
-    integration_conflicted,
+    IntegrationOutcome, LaneListing, ListedCheckout, ProposalFilter, QueuePlace, QueueStanding,
+    ReviewService, Turn, WaitReason, integration_conflicted,
 };
 
 pub mod batches;
@@ -378,6 +378,133 @@ impl From<service::ConflictedReason> for ConflictedReason {
     }
 }
 
+/// The place of an approved open proposal in the automatic integration queue, in the order the job takes the turns: the ready review batches first, then the proposals in number order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct IntegrationQueuePlace {
+    /// From 1: the next turn, or the turn whose integration checks run now.
+    #[schema(example = 2)]
+    pub position: u32,
+    /// The integration checks of this turn run now.
+    pub integrating_now: bool,
+    /// The proposal or review batch one place ahead; null at position 1.
+    #[schema(required = true, example = "P-3")]
+    pub ahead: Option<String>,
+    /// When the turn is estimated to start, in UTC milliseconds, from the average duration of the recent passed integration runs; the start of the run for the turn that integrates now; null without such a run.
+    #[schema(required = true, example = 1_795_804_617_280_i64)]
+    pub estimated_start: Option<i64>,
+    /// The review batch the proposal integrates with, whose place it shares; null for a proposal that integrates on its own.
+    #[schema(required = true, example = "rb-2")]
+    pub batch: Option<String>,
+}
+
+impl IntegrationQueuePlace {
+    fn new(place: QueuePlace, batch: Option<ReviewBatchId>) -> Self {
+        Self {
+            position: place.position,
+            integrating_now: place.integrating_now,
+            ahead: place.ahead.map(|item| item.to_string()),
+            estimated_start: place.estimated_start.map(Timestamp::as_millis),
+            batch: batch.map(|batch| batch.to_string()),
+        }
+    }
+}
+
+/// A prerequisite task that is not Done.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct UnfinishedPrerequisite {
+    #[schema(example = "T-12")]
+    pub task: String,
+    pub status: TaskStatus,
+}
+
+/// Why the automatic integration does not take an approved open proposal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum IntegrationWait {
+    /// `[integration].automatic` is false in the project's configuration: an agent that decides reviews or a human integrates it.
+    AutomaticOff,
+    /// The project's configuration is invalid, so the job skips every run.
+    ConfigInvalid,
+    /// main's `fold-checks.toml` is invalid, so every integration waits for a revision of main that fixes it.
+    MainChecksInvalid,
+    /// The proposal is flagged with a conflict.
+    Conflict,
+    /// The integration checks of the current version failed.
+    ChecksFailed,
+    /// A member of a serial lane behind its front.
+    Lane {
+        #[schema(example = "migrations")]
+        lane: String,
+        #[schema(example = 2)]
+        position: u32,
+    },
+    /// A review batch holds it back to integrate with the other members, and the batch is not ready for its turn.
+    Batch {
+        #[schema(example = "rb-2")]
+        batch: String,
+    },
+    /// fold could not run the integration checks on this version and main; an integrate call or a move of main tries again.
+    FoldFailedChecks,
+    /// The author's update or a reviewer's fix runs the checks of the next version.
+    NextVersionRun,
+    /// Prerequisite tasks are not Done, in number order.
+    Prerequisites {
+        prerequisites: Vec<UnfinishedPrerequisite>,
+    },
+    /// The task's human review mark waits for a human approval.
+    HumanReview {
+        /// The human the mark names; null when any human may approve.
+        #[schema(required = true, example = "tanim")]
+        reviewer: Option<String>,
+    },
+    /// The latest approval does not count for integration, such as one by an agent that does not decide reviews.
+    NotApproved,
+}
+
+impl From<WaitReason> for IntegrationWait {
+    fn from(reason: WaitReason) -> Self {
+        match reason {
+            WaitReason::AutomaticOff => Self::AutomaticOff,
+            WaitReason::ConfigInvalid => Self::ConfigInvalid,
+            WaitReason::MainChecksInvalid => Self::MainChecksInvalid,
+            WaitReason::Conflict => Self::Conflict,
+            WaitReason::ChecksFailed => Self::ChecksFailed,
+            WaitReason::Lane { lane, position } => Self::Lane { lane, position },
+            WaitReason::Batch { batch } => Self::Batch {
+                batch: batch.to_string(),
+            },
+            WaitReason::FoldFailedChecks => Self::FoldFailedChecks,
+            WaitReason::NextVersionRun => Self::NextVersionRun,
+            WaitReason::Prerequisites { unfinished } => Self::Prerequisites {
+                prerequisites: unfinished
+                    .into_iter()
+                    .map(|(task, status)| UnfinishedPrerequisite {
+                        task: task.to_string(),
+                        status: status.into(),
+                    })
+                    .collect(),
+            },
+            WaitReason::HumanReview { reviewer } => Self::HumanReview {
+                reviewer: reviewer.map(|name| name.as_str().to_owned()),
+            },
+            WaitReason::NotApproved => Self::NotApproved,
+        }
+    }
+}
+
+/// The `queue` and `waits_for` fields of a proposal: exactly one is set for an open proposal whose latest verdict is an approval, neither for any other.
+fn queue_fields(
+    standing: Option<QueueStanding>,
+) -> (Option<IntegrationQueuePlace>, Option<IntegrationWait>) {
+    match standing {
+        Some(QueueStanding::Queued { place, batch }) => {
+            (Some(IntegrationQueuePlace::new(place, batch)), None)
+        }
+        Some(QueueStanding::Waits(reason)) => (None, Some(reason.into())),
+        None => (None, None),
+    }
+}
+
 /// A listed proposal with its lane and the reason of its conflict flag.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct ListedProposal {
@@ -389,6 +516,12 @@ pub struct ListedProposal {
     /// Why the open proposal is `conflicted`; null when it is not.
     #[schema(required = true)]
     pub conflicted_reason: Option<ConflictedReason>,
+    /// The place in the automatic integration queue of an approved open proposal that the job takes; null otherwise.
+    #[schema(required = true)]
+    pub queue: Option<IntegrationQueuePlace>,
+    /// Why the automatic integration does not take an approved open proposal; null for a queued one and for any proposal that is not approved and open.
+    #[schema(required = true)]
+    pub waits_for: Option<IntegrationWait>,
 }
 
 impl From<LaneListing> for ProposalList {
@@ -397,13 +530,17 @@ impl From<LaneListing> for ProposalList {
             listing,
             lanes,
             mut conflicted,
+            queue,
         } = listed;
         let proposals = listing
             .proposals
             .into_iter()
             .map(|summary| {
                 let id = summary.id;
+                let (queue, waits_for) = queue_fields(queue.standing(id).cloned());
                 ListedProposal {
+                    queue,
+                    waits_for,
                     lane: lanes
                         .iter()
                         .find(|place| place.proposal == id)
@@ -1038,12 +1175,21 @@ pub struct ProposalDetail {
     /// Why the open proposal is `conflicted` on its current version; null when it is not.
     #[schema(required = true)]
     pub conflicted_reason: Option<ConflictedReason>,
+    /// The place in the automatic integration queue of an approved open proposal that the job takes; null otherwise.
+    #[schema(required = true)]
+    pub queue: Option<IntegrationQueuePlace>,
+    /// Why the automatic integration does not take an approved open proposal; null for a queued one and for any proposal that is not approved and open.
+    #[schema(required = true)]
+    pub waits_for: Option<IntegrationWait>,
 }
 
 impl From<service::ProposalView> for ProposalDetail {
     fn from(view: service::ProposalView) -> Self {
         let detail = view.detail;
+        let (queue, waits_for) = queue_fields(view.queue);
         Self {
+            queue,
+            waits_for,
             summary: detail.summary.into(),
             task_status: detail.task_status.into(),
             task: ProposalTask {

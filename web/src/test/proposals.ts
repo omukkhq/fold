@@ -180,6 +180,8 @@ export function proposalDetail(
     review_plan: null,
     lane: null,
     conflicted_reason: null,
+    queue: null,
+    waits_for: null,
     ...fields,
   };
 }

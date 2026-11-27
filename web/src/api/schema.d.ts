@@ -3691,6 +3691,33 @@ export interface components {
              */
             expected_version: number;
         };
+        /** @description The place of an approved open proposal in the automatic integration queue, in the order the job takes the turns: the ready review batches first, then the proposals in number order. */
+        IntegrationQueuePlace: {
+            /**
+             * @description The proposal or review batch one place ahead; null at position 1.
+             * @example P-3
+             */
+            ahead: string | null;
+            /**
+             * @description The review batch the proposal integrates with, whose place it shares; null for a proposal that integrates on its own.
+             * @example rb-2
+             */
+            batch: string | null;
+            /**
+             * Format: int64
+             * @description When the turn is estimated to start, in UTC milliseconds, from the average duration of the recent passed integration runs; the start of the run for the turn that integrates now; null without such a run.
+             * @example 1795804617280
+             */
+            estimated_start: number | null;
+            /** @description The integration checks of this turn run now. */
+            integrating_now: boolean;
+            /**
+             * Format: int32
+             * @description From 1: the next turn, or the turn whose integration checks run now.
+             * @example 2
+             */
+            position: number;
+        };
         IntegrationResult: {
             /** @example P-3 */
             proposal: string;
@@ -3708,6 +3735,59 @@ export interface components {
         };
         /** @enum {string} */
         IntegrationResultKind: "succeeded" | "checks_failed" | "queued";
+        /** @description Why the automatic integration does not take an approved open proposal. */
+        IntegrationWait: {
+            /** @enum {string} */
+            reason: "automatic_off";
+        } | {
+            /** @enum {string} */
+            reason: "config_invalid";
+        } | {
+            /** @enum {string} */
+            reason: "main_checks_invalid";
+        } | {
+            /** @enum {string} */
+            reason: "conflict";
+        } | {
+            /** @enum {string} */
+            reason: "checks_failed";
+        } | {
+            /** @example migrations */
+            lane: string;
+            /**
+             * Format: int32
+             * @example 2
+             */
+            position: number;
+            /** @enum {string} */
+            reason: "lane";
+        } | {
+            /** @example rb-2 */
+            batch: string;
+            /** @enum {string} */
+            reason: "batch";
+        } | {
+            /** @enum {string} */
+            reason: "fold_failed_checks";
+        } | {
+            /** @enum {string} */
+            reason: "next_version_run";
+        } | {
+            prerequisites: components["schemas"]["UnfinishedPrerequisite"][];
+            /** @enum {string} */
+            reason: "prerequisites";
+        } | {
+            /** @enum {string} */
+            reason: "human_review";
+            /**
+             * @description The human the mark names; null when any human may approve.
+             * @example tanim
+             */
+            reviewer: string | null;
+        } | {
+            /** @enum {string} */
+            reason: "not_approved";
+        };
         /** @description How the change of a proposal version works in the code, so a human understands and judges it without reading every line: the summary and the parts of the diff always, and the contracts, the decisions and what it does not change when they apply. A section without entries does not show. Every file the version changes belongs to exactly one part. */
         Intent: {
             /** @description The contracts by kind; a request may leave it out for none. */
@@ -3789,6 +3869,8 @@ export interface components {
         ListedProposal: components["schemas"]["ProposalSummary"] & {
             conflicted_reason: components["schemas"]["ConflictedReason"] | null;
             lane: components["schemas"]["ProposalLane"] | null;
+            queue: components["schemas"]["IntegrationQueuePlace"] | null;
+            waits_for: components["schemas"]["IntegrationWait"] | null;
         };
         /** @description What fold saw of a workspace's worker, as the stall rule decides it. fold keeps the times of the worker's output in memory, so after a daemon start it counts from that start. */
         LiveActivity: {
@@ -4534,6 +4616,7 @@ export interface components {
             main_task: boolean;
             /** @description The direct prerequisites of the task. */
             prerequisites: components["schemas"]["ProposalTask"][];
+            queue: components["schemas"]["IntegrationQueuePlace"] | null;
             review_claim: components["schemas"]["ReviewClaim"] | null;
             review_plan: components["schemas"]["ReviewPlanWait"] | null;
             /** @description Every version's reviews, oldest first. */
@@ -4548,6 +4631,7 @@ export interface components {
             update_run: components["schemas"]["NextVersionRun"] | null;
             /** @description Oldest first. */
             versions: components["schemas"]["ProposalVersion"][];
+            waits_for: components["schemas"]["IntegrationWait"] | null;
         };
         /** @description One gate between the requesting human and integrating the selected version. */
         ProposalGate: {
@@ -6236,6 +6320,12 @@ export interface components {
          * @enum {string}
          */
         TurnWaitReason: "network" | "usage_limit" | "login";
+        /** @description A prerequisite task that is not Done. */
+        UnfinishedPrerequisite: {
+            status: components["schemas"]["TaskStatus"];
+            /** @example T-12 */
+            task: string;
+        };
         /** @description One path where the unstash conflicted with the project folder. */
         UnstashConflictView: {
             /** @description `both_modified_text`, `both_modified_binary`, `modify_delete`, `add_add` or `type_change`. */

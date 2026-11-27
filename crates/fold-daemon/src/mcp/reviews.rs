@@ -10,7 +10,7 @@ use fold_core::reviews::{
 use fold_core::text::shorten;
 use fold_core::{
     Actor, ChangesetId, CommentId, FoldError, HumanName, IdParseError, ProposalId, TaskId,
-    WorkerName, codes,
+    Timestamp, WorkerName, codes,
 };
 use fold_store::reviews::ProposalState;
 use fold_vcs::compare::Totals;
@@ -27,8 +27,8 @@ use super::workspaces::{file_diff_value, file_line};
 use crate::services::reviews::{
     ChangeRange, CommentInput, CommentLocation, CommentView, DEFAULT_PROPOSAL_LIST, DirectChange,
     DirectOutcome, FixOutcome, IntegrationOutcome, ProposalDetail, ProposalFilter, ProposalSummary,
-    ProposalView, Proposed, ReviewFix, ReviewService, direct_conflicted, integration_conflicted,
-    scope_suggestion,
+    ProposalView, Proposed, QueueStanding, ReviewFix, ReviewService, WaitReason, direct_conflicted,
+    integration_conflicted, scope_suggestion,
 };
 use crate::services::workspaces::StateComparison;
 
@@ -461,12 +461,12 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_PROPOSALS,
-            "List proposals with their task, author, whose turn it is, the review claim holder and the human review mark. A member of a serial lane of main's fold-checks.toml has lane: its name, its position (1 is the front, null before its first approval) and held, the reason \"lane <name>, position <n>\" while it waits behind the front.",
+            "List proposals with their task, author, whose turn it is, the review claim holder and the human review mark. A member of a serial lane of main's fold-checks.toml has lane: its name, its position (1 is the front, null before its first approval) and held, the reason \"lane <name>, position <n>\" while it waits behind the front. An open proposal whose latest verdict is an approval has queue (position from 1 in the order the automatic integration takes the turns, integrating_now, ahead: the proposal or review batch one place ahead, estimated_start in UTC milliseconds or null without integration run history, and batch when it integrates with a review batch) or waits_for (reason: automatic_off, config_invalid, main_checks_invalid, conflict, checks_failed, lane with lane and position, batch with batch, fold_failed_checks, next_version_run, prerequisites with prerequisites, human_review with reviewer, or not_approved).",
             schema_for_type::<ListProposalsInput>(),
         ),
         Tool::new(
             GET_PROPOSAL,
-            "Read one proposal: versions, the intent of the version (its summary of how the change works and the parts of the diff with their files; check every hunk against its part), the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related open proposals without a review, each with its proposal, and the related tasks that can still open proposals, strongest link first, with the create_review_plan or start_worker call that has one reviewer review them together), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, lane for a member of a serial lane of main's fold-checks.toml (name, position from 1 at the front in the order of first approval, null before one, and held, the reason \"lane <name>, position <n>\" while only the front may integrate), the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. The short form gives evidence_chars for the evidence, the intent's summary with each part's name and file_count, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the whole intent (what each part does, its files, contracts, decisions and not_changed), the task description and every whole body, such as before a review or when the task description matters.",
+            "Read one proposal: versions, the intent of the version (its summary of how the change works and the parts of the diff with their files; check every hunk against its part), the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related open proposals without a review, each with its proposal, and the related tasks that can still open proposals, strongest link first, with the create_review_plan or start_worker call that has one reviewer review them together), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, lane for a member of a serial lane of main's fold-checks.toml (name, position from 1 at the front in the order of first approval, null before one, and held, the reason \"lane <name>, position <n>\" while only the front may integrate), the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. An open proposal whose latest verdict is an approval has queue (position from 1 in the order the automatic integration takes the turns, integrating_now, ahead: the proposal or review batch one place ahead, estimated_start in UTC milliseconds or null without integration run history, and batch when it integrates with a review batch) or waits_for (reason: automatic_off, config_invalid, main_checks_invalid, conflict, checks_failed, lane with lane and position, batch with batch, fold_failed_checks, next_version_run, prerequisites with prerequisites, human_review with reviewer, or not_approved). The short form gives evidence_chars for the evidence, the intent's summary with each part's name and file_count, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the whole intent (what each part does, its files, contracts, decisions and not_changed), the task description and every whole body, such as before a review or when the task description matters.",
             schema_for_type::<GetProposalInput>(),
         ),
         Tool::new(
@@ -625,6 +625,53 @@ pub(crate) fn lane_json(place: &LanePlace) -> Value {
         "position": place.position,
         "held": place.reason(),
     })
+}
+
+/// Sets `queue` or `waits_for` on an approved open proposal: its place in the automatic integration queue, or why the job does not take it.
+fn put_queue(value: &mut Value, standing: Option<&QueueStanding>) {
+    match standing {
+        Some(QueueStanding::Queued { place, batch }) => {
+            let mut queue = json!({
+                "position": place.position,
+                "integrating_now": place.integrating_now,
+                "ahead": place.ahead.map(|item| item.to_string()),
+                "estimated_start": place.estimated_start.map(Timestamp::as_millis),
+            });
+            if let Some(batch) = batch {
+                queue["batch"] = json!(batch.to_string());
+            }
+            value["queue"] = queue;
+        }
+        Some(QueueStanding::Waits(reason)) => {
+            let mut waits = json!({"reason": reason.as_str()});
+            match reason {
+                WaitReason::Lane { lane, position } => {
+                    waits["lane"] = json!(lane);
+                    waits["position"] = json!(position);
+                }
+                WaitReason::Batch { batch } => waits["batch"] = json!(batch.to_string()),
+                WaitReason::Prerequisites { unfinished } => {
+                    waits["prerequisites"] = unfinished
+                        .iter()
+                        .map(|(task, status)| json!({"task": task.to_string(), "status": status.as_str()}))
+                        .collect();
+                }
+                WaitReason::HumanReview { reviewer } => {
+                    waits["reviewer"] = json!(reviewer.as_ref().map(HumanName::as_str));
+                }
+                WaitReason::AutomaticOff
+                | WaitReason::ConfigInvalid
+                | WaitReason::MainChecksInvalid
+                | WaitReason::Conflict
+                | WaitReason::ChecksFailed
+                | WaitReason::FoldFailedChecks
+                | WaitReason::NextVersionRun
+                | WaitReason::NotApproved => {}
+            }
+            value["waits_for"] = waits;
+        }
+        None => {}
+    }
 }
 
 fn summary_json(summary: &ProposalSummary) -> Value {
@@ -848,6 +895,7 @@ fn view_json(view: &ProposalView, full: bool) -> Value {
     if let Some(place) = &view.lane {
         value["lane"] = lane_json(place);
     }
+    put_queue(&mut value, view.queue.as_ref());
     value["intent"] = selected
         .intent
         .as_ref()
@@ -962,7 +1010,7 @@ async fn list_proposals(
             })
         })
         .transpose()?;
-    let (rows, lanes) = reviews
+    let (rows, lanes, queue) = reviews
         .list_proposals_in_lanes(ProposalFilter {
             state,
             unclaimed: input.unclaimed,
@@ -977,6 +1025,7 @@ async fn list_proposals(
             if let Some(place) = lanes.iter().find(|place| place.proposal == row.id) {
                 value["lane"] = lane_json(place);
             }
+            put_queue(&mut value, queue.standing(row.id));
             value
         })
         .collect();

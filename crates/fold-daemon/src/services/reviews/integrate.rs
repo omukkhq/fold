@@ -27,7 +27,7 @@ use fold_store::{StoreError, WriteTx, agents, counters, tasks, workspaces};
 use fold_vcs::integrate::MergeOutcome;
 use serde_json::json;
 
-use super::batch_integration::BatchIntegration;
+use super::batch_integration::{BatchHolds, BatchIntegration};
 use super::checks::{
     HeldRequest, Integrating, IntegrationChecks, PassedRun, Verdict as RunVerdict, end_run_in_tx,
     fold_failed_refusal, next_version_run,
@@ -253,6 +253,30 @@ pub(super) enum Subject {
         workspace: WorkspaceId,
         message: String,
     },
+}
+
+/// One turn of the automatic integration job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AutomaticTurn {
+    /// A submitted review batch whose ready members integrate together.
+    Batch(ReviewBatchId),
+    /// A ready proposal on its own, at its current version.
+    Proposal { proposal: ProposalId, version: u32 },
+}
+
+/// Why the automatic integration job skips an approved open proposal, in the order it checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AutomaticSkip {
+    Conflicted,
+    ChecksFailed,
+    /// A review batch holds it back, or it is a lane member behind the front.
+    Held,
+    /// fold failed to run its integration checks on this version and main.
+    FoldFailed,
+    NextVersionRun,
+    /// The proposal has no integration facts.
+    Missing,
+    Gate(GateRefusal),
 }
 
 /// The first refusal of the gates on `facts`, as `can_integrate` decides it.
@@ -604,25 +628,27 @@ impl ReviewService {
         let mut turned = HashSet::new();
         loop {
             let holds = self.batch_holds().await?;
-            if let Some(&batch) = holds.ready.iter().find(|batch| !turned.contains(*batch)) {
-                turned.insert(batch);
-                match self.integrate_batch_automatically(batch).await {
-                    Ok(turn) => done.extend(
-                        turn.into_iter()
-                            .flat_map(BatchIntegration::into_members)
-                            .map(|member| AutomaticIntegration {
-                                proposal: member.proposal,
-                                outcome: member.outcome,
-                            }),
-                    ),
-                    Err(error) => {
-                        tracing::warn!(batch = %batch, code = error.log_code(), "the automatic integration of a review batch failed; the next trigger tries again");
+            let (turns, _) = self.automatic_turns(&holds, &passed, &turned, true).await?;
+            let (proposal, version) = match turns.first() {
+                Some(&AutomaticTurn::Batch(batch)) => {
+                    turned.insert(batch);
+                    match self.integrate_batch_automatically(batch).await {
+                        Ok(turn) => done.extend(
+                            turn.into_iter()
+                                .flat_map(BatchIntegration::into_members)
+                                .map(|member| AutomaticIntegration {
+                                    proposal: member.proposal,
+                                    outcome: member.outcome,
+                                }),
+                        ),
+                        Err(error) => {
+                            tracing::warn!(batch = %batch, code = error.log_code(), "the automatic integration of a review batch failed; the next trigger tries again");
+                        }
                     }
+                    continue;
                 }
-                continue;
-            }
-            let Some((proposal, version)) = self.next_ready(&passed, &holds.held).await? else {
-                break;
+                Some(&AutomaticTurn::Proposal { proposal, version }) => (proposal, version),
+                None => break,
             };
             passed.insert(proposal);
             let request = IntegrationRequest::Proposal {
@@ -646,56 +672,110 @@ impl ReviewService {
         Ok(done)
     }
 
-    /// The lowest-numbered open proposal outside `passed` and outside `held`, the members a review batch holds back to integrate together and the members of a lane behind its front, that is not flagged with a conflict or failed integration checks, whose integration checks fold did not fail to run on this version and main, and that passes every gate for the automatic caller, with its current version.
-    async fn next_ready(
+    /// The turns of the automatic integration in the order the job takes them: the ready review batches of `holds` outside `turned`, in number order, then the ready proposals outside `passed` in number order, with the standing of every approved open proposal that [`ReviewService::automatic_standings`] gives. With `first_only` it stops at the first turn, which is the one the job takes next, and a ready batch first reads no standings.
+    pub(super) async fn automatic_turns(
+        &self,
+        holds: &BatchHolds,
+        passed: &HashSet<ProposalId>,
+        turned: &HashSet<ReviewBatchId>,
+        first_only: bool,
+    ) -> Result<
+        (
+            Vec<AutomaticTurn>,
+            Vec<(ProposalId, Result<u32, AutomaticSkip>)>,
+        ),
+        ReviewError,
+    > {
+        let mut turns: Vec<AutomaticTurn> = holds
+            .ready
+            .iter()
+            .filter(|batch| !turned.contains(*batch))
+            .map(|&batch| AutomaticTurn::Batch(batch))
+            .collect();
+        if first_only && !turns.is_empty() {
+            turns.truncate(1);
+            return Ok((turns, Vec::new()));
+        }
+        let standings = self
+            .automatic_standings(passed, &holds.held, first_only)
+            .await?;
+        turns.extend(standings.iter().filter_map(|(proposal, standing)| {
+            standing
+                .as_ref()
+                .ok()
+                .map(|&version| AutomaticTurn::Proposal {
+                    proposal: *proposal,
+                    version,
+                })
+        }));
+        Ok((turns, standings))
+    }
+
+    /// The rule of the automatic integration for single proposals: each open proposal outside `passed` whose latest verdict on its current version is an approval, in number order, with its current version when it is ready, or the first reason the job skips it: flagged with a conflict or failed integration checks, held in `held`, the members a review batch holds back to integrate together and the members of a lane behind its front, fold's own failure to run its integration checks on this version and main, the checks of its next version running, or a gate the automatic caller does not pass. With `first_only` it stops at the first ready proposal, which is the one the job takes next.
+    pub(super) async fn automatic_standings(
         &self,
         passed: &HashSet<ProposalId>,
         held: &HashSet<ProposalId>,
-    ) -> Result<Option<(ProposalId, u32)>, ReviewError> {
+        first_only: bool,
+    ) -> Result<Vec<(ProposalId, Result<u32, AutomaticSkip>)>, ReviewError> {
         let head = workspaces::head(self.store.read())
             .await?
             .ok_or(StoreError::Corrupt("refs.main"))?
             .number;
         let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
         let open = reviews::list_proposals(&mut *read, Some(ProposalState::Open), None).await?;
-        let mut ready = None;
+        let mut standings = Vec::new();
         for row in open {
             // No version passes the automatic gates without an approval as its latest verdict, so only those proposals read their gate facts.
-            if row.conflicted
-                || row.checks_failed
-                || passed.contains(&row.id)
-                || held.contains(&row.id)
-                || row.latest_verdict != Some(Verdict::Approve)
-            {
+            if passed.contains(&row.id) || row.latest_verdict != Some(Verdict::Approve) {
                 continue;
             }
-            // fold's own failure to run the integration checks is not retried on the same version and main: only a caller's integrate, or an automatic run after main moved, tries again.
-            let newest = checks::runs_of_version(&mut *read, row.task, row.id, row.current_version)
-                .await?
-                .into_iter()
-                .find(|run| run.stage == Stage::Integration);
-            if newest
-                .is_some_and(|run| run.reason == Some(RunReason::FoldFailed) && run.base == head)
-            {
-                continue;
-            }
-            // An approval from before an update or a reviewer's fix started the checks of the next version waits for that run: integrating the older version would end it as workspace_changed.
-            if next_version_run(&mut read, row.task, row.id)
-                .await?
-                .is_some()
-            {
-                continue;
-            }
-            let Some(facts) = reviews::integration_facts(&mut read, row.id).await? else {
-                continue;
-            };
-            if decide(&facts, &CallerFacts::Automatic, None).is_ok() {
-                ready = Some((row.id, facts.target.version));
+            let standing = self.automatic_standing(&mut read, &row, head, held).await?;
+            let ready = standing.is_ok();
+            standings.push((row.id, standing));
+            if ready && first_only {
                 break;
             }
         }
         read.commit().await.map_err(StoreError::from)?;
-        Ok(ready)
+        Ok(standings)
+    }
+
+    async fn automatic_standing(
+        &self,
+        read: &mut fold_store::SqliteConnection,
+        row: &reviews::ProposalRow,
+        head: RevisionId,
+        held: &HashSet<ProposalId>,
+    ) -> Result<Result<u32, AutomaticSkip>, ReviewError> {
+        if row.conflicted {
+            return Ok(Err(AutomaticSkip::Conflicted));
+        }
+        if row.checks_failed {
+            return Ok(Err(AutomaticSkip::ChecksFailed));
+        }
+        if held.contains(&row.id) {
+            return Ok(Err(AutomaticSkip::Held));
+        }
+        // fold's own failure to run the integration checks is not retried on the same version and main: only a caller's integrate, or an automatic run after main moved, tries again.
+        let newest = checks::runs_of_version(&mut *read, row.task, row.id, row.current_version)
+            .await?
+            .into_iter()
+            .find(|run| run.stage == Stage::Integration);
+        if newest.is_some_and(|run| run.reason == Some(RunReason::FoldFailed) && run.base == head) {
+            return Ok(Err(AutomaticSkip::FoldFailed));
+        }
+        // An approval from before an update or a reviewer's fix started the checks of the next version waits for that run: integrating the older version would end it as workspace_changed.
+        if next_version_run(read, row.task, row.id).await?.is_some() {
+            return Ok(Err(AutomaticSkip::NextVersionRun));
+        }
+        let Some(facts) = reviews::integration_facts(read, row.id).await? else {
+            return Ok(Err(AutomaticSkip::Missing));
+        };
+        Ok(match decide(&facts, &CallerFacts::Automatic, None) {
+            Ok(()) => Ok(facts.target.version),
+            Err(refusal) => Err(AutomaticSkip::Gate(refusal)),
+        })
     }
 
     /// The one procedure behind every kind. The project's integration mutex is held throughout, so two integrations never run at the same time.

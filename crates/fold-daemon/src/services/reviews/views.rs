@@ -2,7 +2,7 @@ use fold_core::claims::is_stale;
 use fold_core::merge::{Conflict, ReportFile};
 use fold_core::policy::{GateState, IntegrateInput, ProposalFacts, gate_report};
 use fold_core::reviews::lanes::LanePlace;
-use fold_core::reviews::{deciding_approval, last_verdict_version};
+use fold_core::reviews::{Verdict, deciding_approval, last_verdict_version};
 use fold_core::{
     Actor, ChangesetId, FoldError, ProposalId, ReviewBatchId, RevisionId, TaskDescription, TaskId,
     TaskStatus, TaskTitle, codes,
@@ -21,6 +21,7 @@ use super::conflicts::{ConflictedReason, conflicted_reason};
 use super::integrate::caller_facts;
 use super::plans::{ProposalPlan, RelatedTaskView, proposal_plan, related_plan_tasks};
 use super::proposals::{ProposalDetail, proposal_detail, proposal_not_found};
+use super::queue::QueueStanding;
 use super::{ReviewError, ReviewService};
 use crate::services::workspaces::StateRef;
 
@@ -81,6 +82,8 @@ pub struct ProposalView {
     pub lane: Option<LanePlace>,
     /// Why the open proposal is flagged `conflicted` on its current version; `None` when it is not.
     pub conflicted_reason: Option<ConflictedReason>,
+    /// The place of the open proposal in the automatic integration queue, or why it waits; `None` unless its latest verdict on the current version is an approval.
+    pub queue: Option<QueueStanding>,
 }
 
 impl ReviewService {
@@ -178,6 +181,14 @@ impl ReviewService {
             .await?
             .into_iter()
             .find(|place| place.proposal == proposal);
+        // Only an open proposal whose latest verdict is an approval has a standing, so the others skip the read.
+        let queue = if detail.summary.state == ProposalState::Open
+            && detail.summary.latest_verdict == Some(Verdict::Approve)
+        {
+            self.integration_queue().await?.standing(proposal).cloned()
+        } else {
+            None
+        };
         let comparison = self
             .workspaces
             .compare_states(
@@ -211,6 +222,7 @@ impl ReviewService {
             integrated,
             lane,
             conflicted_reason,
+            queue,
         })
     }
 }

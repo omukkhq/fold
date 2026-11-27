@@ -28,6 +28,7 @@ mod notify;
 mod plans;
 mod proposals;
 mod questions;
+mod queue;
 mod review_fixes;
 mod scopes;
 mod verdicts;
@@ -69,6 +70,10 @@ pub(crate) use proposals::proposal_missing;
 pub use proposals::{
     DEFAULT_PROPOSAL_LIST, MAX_PROPOSAL_LIST, ProposalDetail, ProposalFilter, ProposalListing,
     ProposalSummary, Proposed, Retirement, Turn, VersionView, retire_proposal,
+};
+pub use queue::{
+    ESTIMATE_RUNS, IntegrationQueue, QueueItem, QueuePlace, QueueStanding, WaitReason,
+    estimate_starts, places,
 };
 pub use review_fixes::{FixOutcome, FixedVersion, MAX_CHECKS_CHARS, MAX_FIXES, ReviewFix};
 pub use scopes::{SuggestedScope, scope_suggestion};

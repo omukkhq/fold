@@ -1302,3 +1302,61 @@ async fn approve_and_integrate_wait_while_a_reviewer_fix_runs_its_checks() {
     .await;
     assert_eq!(detail.body["update_run"], Value::Null);
 }
+
+#[tokio::test]
+async fn an_approved_proposal_shows_its_queue_place_or_why_it_waits() {
+    let fx = with_p1().await;
+    let p1 = fold_core::ProposalId::from_number(1).unwrap();
+    let unreviewed = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
+    assert_eq!(unreviewed.body["queue"], Value::Null, "{}", unreviewed.body);
+    assert_eq!(unreviewed.body["waits_for"], Value::Null);
+
+    let review = fx.agent("review").await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
+    fx.reviews()
+        .submit_review(
+            &review,
+            p1,
+            1,
+            fold_core::reviews::Verdict::Approve,
+            "ok",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let place = json!({
+        "position": 1,
+        "integrating_now": false,
+        "ahead": null,
+        "estimated_start": null,
+        "batch": null,
+    });
+    let read = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
+    assert_eq!(read.status, StatusCode::OK, "{}", read.body);
+    assert_eq!(read.body["queue"], place);
+    assert_eq!(read.body["waits_for"], Value::Null);
+    let listed = send(&fx, Method::GET, "/proposals?state=open", None, None).await;
+    assert_eq!(listed.body["proposals"][0]["queue"], place);
+    assert_eq!(listed.body["proposals"][0]["waits_for"], Value::Null);
+
+    std::fs::write(
+        fx.project.paths().config(),
+        "[integration]\nautomatic = false\n",
+    )
+    .unwrap();
+    let read = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
+    assert_eq!(read.body["queue"], Value::Null);
+    assert_eq!(read.body["waits_for"], json!({"reason": "automatic_off"}));
+
+    fx.handle
+        .tasks
+        .add_dependency(&human(TANIM), t(1), t(2))
+        .await
+        .unwrap();
+    std::fs::write(fx.project.paths().config(), "").unwrap();
+    let listed = send(&fx, Method::GET, "/proposals?state=open", None, None).await;
+    assert_eq!(
+        listed.body["proposals"][0]["waits_for"],
+        json!({"reason": "prerequisites", "prerequisites": [{"task": "T-2", "status": "todo"}]})
+    );
+}

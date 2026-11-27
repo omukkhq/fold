@@ -442,3 +442,53 @@ async fn the_newest_proposal_run_end_of_each_open_workspace_starts_its_stall_win
     .unwrap();
     assert!(ends().await.is_empty(), "a closed workspace never stalls");
 }
+
+#[cfg(test)]
+async fn ran(store: &Store, new: &NewCheckRun<'_>, start: i64, end: i64, state: RunState) {
+    let reason = (state != RunState::Passed).then_some(RunReason::CheckFailed);
+    store
+        .write(async |tx| {
+            checks::insert_run(tx, new, at(start)).await?;
+            checks::finish_run(tx, new.id, state, reason, at(end)).await
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn the_recent_integration_durations_are_the_newest_passed_runs_first() {
+    let (_dir, store) = seeded().await;
+    ran(&store, &integration_run(1), 100, 400, RunState::Passed).await;
+    ran(&store, &integration_run(2), 500, 600, RunState::Failed).await;
+    ran(&store, &integration_run(3), 700, 900, RunState::Passed).await;
+    ran(&store, &workspace_run(4), 900, 5_000, RunState::Passed).await;
+    ran(&store, &integration_run(5), 1_000, 1_050, RunState::Passed).await;
+    insert(&store, &integration_run(6)).await.unwrap();
+
+    let all = checks::recent_integration_run_durations(store.read(), 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        all,
+        [50, 200, 300],
+        "newest first, without the failed, the proposal-stage and the running run"
+    );
+    let two = checks::recent_integration_run_durations(store.read(), 2)
+        .await
+        .unwrap();
+    assert_eq!(two, [50, 200]);
+    let none = checks::recent_integration_run_durations(store.read(), 0)
+        .await
+        .unwrap();
+    assert!(none.is_empty());
+}
+
+#[tokio::test]
+async fn a_run_that_ends_before_its_start_lasts_no_time() {
+    let (_dir, store) = seeded().await;
+    ran(&store, &integration_run(1), 900, 400, RunState::Passed).await;
+    let durations = checks::recent_integration_run_durations(store.read(), 10)
+        .await
+        .unwrap();
+    assert_eq!(durations, [0]);
+}

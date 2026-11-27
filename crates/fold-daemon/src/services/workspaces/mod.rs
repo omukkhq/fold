@@ -201,6 +201,11 @@ impl WorkspaceService {
         &self.lease
     }
 
+    /// The project's folders, whose `config.toml` the review services read too.
+    pub(crate) fn paths(&self) -> &ProjectPaths {
+        &self.paths
+    }
+
     /// Shares one capabilities probe with every other service of the project.
     #[must_use]
     pub fn with_capabilities(mut self, caps: Arc<OnceLock<Capabilities>>) -> Self {

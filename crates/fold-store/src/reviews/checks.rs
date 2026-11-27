@@ -464,6 +464,27 @@ pub async fn newest_batch_run(
     Ok(rows(raw)?.pop())
 }
 
+/// How long each of the newest `limit` passed integration runs took, in milliseconds, newest first. A clock that went back gives 0.
+pub async fn recent_integration_run_durations(
+    executor: impl SqliteExecutor<'_>,
+    limit: u32,
+) -> Result<Vec<u64>, StoreError> {
+    let limit = i64::from(limit);
+    let rows = sqlx::query_scalar!(
+        r#"SELECT MAX(finished_at - created_at, 0) AS "duration!: i64" FROM check_runs
+           WHERE stage = 'integration' AND state = 'passed' AND finished_at IS NOT NULL
+           ORDER BY finished_at DESC, id DESC
+           LIMIT ?1"#,
+        limit
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|duration| u64::try_from(duration).unwrap_or(0))
+        .collect())
+}
+
 /// The version row ids of the members a batch's run checked together.
 pub async fn run_member_versions(
     executor: impl SqliteExecutor<'_>,
