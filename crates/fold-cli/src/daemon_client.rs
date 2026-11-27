@@ -11,6 +11,7 @@ use hyper::body::Bytes;
 use hyper::header::{CONTENT_TYPE, HOST, HeaderValue};
 use hyper::{Method, Request};
 use hyper_util::rt::TokioIo;
+use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -18,7 +19,7 @@ use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
 pub use fold_daemon::http::actor::HUMAN_HEADER;
-use fold_daemon::mcp::handshake::{Answer, Hello, MAX_LINE};
+use fold_daemon::mcp::handshake::{Answer, Hello, HelloOptions, MAX_LINE};
 
 const START_LOCK_FILE: &str = "start.lock";
 /// How long a client waits for the daemon it started to answer: longer than the 10 seconds the daemon gives the login shell at its start, so a shell that hangs delays the start but does not fail it.
@@ -260,10 +261,28 @@ pub enum HandshakeError {
     },
 }
 
+/// The adapter's first line: the [`Hello`] with its options beside its fields in one JSON object, as the daemon reads them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HelloLine {
+    #[serde(flatten)]
+    pub hello: Hello,
+    #[serde(flatten)]
+    pub options: HelloOptions,
+}
+
+impl From<Hello> for HelloLine {
+    fn from(hello: Hello) -> Self {
+        Self {
+            hello,
+            options: HelloOptions::default(),
+        }
+    }
+}
+
 /// Sends `hello` as the first line of a daemon socket that speaks MCP and reads the daemon's one-line answer. The halves it returns carry the MCP session that follows; the read half may already hold bytes of it.
 pub async fn handshake(
     stream: UnixStream,
-    hello: &Hello,
+    hello: &HelloLine,
 ) -> Result<(BufReader<OwnedReadHalf>, OwnedWriteHalf), HandshakeError> {
     let (read, mut write) = stream.into_split();
     let mut line = serde_json::to_vec(hello).map_err(|_| HandshakeError::NoAnswer)?;

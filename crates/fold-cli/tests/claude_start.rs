@@ -3,6 +3,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
+use std::time::Duration;
 
 use fold_cli::claude_files::{
     MAIN_SKILL_FILE, SETTINGS_FILE, SKILL_FILES, SKILL_TEXTS, role_fingerprint,
@@ -12,15 +13,17 @@ use fold_cli::main_reload::{Current, main_hooks};
 use fold_core::roles::{Role, reload_note};
 use fold_core::{AgentName, ProjectPaths};
 use fold_daemon::mcp::tool_schema_hashes;
+use tokio::io::AsyncReadExt;
 
 use crate::common::{DaemonGuard, Host, adapter, daemons, feed, list_agents};
 
-/// A stand-in for the user's `claude` at the front of `PATH`: it prints its arguments, its working directory and the fold variables, one per line. Like Claude Code, it keeps an empty transcript `<id>.jsonl` for the session in `projects/<working directory with - for every other character than a letter or digit>` of `CLAUDE_CONFIG_DIR` or `$HOME/.claude`, with a fixed id when no `--session-id` names it.
+/// A stand-in for the user's `claude` at the front of `PATH`: it prints its arguments, its working directory and the fold variables, one per line, `FOLD_KEEP_OTHERS` only when it is set. Like Claude Code, it keeps an empty transcript `<id>.jsonl` for the session in `projects/<working directory with - for every other character than a letter or digit>` of `CLAUDE_CONFIG_DIR` or `$HOME/.claude`, with a fixed id when no `--session-id` names it.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 for arg in "$@"; do printf 'arg %s\n' "$arg"; done
 printf 'cwd %s\n' "$(pwd -P)"
 printf 'FOLD_AGENT=%s\n' "$FOLD_AGENT"
 printf 'FOLD_AGENT_TAGS=%s\n' "$FOLD_AGENT_TAGS"
+if [ -n "${FOLD_KEEP_OTHERS:-}" ]; then printf 'FOLD_KEEP_OTHERS=%s\n' "$FOLD_KEEP_OTHERS"; fi
 session=99999999-9999-4999-8999-999999999999
 while [ $# -gt 0 ]; do
   case "$1" in --session-id|--resume) session="$2" ;; esac
@@ -60,6 +63,7 @@ async fn fld_with_config(host: &Host, args: &[&str], cwd: &Path, config: Option<
         .env("PATH", path)
         .env("FOLD_HUMAN", "ana")
         .env_remove("FOLD_AGENT_TAGS")
+        .env_remove("FOLD_KEEP_OTHERS")
         .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("CLAUDE_CODE_PROJECT_DIR_NAME");
     if let Some(config) = config {
@@ -744,6 +748,117 @@ async fn fld_claude_refuses_a_second_main_agent_where_fold_runs_the_supervised_o
         daemons(&host.default_socket()).is_empty(),
         "the refusal starts no daemon"
     );
+}
+
+/// The `fld mcp` of the session that `fld claude` ran as `output`: it gets the fold variables the fake `claude` printed, as Claude Code passes its environment to the adapter.
+fn session_adapter(host: &Host, output: &Output) -> tokio::process::Command {
+    let mut command = host.fold(&["mcp"], &host.root);
+    command
+        .env_remove("FOLD_AGENT_TAGS")
+        .env_remove("FOLD_KEEP_OTHERS");
+    for line in text(&output.stdout).lines() {
+        if let Some((name, value)) = line.split_once('=')
+            && name.starts_with("FOLD_")
+        {
+            command.env(name, value);
+        }
+    }
+    command
+}
+
+#[tokio::test]
+async fn fld_claude_takes_over_a_live_main_session_and_keep_others_runs_both() {
+    let host = Host::new().await;
+    let help = fld_claude(&host, &["--help"], &host.root).await;
+    assert!(
+        text(&help.stdout)
+            .lines()
+            .any(|line| line.trim_start().starts_with("--keep-others")
+                && line
+                    .contains("Keep the agent's live main sessions connected next to the new one")),
+        "{}",
+        text(&help.stdout)
+    );
+    claude_user::add(&user_files(&host)).unwrap();
+    let first = fld_claude(&host, &[], &host.root).await;
+    assert!(first.status.success(), "{}", text(&first.stderr));
+    assert!(!text(&first.stdout).contains("takes over"));
+    let guard = DaemonGuard(daemons(&host.default_socket()));
+    let (old, mut old_child) = adapter(session_adapter(&host, &first)).await;
+    list_agents(&old).await;
+
+    let second = fld_claude(&host, &[], &host.root).await;
+    assert!(second.status.success(), "{}", text(&second.stderr));
+    let stdout = text(&second.stdout);
+    assert!(
+        stdout.starts_with("this session takes over the live main session of main, whose fold tools stop; to keep both connected, run `fld claude --keep-others`\n"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("FOLD_KEEP_OTHERS"), "{stdout}");
+    let (new, mut new_child) = adapter(session_adapter(&host, &second)).await;
+    let ended = tokio::time::timeout(Duration::from_secs(20), old_child.wait())
+        .await
+        .expect("fold closes the old session and refuses its reconnect")
+        .unwrap();
+    assert!(!ended.success());
+    let mut stderr = String::new();
+    old_child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .await
+        .unwrap();
+    assert!(stderr.contains("main_session_taken_over"), "{stderr}");
+    list_agents(&new).await;
+
+    let kept = fld_claude(&host, &["--keep-others"], &host.root).await;
+    assert!(kept.status.success(), "{}", text(&kept.stderr));
+    let stdout = text(&kept.stdout);
+    assert!(!stdout.contains("takes over"), "{stdout}");
+    assert!(
+        stdout.ends_with("FOLD_AGENT_TAGS=main\nFOLD_KEEP_OTHERS=1\n"),
+        "{stdout}"
+    );
+    let (other, mut other_child) = adapter(session_adapter(&host, &kept)).await;
+    list_agents(&other).await;
+    list_agents(&new).await;
+    assert!(
+        new_child.try_wait().unwrap().is_none(),
+        "the earlier session stays"
+    );
+    // The agent list that `fld claude` reads counts both sessions as live, and a `FOLD_KEEP_OTHERS` inherited from a kept session's shell does not reach the new `claude`.
+    let both = host
+        .fold(&["claude"], &host.root)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                fake_claude_bin(&host).display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env("FOLD_HUMAN", "ana")
+        .env("FOLD_KEEP_OTHERS", "1")
+        .env_remove("FOLD_AGENT_TAGS")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CLAUDE_CODE_PROJECT_DIR_NAME")
+        .output()
+        .await
+        .unwrap();
+    let stdout = text(&both.stdout);
+    assert!(
+        stdout.starts_with("this session takes over the 2 live main sessions of main"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("FOLD_KEEP_OTHERS"), "{stdout}");
+
+    for (client, child) in [(new, &mut new_child), (other, &mut other_child)] {
+        client.cancel().await.unwrap();
+        child.wait().await.unwrap();
+    }
+    old.cancel().await.ok();
+    guard.stop().await;
 }
 
 /// The files below `relative` in `root`, each as a path relative to `root`.

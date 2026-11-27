@@ -37,7 +37,7 @@ impl Agent {
             tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
             inbox: None,
         };
-        let (read, write) = daemon_client::handshake(stream, &hello)
+        let (read, write) = daemon_client::handshake(stream, &hello.into())
             .await
             .map_err(SeedError::from)?;
         let client =

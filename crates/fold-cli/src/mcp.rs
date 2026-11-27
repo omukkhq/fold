@@ -2,11 +2,12 @@ use std::io;
 use std::path::PathBuf;
 
 use clap::Args;
-use fold_cli::claude_files::{AGENT_ENV, AGENT_TAGS_ENV};
-use fold_cli::daemon_client::{self, ClientConfig, ClientError, HandshakeError};
+use fold_cli::claude_files::{AGENT_ENV, AGENT_TAGS_ENV, KEEP_OTHERS_ENV};
+use fold_cli::daemon_client::{self, ClientConfig, ClientError, HandshakeError, HelloLine};
 use fold_cli::mcp_relay::{self, ReconnectPolicy, RelayError};
+use fold_core::MAIN_TAG;
 use fold_daemon::mcp::OutsideProject;
-use fold_daemon::mcp::handshake::{Hello, PROTOCOL_VERSION, SessionInbox};
+use fold_daemon::mcp::handshake::{Hello, HelloOptions, PROTOCOL_VERSION, SessionInbox};
 use thiserror::Error;
 
 use crate::init::project_root_at_or_above;
@@ -64,6 +65,11 @@ pub fn run(args: &McpArgs) -> Result<(), McpError> {
             std::env::var(MESSAGING_TOKEN_ENV).ok(),
         ),
     };
+    let keep_others = keeps_others(&hello.tags, std::env::var_os(KEEP_OTHERS_ENV));
+    let hello = HelloLine {
+        hello,
+        options: HelloOptions { keep_others },
+    };
     let runtime = serve::current_thread_runtime().map_err(McpError::Runtime)?;
     let outcome = runtime.block_on(session(&config, &hello));
     // The stdin reader blocks a runtime thread until the next line, which may never come.
@@ -99,7 +105,12 @@ fn agent_tags(value: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-async fn session(config: &ClientConfig, hello: &Hello) -> Result<(), McpError> {
+/// `FOLD_KEEP_OTHERS`, which `fld claude --keep-others` sets to `1` on the main session: only `1`, and only with the `main` tag, keeps the agent's other live sessions, so a worker that inherits the variable from a daemon started inside such a session never sends it.
+fn keeps_others(tags: &[String], value: Option<std::ffi::OsString>) -> bool {
+    tags.iter().any(|tag| tag == MAIN_TAG) && value.is_some_and(|value| value == "1")
+}
+
+async fn session(config: &ClientConfig, hello: &HelloLine) -> Result<(), McpError> {
     let stream = daemon_client::connect(config).await?;
     let connection = daemon_client::handshake(stream, hello).await?;
     // The relay carries protocol bytes, never user output.
@@ -136,6 +147,36 @@ mod tests {
         assert_eq!(session_inbox(socket(), Some(String::new())), None);
         let shown = format!("{:?}", session_inbox(socket(), token()));
         assert!(!shown.contains("0123456789abcdef"), "{shown}");
+    }
+
+    #[test]
+    fn keep_others_is_1_on_a_main_session_and_goes_beside_the_hello() {
+        let main = ["main".to_owned()];
+        assert!(!keeps_others(&main, None));
+        assert!(!keeps_others(&main, Some("".into())));
+        assert!(!keeps_others(&main, Some("0".into())));
+        assert!(!keeps_others(&main, Some("true".into())));
+        assert!(keeps_others(&main, Some("1".into())));
+        assert!(!keeps_others(&[], Some("1".into())));
+        assert!(!keeps_others(&["review".to_owned()], Some("1".into())));
+        let hello = Hello {
+            fold: PROTOCOL_VERSION,
+            cwd: PathBuf::from("/src/app"),
+            pid: 7,
+            agent: Some("main".to_owned()),
+            tags: vec!["main".to_owned()],
+            inbox: None,
+        };
+        let plain = serde_json::to_vec(&HelloLine::from(hello.clone())).unwrap();
+        assert!(!String::from_utf8_lossy(&plain).contains("keep_others"));
+        let kept = HelloLine {
+            hello: hello.clone(),
+            options: HelloOptions { keep_others: true },
+        };
+        let line = serde_json::to_vec(&kept).unwrap();
+        let (parsed, options) = fold_daemon::mcp::handshake::parse_line(&line).unwrap();
+        assert_eq!(parsed, hello);
+        assert!(options.keep_others);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use fold_cli::daemon_client::{self, ClientConfig};
+use fold_cli::daemon_client::{self, ClientConfig, HelloLine};
 use fold_cli::mcp_relay::{ReconnectPolicy, RelayError, relay};
 use fold_core::ManualClock;
 use fold_daemon::mcp::handshake::{Hello, PROTOCOL_VERSION};
@@ -32,7 +32,7 @@ async fn start_daemon(host: &Host) -> RunningDaemon {
     .unwrap()
 }
 
-fn hello(host: &Host) -> Hello {
+fn hello(host: &Host) -> HelloLine {
     Hello {
         fold: PROTOCOL_VERSION,
         cwd: host.root.clone(),
@@ -41,6 +41,7 @@ fn hello(host: &Host) -> Hello {
         tags: Vec::new(),
         inbox: None,
     }
+    .into()
 }
 
 #[cfg(test)]

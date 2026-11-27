@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use fold_core::{FoldError, codes};
 use fold_daemon::mcp::error::{ErrorBody, tool_error};
-use fold_daemon::mcp::handshake::Hello;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -12,7 +11,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::time::Instant;
 
-use crate::daemon_client::{self, ClientConfig, HandshakeError};
+use crate::daemon_client::{self, ClientConfig, HandshakeError, HelloLine};
 
 /// The halves of a daemon connection after its handshake.
 pub type Connection = (BufReader<OwnedReadHalf>, OwnedWriteHalf);
@@ -192,7 +191,7 @@ pub async fn relay<I, O>(
     mut stdout: O,
     connection: Connection,
     reconnect: &ClientConfig,
-    hello: &Hello,
+    hello: &HelloLine,
     policy: &ReconnectPolicy,
 ) -> Result<(), RelayError>
 where
@@ -289,7 +288,7 @@ async fn bridge_gap<I, O>(
     stdout: &mut O,
     session: &mut SessionLines,
     config: &ClientConfig,
-    hello: &Hello,
+    hello: &HelloLine,
     policy: &ReconnectPolicy,
 ) -> Result<Option<Connection>, RelayError>
 where
@@ -334,7 +333,7 @@ enum Reopened {
 }
 
 /// Connects without starting a daemon, repeats the handshake with the same line, so the daemon binds the same agent, and replays the client's `initialize` and `notifications/initialized`, which the new daemon session needs before any other request. The daemon's answer to the replayed `initialize` is the client's no longer, so it is dropped. A refused handshake is final: the daemon answered and will answer the same again.
-async fn reopen(config: &ClientConfig, hello: &Hello, session: &SessionLines) -> Reopened {
+async fn reopen(config: &ClientConfig, hello: &HelloLine, session: &SessionLines) -> Reopened {
     let Ok(stream) = daemon_client::connect(config).await else {
         return Reopened::Retry;
     };

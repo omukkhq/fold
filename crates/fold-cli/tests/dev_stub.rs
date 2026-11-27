@@ -121,7 +121,9 @@ impl Host {
             tags: vec!["main".to_owned()],
             inbox: None,
         };
-        let (read, write) = daemon_client::handshake(stream, &hello).await.unwrap();
+        let (read, write) = daemon_client::handshake(stream, &hello.into())
+            .await
+            .unwrap();
         let session = Session(().serve((read, write)).await.unwrap());
         session.ok("register_agent", json!({"name": "main"})).await;
         session

@@ -14,6 +14,9 @@ pub use fold_core::layout::{
     AGENT_ENV, AGENT_TAGS_ENV, ALLOW_FOLD_TOOLS, MCP_SERVER_NAME, MCP_SERVERS_KEY,
 };
 
+/// Set by `fld claude --keep-others` on the `claude` it runs, whose `fld mcp` then asks the daemon to keep the main agent's other live sessions connected.
+pub const KEEP_OTHERS_ENV: &str = "FOLD_KEEP_OTHERS";
+
 /// The folders of Claude Code files that fold's files sit in. Each folder after `.claude/skills` is the folder of one skill: the `fold` skill and the skill of each role.
 pub const FOLDERS: [&str; 8] = [
     ".claude",
