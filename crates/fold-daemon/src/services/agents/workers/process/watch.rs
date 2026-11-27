@@ -503,6 +503,7 @@ impl Supervisor {
     async fn recover(self) {
         self.answer_open_asks().await;
         self.stop_done_workers().await;
+        self.clone().wake_dormant().await;
         self.notify_running_authors().await;
         self.clone().resume_owed_send_backs().await;
         self.clone().resume_owed_gate_runs().await;
@@ -560,6 +561,10 @@ pub(super) async fn watch_done(
         let supervisor = Supervisor { inner };
         supervisor.on_event(&event).await;
         tokio::spawn(supervisor.clone().wake_main(event.clone()));
+        if fold_core::agents::push::is_pushed(&event) && !lock(&supervisor.inner.dormant).is_empty()
+        {
+            tokio::spawn(supervisor.clone().wake_dormant_for(event.clone()));
+        }
         if event.event_type == types::WORKER_STOPPED {
             tokio::spawn(supervisor.clone().catch_up_after_stop(event.clone()));
         }

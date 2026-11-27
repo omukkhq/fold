@@ -266,6 +266,7 @@ impl Supervisor {
             account: account.map(|(stamp, _)| stamp),
         };
         lock(&self.inner.running).insert(row.agent.clone(), run.clone());
+        lock(&self.inner.dormant).remove(&row.agent);
         self.inner
             .streams
             .started(&row.agent, generation, self.inner.clock.now());

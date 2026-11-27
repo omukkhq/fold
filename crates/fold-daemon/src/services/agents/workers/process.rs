@@ -25,6 +25,7 @@ use watch::watch_done;
 mod account;
 mod asking;
 mod conflict;
+mod dormant;
 mod fresh;
 mod gate;
 mod groups;
@@ -249,6 +250,8 @@ struct Inner {
     groups: Mutex<ResumeGroups>,
     /// The finished workers whose stop waits for their turn to end; a `wait_for_events` of one of them returns at once.
     finishing: tokio::sync::watch::Sender<BTreeSet<AgentName>>,
+    /// The leads that a daemon start left without a process because no work waited for them; their rows stay `idle`, and the first work that comes runs them.
+    dormant: Mutex<HashSet<AgentName>>,
 }
 
 impl Drop for Inner {
@@ -323,6 +326,7 @@ impl Supervisor {
                 windows: Mutex::default(),
                 groups: Mutex::default(),
                 finishing: tokio::sync::watch::Sender::new(BTreeSet::new()),
+                dormant: Mutex::default(),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();

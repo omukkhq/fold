@@ -11,6 +11,7 @@ use fold_store::agents::{self, ProcessEnd, SessionEnd, WorkerProcessRow};
 use fold_store::{StoreError, messages};
 use serde_json::json;
 
+use super::dormant::IDLE_LEAD_HANDOFF_TOKENS;
 use super::launch::hands_off_on_update;
 use super::stop::stopped_event;
 use super::{Input, Supervisor, lock};
@@ -119,12 +120,15 @@ impl Supervisor {
         Ok(upgraded.then_some(UPGRADE_HANDOFF_REQUEST))
     }
 
-    /// Whether the row's context has reached its role's `handoff_at` in the window of its model among `windows`.
+    /// Whether the row's context has reached its role's `handoff_at` in the window of its model among `windows`, or is an area lead's context over [`IDLE_LEAD_HANDOFF_TOKENS`] while its area has no open task.
     async fn past_handoff_at(
         &self,
         row: &WorkerProcessRow,
         windows: &[(String, u64)],
     ) -> Result<bool, AgentError> {
+        if row.context_tokens > IDLE_LEAD_HANDOFF_TOKENS && self.area_is_empty(row).await? {
+            return Ok(true);
+        }
         let config = load_config(&self.inner.paths).await?;
         let Some(at) = config.role(row.role).handoff_at else {
             return Ok(false);

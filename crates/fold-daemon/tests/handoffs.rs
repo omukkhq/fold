@@ -21,6 +21,8 @@ const REVIEW_LEAD: &str = "review-lead";
 /// The recorded turn reports a context of 25310 tokens in a window of 1000000; the grown one reports 700192, past the default of 60 percent for that window.
 const SMALL: &str = "\"cache_read_input_tokens\":25118";
 const GROWN: &str = "\"cache_read_input_tokens\":700000";
+/// A context of 200192 tokens: below the default threshold, above the 150k at which an area lead with no open task hands off.
+const MID: &str = "\"cache_read_input_tokens\":200000";
 
 /// The turn the stand-in replays: a file the test rewrites between turns, so the context it reports grows.
 struct Turn {
@@ -45,6 +47,10 @@ impl Turn {
 
     fn grow(&self) {
         std::fs::write(&self.path, self.small.replace(SMALL, GROWN)).unwrap();
+    }
+
+    fn grow_to_mid(&self) {
+        std::fs::write(&self.path, self.small.replace(SMALL, MID)).unwrap();
     }
 
     fn shrink(&self) {
@@ -262,6 +268,30 @@ async fn a_lead_past_its_threshold_hands_off_to_a_fresh_session() {
     assert!(!text.contains("plover"), "a log line holds the note");
     assert!(!events.contains("plover"), "a stored event holds the note");
     assert!(!live.contains("plover"), "a live event holds the note");
+}
+
+#[tokio::test]
+async fn an_area_lead_over_150k_is_asked_for_a_handoff_once_its_area_has_no_open_task() {
+    let turn = Turn::new();
+    let fake = turn.fake();
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    lead(&mut harness).await;
+    turn.grow_to_mid();
+    harness.send(MAIN, &[LEAD], "Look at the page.").await;
+    assert_eq!(idle_after(&harness, 2).await.context_tokens, 200_192);
+    harness.send(MAIN, &[LEAD], "One more look.").await;
+    idle_after(&harness, 3).await;
+    let run = runs(&fake, 1, 4).await.remove(0);
+    assert_eq!(asks(&run), 0, "T-1 is still open in the area");
+
+    harness
+        .call(MAIN, "archive_task", json!({"id": "T-1"}))
+        .await;
+    harness.send(MAIN, &[LEAD], "The page is gone.").await;
+    idle_after(&harness, 5).await;
+    let run = runs(&fake, 1, 6).await.remove(0);
+    assert_eq!(asks(&run), 1, "{:?}", run.stdin);
 }
 
 #[tokio::test]

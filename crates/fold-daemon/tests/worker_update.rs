@@ -142,37 +142,34 @@ async fn a_lead_of_an_older_fold_hands_off_into_a_fresh_session_with_its_note() 
     harness.stop().await;
 
     harness.start_again().await;
-    let resumed = eventually(WAIT, async || {
-        let runs = fake.runs_of(LEAD);
-        match runs.get(1) {
-            Some(run) if !run.stdin.is_empty() => Ok(run.clone()),
-            _ => Err(runs.len()),
+    // Nothing waits for the lead, so the daemon start leaves it without a process until the message comes.
+    eventually(WAIT, async || {
+        if harness
+            .handle
+            .workers
+            .is_dormant(&AgentName::parse(LEAD).unwrap())
+        {
+            Ok(())
+        } else {
+            Err(())
         }
     })
     .await;
-    assert!(resumed.has("--resume"));
-    until_state(&harness, LEAD, WorkerState::Idle).await;
-    assert!(
-        user_turns(&resumed).is_empty(),
-        "nothing waits for the lead"
-    );
+    assert_eq!(fake.runs_of(LEAD).len(), 1);
 
     harness.connect(MAIN).await;
-    harness.connect(LEAD).await;
-    let sent = harness
+    harness
         .call(
             MAIN,
             "send_message",
             json!({"to": [LEAD], "body": "the plover task"}),
         )
         .await;
-    let message = sent["id"].as_str().unwrap().to_owned();
+    let resumed = until_runs(&fake, LEAD, 2).await.remove(1);
+    assert!(resumed.has("--resume"));
+    harness.connect(LEAD).await;
     let turns = until_turns(&fake, LEAD, 1, 2).await;
-    assert!(
-        turns[0].contains(&format!("message {message} arrived")),
-        "{}",
-        turns[0]
-    );
+    assert!(turns[0].contains("get_inbox"), "{}", turns[0]);
     assert!(!turns[0].contains("fold was updated"), "{}", turns[0]);
     assert_eq!(turns[1], UPGRADE_HANDOFF_REQUEST);
     assert_eq!(

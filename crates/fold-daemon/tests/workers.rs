@@ -2952,14 +2952,157 @@ async fn an_idle_lead_gets_a_turn_at_a_daemon_start_only_when_ready_tasks_wait_f
     until_state(&harness, "web-worker", WorkerState::Idle).await;
     harness.stop().await;
     harness.start_again().await;
+    until_dormant(&harness, &lead).await;
     let row = worker(&harness, &lead).await;
     assert_eq!(
         (row.state, row.turns),
         (WorkerState::Idle, 2),
-        "nothing waits for the lead, so it gets no turn"
+        "nothing waits for the lead, so it stays without a process"
     );
-    let runs = until_runs(&fake, &lead, 3, 1).await;
-    assert!(user_turns(&runs[2]).is_empty(), "{:?}", runs[2].stdin);
+    assert_eq!(fake.runs_of(&lead).len(), 2);
+}
+
+/// Waits until the daemon start keeps `agent` without a process, as a lead that no work waits for.
+async fn until_dormant(harness: &Harness, agent: &str) {
+    let agent = name(agent);
+    eventually(WAIT, async || {
+        if harness.handle.workers.is_dormant(&agent) {
+            Ok(())
+        } else {
+            Err(())
+        }
+    })
+    .await;
+    assert!(!harness.handle.workers.is_running(&agent));
+}
+
+#[tokio::test]
+async fn a_daemon_start_runs_no_lead_of_an_empty_graph_and_a_ready_task_starts_its_lead() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    for (area, label) in [("web", "ui"), ("api", "server")] {
+        harness
+            .call(
+                MAIN,
+                "create_label",
+                json!({"name": label, "color": "sage"}),
+            )
+            .await;
+        harness
+            .call(MAIN, "define_area", json!({"name": area, "label": label}))
+            .await;
+    }
+    let web = start_lead(&mut harness, "web").await;
+    let api = start_lead(&mut harness, "api").await;
+    until_state(&harness, &web, WorkerState::Idle).await;
+    until_state(&harness, &api, WorkerState::Idle).await;
+
+    harness.stop().await;
+    harness.start_again().await;
+    until_dormant(&harness, &web).await;
+    until_dormant(&harness, &api).await;
+    assert_eq!(fake.runs_of(&web).len(), 1);
+    assert_eq!(fake.runs_of(&api).len(), 1);
+    // Past the stall time, a lead without a process is no stalled worker.
+    harness
+        .project
+        .clock()
+        .advance(Duration::from_secs(10 * 60))
+        .unwrap();
+    fold_daemon::services::workspaces::check_stalls(&harness.handle, harness.project.now())
+        .await
+        .unwrap();
+    assert!(
+        stored_events(&harness)
+            .await
+            .iter()
+            .all(|(kind, _)| kind != "worker.stalled"),
+    );
+
+    harness.connect(MAIN).await;
+    harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Draw the page", "labels": ["ui"]}),
+        )
+        .await;
+    let runs = until_runs(&fake, &web, 2, 2).await;
+    assert!(runs[1].flag("--resume").is_some(), "{:?}", runs[1].args);
+    let turns = user_turns(&runs[1]);
+    assert!(
+        turns[0].contains("These tasks of area web are ready and wait for a task worker: T-1."),
+        "{}",
+        turns[0]
+    );
+    until_state(&harness, &web, WorkerState::Idle).await;
+    assert!(!harness.handle.workers.is_dormant(&name(&web)));
+    assert!(
+        harness.handle.workers.is_dormant(&name(&api)),
+        "no work came for api"
+    );
+    assert_eq!(fake.runs_of(&api).len(), 1);
+}
+
+#[tokio::test]
+async fn a_notice_to_a_dormant_lead_starts_it_with_the_notice() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    for (area, label) in [("web", "ui"), ("api", "server")] {
+        harness
+            .call(
+                MAIN,
+                "create_label",
+                json!({"name": label, "color": "sage"}),
+            )
+            .await;
+        harness
+            .call(MAIN, "define_area", json!({"name": area, "label": label}))
+            .await;
+    }
+    let web = start_lead(&mut harness, "web").await;
+    let api = start_lead(&mut harness, "api").await;
+    until_state(&harness, &web, WorkerState::Idle).await;
+    until_state(&harness, &api, WorkerState::Idle).await;
+    harness.stop().await;
+    harness.start_again().await;
+    until_dormant(&harness, &web).await;
+    until_dormant(&harness, &api).await;
+
+    // A stall of a worker of web's is no work that the stored state shows the lead; only its notice does.
+    let stalled = fold_core::events::NewEvent::new(
+        fold_core::events::types::WORKER_STALLED,
+        fold_core::EventActor::parse("fold").unwrap(),
+    )
+    .unwrap()
+    .task(fold_core::TaskId::from_number(1).unwrap())
+    .data(json!({"agent": "web-worker", "reason": "silent", "call": null, "minutes": 5, "told": [web]}))
+    .unwrap();
+    let mut buffer = fold_daemon::services::events::EventBuffer::new();
+    let now = harness.project.now();
+    harness
+        .project
+        .store()
+        .write(async |tx| buffer.append(tx, &stalled, now).await.map(|_| ()))
+        .await
+        .unwrap();
+    harness.handle.bus.publish(buffer);
+
+    let runs = until_runs(&fake, &web, 2, 2).await;
+    assert!(runs[1].flag("--resume").is_some(), "{:?}", runs[1].args);
+    let turns = user_turns(&runs[1]);
+    assert!(
+        turns[0].contains("web-worker shows no activity on T-1 for 5 min"),
+        "{}",
+        turns[0]
+    );
+    assert!(
+        harness.handle.workers.is_dormant(&name(&api)),
+        "the notice was not for api"
+    );
+    assert_eq!(fake.runs_of(&api).len(), 1);
 }
 
 #[tokio::test]
