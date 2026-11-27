@@ -980,6 +980,12 @@ fn a_healthy_project_is_all_ok_and_nothing_changes_on_disk() {
     let fixture = Fixture::new();
     let host = fixture.linux_host(524_288);
     let root = fixture.project("demo");
+    // The stub git answers the identity keys, as a machine with a configured identity does.
+    std::fs::write(
+        fixture.path("bin/git"),
+        "#!/bin/sh\ncase \"$*\" in\n  *user.name*) echo Ana ;;\n  *user.email*) echo ana@example.com ;;\nesac\n",
+    )
+    .unwrap();
     let before = snapshot(&root);
     let checks = project_report(&host, &root, at(1_000));
     let names: Vec<_> = checks.iter().map(|check| check.name).collect();
@@ -991,6 +997,8 @@ fn a_healthy_project_is_all_ok_and_nothing_changes_on_disk() {
             "git history",
             "project folder",
             "exclude file",
+            "git identity",
+            "git upstream",
             "inotify watches",
             "watch instances",
             "claude files",
@@ -2163,4 +2171,138 @@ fn personal_skills_need_a_home_and_fail_for_each_fold_name() {
         fix.contains(&skills.join("fold-reviewer").display().to_string()),
         "{fix}"
     );
+}
+
+#[test]
+fn the_fallback_identity_warns_and_a_real_one_is_named() {
+    let fold = fold_vcs::git_export::Signature::fold();
+    let check = git_branch::identity_verdict(&fold);
+    assert_eq!(check.status, Status::Warn);
+    assert!(
+        check.message.contains("`fold <fold@localhost>`"),
+        "{check:?}"
+    );
+    assert!(
+        check
+            .fix
+            .as_deref()
+            .unwrap()
+            .contains("git config --global user.email")
+    );
+    let ana = fold_vcs::git_export::Signature {
+        name: "Ana".to_owned(),
+        email: "ana@example.com".to_owned(),
+    };
+    let check = git_branch::identity_verdict(&ana);
+    assert_eq!(check.status, Status::Ok);
+    assert!(
+        check.message.ends_with("as Ana <ana@example.com>"),
+        "{check:?}"
+    );
+}
+
+#[test]
+fn an_upstream_that_fold_does_not_sync_warns_with_the_command_that_fixes_it() {
+    let remotes = [
+        ("backup".to_owned(), "main".to_owned()),
+        ("origin".to_owned(), "dev".to_owned()),
+    ];
+    let upstream = |remote: &str, merge: &str| git_branch::Upstream {
+        remote: remote.to_owned(),
+        merge: merge.to_owned(),
+    };
+    let none = git_branch::upstream_verdict("main", None, &remotes);
+    assert_eq!(none.status, Status::Ok);
+    let same = git_branch::upstream_verdict(
+        "main",
+        Some(&upstream("origin", "refs/heads/dev")),
+        &remotes,
+    );
+    assert_eq!(same.status, Status::Ok, "{same:?}");
+    assert!(same.message.contains("tracks origin/`dev`"), "{same:?}");
+    let other = git_branch::upstream_verdict(
+        "main",
+        Some(&upstream("origin", "refs/heads/main")),
+        &remotes,
+    );
+    assert_eq!(other.status, Status::Warn);
+    assert!(
+        other
+            .message
+            .contains("tracks origin/`main`, but fold syncs it with origin/`dev`"),
+        "{other:?}"
+    );
+    assert_eq!(
+        other.fix.as_deref(),
+        Some(
+            "run `fld pull origin`, then `git branch --set-upstream-to=origin/dev main` in the project folder, or `git branch --unset-upstream main`"
+        )
+    );
+    let unknown =
+        git_branch::upstream_verdict("main", Some(&upstream("fork", "refs/heads/main")), &remotes);
+    assert_eq!(unknown.status, Status::Warn);
+    assert!(
+        unknown
+            .message
+            .contains("no remote of .fold/config.toml names"),
+        "{unknown:?}"
+    );
+    assert!(
+        unknown
+            .fix
+            .as_deref()
+            .unwrap()
+            .contains("git branch --unset-upstream main")
+    );
+}
+
+#[test]
+fn doctor_reads_the_identity_and_the_upstream_from_the_project_repository() {
+    let fixture = Fixture::new();
+    let mut host = fixture.bare_host();
+    host.path = std::env::var_os("PATH");
+    let root = fixture.project("demo");
+    let repo = root.join(".git");
+    let set = |key: &str, value: &str| git(&repo, &["config", "--local", key, value]);
+    // A blank local value hides any global one, so the fallback is what the next commit gets.
+    set("user.name", "");
+    set("user.email", "");
+    let checks = project_report(&host, &root, at(1_000));
+    assert_eq!(find(&checks, "git identity").status, Status::Warn);
+    set("user.name", "Ana");
+    set("user.email", "ana@example.com");
+    let checks = project_report(&host, &root, at(1_000));
+    let identity = find(&checks, "git identity");
+    assert_eq!(identity.status, Status::Ok, "{identity:?}");
+    assert_eq!(find(&checks, "git upstream").status, Status::Ok);
+
+    std::fs::write(
+        root.join(".fold/config.toml"),
+        "[git]\nbranch = \"main\"\n\n[remotes.origin]\nurl = \"/r.git\"\nbranch = \"dev\"\n",
+    )
+    .unwrap();
+    set("branch.main.remote", "origin");
+    set("branch.main.merge", "refs/heads/main");
+    let before = snapshot(&root);
+    let checks = project_report(&host, &root, at(1_000));
+    let upstream = find(&checks, "git upstream");
+    assert_eq!(upstream.status, Status::Warn, "{upstream:?}");
+    assert!(
+        upstream
+            .message
+            .contains("but fold syncs it with origin/`dev`"),
+        "{upstream:?}"
+    );
+    assert_eq!(snapshot(&root), before);
+    set("branch.main.merge", "refs/heads/dev");
+    let checks = project_report(&host, &root, at(1_000));
+    assert_eq!(find(&checks, "git upstream").status, Status::Ok);
+
+    std::fs::write(root.join(".fold/config.toml"), "[git\n").unwrap();
+    let checks = project_report(&host, &root, at(1_000));
+    assert_eq!(find(&checks, "git upstream").status, Status::Warn);
+    host.path = None;
+    let checks = project_report(&host, &root, at(1_000));
+    assert_eq!(find(&checks, "git identity").message, NOT_APPLICABLE);
+    assert_eq!(find(&checks, "git upstream").message, NOT_APPLICABLE);
 }

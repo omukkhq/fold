@@ -371,7 +371,7 @@ fn with_git_in_a_git_repository_records_the_section_it_adds_to_agents_md_as_r1()
         sandbox.status(&repo),
         [
             "Project folder at main r1",
-            "  ↳ Git: main is synced with the branch main",
+            "  ↳ Git: fold main → local branch `main`",
             "",
             "To record: 1 file",
             "  ↳ added: notes.txt",
@@ -407,7 +407,7 @@ fn with_git_in_a_git_repository_whose_agents_md_has_the_section_makes_no_revisio
         sandbox.status(&repo),
         [
             "Nothing to record: the project folder is at main r0",
-            "  ↳ Git: main is synced with the branch main",
+            "  ↳ Git: fold main → local branch `main`",
         ]
     );
 }
@@ -439,7 +439,7 @@ fn with_git_in_a_git_repository_leaves_an_untracked_agents_md_unrecorded() {
         sandbox.status(&repo),
         [
             "Project folder at main r0",
-            "  ↳ Git: main is synced with the branch main",
+            "  ↳ Git: fold main → local branch `main`",
             "",
             "To record: 1 file",
             "  ↳ added: AGENTS.md",

@@ -58,14 +58,16 @@ enum Command {
     Token(token::TokenArgs),
     /// Print a one-time link that signs you in to the web interface; it works once, for a few minutes, starting the daemon when needed
     Web(commands::web::WebArgs),
-    /// Add, remove and list the remote Git repositories that fld push and fld pull sync main with
+    /// Add, remove and list the remote Git repositories that fld push and fld pull sync fold main with
     Remote(commands::remote::RemoteArgs),
-    /// Push main's Git history, one commit per revision, to a Git remote, without force; the remote's name can be left out when the project has only one
+    /// Push fold main's Git history, one commit per revision, from the local branch to a Git remote's branch, without force; the remote's name can be left out when the project has only one
     Push(commands::remote::PushArgs),
+    /// Manage the project's local Git branch: fld git branch <name> renames the branch that each integration commits fold main to
+    Git(commands::git::GitArgs),
     /// Run a Claude Code hook; the settings that fld setup and fold's sessions get call these
     #[command(hide = true)]
     Hook(hook::HookArgs),
-    /// Bring the commits of a Git remote into main; a conflict becomes a sync task. The remote's name can be left out when the project has only one
+    /// Bring the commits of a Git remote's branch into fold main; a conflict becomes a sync task. The remote's name can be left out when the project has only one
     Pull(commands::remote::PullArgs),
     /// Send the project's events to webhooks, Slack or Discord: list, add, edit, remove, test and log the notice targets
     Notify(commands::notify::NotifyArgs),
@@ -169,6 +171,7 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::Push(args)) => {
             commands::remote::run_push(&args, out).map_err(Failure::Remote)
         }
+        Some(Command::Git(args)) => commands::git::run(&args, out).map_err(Failure::Remote),
         Some(Command::Hook(args)) => {
             hook::run(&args, out);
             Ok(())

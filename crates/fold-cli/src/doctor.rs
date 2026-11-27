@@ -1043,6 +1043,8 @@ fn project_checks(
             git_history_check(&paths, host),
             folder_check(&paths, host),
             exclude_check(&paths),
+            git_branch::identity_check(&paths, host),
+            git_branch::upstream_check(&paths, host),
         ]);
     }
     if watch_applicable {
@@ -1372,7 +1374,7 @@ fn git_history_check(paths: &ProjectPaths, host: &Host) -> Check {
     }
 }
 
-/// While Git sync is on, the project folder and its branch follow main together, so a change of the human on a file main changes holds both back until `fld record` records it.
+/// While Git sync is on, the project folder and its local branch follow fold main together, so a change of the human on a file main changes holds both back until `fld record` records it.
 fn folder_check(paths: &ProjectPaths, host: &Host) -> Check {
     const NAME: &str = "project folder";
     let Some(program) = on_path("git", host.path.as_deref()) else {
@@ -1392,7 +1394,7 @@ fn folder_check(paths: &ProjectPaths, host: &Host) -> Check {
         ),
         Ok(true) => Check::warn(
             NAME,
-            "the project folder has changes that are not committed; on a file main changes they hold the folder and its branch back",
+            "the project folder has changes that are not committed; on a file main changes they hold the folder and its local branch back",
             "run `fld record` in the project folder to record them on main, or undo what you staged with `git restore --staged`; fold brings the folder to main at the next integration or daemon start",
         ),
         Err(_) => Check::warn(
@@ -1550,6 +1552,7 @@ fn shadowing_checks(root: &Path, home: Option<&Path>) -> Vec<Check> {
 mod accounts;
 mod daemon;
 mod environment;
+mod git_branch;
 mod inotify;
 mod push;
 mod unit;
