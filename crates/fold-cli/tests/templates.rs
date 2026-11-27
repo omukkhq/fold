@@ -198,10 +198,10 @@ const FOLD_TOOLS: [&str; 104] = [
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
-const PENDING_TOOLS: [&str; 2] = ["watch_tasks", "unwatch_tasks"];
+const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 192] = [
+const FOLD_ERROR_CODES: [&str; 193] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -394,13 +394,14 @@ const FOLD_ERROR_CODES: [&str; 192] = [
     "account_not_found",
     "account_token_rejected",
     "daemon_restarting",
+    "main_session_taken_over",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
 const PENDING_ERROR_CODES: [&str; 1] = ["too_large"];
 
 /// The `invalid_request` reasons that have a name.
-const INVALID_REQUEST_REASONS: [&str; 16] = [
+const INVALID_REQUEST_REASONS: [&str; 19] = [
     "self_dependency",
     "checklist_origin",
     "linked_item",
@@ -417,9 +418,12 @@ const INVALID_REQUEST_REASONS: [&str; 16] = [
     "two_areas",
     "main_approves",
     "batch_waiting",
+    "integration_run",
+    "branch_exists",
+    "folder_held",
 ];
 
-const NON_TOOL_NAMES: [&str; 78] = [
+const NON_TOOL_NAMES: [&str; 81] = [
     "next_offset",
     "file_count",
     "human_review",
@@ -498,6 +502,9 @@ const NON_TOOL_NAMES: [&str; 78] = [
     "waiting_for",
     "max_parallel",
     "waiting_check",
+    "created_at",
+    "include_handoffs",
+    "out_of_handles",
 ];
 
 /// The sections of the index before the shared ones.
@@ -1417,7 +1424,7 @@ const REFERENCE_SECTIONS: [&str; 8] = [
 ];
 
 /// Backticked names of the reference that are neither tools, codes, config or checks keys nor run states, but the values and fields it explains.
-const REFERENCE_NAMES: [&str; 11] = [
+const REFERENCE_NAMES: [&str; 13] = [
     "session_days",
     "check_runs",
     "check_memory_gb",
@@ -1429,6 +1436,8 @@ const REFERENCE_NAMES: [&str; 11] = [
     "target_changed",
     "stash_changed",
     "needs_confirmation",
+    "held_by",
+    "not_shown",
 ];
 
 /// Every key of `.fold/config.toml` as `(section, key)`, from the serialised form of a config that sets every optional key, so a new field of the config structs fails the reference test until the reference shows it. A section of named tables, such as `[remotes.<name>]`, is its name with a `.` after it.
