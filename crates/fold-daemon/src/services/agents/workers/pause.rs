@@ -30,7 +30,7 @@ impl AgentService {
         Ok(agents::pause_state(self.store.read()).await?.into())
     }
 
-    /// Pauses every agent of the project: in one transaction with `project.paused` the pause is stored, so it outlives a daemon restart; then every worker process ends the way a daemon stop ends it, interrupting a working turn, and each row keeps its state and session for the resume. While paused fold starts no worker, no claim goes stale, and the idle sweep and stall detection wait; integration and push go on. The main agent's own session is not supervised, so it only hears of the pause. A project that is paused already stays as it is, without a second event.
+    /// Pauses every agent of the project: in one transaction with `project.paused` the pause is stored, so it outlives a daemon restart; then every worker process ends the way a daemon stop ends it, interrupting a working turn, and each row keeps its state and session for the resume. While paused fold starts no worker, no claim goes stale, and the idle sweep and stall detection wait; integration and push go on. The main agent's own session is not supervised, so it keeps running; a pause by an agent tells the other main agents of it, and a pause by a human tells no agent. A project that is paused already stays as it is, without a second event.
     pub async fn pause_project(&self, actor: &Actor) -> Result<PauseState, AgentError> {
         let supervisor = self.supervisor()?.clone();
         let starter = self.starter(actor).await?;

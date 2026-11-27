@@ -676,6 +676,9 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
         ));
     }
     if kind == types::PROJECT_PAUSED {
+        if event.actor.is_human() {
+            return None;
+        }
         return Some((
             ctx.main_agents.iter().cloned().collect(),
             "the agents are paused: every worker is stopped; start no work until a resume; pass include_stopped true to see the stopped workers"
@@ -2127,10 +2130,10 @@ mod tests {
     }
 
     #[test]
-    fn a_pause_and_a_resume_reach_the_main_agent_but_not_the_one_who_acted() {
+    fn a_pause_by_an_agent_and_a_resume_reach_the_main_agent_but_not_the_one_who_acted() {
         let mut ctx = ctx();
-        ctx.main_agents = [name("main")].into_iter().collect();
-        let paused = event(types::PROJECT_PAUSED, "human:rafeed");
+        ctx.main_agents = [name("main"), name("second")].into_iter().collect();
+        let paused = event(types::PROJECT_PAUSED, "second");
         assert!(is_pushed(&paused));
         assert_eq!(
             sent(&notice_for(&paused, &ctx)),
@@ -2143,13 +2146,27 @@ mod tests {
         let resumed = event(types::PROJECT_RESUMED, "human:rafeed");
         assert_eq!(
             sent(&notice_for(&resumed, &ctx)),
-            vec![row(
-                "main",
-                "fold: the agents are resumed: the paused workers run again. Call list_workers.",
-                "list_workers"
-            )]
+            vec![
+                row(
+                    "main",
+                    "fold: the agents are resumed: the paused workers run again. Call list_workers.",
+                    "list_workers"
+                ),
+                row(
+                    "second",
+                    "fold: the agents are resumed: the paused workers run again. Call list_workers.",
+                    "list_workers"
+                )
+            ]
         );
-        assert!(notice_for(&event(types::PROJECT_PAUSED, "main"), &ctx).is_empty());
+    }
+
+    #[test]
+    fn a_pause_by_a_human_gives_no_notice() {
+        let mut ctx = ctx();
+        ctx.main_agents = [name("main")].into_iter().collect();
+        let paused = event(types::PROJECT_PAUSED, "human:rafeed");
+        assert!(notice_for(&paused, &ctx).is_empty());
     }
 
     #[test]
