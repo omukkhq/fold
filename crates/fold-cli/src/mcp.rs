@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use clap::Args;
 use fold_cli::claude_files::{AGENT_ENV, AGENT_TAGS_ENV};
 use fold_cli::daemon_client::{self, ClientConfig, ClientError, HandshakeError};
+use fold_cli::mcp_relay::{self, ReconnectPolicy, RelayError};
 use fold_daemon::mcp::OutsideProject;
 use fold_daemon::mcp::handshake::{Hello, PROTOCOL_VERSION, SessionInbox};
 use thiserror::Error;
@@ -30,13 +31,11 @@ pub enum McpError {
     Client(#[from] ClientError),
     #[error(transparent)]
     Handshake(#[from] HandshakeError),
-    #[error("the connection to the daemon failed: {0}")]
-    Copy(io::Error),
-    #[error("the daemon closed the session; start a new session to reconnect")]
-    DaemonClosed,
+    #[error(transparent)]
+    Relay(#[from] RelayError),
 }
 
-/// Connects this session to the daemon and copies MCP bytes between stdio and the socket until either side closes. One process is one session. A session in a folder outside every fold project gets [`OutsideProject`] instead, without a daemon: the user's Claude Code configuration starts `fld mcp` in every folder, and there it serves no tools and writes nothing to stderr.
+/// Connects this session to the daemon and carries MCP between stdio and the socket until Claude Code closes stdin. One process is one session: when the daemon closes the connection, the adapter reconnects as the same agent and keeps stdio open, and it exits only when the reconnect gives up. A session in a folder outside every fold project gets [`OutsideProject`] instead, without a daemon: the user's Claude Code configuration starts `fld mcp` in every folder, and there it serves no tools and writes nothing to stderr.
 pub fn run(args: &McpArgs) -> Result<(), McpError> {
     let cwd = std::env::current_dir()
         .and_then(|dir| dir.canonicalize())
@@ -102,62 +101,23 @@ fn agent_tags(value: Option<&str>) -> Vec<String> {
 
 async fn session(config: &ClientConfig, hello: &Hello) -> Result<(), McpError> {
     let stream = daemon_client::connect(config).await?;
-    let (mut read, mut write) = daemon_client::handshake(stream, hello).await?;
-
-    // These copies carry protocol bytes, never user output.
-    let mut stdin = tokio::io::stdin();
-    let mut stdout = tokio::io::stdout();
-    tokio::select! {
-        copied = tokio::io::copy(&mut stdin, &mut write) => session_ended(copied),
-        copied = tokio::io::copy(&mut read, &mut stdout) => Err(daemon_ended(copied)),
-    }
-}
-
-/// The session ends cleanly when Claude Code closes stdin. A write that fails because the daemon went away is the daemon closing the session.
-fn session_ended(copied: io::Result<u64>) -> Result<(), McpError> {
-    match copied {
-        Ok(_) => Ok(()),
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
-            ) =>
-        {
-            Err(McpError::DaemonClosed)
-        }
-        Err(error) => Err(McpError::Copy(error)),
-    }
-}
-
-/// The daemon's side ends with its end of stream, or with the error that stopped the copy.
-fn daemon_ended(copied: io::Result<u64>) -> McpError {
-    match copied {
-        Ok(_) => McpError::DaemonClosed,
-        Err(error) => McpError::Copy(error),
-    }
+    let connection = daemon_client::handshake(stream, hello).await?;
+    // The relay carries protocol bytes, never user output.
+    mcp_relay::relay(
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+        connection,
+        &ClientConfig::running(config.socket.clone()),
+        hello,
+        &ReconnectPolicy::default(),
+    )
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_copy_error_is_reported_as_itself() {
-        assert!(session_ended(Ok(3)).is_ok());
-        let gone = io::Error::from(io::ErrorKind::BrokenPipe);
-        assert!(matches!(
-            session_ended(Err(gone)),
-            Err(McpError::DaemonClosed)
-        ));
-        let other = io::Error::from(io::ErrorKind::PermissionDenied);
-        assert!(matches!(session_ended(Err(other)), Err(McpError::Copy(_))));
-        assert!(matches!(daemon_ended(Ok(0)), McpError::DaemonClosed));
-        let error = daemon_ended(Err(io::Error::other("stdout closed")));
-        assert_eq!(
-            error.to_string(),
-            "the connection to the daemon failed: stdout closed"
-        );
-    }
 
     #[test]
     fn the_inbox_needs_both_messaging_values() {

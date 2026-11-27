@@ -201,3 +201,4 @@ account_reserved
 account_token_rejected
 directory_other_filesystem
 database_replaced
+daemon_restarting

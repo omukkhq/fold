@@ -1,4 +1,8 @@
-use serde_json::json;
+use std::process::Stdio;
+use std::time::Duration;
+
+use rmcp::model::CallToolRequestParams;
+use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 
 use crate::common::{DaemonGuard, Host, adapter, daemons, list_agents};
@@ -90,24 +94,45 @@ async fn an_adapter_outside_every_project_serves_no_tools_quietly_and_starts_no_
 }
 
 #[tokio::test]
-async fn an_adapter_whose_daemon_stops_writes_one_line_and_exits_1() {
+async fn an_adapter_whose_daemon_restarts_stays_open_and_reconnects() {
     let host = Host::new().await;
     let (client, mut child) = adapter(host.fold(&["mcp"], &host.root)).await;
     assert_eq!(list_agents(&client).await, json!({"agents": []}));
     DaemonGuard(daemons(&host.default_socket())).stop().await;
-    let status = child.wait().await.unwrap();
-    assert_eq!(status.code(), Some(1));
-    let mut stderr = String::new();
-    child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_string(&mut stderr)
+
+    let gap = client
+        .call_tool(CallToolRequestParams::new("list_agents"))
         .await
         .unwrap();
-    assert_eq!(
-        stderr,
-        "fld mcp: the daemon closed the session; start a new session to reconnect\n"
+    assert_eq!(gap.is_error, Some(true));
+    let body: Value = serde_json::from_str(&gap.content[0].as_text().unwrap().text).unwrap();
+    assert_eq!(body["error"]["code"], "daemon_restarting");
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "the adapter keeps running"
     );
-    drop(client);
+
+    let socket = host.default_socket();
+    let mut serve = host.fold(&["serve", "--socket", socket.to_str().unwrap()], &host.root);
+    serve
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let _daemon = serve.spawn().unwrap();
+    fold_store::testing::eventually(Duration::from_secs(20), async || {
+        let result = client
+            .call_tool(CallToolRequestParams::new("list_agents"))
+            .await
+            .unwrap();
+        if result.is_error == Some(true) {
+            Err(result.content[0].as_text().unwrap().text.clone())
+        } else {
+            Ok(())
+        }
+    })
+    .await;
+    let guard = DaemonGuard(daemons(&socket));
+    client.cancel().await.unwrap();
+    assert!(child.wait().await.unwrap().success());
+    guard.stop().await;
 }

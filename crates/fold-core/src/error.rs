@@ -217,6 +217,7 @@ define_codes! {
     ACCOUNT_TOKEN_REJECTED = "account_token_rejected",
     DIRECTORY_OTHER_FILESYSTEM = "directory_other_filesystem",
     DATABASE_REPLACED = "database_replaced",
+    DAEMON_RESTARTING = "daemon_restarting",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

@@ -5,6 +5,7 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 | Code | What to do |
 | --- | --- |
 | `agent_not_registered` | Call `register_agent`. |
+| `daemon_restarting` | The daemon is not reachable now, such as during `fld restart`, and the session reconnects to it by itself as the same agent. Call the tool again in a few seconds. A call that ran when the daemon stopped may have finished: read its result before you repeat a write. |
 | `already_claimed` | Read the holder with `get_task` or `get_proposal`, and tell the lead. Stay within assigned work. For an unassigned session, choose other ready work; for a request, use `list_requests`. |
 | `dependency_cycle` | Call `get_task_graph` and remove the edge that closes the cycle. In a request draft, remove the edge between the cards. |
 | `not_approved` | Call `get_proposal`. The current version needs an approval. |

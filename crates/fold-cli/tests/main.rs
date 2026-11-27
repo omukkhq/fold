@@ -40,6 +40,7 @@ mod hook_stop;
 mod init;
 mod init_folder;
 mod log;
+mod mcp_relay;
 mod news;
 mod notify;
 mod remote;
