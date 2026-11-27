@@ -1,22 +1,25 @@
 use axum::Json;
 use axum::extract::{Path, State};
-use fold_core::CheckRunId;
 use fold_core::reviews::checks::{Outcome, RunReason, RunState, Stage};
-use serde::Serialize;
+use fold_core::{CheckRunId, TaskId};
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::super::Project;
-use super::super::error::{ApiError, ErrorEnvelope};
+use super::super::actor::Human;
+use super::super::error::{ApiError, ApiJson, ErrorEnvelope};
 use super::super::tasks::id;
 use super::service;
 use crate::daemon::AppState;
 pub use crate::live::CheckPurpose;
-use crate::services::reviews::checks::{CheckRunView, VersionRun};
+use crate::services::reviews::checks::{CancelTarget, CheckRunView, VersionRun};
 
 pub fn routes() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(get_check_run))
+    OpenApiRouter::new()
+        .routes(routes!(get_check_run))
+        .routes(routes!(cancel_check_runs))
 }
 
 /// When a check runs.
@@ -93,8 +96,10 @@ pub enum CheckRunReason {
     Superseded,
     /// fold itself could not run the checks; the integration can be asked again once the fault is fixed.
     FoldFailed,
-    /// A SIGKILL that fold did not send ended a required command, such as the kernel's OOM killer.
+    /// A signal that fold did not send ended a command, such as the kernel's OOM killer; no later command of the run started.
     Killed,
+    /// A worker, a lead, the main agent or a human cancelled the run; `checks.finished` names who.
+    Cancelled,
 }
 
 impl From<RunReason> for CheckRunReason {
@@ -110,6 +115,7 @@ impl From<RunReason> for CheckRunReason {
             RunReason::Superseded => Self::Superseded,
             RunReason::FoldFailed => Self::FoldFailed,
             RunReason::Killed => Self::Killed,
+            RunReason::Cancelled => Self::Cancelled,
         }
     }
 }
@@ -251,4 +257,72 @@ pub async fn get_check_run(
     let run: CheckRunId = id(&run)?;
     let view = service(&state, &project).get_check_run(run, true).await?;
     Ok(Json(view.into()))
+}
+
+/// The running check runs to cancel: give exactly one of `run`, `task` and `all`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CancelCheckRunsBody {
+    /// One running run, such as cr-4.
+    #[serde(default)]
+    #[schema(example = "cr-4")]
+    pub run: Option<String>,
+    /// A task, such as T-12: every running run of its task workspace and review checkouts.
+    #[serde(default)]
+    #[schema(example = "T-12")]
+    pub task: Option<String>,
+    /// True for every running run of the project.
+    #[serde(default)]
+    pub all: bool,
+}
+
+/// The runs a cancel ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct CancelledCheckRuns {
+    /// Each run that ended as failed with reason `cancelled`, oldest first; empty when the task or the project had no running run.
+    #[schema(example = json!(["cr-4"]))]
+    pub cancelled: Vec<String>,
+}
+
+/// Cancels running check runs: the running command's process group ends, no later command starts, and each run ends as failed with reason `cancelled`. Integration runs are not cancelled: a run id of one is `invalid_request` with `details.reason` `integration_run`, and `task` and `all` leave them out.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/check-runs/cancel",
+    operation_id = "cancel_check_runs",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+    ),
+    request_body = CancelCheckRunsBody,
+    responses(
+        (status = 200, description = "The cancelled runs", body = CancelledCheckRuns),
+        (status = 400, description = "`invalid_request`: not exactly one of `run`, `task` and `all`, or `details.reason` `integration_run`; or `invalid_id`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`check_run_not_found`, `task_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`check_run_ended`: the run ended before the cancel", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn cancel_check_runs(
+    State(state): State<AppState>,
+    human: Human,
+    project: Project,
+    ApiJson(body): ApiJson<CancelCheckRunsBody>,
+) -> Result<Json<CancelledCheckRuns>, ApiError> {
+    let target = match (body.run.as_deref(), body.task.as_deref(), body.all) {
+        (Some(run), None, false) => CancelTarget::Run(id::<CheckRunId>(run)?),
+        (None, Some(task), false) => CancelTarget::Task(id::<TaskId>(task)?),
+        (None, None, true) => CancelTarget::All,
+        _ => {
+            return Err(ApiError::invalid_request(
+                "give exactly one of run, task and all",
+            ));
+        }
+    };
+    let cancelled = service(&state, &project)
+        .cancel_check_runs(&human.actor(), target)
+        .await?;
+    Ok(Json(CancelledCheckRuns {
+        cancelled: cancelled.iter().map(ToString::to_string).collect(),
+    }))
 }

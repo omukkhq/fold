@@ -69,6 +69,7 @@ mod acceptance_55_a_reviewer_waits_parked_for_a_humans_answer;
 mod acceptance_56_setup_in_new_folders;
 mod acceptance_57_a_project_limits_its_parallel_check_runs;
 mod acceptance_58_a_new_main_session_takes_over;
+mod acceptance_59_cancel_a_check_run;
 mod acceptance_5_review_and_integrate;
 mod acceptance_60_watch_tasks_until_done;
 mod acceptance_6_dependency_unblocks;

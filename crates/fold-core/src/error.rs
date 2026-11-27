@@ -175,6 +175,8 @@ define_codes! {
     CHECKS_FILE_INVALID = "checks_file_invalid",
     CHECKS_RUNNING = "checks_running",
     CHECK_RUN_NOT_FOUND = "check_run_not_found",
+    CHECK_CANCEL_DENIED = "check_cancel_denied",
+    CHECK_RUN_ENDED = "check_run_ended",
     WORKER_CLAIM_DENIED = "worker_claim_denied",
     MAIN_AREA = "main_area",
     AGENT_SESSION_NOT_FOUND = "agent_session_not_found",

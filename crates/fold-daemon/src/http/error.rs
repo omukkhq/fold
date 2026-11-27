@@ -159,6 +159,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::TASK_ON_HOLD
         | codes::TASK_NEEDS_HUMAN => Some(StatusCode::CONFLICT),
         codes::CHECK_RUN_NOT_FOUND => Some(StatusCode::NOT_FOUND),
+        codes::CHECK_RUN_ENDED => Some(StatusCode::CONFLICT),
+        codes::CHECK_CANCEL_DENIED => Some(StatusCode::FORBIDDEN),
         codes::CHECKS_FILE_INVALID => Some(StatusCode::UNPROCESSABLE_ENTITY),
         codes::CHECKS_RUNNING | codes::PROJECT_WORKERS_RUNNING | codes::UPDATE_CHECKS_RUNNING => {
             Some(StatusCode::CONFLICT)
@@ -325,6 +327,8 @@ mod tests {
         for (code, status) in [
             (codes::NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::CHECK_RUN_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::CHECK_RUN_ENDED, StatusCode::CONFLICT),
+            (codes::CHECK_CANCEL_DENIED, StatusCode::FORBIDDEN),
             (codes::NOTIFY_TARGET_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::NOTIFY_SEND_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::INVALID_NOTIFY_TARGET, StatusCode::BAD_REQUEST),

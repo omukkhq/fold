@@ -159,6 +159,8 @@ file_not_editable
 checks_file_invalid
 checks_running
 check_run_not_found
+check_cancel_denied
+check_run_ended
 worker_claim_denied
 main_area
 agent_session_not_found

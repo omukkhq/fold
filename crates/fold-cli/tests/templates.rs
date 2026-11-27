@@ -90,7 +90,7 @@ fn skill_identifiers() -> BTreeSet<String> {
         .collect()
 }
 
-const FOLD_TOOLS: [&str; 103] = [
+const FOLD_TOOLS: [&str; 104] = [
     "register_agent",
     "list_agents",
     "define_area",
@@ -182,6 +182,7 @@ const FOLD_TOOLS: [&str; 103] = [
     "submit_review_fix",
     "run_checks",
     "get_check_run",
+    "cancel_check_run",
     "set_review_scope",
     "restart_worker",
     "mark_answered",
@@ -200,7 +201,7 @@ const FOLD_TOOLS: [&str; 103] = [
 const PENDING_TOOLS: [&str; 2] = ["watch_tasks", "unwatch_tasks"];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 190] = [
+const FOLD_ERROR_CODES: [&str; 192] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -357,6 +358,8 @@ const FOLD_ERROR_CODES: [&str; 190] = [
     "checks_file_invalid",
     "checks_running",
     "check_run_not_found",
+    "check_cancel_denied",
+    "check_run_ended",
     "worker_claim_denied",
     "main_area",
     "ask_not_open",

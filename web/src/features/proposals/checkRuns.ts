@@ -17,6 +17,7 @@ const REASONS: Record<CheckRunReason, string> = {
   fold_failed:
     "fold could not run the checks; the version keeps its place, so integrate again once the fault is fixed",
   killed: "a check was killed: out of memory or by a signal",
+  cancelled: "fold stopped the run because someone cancelled it.",
 };
 
 /** The sentence for why a run failed or stopped. */

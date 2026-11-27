@@ -382,6 +382,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/check-runs/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancels running check runs: the running command's process group ends, no later command starts, and each run ends as failed with reason `cancelled`. Integration runs are not cancelled: a run id of one is `invalid_request` with `details.reason` `integration_run`, and `task` and `all` leave them out. */
+        post: operations["cancel_check_runs"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/check-runs/{id}": {
         parameters: {
             query?: never;
@@ -2432,6 +2449,31 @@ export interface components {
         BoardView: {
             columns: components["schemas"]["BoardColumn"][];
         };
+        /** @description The running check runs to cancel: give exactly one of `run`, `task` and `all`. */
+        CancelCheckRunsBody: {
+            /** @description True for every running run of the project. */
+            all?: boolean;
+            /**
+             * @description One running run, such as cr-4.
+             * @example cr-4
+             */
+            run?: string | null;
+            /**
+             * @description A task, such as T-12: every running run of its task workspace and review checkouts.
+             * @example T-12
+             */
+            task?: string | null;
+        };
+        /** @description The runs a cancel ended. */
+        CancelledCheckRuns: {
+            /**
+             * @description Each run that ended as failed with reason `cancelled`, oldest first; empty when the task or the project had no running run.
+             * @example [
+             *       "cr-4"
+             *     ]
+             */
+            cancelled: string[];
+        };
         /** @description A check run in progress for a board card's task. */
         CardCheckRun: {
             /**
@@ -2549,7 +2591,7 @@ export interface components {
          * @description Why a run failed or stopped.
          * @enum {string}
          */
-        CheckRunReason: "check_failed" | "setup_failed" | "checks_file_invalid" | "files_changed" | "workspace_changed" | "refused" | "daemon_stopped" | "superseded" | "fold_failed" | "killed";
+        CheckRunReason: "check_failed" | "setup_failed" | "checks_file_invalid" | "files_changed" | "workspace_changed" | "refused" | "daemon_stopped" | "superseded" | "fold_failed" | "killed" | "cancelled";
         /**
          * @description Where a run stands.
          * @enum {string}
@@ -8571,6 +8613,96 @@ export interface operations {
                 };
             };
             /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    cancel_check_runs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelCheckRunsBody"];
+            };
+        };
+        responses: {
+            /** @description The cancelled runs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelledCheckRuns"];
+                };
+            };
+            /** @description `invalid_request`: not exactly one of `run`, `task` and `all`, or `details.reason` `integration_run`; or `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `check_run_not_found`, `task_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `check_run_ended`: the run ended before the cancel */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
             503: {
                 headers: {
                     [name: string]: unknown;

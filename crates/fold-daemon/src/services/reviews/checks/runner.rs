@@ -166,10 +166,54 @@ pub struct CheckRunner {
     memory_waits: Waits,
     /// The permits of each check with a `max_parallel`, by check name, with the limit they were made for.
     check_limits: CheckLimits,
+    /// The runs of the project that a cancel can reach, by run, each with the sender its run listens on.
+    cancels: Cancels,
     /// The folders whose `[setup]` runs, each with the receiver that turns true at its end.
     setups: Arc<Mutex<HashMap<WorkspaceId, tokio::sync::watch::Receiver<bool>>>>,
     /// The project's places for runs under `[runs] max_parallel_runs`.
     slots: Arc<RunSlots>,
+}
+
+type Cancels = Arc<Mutex<HashMap<CheckRunId, tokio::sync::oneshot::Sender<CancelRequest>>>>;
+
+/// A cancel of one run: who cancelled it, and the sender the run answers on once it has ended.
+#[derive(Debug)]
+pub(crate) struct CancelRequest {
+    pub by: fold_core::EventActor,
+    pub ended: tokio::sync::oneshot::Sender<()>,
+}
+
+/// The place of a run among the runs a cancel can reach, left when the run ends or is aborted.
+#[derive(Debug)]
+pub(crate) struct CancelWatch {
+    run: CheckRunId,
+    cancels: Cancels,
+    request: Option<tokio::sync::oneshot::Receiver<CancelRequest>>,
+}
+
+impl CancelWatch {
+    /// The next cancel of the run; it never resolves once the run's place is gone.
+    pub(crate) async fn next(&mut self) -> CancelRequest {
+        match self.request.as_mut() {
+            Some(request) => match request.await {
+                Ok(cancel) => {
+                    self.request = None;
+                    cancel
+                }
+                Err(_) => {
+                    self.request = None;
+                    std::future::pending().await
+                }
+            },
+            None => std::future::pending().await,
+        }
+    }
+}
+
+impl Drop for CancelWatch {
+    fn drop(&mut self) {
+        lock(&self.cancels).remove(&self.run);
+    }
 }
 
 /// A running setup of a folder: dropping it ends the wait of every check run of the folder.
@@ -402,9 +446,33 @@ impl CheckRunner {
             held: Arc::default(),
             memory_waits: Arc::default(),
             check_limits: Arc::default(),
+            cancels: Arc::default(),
             setups: Arc::default(),
             slots: Arc::default(),
         }
+    }
+
+    /// Makes `run` one that a cancel reaches until the watch is dropped.
+    pub(crate) fn watch_cancel(&self, run: CheckRunId) -> CancelWatch {
+        let (send, request) = tokio::sync::oneshot::channel();
+        lock(&self.cancels).insert(run, send);
+        CancelWatch {
+            run,
+            cancels: Arc::clone(&self.cancels),
+            request: Some(request),
+        }
+    }
+
+    /// Sends `request` to `run`; the request comes back when no running run of the project listens for it.
+    pub(crate) fn cancel(
+        &self,
+        run: CheckRunId,
+        request: CancelRequest,
+    ) -> Result<(), CancelRequest> {
+        let Some(send) = lock(&self.cancels).remove(&run) else {
+            return Err(request);
+        };
+        send.send(request)
     }
 
     /// Marks the setup of `workspace` as running until the returned guard drops.
@@ -670,8 +738,8 @@ pub struct CommandResult {
     pub log_bytes: u64,
     /// fold could not start the command or wait for it, so its failure is fold's and says nothing of the tree.
     pub fault: bool,
-    /// A SIGKILL that fold did not send ended the command, such as the kernel's OOM killer, so its failure says nothing of the tree either.
-    pub killed: bool,
+    /// The signal that ended the command when fold did not send it, such as the SIGKILL of the kernel's OOM killer, so its failure says nothing of the tree either.
+    pub killed: Option<i32>,
 }
 
 impl CommandResult {
@@ -731,7 +799,7 @@ pub async fn run_gated_commands(
     run_gated_commands_for(Some(gate), &nobody, dir, specs, limits, clock).await
 }
 
-/// Runs `specs` one after another in `dir`. A skipped check is not started; after a failed setup no check is started. Every command is a `sh -c` of its own in a process group of its own, registered for the peer checks while it runs: a process under it that calls fold acts as `owner` and never as a human.
+/// Runs `specs` one after another in `dir`. A skipped check is not started; after a failed setup, and after a command that a signal fold did not send ended, no command is started. Every command is a `sh -c` of its own in a process group of its own, registered for the peer checks while it runs: a process under it that calls fold acts as `owner` and never as a human.
 pub async fn run_commands_for(
     owner: &PeerWorker,
     dir: &Path,
@@ -752,7 +820,7 @@ pub async fn run_gated_commands_for(
     clock: &dyn Clock,
 ) -> Vec<CommandResult> {
     let mut results = Vec::with_capacity(specs.len());
-    let mut setup_failed = false;
+    let mut stopped = false;
     for spec in specs {
         let skipped = |outcome| CommandResult {
             check: spec.check.clone(),
@@ -763,9 +831,9 @@ pub async fn run_gated_commands_for(
             log: Vec::new(),
             log_bytes: 0,
             fault: false,
-            killed: false,
+            killed: None,
         };
-        if setup_failed {
+        if stopped {
             results.push(skipped(Outcome::NotRun));
             continue;
         }
@@ -801,7 +869,7 @@ pub async fn run_gated_commands_for(
             fault: ran.fault,
             killed: ran.killed,
         };
-        setup_failed = spec.check.is_none() && result.outcome.is_failure();
+        stopped = (spec.check.is_none() && result.outcome.is_failure()) || result.killed.is_some();
         results.push(result);
     }
     results
@@ -813,7 +881,7 @@ struct Ran {
     log: Vec<u8>,
     log_bytes: u64,
     fault: bool,
-    killed: bool,
+    killed: Option<i32>,
 }
 
 /// The end of a stream of output, at most `limit` bytes, and the size of the whole.
@@ -879,7 +947,7 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
                 log,
                 log_bytes,
                 fault: true,
-                killed: false,
+                killed: None,
             };
         }
     };
@@ -906,9 +974,9 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
                 } else {
                     Outcome::Failed
                 };
-                let killed = killed_by_sigkill(status);
-                if killed {
-                    note(&tail, KILLED_NOTE);
+                let killed = killed_by_signal(status);
+                if let Some(signal) = killed {
+                    note(&tail, &killed_note(signal));
                 }
                 (outcome, status.code(), false, killed)
             }
@@ -917,7 +985,7 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
                     &tail,
                     &format!("\nfold could not wait for the command: {}\n", error.kind()),
                 );
-                (Outcome::Failed, None, true, false)
+                (Outcome::Failed, None, true, None)
             }
             Err(_) => {
                 signal(group, rustix::process::Signal::TERM);
@@ -935,7 +1003,7 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
                         limits.timeout.as_secs()
                     ),
                 );
-                (Outcome::TimedOut, None, false, false)
+                (Outcome::TimedOut, None, false, None)
             }
         };
     drop(guard);
@@ -957,17 +1025,25 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
     }
 }
 
-/// The line a command's log ends with when a SIGKILL that fold did not send ended it.
-pub const KILLED_NOTE: &str = "\nkilled: out of memory or by a signal\n";
+/// The line a command's log ends with when a signal that fold did not send ended it.
+fn killed_note(signal: i32) -> String {
+    format!("\nkilled: out of memory or by a signal (signal {signal})\n")
+}
 
 /// The `oom_score_adj` of a check command's shell, which every process it starts inherits: the kernel's OOM killer ends a check before the daemon or a worker, whose score stays near 0.
 pub const CHECK_OOM_SCORE_ADJ: &str = "800";
 
-/// The command ended by SIGKILL: its shell, or the process the shell waited for last, which the shell reports as exit 137. fold sends SIGKILL only after a timeout, whose status this never reads, so this one came from the kernel's OOM killer or another process.
-fn killed_by_sigkill(status: std::process::ExitStatus) -> bool {
+/// The signal that ended the command: any signal that ended its shell, or a SIGKILL or SIGTERM that ended the process the shell waited for last, which the shell reports as exit 137 or 143. fold signals a command only after a timeout or at a cancel, whose status this never reads, so this one came from the kernel's OOM killer or another process.
+fn killed_by_signal(status: std::process::ExitStatus) -> Option<i32> {
     use std::os::unix::process::ExitStatusExt as _;
-    let kill = rustix::process::Signal::KILL.as_raw();
-    status.signal() == Some(kill) || status.code() == Some(128 + kill)
+    if let Some(signal) = status.signal() {
+        return Some(signal);
+    }
+    let code = status.code()?;
+    [rustix::process::Signal::KILL, rustix::process::Signal::TERM]
+        .into_iter()
+        .map(rustix::process::Signal::as_raw)
+        .find(|signal| code == 128 + signal)
 }
 
 /// Kills the command's process group when it is dropped: at the command's end, so what it left running, such as a server a test started, ends with it, and when a stopping daemon aborts the run, which `kill_on_drop` alone does only for the shell.
@@ -1497,29 +1573,84 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_command_that_a_sigkill_ended_is_killed_and_says_so() {
+    async fn a_command_that_an_outside_signal_ended_is_killed_and_says_so() {
         let dir = tempfile::tempdir().unwrap();
+        for (run, signal) in [
+            ("kill -KILL $$", 9),
+            ("sh -c 'kill -KILL $$'", 9),
+            ("kill -TERM $$", 15),
+            ("sh -c 'kill -TERM $$'", 15),
+            ("kill -INT $$", 2),
+        ] {
+            let results =
+                run_commands(dir.path(), vec![spec("killed", run)], quick(), &clock()).await;
+            let killed = &results[0];
+            assert_eq!(killed.outcome, Outcome::Failed, "{run}");
+            assert_eq!(killed.killed, Some(signal), "{run}");
+            assert!(!killed.fault);
+            assert!(
+                String::from_utf8_lossy(&killed.log).contains(&format!(
+                    "killed: out of memory or by a signal (signal {signal})"
+                )),
+                "{run}"
+            );
+        }
+        let results =
+            run_commands(dir.path(), vec![spec("red", "exit 1")], quick(), &clock()).await;
+        assert_eq!(results[0].killed, None);
+    }
+
+    #[tokio::test]
+    async fn no_command_starts_after_an_outside_signal_ended_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let optional = CommandSpec {
+            required: false,
+            ..spec("first", "kill -KILL $$")
+        };
         let results = run_commands(
             dir.path(),
-            vec![
-                spec("self", "kill -KILL $$"),
-                spec("child", "sh -c 'kill -KILL $$'"),
-                spec("red", "exit 1"),
-            ],
+            vec![optional, spec("later", "touch ran")],
             quick(),
             &clock(),
         )
         .await;
-        for killed in &results[..2] {
-            assert_eq!(killed.outcome, Outcome::Failed);
-            assert!(killed.killed, "{:?}", killed.check);
-            assert!(!killed.fault);
-            assert!(
-                String::from_utf8_lossy(&killed.log)
-                    .contains("killed: out of memory or by a signal")
-            );
-        }
-        assert!(!results[2].killed);
+        assert_eq!(results[0].killed, Some(9));
+        assert_eq!(results[1].outcome, Outcome::NotRun);
+        assert!(!dir.path().join("ran").exists());
+    }
+
+    #[tokio::test]
+    async fn a_cancel_reaches_a_watched_run_once_and_none_after_its_watch() {
+        let runner = CheckRunner::default();
+        let run = CheckRunId::from_number(3).unwrap();
+        let request = |ended| CancelRequest {
+            by: fold_core::EventActor::fold(),
+            ended,
+        };
+        let (ended, _) = tokio::sync::oneshot::channel();
+        assert!(
+            runner.cancel(run, request(ended)).is_err(),
+            "nothing watches"
+        );
+        let mut watch = runner.watch_cancel(run);
+        let (ended, answer) = tokio::sync::oneshot::channel();
+        runner.cancel(run, request(ended)).unwrap();
+        let got = tokio::time::timeout(Duration::from_secs(5), watch.next())
+            .await
+            .unwrap();
+        got.ended.send(()).unwrap();
+        answer.await.unwrap();
+        let (ended, _) = tokio::sync::oneshot::channel();
+        assert!(
+            runner.cancel(run, request(ended)).is_err(),
+            "a run is cancelled once"
+        );
+        let again = tokio::time::timeout(Duration::from_millis(50), watch.next()).await;
+        assert!(again.is_err(), "a used watch never resolves again");
+        drop(watch);
+        let _other = runner.watch_cancel(CheckRunId::from_number(4).unwrap());
+        let (ended, _) = tokio::sync::oneshot::channel();
+        assert!(runner.cancel(run, request(ended)).is_err());
     }
 
     #[tokio::test]
@@ -1538,7 +1669,7 @@ mod tests {
         )
         .await;
         assert_eq!(results[0].outcome, Outcome::TimedOut);
-        assert!(!results[0].killed);
+        assert_eq!(results[0].killed, None);
     }
 
     #[test]

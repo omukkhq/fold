@@ -24,13 +24,16 @@ use crate::services::messages::send_from_fold_in_tx;
 use crate::services::tasks::{TaskError, closed_refusal, proposal_kind_refusal, task_not_found};
 use crate::services::workspaces::ProposalSnapshot;
 
+mod cancel;
 mod integration;
 pub mod memory;
 mod runner;
 mod setup;
 
+pub use cancel::CancelTarget;
 pub(crate) use integration::{Integrating, IntegrationChecks, PassedRun, fold_failed_refusal};
 pub(crate) use runner::HeldRequest;
+pub(super) use runner::{CancelRequest, CancelWatch};
 pub use runner::{
     CheckPermits, CheckRunner, CheckSettings, CommandResult, CommandSpec, LOG_LIMIT, MEMORY_TICK,
     RunGate, RunLimits, SlotTicket, commands, run_commands, run_commands_for, run_gated_commands,
@@ -93,12 +96,9 @@ impl Verdict {
         }
     }
 
-    /// From the commands' results alone: a blocking command that a SIGKILL ended, then a blocking setup failure, then a blocking check failure, else a pass.
+    /// From the commands' results alone: a command that a signal fold did not send ended, then a blocking setup failure, then a blocking check failure, else a pass. A killed command fails the run even when it is not required, because no later command of the run started.
     pub(super) fn of(results: &[CommandResult]) -> Self {
-        if results
-            .iter()
-            .any(|result| result.killed && result.blocks())
-        {
+        if results.iter().any(|result| result.killed.is_some()) {
             return Self::failed(RunReason::Killed);
         }
         if results
@@ -356,7 +356,7 @@ impl ReviewService {
         Ok(run)
     }
 
-    /// Runs the commands of `run` in the background and ends it. The run waits for its place under `[runs] max_parallel_runs` first and holds it until it ends.
+    /// Runs the commands of `run` in the background and ends it. A cancel reaches the run from here on, also while it waits for its place under `[runs] max_parallel_runs`, which it holds until it ends, or for the `[setup]` of its folder.
     pub(super) fn spawn_proposal_run(
         &self,
         run: CheckRunRow,
@@ -365,27 +365,33 @@ impl ReviewService {
         ticket: SlotTicket,
     ) {
         let service = self.clone();
+        let cancel = self.checks.watch_cancel(run.id);
         self.checks.spawn(async move {
             let id = run.id;
-            ticket.ready().await;
-            if let Some(workspace) = run.workspace {
-                service.checks.setup_finished(workspace).await;
-            }
-            if let Err(error) = service.complete_proposal_run(run, job, actor).await {
+            if let Err(error) = service
+                .complete_proposal_run(run, job, actor, cancel, ticket)
+                .await
+            {
                 tracing::warn!(run = %id, code = error.log_code(), "a check run could not end; the next start of the daemon ends it as stopped");
             }
         });
     }
 
-    /// Takes a machine-wide permit, runs the commands in the workspace and snapshots it again. The run fails when the snapshot differs from the checked tree, or when the workspace was replaced, synced or restored meanwhile. A scan of the live state that finds an edit of a tracked file meanwhile ends the run at once, without waiting for its commands, once a snapshot confirms it. A passed run of a proposal command then makes its version; a run whose command is refused by then, such as a claim that was taken over, ends as stopped with the refusal in its message.
+    /// Takes a machine-wide permit, runs the commands in the workspace and snapshots it again. The run fails when the snapshot differs from the checked tree, or when the workspace was replaced, synced or restored meanwhile. A scan of the live state that finds an edit of a tracked file meanwhile ends the run at once, without waiting for its commands, once a snapshot confirms it, and so does a cancel. A passed run of a proposal command then makes its version; a run whose command is refused by then, such as a claim that was taken over, ends as stopped with the refusal in its message.
     async fn complete_proposal_run(
         &self,
         run: CheckRunRow,
         job: GateJob,
         actor: Actor,
+        mut cancel: CancelWatch,
+        ticket: SlotTicket,
     ) -> Result<(), ReviewError> {
+        let current = checks::get_run(self.store.read(), run.id).await?;
+        if current.is_none_or(|row| row.state != RunState::Running) {
+            return Ok(());
+        }
         if run.purpose == Purpose::ReviewFix {
-            return self.complete_fix_run(run, job, actor).await;
+            return self.complete_fix_run(run, job, actor, cancel, ticket).await;
         }
         let workspace = run
             .workspace
@@ -395,6 +401,8 @@ impl ReviewService {
             .ok_or(StoreError::Corrupt("check_runs.workspace_id"))?;
         let edits = self.workspaces.watch_edits(workspace);
         let commands = async {
+            ticket.ready().await;
+            self.checks.setup_finished(workspace).await;
             let permit = self.checks.start_permit(run.id, &*self.clock).await;
             let dir = self.workspaces.workspace_dir(&row);
             let owner = self
@@ -413,9 +421,13 @@ impl ReviewService {
             drop(permit);
             results
         };
-        let results = match self.until_first_edit(&run, edits, commands).await? {
+        let results = match self
+            .until_first_edit(&run, edits, &mut cancel, commands)
+            .await?
+        {
             Ran::Ended(results) => results,
             Ran::Edited(path) => return self.end_edited_run(&run, &path).await,
+            Ran::Cancelled(request) => return self.end_on_cancel(&run, request).await,
         };
         let (mut verdict, checked) = self.recheck_workspace(&run, &results).await?;
         let mut refused = None;
@@ -449,24 +461,24 @@ impl ReviewService {
             .await
     }
 
-    /// The results of `commands`, unless a scan finds an edit first and a snapshot of the workspace then differs from the checked tree: the commands are dropped, which kills their process groups, and the edited path is returned. An edit the snapshot does not confirm, such as a scan of a write made before the run's snapshot, and a workspace that could not be snapshotted or was synced or restored leave the commands running, so the end of the run decides them as before.
-    async fn until_first_edit(
+    /// The results of `commands`, unless a cancel comes first, or a scan finds an edit first and a snapshot of the workspace then differs from the checked tree: the commands are dropped, which kills their process groups or ends their wait for a permit, and the cancel or the edited path is returned. An edit the snapshot does not confirm, such as a scan of a write made before the run's snapshot, and a workspace that could not be snapshotted or was synced or restored leave the commands running, so the end of the run decides them as before.
+    pub(super) async fn until_first_edit(
         &self,
         run: &CheckRunRow,
-        edits: Option<crate::live::EditWatch>,
+        mut edits: Option<crate::live::EditWatch>,
+        cancel: &mut CancelWatch,
         commands: impl Future<Output = Vec<CommandResult>>,
     ) -> Result<Ran, ReviewError> {
-        let Some(mut edits) = edits else {
-            return Ok(Ran::Ended(commands.await));
-        };
         let mut commands = std::pin::pin!(commands);
         loop {
             let path = tokio::select! {
                 results = &mut commands => return Ok(Ran::Ended(results)),
-                path = edits.next() => path,
+                request = cancel.next() => return Ok(Ran::Cancelled(request)),
+                path = next_edit(&mut edits) => path,
             };
             let Some(path) = path else {
-                return Ok(Ran::Ended(commands.await));
+                edits = None;
+                continue;
             };
             let (verdict, checked) = self.recheck_workspace(run, &[]).await?;
             drop(checked);
@@ -477,20 +489,67 @@ impl ReviewService {
         }
     }
 
-    /// One write transaction: the end of a run that an edit stopped as `files_changed`, without results, with the changed path in `checks.finished`, and the result message to the requesting worker.
-    async fn end_edited_run(&self, run: &CheckRunRow, path: &str) -> Result<(), ReviewError> {
-        let verdict = Verdict::failed(RunReason::FilesChanged);
-        let now = self.clock.now();
+    /// The end of a run that an edit stopped as `files_changed`, with the changed path in `checks.finished`.
+    pub(super) async fn end_edited_run(
+        &self,
+        run: &CheckRunRow,
+        path: &str,
+    ) -> Result<(), ReviewError> {
         let extra = json!({ "path": path });
+        self.end_cut_run(
+            run,
+            RunReason::FilesChanged,
+            &extra,
+            &edited_message(run, path),
+        )
+        .await
+    }
+
+    /// The end of a run that `by` cancelled, as `cancelled` with `by` in `checks.finished`; the commands were dropped before.
+    pub(super) async fn end_cancelled_run(
+        &self,
+        run: &CheckRunRow,
+        by: &EventActor,
+    ) -> Result<(), ReviewError> {
+        let extra = json!({ "by": by.as_str() });
+        self.end_cut_run(
+            run,
+            RunReason::Cancelled,
+            &extra,
+            &cancelled_message(run, by),
+        )
+        .await
+    }
+
+    /// [`ReviewService::end_cancelled_run`] of `request`, which hears once the run has ended, whether this end wrote it or not.
+    pub(super) async fn end_on_cancel(
+        &self,
+        run: &CheckRunRow,
+        request: CancelRequest,
+    ) -> Result<(), ReviewError> {
+        let ended = self.end_cancelled_run(run, &request.by).await;
+        let _ = request.ended.send(());
+        ended
+    }
+
+    /// One write transaction: the end of a run cut short before its commands ended, failed with `reason`, without results, with `extra` in `checks.finished`, and `body` to the requesting worker.
+    async fn end_cut_run(
+        &self,
+        run: &CheckRunRow,
+        reason: RunReason,
+        extra: &serde_json::Value,
+        body: &str,
+    ) -> Result<(), ReviewError> {
+        let verdict = Verdict::failed(reason);
+        let now = self.clock.now();
         let mut buffer = EventBuffer::new();
         let ended = self
             .store
             .write(async |tx| {
-                if !end_run_with_in_tx(tx, &mut buffer, run, &[], verdict, &extra, now).await? {
+                if !end_run_with_in_tx(tx, &mut buffer, run, &[], verdict, extra, now).await? {
                     return Ok(false);
                 }
-                let body = edited_message(run, path);
-                tell_requester(tx, &mut buffer, run, &body, now).await?;
+                tell_requester(tx, &mut buffer, run, body, now).await?;
                 Ok::<_, ReviewError>(true)
             })
             .await?;
@@ -671,11 +730,21 @@ impl ReviewService {
     }
 }
 
-/// How the commands of a task workspace's run ended.
-enum Ran {
+/// How the commands of a proposal-stage run ended.
+pub(super) enum Ran {
     Ended(Vec<CommandResult>),
     /// The edit of this path stopped the run before its commands ended.
     Edited(String),
+    /// A cancel stopped the run before its commands ended.
+    Cancelled(CancelRequest),
+}
+
+/// The next edit path of `edits`; it never resolves without a watch.
+async fn next_edit(edits: &mut Option<crate::live::EditWatch>) -> Option<String> {
+    match edits {
+        Some(edits) => edits.next().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// A running run that makes the next version of a proposal when its checks pass: the author's update (`update_proposal`) or a reviewer's fix (`review_fix`). It has no version until then.
@@ -957,8 +1026,8 @@ pub(super) fn result_message(
             let what = match reason {
                 RunReason::SetupFailed => "the setup failed, so no check ran".to_owned(),
                 RunReason::Killed => format!(
-                    "{} killed: out of memory or by a signal, not a test failure; run the checks again when the machine has free memory",
-                    failed.join(", ")
+                    "{} killed: out of memory or by a signal, not a test failure, so no later check ran; run the checks again when the machine has free memory",
+                    killed_names(results).join(", ")
                 ),
                 _ => failed.join(", "),
             };
@@ -981,6 +1050,38 @@ pub(super) fn result_message(
             text
         }
     }
+}
+
+/// The name of each command that a signal fold did not send ended, with the signal.
+fn killed_names(results: &[CommandResult]) -> Vec<String> {
+    results
+        .iter()
+        .filter_map(|result| {
+            let signal = result.killed?;
+            let name = result.check.as_deref().unwrap_or("setup");
+            Some(format!("{name} (signal {signal})"))
+        })
+        .collect()
+}
+
+/// The result message of a run that `by` cancelled before its commands ended.
+fn cancelled_message(run: &CheckRunRow, by: &EventActor) -> String {
+    let mut text = format!(
+        "The checks of {} ({}) were cancelled by {}: fold stopped the running command and started no later check.",
+        run.task,
+        run.id,
+        by.as_str()
+    );
+    if let Some(gate) = gate_sentence(run) {
+        text.push(' ');
+        text.push_str(&gate);
+    } else {
+        text.push_str(&format!(
+            " Call {} again when you need a result.",
+            again_tool(run.purpose)
+        ));
+    }
+    text
 }
 
 /// The result message of a run that the edit of `path` stopped before its commands ended.
@@ -1102,7 +1203,7 @@ pub async fn recover_check_runs(
     Ok(ended)
 }
 
-fn run_not_found(run: CheckRunId) -> ReviewError {
+pub(super) fn run_not_found(run: CheckRunId) -> ReviewError {
     FoldError::new(codes::CHECK_RUN_NOT_FOUND, format!("{run} does not exist"))
         .with_details([("run", json!(run.to_string()))])
         .with_hint("call get_proposal to see the check runs of a proposal")
@@ -1153,7 +1254,7 @@ mod tests {
             log: b"line 1\nline 2\nboom\n".to_vec(),
             log_bytes: 19,
             fault: false,
-            killed: false,
+            killed: None,
         }
     }
 
@@ -1199,7 +1300,7 @@ mod tests {
         );
         assert_eq!(Verdict::of(&[]), Verdict::passed());
         let killed = CommandResult {
-            killed: true,
+            killed: Some(9),
             ..result(Some("test"), Outcome::Failed, true)
         };
         let red = result(Some("lint"), Outcome::Failed, true);
@@ -1211,7 +1312,32 @@ mod tests {
             required: false,
             ..killed
         };
-        assert_eq!(Verdict::of(&[optional]), Verdict::passed());
+        assert_eq!(
+            Verdict::of(std::slice::from_ref(&optional)),
+            Verdict::failed(RunReason::Killed),
+            "no later command ran"
+        );
+        let text = result_message(&run(), &[optional], Verdict::failed(RunReason::Killed));
+        assert!(text.contains("test (signal 9) killed"), "{text}");
+    }
+
+    #[test]
+    fn a_cancel_message_names_who_cancelled_and_how_to_ask_again() {
+        let by = EventActor::human(&fold_core::HumanName::parse("ana").unwrap());
+        let text = cancelled_message(&run(), &by);
+        assert!(
+            text.starts_with("The checks of T-12 (cr-4) were cancelled by human:ana"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("Call run_checks again when you need a result."),
+            "{text}"
+        );
+        let gated = CheckRunRow {
+            purpose: Purpose::CreateProposal,
+            ..run()
+        };
+        assert!(cancelled_message(&gated, &by).contains("call create_proposal again"));
     }
 
     #[test]

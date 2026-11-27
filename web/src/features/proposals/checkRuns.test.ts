@@ -78,6 +78,7 @@ describe("reasonText", () => {
       "superseded",
       "fold_failed",
       "killed",
+      "cancelled",
     ] as const) {
       expect(reasonText(reason)).not.toBe("");
     }

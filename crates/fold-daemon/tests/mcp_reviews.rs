@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 /// The fixed count always puts the unread part on the footer line; real counts can add to it.
 const FOOTER: &str = "fold: ";
 
-const REVIEW_TOOLS: [&str; 18] = [
+const REVIEW_TOOLS: [&str; 19] = [
     "create_proposal",
     "list_proposals",
     "get_proposal",
@@ -38,6 +38,7 @@ const REVIEW_TOOLS: [&str; 18] = [
     "submit_review_fix",
     "run_checks",
     "get_check_run",
+    "cancel_check_run",
     "set_review_scope",
 ];
 

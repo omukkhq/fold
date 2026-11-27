@@ -101,7 +101,7 @@ impl ReviewService {
                     log_bytes: message.len() as u64,
                     log: message,
                     fault: false,
-                    killed: false,
+                    killed: None,
                 };
                 let verdict = Verdict::failed(RunReason::ChecksFileInvalid);
                 if at.batch.is_some() {
@@ -666,7 +666,7 @@ mod tests {
             log: b"step 1\nboom\n".to_vec(),
             log_bytes: 12,
             fault: false,
-            killed: false,
+            killed: None,
         }];
         let text = send_back_message(at, &run, &results, Verdict::failed(RunReason::CheckFailed));
         assert!(text.starts_with(

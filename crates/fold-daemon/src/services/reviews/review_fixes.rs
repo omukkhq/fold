@@ -18,8 +18,8 @@ use fold_store::{StoreError, WriteTx};
 use serde_json::json;
 
 use super::checks::{
-    FixJob, GateDecision, GateJob, NewProposalRun, Verdict, Waiting, end_run_in_tx,
-    insert_proposal_run, is_refusal, run_gated_commands_for, tell_requester,
+    CancelWatch, FixJob, GateDecision, GateJob, NewProposalRun, Ran, SlotTicket, Verdict, Waiting,
+    end_run_in_tx, insert_proposal_run, is_refusal, run_gated_commands_for, tell_requester,
 };
 use super::human_edits::{busy, current_version, idle_checks};
 use super::proposals::{ProposalDetail, mark_checks_change, require_open, usable_workspace};
@@ -270,6 +270,8 @@ impl ReviewService {
         run: CheckRunRow,
         job: GateJob,
         actor: Actor,
+        mut cancel: CancelWatch,
+        ticket: SlotTicket,
     ) -> Result<(), ReviewError> {
         let fix = job.fix.ok_or(StoreError::Corrupt("check_runs.purpose"))?;
         let proposal = run
@@ -278,22 +280,37 @@ impl ReviewService {
         let checkout = workspaces::get_workspace(self.store.read(), fix.checkout)
             .await?
             .ok_or(StoreError::Corrupt("check_runs.workspace_id"))?;
-        let permit = self.checks.start_permit(run.id, &*self.clock).await;
-        let dir = self.workspaces.workspace_dir(&checkout);
-        let owner = self
-            .checks
-            .owner(run.worker.as_ref().map(fold_core::WorkerName::agent));
-        let results = run_gated_commands_for(
-            Some(&self.checks.gate(run.id)),
-            &owner,
-            &dir,
-            job.specs.clone(),
-            self.checks.limits(),
-            &*self.clock,
-        )
-        .instrument(tracing::info_span!("check_run", run = %run.id))
-        .await;
-        drop(permit);
+        let commands = async {
+            ticket.ready().await;
+            if let Some(workspace) = run.workspace {
+                self.checks.setup_finished(workspace).await;
+            }
+            let permit = self.checks.start_permit(run.id, &*self.clock).await;
+            let dir = self.workspaces.workspace_dir(&checkout);
+            let owner = self
+                .checks
+                .owner(run.worker.as_ref().map(fold_core::WorkerName::agent));
+            let results = run_gated_commands_for(
+                Some(&self.checks.gate(run.id)),
+                &owner,
+                &dir,
+                job.specs.clone(),
+                self.checks.limits(),
+                &*self.clock,
+            )
+            .instrument(tracing::info_span!("check_run", run = %run.id))
+            .await;
+            drop(permit);
+            results
+        };
+        let results = match self
+            .until_first_edit(&run, None, &mut cancel, commands)
+            .await?
+        {
+            Ran::Ended(results) => results,
+            Ran::Edited(path) => return self.end_edited_run(&run, &path).await,
+            Ran::Cancelled(request) => return self.end_on_cancel(&run, request).await,
+        };
         let mut verdict = Verdict::of(&results);
         let live = workspaces::live_task_workspace(self.store.read(), run.task).await?;
         let snapshot = match live {

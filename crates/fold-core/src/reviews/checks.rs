@@ -87,8 +87,10 @@ define_names!(
         Superseded = "superseded",
         /// fold itself could not run the checks, such as when its check directory could not take the tree or a command could not start: the run says nothing of the change, and the integration can be asked again once the fault is fixed.
         FoldFailed = "fold_failed",
-        /// A SIGKILL that fold did not send ended a required command, as the kernel's OOM killer does when the machine runs out of memory: the run says nothing of the change.
+        /// A signal that fold did not send ended a command, as the kernel's OOM killer does when the machine runs out of memory: no later command of the run starts, and the run says nothing of the change.
         Killed = "killed",
+        /// A worker, a lead, the main agent or a human cancelled the run: fold ended its running command's process group and started no later command.
+        Cancelled = "cancelled",
     }
 );
 

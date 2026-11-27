@@ -9,10 +9,11 @@ use super::super::error::from_review;
 use super::super::parse;
 use super::{id, task_id, version};
 use crate::services::reviews::ReviewService;
-use crate::services::reviews::checks::{CheckRunView, RUN_SLOT, Started, log_tail};
+use crate::services::reviews::checks::{CancelTarget, CheckRunView, RUN_SLOT, Started, log_tail};
 
 pub const RUN_CHECKS: &str = "run_checks";
 pub const GET_CHECK_RUN: &str = "get_check_run";
+pub const CANCEL_CHECK_RUN: &str = "cancel_check_run";
 
 /// The most lines of a failed result's log that `get_check_run` returns.
 const RESULT_TAIL_LINES: usize = 200;
@@ -34,6 +35,13 @@ pub struct GetCheckRunInput {
     pub run: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct CancelCheckRunInput {
+    /// The running check run to cancel, such as cr-4, from run_checks, a result message or get_proposal.
+    pub run: String,
+}
+
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
@@ -45,6 +53,11 @@ pub fn tools() -> Vec<Tool> {
             GET_CHECK_RUN,
             "Read one check run: its stage, state and reason, and each command's outcome, exit code and duration, with the end of the log of each command that failed. A running run with waiting_for memory holds its permit and waits until the machine has enough free memory to start its commands; with waiting_for check, it waits before the command of waiting_check until fewer runs than that check's max_parallel run it; with waiting_for run_slot, it waits at position (1 is next) until fewer runs of the project than [runs] max_parallel_runs of fold-checks.toml run.",
             schema_for_type::<GetCheckRunInput>(),
+        ),
+        Tool::new(
+            CANCEL_CHECK_RUN,
+            "Cancel a running check run: fold ends the process group of its running command, or its wait for memory or a run slot, starts no later check, and ends the run as failed with reason cancelled. The worker that asked for the run gets fold's message as for any end. The worker that asked for the run, the lead of its task's area and the main agent may cancel it; others get check_cancel_denied. A run that ended first gives check_run_ended, and an integration run is not cancelled.",
+            schema_for_type::<CancelCheckRunInput>(),
         ),
     ]
 }
@@ -59,6 +72,7 @@ pub async fn run(
     let value = match tool {
         RUN_CHECKS => run_checks(reviews, actor, arguments).await?,
         GET_CHECK_RUN => get_check_run(reviews, arguments).await?,
+        CANCEL_CHECK_RUN => cancel_check_run(reviews, actor, arguments).await?,
         _ => return Ok(None),
     };
     Ok(Some(value))
@@ -90,6 +104,23 @@ pub fn started_json(task: fold_core::TaskId, started: Started) -> Value {
         }),
         Started::NoChecks => json!({"task": task, "checks": "none"}),
     }
+}
+
+async fn cancel_check_run(
+    reviews: &ReviewService,
+    actor: &Actor,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: CancelCheckRunInput = parse(arguments)?;
+    let run: CheckRunId = id(
+        &input.run,
+        "pass a check run id such as cr-4; get_proposal lists the runs of a proposal",
+    )?;
+    reviews
+        .cancel_check_runs(actor, CancelTarget::Run(run))
+        .await
+        .map_err(from_review)?;
+    Ok(json!({"run": run, "state": "failed", "reason": "cancelled"}))
 }
 
 async fn get_check_run(
