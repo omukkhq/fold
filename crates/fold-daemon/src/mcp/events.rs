@@ -219,10 +219,20 @@ pub async fn wait_for_events(
         .await
         .map_err(from_events)?;
     let progress = context.meta.get_progress_token();
+    let agent = worker.name.agent();
+    let work_done = server.agents.until_work_done(&agent);
+    tokio::pin!(work_done);
     loop {
         let step = tokio::select! {
             step = waiter.next() => step.map_err(from_events)?,
             () = context.ct.cancelled() => return Ok(json!({"cancelled": true})),
+            // fold stops a finished worker once its turn ends, so the wait returns rather than hold the turn open.
+            () = &mut work_done => {
+                return Ok(json!({
+                    "work_done": true,
+                    "hint": "your work is done and fold stops you once this turn ends: end your turn",
+                }));
+            }
         };
         match step {
             WaitStep::Events(page) => {

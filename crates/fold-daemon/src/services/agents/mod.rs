@@ -491,6 +491,14 @@ impl AgentService {
         Ok(())
     }
 
+    /// Returns once fold waits to stop the worker of `agent` because its work is done; never without a supervisor.
+    pub async fn until_work_done(&self, agent: &AgentName) {
+        match &self.workers {
+            Some(supervisor) => supervisor.until_finishing(agent).await,
+            None => std::future::pending::<()>().await,
+        }
+    }
+
     /// Ends every session still open at daemon start, because no adapter survives a restart. Returns how many sessions it ended.
     pub async fn close_orphan_sessions(&self) -> Result<u64, AgentError> {
         self.close_open_sessions("daemon_restart").await

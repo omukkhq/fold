@@ -301,6 +301,105 @@ async fn a_task_worker_stops_once_its_task_has_an_open_proposal() {
     assert!(!harness.handle.workers.is_running(&name("web-worker")));
 }
 
+/// A task worker `web-worker` of `T-1` whose first turn runs one tool call that waits until the file `gate` exists or its process has ended, started by `web-lead`, with its call open and its workspace of `T-1` ready.
+async fn a_worker_inside_a_call(
+    gate: &std::path::Path,
+) -> (FakeClaude, Harness, crate::common::acceptance::Work) {
+    let fake = FakeClaude::new("bash_call").running_tool_scripts();
+    fake.set_tool_script(&format!(
+        "[ \"$FOLD_AGENT\" = web-worker ] || exit 0\nparent=$PPID\nwhile [ ! -e '{}' ] && kill -0 \"$parent\" 2>/dev/null; do sleep 0.05; done\n",
+        gate.display()
+    ));
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    let streams = harness.handle.workers.worker_streams();
+    eventually(WAIT, async || {
+        match streams
+            .facts(&name("web-worker"))
+            .and_then(|facts| facts.open_call)
+        {
+            Some(_) => Ok(()),
+            None => Err(()),
+        }
+    })
+    .await;
+    harness.connect("web-worker").await;
+    let work = harness.start_work("web-worker", "T-1").await;
+    std::fs::write(work.dir.join("page.html"), "<p>page</p>\n").unwrap();
+    (fake, harness, work)
+}
+
+#[tokio::test]
+async fn a_task_worker_whose_proposal_ends_its_work_gets_the_calls_result_before_its_stop() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let gate = dir.path().join("gate");
+    let (fake, harness, work) = a_worker_inside_a_call(&gate).await;
+    harness.propose("web-worker", &work, "Draw the page").await;
+    assert_eq!(
+        worker(&harness, "web-worker").await.state,
+        WorkerState::Working,
+        "the stop waits while the call is open"
+    );
+    std::fs::write(&gate, "").unwrap();
+    let stopped = until_state(&harness, "web-worker", WorkerState::Stopped).await;
+    assert_eq!(stopped.exit_code, Some(0));
+    assert_eq!(stopped.turns, 1, "the turn ended with its result");
+    assert_eq!(stopped.last_error, None);
+    let run = fake.runs_of("web-worker").pop().unwrap();
+    assert!(
+        run.stdin.iter().all(|line| !line.contains("\"interrupt\"")),
+        "no interrupt ended the call: {:?}",
+        run.stdin
+    );
+}
+
+#[tokio::test]
+async fn a_finished_workers_wait_for_events_returns_at_once_so_its_turn_can_end() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let (_fake, harness, work) = a_worker_inside_a_call(&dir.path().join("gate")).await;
+    harness.propose("web-worker", &work, "Draw the page").await;
+    harness
+        .call("web-worker", "get_events", json!({"limit": 500}))
+        .await;
+    let waited = tokio::time::timeout(
+        WAIT,
+        harness.call("web-worker", "wait_for_events", json!({"timeout_s": 1500})),
+    )
+    .await
+    .expect("the wait of a finished worker returns before its timeout");
+    assert_eq!(waited["work_done"], true, "{waited}");
+}
+
+#[tokio::test]
+async fn a_finished_worker_whose_call_never_returns_is_stopped_after_the_grace_limit() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let (_fake, harness, work) = a_worker_inside_a_call(&dir.path().join("gate")).await;
+    let clock = harness.project.clock().clone();
+    let proposed = clock.now();
+    harness.propose("web-worker", &work, "Draw the page").await;
+    let stopped = eventually(WAIT, async || {
+        let row = worker(&harness, "web-worker").await;
+        if row.state == WorkerState::Stopped {
+            Ok(row)
+        } else {
+            clock.advance(Duration::from_secs(5)).unwrap();
+            Err(row.state)
+        }
+    })
+    .await;
+    let waited = stopped.stopped_at.unwrap().as_millis() - proposed.as_millis();
+    assert!(waited >= 120_000, "stopped after {waited} ms");
+}
+
 #[tokio::test]
 async fn a_task_worker_stops_when_its_last_proposal_opens_after_an_earlier_one_integrated() {
     let fake = FakeClaude::new("result");

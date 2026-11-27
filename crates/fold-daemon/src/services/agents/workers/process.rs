@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -246,6 +246,8 @@ struct Inner {
     windows: Mutex<HashMap<String, u64>>,
     /// The groups in which a daemon start runs the project's workers again, shared with every project of the daemon.
     groups: Mutex<ResumeGroups>,
+    /// The finished workers whose stop waits for their turn to end; a `wait_for_events` of one of them returns at once.
+    finishing: tokio::sync::watch::Sender<BTreeSet<AgentName>>,
 }
 
 impl Drop for Inner {
@@ -319,6 +321,7 @@ impl Supervisor {
                 owed: Mutex::default(),
                 windows: Mutex::default(),
                 groups: Mutex::default(),
+                finishing: tokio::sync::watch::Sender::new(BTreeSet::new()),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();
@@ -380,6 +383,14 @@ impl Supervisor {
     /// The tool calls of the project's workers that can write files, as their output tells them.
     pub fn tool_windows(&self) -> Arc<ToolWindows> {
         self.inner.tool_windows.clone()
+    }
+
+    /// Returns once fold waits to stop `agent` as a finished worker, until its turn ends; it never returns for a worker fold does not stop so.
+    pub async fn until_finishing(&self, agent: &AgentName) {
+        let mut finishing = self.inner.finishing.subscribe();
+        if finishing.wait_for(|set| set.contains(agent)).await.is_err() {
+            std::future::pending::<()>().await;
+        }
     }
 
     /// The output of the project's running worker processes, as the stall rule reads it.
