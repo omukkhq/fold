@@ -22,28 +22,28 @@ use tokio::net::UnixListener;
 use tower::ServiceExt as _;
 
 #[cfg(test)]
-const WAIT: Duration = Duration::from_secs(10);
+pub(crate) const WAIT: Duration = Duration::from_secs(10);
 
 #[cfg(test)]
-type Client = RunningService<RoleClient, ()>;
+pub(crate) type Client = RunningService<RoleClient, ()>;
 
 #[cfg(test)]
-type Rest = (BufReader<ReadHalf<DuplexStream>>, WriteHalf<DuplexStream>);
+pub(crate) type Rest = (BufReader<ReadHalf<DuplexStream>>, WriteHalf<DuplexStream>);
 
 /// A started daemon with one registered project, `app`.
 #[cfg(test)]
-struct Host {
+pub(crate) struct Host {
     _dir: TempDir,
     _project: TestProject,
-    root: PathBuf,
-    daemon: RunningDaemon,
+    pub(crate) root: PathBuf,
+    pub(crate) daemon: RunningDaemon,
     config: DaemonConfig,
-    clock: ManualClock,
+    pub(crate) clock: ManualClock,
 }
 
 #[cfg(test)]
 impl Host {
-    async fn start() -> Self {
+    pub(crate) async fn start() -> Self {
         let dir = TempDir::new().unwrap();
         let config = DaemonConfig {
             listen: "127.0.0.1:0".parse().unwrap(),
@@ -107,11 +107,11 @@ impl Host {
         }
     }
 
-    fn state(&self) -> AppState {
+    pub(crate) fn state(&self) -> AppState {
         self.daemon.state().clone()
     }
 
-    fn hello(&self, cwd: &Path, agent: Option<&str>) -> Value {
+    pub(crate) fn hello(&self, cwd: &Path, agent: Option<&str>) -> Value {
         json!({"fold": PROTOCOL_VERSION, "cwd": cwd, "pid": 4242, "agent": agent})
     }
 
@@ -142,7 +142,7 @@ impl Host {
 
 /// Sends `bytes` as the first thing on a fresh in-memory connection and reads the answer line.
 #[cfg(test)]
-async fn handshake_raw(state: AppState, bytes: &[u8]) -> (Answer, Rest) {
+pub(crate) async fn handshake_raw(state: AppState, bytes: &[u8]) -> (Answer, Rest) {
     let (client, server) = tokio::io::duplex(64 * 1024);
     tokio::spawn(handshake::accept(state, server, Default::default()));
     let (read, mut write) = tokio::io::split(client);
@@ -155,12 +155,12 @@ async fn handshake_raw(state: AppState, bytes: &[u8]) -> (Answer, Rest) {
 }
 
 #[cfg(test)]
-async fn handshake(state: AppState, hello: &Value) -> (Answer, Rest) {
+pub(crate) async fn handshake(state: AppState, hello: &Value) -> (Answer, Rest) {
     handshake_raw(state, format!("{hello}\n").as_bytes()).await
 }
 
 #[cfg(test)]
-async fn refused(state: AppState, bytes: &[u8]) -> (String, Option<String>) {
+pub(crate) async fn refused(state: AppState, bytes: &[u8]) -> (String, Option<String>) {
     let (answer, (mut read, _write)) = handshake_raw(state, bytes).await;
     assert!(!answer.ok);
     assert_eq!(answer.project, None);
@@ -175,13 +175,13 @@ async fn refused(state: AppState, bytes: &[u8]) -> (String, Option<String>) {
 }
 
 #[cfg(test)]
-async fn mcp(rest: Rest) -> Client {
+pub(crate) async fn mcp(rest: Rest) -> Client {
     ().serve(rest).await.unwrap()
 }
 
 #[cfg(test)]
 /// The `list_agents` result reduced to each agent's name, tags, presence and worker names.
-async fn list_agents(client: &Client) -> Value {
+pub(crate) async fn list_agents(client: &Client) -> Value {
     let result = client
         .call_tool(CallToolRequestParams::new("list_agents"))
         .await
@@ -610,7 +610,7 @@ async fn shutdown_answers_an_open_wait_for_events_and_ends_before_the_drain_time
 
 /// A stand-in for a Claude Code session's inbox at `path`: the bytes of each connection, read to its end. A connection that sends nothing, as the check of a kept socket, delivers nothing.
 #[cfg(test)]
-fn session_inbox(path: &Path) -> tokio::sync::mpsc::UnboundedReceiver<String> {
+pub(crate) fn session_inbox(path: &Path) -> tokio::sync::mpsc::UnboundedReceiver<String> {
     let listener = UnixListener::bind(path).unwrap();
     let (sender, received) = tokio::sync::mpsc::unbounded_channel();
     tokio::spawn(async move {
@@ -626,7 +626,9 @@ fn session_inbox(path: &Path) -> tokio::sync::mpsc::UnboundedReceiver<String> {
 }
 
 #[cfg(test)]
-async fn next_notice(inbox: &mut tokio::sync::mpsc::UnboundedReceiver<String>) -> String {
+pub(crate) async fn next_notice(
+    inbox: &mut tokio::sync::mpsc::UnboundedReceiver<String>,
+) -> String {
     tokio::time::timeout(WAIT, inbox.recv())
         .await
         .expect("a notice within the wait")
@@ -634,7 +636,7 @@ async fn next_notice(inbox: &mut tokio::sync::mpsc::UnboundedReceiver<String>) -
 }
 
 #[cfg(test)]
-const INBOX_TOKEN: &str = "0123456789abcdef0123456789abcdef";
+pub(crate) const INBOX_TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
 /// The session-start hook of `agent` with the session's inbox, through the daemon's socket router.
 #[cfg(test)]
@@ -661,7 +663,7 @@ async fn session_start_hook(host: &Host, agent: &str, socket: &Path) -> Value {
 
 /// Sends one message from the human `ana` to `main` through the project's message service, which opens the project first.
 #[cfg(test)]
-async fn message_main(host: &Host) {
+pub(crate) async fn message_main(host: &Host) {
     let state = host.state();
     let ana = fold_core::HumanName::parse("ana").unwrap();
     let now = host.clock.now();
@@ -769,4 +771,22 @@ async fn the_adapter_reports_the_inbox_that_claude_code_gave_it() {
     );
     client.cancel().await.unwrap();
     host.daemon.shutdown().await;
+}
+
+#[test]
+fn parse_line_reads_keep_others_and_an_adapter_without_it_takes_over() {
+    let (_, options) = handshake::parse_line(
+        br#"{"fold":1,"cwd":"/src/app","pid":3,"agent":"main","tags":["main"],"keep_others":true}"#,
+    )
+    .unwrap();
+    assert!(options.keep_others);
+    let (_, options) =
+        handshake::parse_line(br#"{"fold":1,"cwd":"/src/app","pid":3,"agent":"main"}"#).unwrap();
+    assert!(!options.keep_others);
+    assert_eq!(serde_json::to_string(&options).unwrap(), "{}");
+    let error = handshake::parse_line(
+        br#"{"fold":1,"cwd":"/src/app","pid":3,"agent":"main","keep_others":"yes"}"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "invalid_handshake");
 }

@@ -501,6 +501,46 @@ impl PushTargets {
         }
     }
 
+    /// Drops the agent's targets registered at or before `at`, except the socket `keep`, with their kept files, after each posts `farewell` as its last notice in place of the notices still waiting for it. A new main session that takes over passes the start of the session it replaces and its own inbox, so the old session learns why fold went quiet and only the new one gets notices from now on. Returns how many targets it dropped.
+    pub async fn retire_registered_by(
+        &self,
+        agent: &AgentName,
+        at: Timestamp,
+        keep: Option<&Path>,
+        farewell: &str,
+    ) -> usize {
+        if !postable(farewell, MAX_NOTICE_LEN) {
+            tracing::error!(agent = %agent, "session push refused a malformed farewell");
+            return 0;
+        }
+        let mut removed: Vec<Target> = Vec::new();
+        {
+            let mut agents = lock(&self.inner.agents);
+            if let Some(targets) = agents.get_mut(agent) {
+                let (gone, kept) = std::mem::take(targets).into_iter().partition(|target| {
+                    target.registered_at <= at && Some(target.socket.as_path()) != keep
+                });
+                *targets = kept;
+                removed = gone;
+                if targets.is_empty() {
+                    agents.remove(agent);
+                }
+            }
+        }
+        let count = removed.len();
+        for target in removed {
+            target.queue.finish(Queued {
+                text: Arc::from(farewell),
+                seq: 0,
+                about: None,
+                head: None,
+                digest: None,
+            });
+            self.drop_file(agent, &target.socket).await;
+        }
+        count
+    }
+
     /// Drops every socket target and every held inbox and leaves the kept files, for a daemon that stops or starts while the sessions may live on.
     pub fn clear_all(&self) {
         lock(&self.inner.pending).clear();
@@ -865,6 +905,8 @@ struct Queue {
 struct QueueState {
     pending: VecDeque<Queued>,
     closed: bool,
+    /// The queue takes no new notice and ends once its pending ones are posted.
+    ending: bool,
 }
 
 impl Queue {
@@ -873,6 +915,7 @@ impl Queue {
             state: Mutex::new(QueueState {
                 pending,
                 closed: false,
+                ending: false,
             }),
             wake: Notify::new(),
             failing: AtomicBool::new(false),
@@ -897,7 +940,7 @@ impl Queue {
     fn push(&self, notice: Queued) {
         {
             let mut state = lock(&self.state);
-            if state.closed {
+            if state.closed || state.ending {
                 return;
             }
             if state.pending.len() == QUEUE_LEN {
@@ -917,7 +960,21 @@ impl Queue {
         self.wake.notify_one();
     }
 
-    /// The next notice, or `None` once the target is dropped.
+    /// Replaces the waiting notices with `last` and ends the queue once `last` is taken.
+    fn finish(&self, last: Queued) {
+        {
+            let mut state = lock(&self.state);
+            if state.closed || state.ending {
+                return;
+            }
+            state.pending.clear();
+            state.pending.push_back(last);
+            state.ending = true;
+        }
+        self.wake.notify_one();
+    }
+
+    /// The next notice, or `None` once the target is dropped or its last notice is taken.
     async fn next(&self) -> Option<Queued> {
         loop {
             {
@@ -927,6 +984,9 @@ impl Queue {
                 }
                 if let Some(notice) = state.pending.pop_front() {
                     return Some(notice);
+                }
+                if state.ending {
+                    return None;
                 }
             }
             self.wake.notified().await;

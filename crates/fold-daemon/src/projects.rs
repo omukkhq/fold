@@ -76,6 +76,8 @@ pub struct ProjectHandle {
     pub batch_merges: Arc<BatchMergeCache>,
     /// The Claude Code inbox sockets of the project's agents. They live in memory only, so a restarted daemon has none until the session-start hooks run again.
     pub push: PushTargets,
+    /// The live adapter connections of the interactive main sessions, which a new main handshake takes over.
+    pub main_sessions: Arc<crate::services::agents::MainSessions>,
     push_task: PushTask,
     /// The Claude Code processes of the project's worker agents.
     pub workers: Supervisor,
@@ -282,6 +284,7 @@ impl ProjectHandle {
             carries: Arc::new(CarryCache::default()),
             batch_merges: Arc::new(BatchMergeCache::default()),
             push,
+            main_sessions: Arc::default(),
             push_task,
             workers,
             checks: CheckRunner::default().with_project(&row.slug),
@@ -417,6 +420,7 @@ impl ProjectHandle {
             .with_live(self.live.clone())
             .with_workers(self.workers.clone())
             .with_workspace_locks(self.workspace_locks.clone())
+            .with_main_sessions(self.main_sessions.clone())
     }
 
     /// Every item that waits for a human, oldest first: the stored items with the stalls, the project folder's items and, with `notify`, the notice targets fold turned off. The web app's Needs you, the notices and the main agent's `get_needs_you` read this one list, so they name the same items.

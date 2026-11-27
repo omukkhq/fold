@@ -218,6 +218,7 @@ define_codes! {
     DIRECTORY_OTHER_FILESYSTEM = "directory_other_filesystem",
     DATABASE_REPLACED = "database_replaced",
     DAEMON_RESTARTING = "daemon_restarting",
+    MAIN_SESSION_TAKEN_OVER = "main_session_taken_over",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

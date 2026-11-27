@@ -10,12 +10,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
+use tokio::sync::Notify;
 
 use super::FoldServer;
 use super::agents::NeedsYouFooter;
 use super::error::{ErrorBody, from_agent, from_project};
 use crate::daemon::AppState;
-use crate::services::agents::{AgentService, SessionContext, peers};
+use crate::services::agents::{AgentService, MainConnection, SessionContext, peers};
 use crate::services::events::EventService;
 use crate::services::messages::MessageService;
 use crate::services::projects;
@@ -48,6 +49,14 @@ pub struct Hello {
     /// The session's Claude Code inbox, when Claude Code gave the adapter one. It needs `agent`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inbox: Option<SessionInbox>,
+}
+
+/// The options of the adapter's first line, next to the fields of [`Hello`] in the same JSON object. An adapter adds them with `#[serde(flatten)]` beside its `Hello`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelloOptions {
+    /// `true` keeps the live connections of an earlier session of the same main agent open next to this one, and both get notices. Without it, a session that registers with the `main` tag from outside every worker's process tree takes over: fold posts the takeover notice to each earlier session's inbox and closes its connection. It changes nothing for any other session, and an adapter that sends `false` omits the field.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_others: bool,
 }
 
 /// `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN` of the session. Its `Debug` leaves the token out, so a logged handshake never shows it.
@@ -118,20 +127,33 @@ where
         Ok(Err(error)) => Err(error),
         Err(_) => Err(invalid("no handshake line arrived within 5 seconds")),
     };
-    let ((agents, events, workspaces, tasks, messages, reviews, session, project, handle), rest) =
-        match opened {
-            Ok(opened) => opened,
-            Err(error) => {
-                if write
-                    .write_all(&Answer::refused(&error).line())
-                    .await
-                    .is_ok()
-                {
-                    let _ = write.shutdown().await;
-                }
-                return;
+    let (
+        Opened {
+            agents,
+            events,
+            workspaces,
+            tasks,
+            messages,
+            reviews,
+            session,
+            project,
+            handle,
+            main,
+        },
+        rest,
+    ) = match opened {
+        Ok(opened) => opened,
+        Err(error) => {
+            if write
+                .write_all(&Answer::refused(&error).line())
+                .await
+                .is_ok()
+            {
+                let _ = write.shutdown().await;
             }
-        };
+            return;
+        }
+    };
     if write
         .write_all(&Answer::accepted(&project).line())
         .await
@@ -157,7 +179,23 @@ where
         let read = Cursor::new(rest).chain(read);
         match server.serve((read, write)).await {
             Ok(running) => {
-                let _ = running.waiting().await;
+                let cancel = running.cancellation_token();
+                let waiting = running.waiting();
+                tokio::pin!(waiting);
+                let closed = async {
+                    match &main {
+                        Some(close) => close.notified().await,
+                        None => std::future::pending().await,
+                    }
+                };
+                tokio::select! {
+                    _ = &mut waiting => {}
+                    () = closed => {
+                        tracing::info!(project, "a new main session took over this connection");
+                        cancel.cancel();
+                        let _ = waiting.await;
+                    }
+                }
             }
             Err(error) => tracing::debug!(
                 project,
@@ -217,6 +255,11 @@ where
 
 /// Checks the version before the shape, so an adapter of another version always learns that the versions differ.
 pub fn parse_hello(line: &[u8]) -> Result<Hello, FoldError> {
+    parse_line(line).map(|(hello, _)| hello)
+}
+
+/// [`parse_hello`] with the line's options.
+pub fn parse_line(line: &[u8]) -> Result<(Hello, HelloOptions), FoldError> {
     let value: Value =
         serde_json::from_slice(line).map_err(|_| invalid("the handshake line is not JSON"))?;
     match value.get("fold").and_then(Value::as_u64) {
@@ -230,6 +273,8 @@ pub fn parse_hello(line: &[u8]) -> Result<Hello, FoldError> {
         }
         None => return Err(invalid("the handshake line has no protocol version")),
     }
+    let options: HelloOptions = serde_json::from_value(value.clone())
+        .map_err(|_| invalid("keep_others must be true or false"))?;
     let mut hello: Hello = serde_json::from_value(value)
         .map_err(|_| invalid("the handshake line needs fold, cwd, pid and agent"))?;
     let canonical = hello.cwd.is_absolute()
@@ -243,28 +288,26 @@ pub fn parse_hello(line: &[u8]) -> Result<Hello, FoldError> {
     if hello.agent.as_deref() == Some("") {
         hello.agent = None;
     }
-    Ok(hello)
+    Ok((hello, options))
 }
 
-async fn open(
-    state: &AppState,
-    line: &[u8],
-    peer: SocketPeer,
-) -> Result<
-    (
-        AgentService,
-        EventService,
-        WorkspaceService,
-        TaskService,
-        MessageService,
-        ReviewService,
-        SessionContext,
-        String,
-        std::sync::Weak<crate::projects::ProjectHandle>,
-    ),
-    FoldError,
-> {
-    let hello = parse_hello(line)?;
+/// What an accepted handshake serves.
+struct Opened {
+    agents: AgentService,
+    events: EventService,
+    workspaces: WorkspaceService,
+    tasks: TaskService,
+    messages: MessageService,
+    reviews: ReviewService,
+    session: SessionContext,
+    project: String,
+    handle: std::sync::Weak<crate::projects::ProjectHandle>,
+    /// For an interactive main session: the signal that a newer session took this one over.
+    main: Option<Arc<Notify>>,
+}
+
+async fn open(state: &AppState, line: &[u8], peer: SocketPeer) -> Result<Opened, FoldError> {
+    let (hello, options) = parse_line(line)?;
     let agent = hello.agent.as_deref().map(AgentName::parse).transpose()?;
     let tags = hello
         .tags
@@ -282,8 +325,13 @@ async fn open(
         .await
         .map_err(from_agent)?;
     // The kernel's pid when the transport has one; an in-process stream has no peer and records the pid it sent.
+    let pid = peer.pid.unwrap_or(hello.pid);
+    let inbox_socket = hello.inbox.as_ref().map(|inbox| inbox.socket.clone());
+    agents
+        .refuse_taken_over(pid, inbox_socket.as_ref())
+        .map_err(from_agent)?;
     let mut session = agents
-        .start_session_in(peer.pid.unwrap_or(hello.pid), &hello.cwd)
+        .start_session_in(pid, &hello.cwd)
         .await
         .map_err(from_agent)?;
     session.peer = peers::session_peer(worker, &handle.slug);
@@ -296,23 +344,39 @@ async fn open(
             "the adapter's inbox socket was refused"
         );
     }
-    if let Some(agent) = agent
-        && let Err(error) = agents.register_agent(&mut session, &agent, &tags).await
+    if let Some(agent) = &agent
+        && let Err(error) = agents.register_agent(&mut session, agent, &tags).await
     {
         let _ = agents.end_session(&session).await;
         return Err(from_agent(error));
     }
-    Ok((
+    let connection = MainConnection {
+        pid,
+        inbox: inbox_socket,
+        keep_others: options.keep_others,
+    };
+    let main = match agents
+        .enter_main_connection(&session, &tags, &connection)
+        .await
+    {
+        Ok(main) => main,
+        Err(error) => {
+            let _ = agents.end_session(&session).await;
+            return Err(from_agent(error));
+        }
+    };
+    Ok(Opened {
         agents,
         events,
         workspaces,
-        handle.tasks.clone(),
+        tasks: handle.tasks.clone(),
         messages,
-        handle.reviews(&state.registry),
+        reviews: handle.reviews(&state.registry),
         session,
-        handle.slug.clone(),
-        Arc::downgrade(&handle),
-    ))
+        project: handle.slug.clone(),
+        handle: Arc::downgrade(&handle),
+        main,
+    })
 }
 
 fn invalid(message: &str) -> FoldError {
