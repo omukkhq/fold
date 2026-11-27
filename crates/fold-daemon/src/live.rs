@@ -611,6 +611,39 @@ struct Shared {
     told: Mutex<HashMap<WorkspaceId, Told>>,
     /// A stall decision ran since the daemon opened the project, so the stalled flags say what the stall rule decides; before it, they say nothing yet.
     stalls_decided: AtomicBool,
+    /// The check runs that stop at the first edit of a tracked file of their workspace.
+    edits: Arc<EditWatches>,
+}
+
+/// The senders of the runs that watch their workspace's edits, by workspace. A workspace has at most one running check run.
+type EditWatches = Mutex<HashMap<WorkspaceId, mpsc::Sender<String>>>;
+
+/// A check run's watch on the edits of its workspace: it receives the path of each scan that found a tracked file whose content changed, and stops watching when dropped.
+#[derive(Debug)]
+pub struct EditWatch {
+    workspace: WorkspaceId,
+    edits: Arc<EditWatches>,
+    sender: mpsc::Sender<String>,
+    receiver: mpsc::Receiver<String>,
+}
+
+impl EditWatch {
+    /// The path of the next scan that found an edit. A scan that finds one while an earlier one waits gives nothing more, so the run reads the newest state when it reads the files.
+    pub async fn next(&mut self) -> Option<String> {
+        self.receiver.recv().await
+    }
+}
+
+impl Drop for EditWatch {
+    fn drop(&mut self) {
+        let mut edits = lock(&self.edits);
+        if edits
+            .get(&self.workspace)
+            .is_some_and(|sender| sender.same_channel(&self.sender))
+        {
+            edits.remove(&self.workspace);
+        }
+    }
 }
 
 impl Drop for Shared {
@@ -939,6 +972,7 @@ impl LiveState {
                 opened_at,
                 told: Mutex::default(),
                 stalls_decided: AtomicBool::new(false),
+                edits: Arc::default(),
             }),
         }
     }
@@ -1268,6 +1302,7 @@ impl LiveState {
             clock: Arc::clone(&shared.clock),
             config: shared.config,
             states: Arc::clone(&shared.states),
+            edits: Arc::clone(&shared.edits),
             paths: shared.paths.clone(),
             caps,
             seed,
@@ -1532,6 +1567,18 @@ impl LiveState {
         self.shared.stalls.lock().await
     }
 
+    /// A watch on the edits of `workspace` from its next scan on, which replaces an earlier watch of it.
+    pub fn watch_edits(&self, workspace: WorkspaceId) -> EditWatch {
+        let (sender, receiver) = mpsc::channel(1);
+        lock(&self.shared.edits).insert(workspace, sender.clone());
+        EditWatch {
+            workspace,
+            edits: Arc::clone(&self.shared.edits),
+            sender,
+            receiver,
+        }
+    }
+
     /// Sets the check run that goes in the workspace, as the stall check read it from the store. A run that goes clears the stalled flag at once; returns whether it cleared one.
     pub fn set_check_run(&self, workspace: WorkspaceId, run: Option<LiveCheckRun>) -> bool {
         let shared = &self.shared;
@@ -1718,6 +1765,7 @@ struct Pipeline {
     clock: Arc<dyn Clock>,
     config: LiveConfig,
     states: Arc<States>,
+    edits: Arc<EditWatches>,
     paths: ProjectPaths,
     caps: Capabilities,
     seed: Seed,
@@ -1753,8 +1801,8 @@ enum Scan {
 
 struct Scanned {
     files: Vec<FileChange>,
-    /// The `(path, content hash)` pairs differ from the previous scan's.
-    moved: bool,
+    /// The first path whose `(path, content hash)` pair differs from the previous scan's.
+    moved: Option<String>,
     warnings: Vec<Warning>,
     edits_after_version: Option<bool>,
 }
@@ -1843,6 +1891,11 @@ impl Pipeline {
         match scanned {
             Ok(Scan::Done(scanned)) => {
                 self.missing = false;
+                if let Some(path) = &scanned.moved
+                    && let Some(sender) = lock(&self.edits).get(&self.workspace)
+                {
+                    let _ = sender.try_send(path.clone());
+                }
                 Ok(self.apply(scanned))
             }
             Ok(Scan::Missing) => {
@@ -1911,7 +1964,7 @@ impl Pipeline {
 
     fn apply(&mut self, scanned: Scanned) -> Arc<WorkspaceLive> {
         let now = self.clock.now();
-        if scanned.moved {
+        if scanned.moved.is_some() {
             self.last_activity = now;
         }
         let mut tally = ChangeTally::default();
@@ -1941,7 +1994,7 @@ impl Pipeline {
             .activity
             .as_ref()
             .is_some_and(|activity| activity.state == ActivityState::Failed);
-        if (scanned.moved && !ended)
+        if (scanned.moved.is_some() && !ended)
             || stall::present_workspace(view.edits_after_version, turn) == WorkspaceFact::Sent
         {
             view.stalled = false;
@@ -2210,7 +2263,9 @@ impl Scanner {
         for path in refreshed.unstable {
             self.warnings.insert(path, WarningReason::Unstable);
         }
-        let moved = before.is_some_and(|before| !same_content(&before, &self.current));
+        let moved = before
+            .and_then(|before| first_difference(&before, &self.current))
+            .map(|path| String::from_utf8_lossy(&path).into_owned());
         self.scanned = true;
         let working = State::working(self.root.clone(), self.current.clone());
         let comparison = vcs::compare_cached(&self.objects, &self.base, &working, &mut self.cache)?;
@@ -2266,13 +2321,27 @@ impl Version {
     }
 }
 
-/// The same paths with the same content hashes; a kind change alone, such as a new executable bit, is not activity.
-fn same_content(before: &FlatTree, after: &FlatTree) -> bool {
-    before.len() == after.len()
-        && before
-            .iter()
-            .zip(after)
-            .all(|((a, a_entry), (b, b_entry))| a == b && a_entry.hash == b_entry.hash)
+/// The first path, in path order, that one tree has and the other has not, or that has another content hash; `None` for the same paths with the same content hashes. A kind change alone, such as a new executable bit, is not activity.
+fn first_difference(before: &FlatTree, after: &FlatTree) -> Option<Vec<u8>> {
+    let mut before = before.iter().peekable();
+    let mut after = after.iter().peekable();
+    loop {
+        match (before.peek(), after.peek()) {
+            (None, None) => return None,
+            (Some((path, _)), None) | (None, Some((path, _))) => return Some(path.to_vec()),
+            (Some((a, a_entry)), Some((b, b_entry))) => match a.cmp(b) {
+                std::cmp::Ordering::Less => return Some(a.to_vec()),
+                std::cmp::Ordering::Greater => return Some(b.to_vec()),
+                std::cmp::Ordering::Equal if a_entry.hash != b_entry.hash => {
+                    return Some(a.to_vec());
+                }
+                std::cmp::Ordering::Equal => {
+                    before.next();
+                    after.next();
+                }
+            },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2287,6 +2356,42 @@ mod tests {
 
     fn path(text: &str) -> RepoPath {
         RepoPath::parse(text.as_bytes()).unwrap()
+    }
+
+    fn flat(entries: &[(&str, u8, fold_core::tree::EntryKind)]) -> FlatTree {
+        entries
+            .iter()
+            .map(|(path, seed, kind)| {
+                let entry = fold_core::tree::FlatEntry {
+                    kind: *kind,
+                    hash: ObjectHash::from_bytes([*seed; 32]),
+                };
+                (path.as_bytes().to_vec(), entry)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_first_difference_is_the_first_path_in_order_that_moved() {
+        use fold_core::tree::EntryKind::{Executable, File};
+        let before = flat(&[("a", 1, File), ("c", 2, File), ("e", 3, File)]);
+        assert_eq!(first_difference(&before, &before), None);
+        let mode = flat(&[("a", 1, Executable), ("c", 2, File), ("e", 3, File)]);
+        assert_eq!(first_difference(&before, &mode), None);
+        let edited = flat(&[("a", 1, File), ("c", 9, File), ("e", 4, File)]);
+        assert_eq!(first_difference(&before, &edited), Some(b"c".to_vec()));
+        let added = flat(&[
+            ("a", 1, File),
+            ("b", 5, File),
+            ("c", 2, File),
+            ("e", 3, File),
+        ]);
+        assert_eq!(first_difference(&before, &added), Some(b"b".to_vec()));
+        let removed = flat(&[("a", 1, File), ("e", 3, File)]);
+        assert_eq!(first_difference(&before, &removed), Some(b"c".to_vec()));
+        let last = flat(&[("a", 1, File), ("c", 2, File)]);
+        assert_eq!(first_difference(&before, &last), Some(b"e".to_vec()));
+        assert_eq!(first_difference(&last, &before), Some(b"e".to_vec()));
     }
 
     #[test]

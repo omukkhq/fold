@@ -64,6 +64,7 @@ mod acceptance_50_a_serial_lane_integrates_in_turn;
 mod acceptance_51_main_agent_reads_needs_you;
 mod acceptance_52_rename_the_git_branch;
 mod acceptance_53_calculated_holds;
+mod acceptance_54_an_edit_stops_the_check_run;
 mod acceptance_5_review_and_integrate;
 mod acceptance_6_dependency_unblocks;
 mod acceptance_7_conflicting_proposals;

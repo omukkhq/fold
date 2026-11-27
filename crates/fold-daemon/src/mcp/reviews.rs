@@ -699,6 +699,7 @@ fn proposed_json(proposed: Proposed) -> Value {
             "workspace": workspace,
             "checks": "running",
             "run": run,
+            "hint": checks::EDIT_HINT,
         }),
     }
 }

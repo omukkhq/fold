@@ -38,7 +38,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             RUN_CHECKS,
-            "Ask fold to run the project's checks from fold-checks.toml (its setup, then the proposal checks whose files match your change) in your task workspace. It returns at once; fold sends the result as a message, a failure with the check names and the end of the log. Wait for checks.finished with wait_for_events. A check that changes recorded files fails the run. checks none means the tree has no fold-checks.toml or no check runs for the change.",
+            "Ask fold to run the project's checks from fold-checks.toml (its setup, then the proposal checks whose files match your change) in your task workspace. It returns at once; fold sends the result as a message, a failure with the check names and the end of the log. Wait for checks.finished with wait_for_events, and do not edit the files of the workspace until it comes: the first edit of a tracked file, by you or by a check, stops the run at once with files_changed and the path. checks none means the tree has no fold-checks.toml or no check runs for the change.",
             schema_for_type::<RunChecksInput>(),
         ),
         Tool::new(
@@ -75,6 +75,9 @@ async fn run_checks(
     Ok(started_json(task, started))
 }
 
+/// What a worker does while its run goes: the first edit of a tracked file stops the run.
+pub const EDIT_HINT: &str = "do not edit the files of the workspace until checks.finished: the first edit of a tracked file stops the run with files_changed";
+
 /// The answer of a command that started checks, or found none to run.
 pub fn started_json(task: fold_core::TaskId, started: Started) -> Value {
     match started {
@@ -83,6 +86,7 @@ pub fn started_json(task: fold_core::TaskId, started: Started) -> Value {
             "workspace": workspace,
             "checks": "running",
             "run": run,
+            "hint": EDIT_HINT,
         }),
         Started::NoChecks => json!({"task": task, "checks": "none"}),
     }

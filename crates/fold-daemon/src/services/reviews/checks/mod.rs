@@ -348,7 +348,7 @@ impl ReviewService {
         });
     }
 
-    /// Takes a machine-wide permit, runs the commands in the workspace and snapshots it again. The run fails when the snapshot differs from the checked tree, or when the workspace was replaced, synced or restored meanwhile. A passed run of a proposal command then makes its version; a run whose command is refused by then, such as a claim that was taken over, ends as stopped with the refusal in its message.
+    /// Takes a machine-wide permit, runs the commands in the workspace and snapshots it again. The run fails when the snapshot differs from the checked tree, or when the workspace was replaced, synced or restored meanwhile. A scan of the live state that finds an edit of a tracked file meanwhile ends the run at once, without waiting for its commands, once a snapshot confirms it. A passed run of a proposal command then makes its version; a run whose command is refused by then, such as a claim that was taken over, ends as stopped with the refusal in its message.
     async fn complete_proposal_run(
         &self,
         run: CheckRunRow,
@@ -364,22 +364,30 @@ impl ReviewService {
         let row = workspaces::get_workspace(self.store.read(), workspace)
             .await?
             .ok_or(StoreError::Corrupt("check_runs.workspace_id"))?;
-        let permit = self.checks.start_permit(run.id, &*self.clock).await;
-        let dir = self.workspaces.workspace_dir(&row);
-        let owner = self
-            .checks
-            .owner(run.worker.as_ref().map(WorkerName::agent));
-        let results = run_gated_commands_for(
-            Some(&self.checks.gate(run.id)),
-            &owner,
-            &dir,
-            job.specs.clone(),
-            self.checks.limits(),
-            &*self.clock,
-        )
-        .instrument(tracing::info_span!("check_run", run = %run.id))
-        .await;
-        drop(permit);
+        let edits = self.workspaces.watch_edits(workspace);
+        let commands = async {
+            let permit = self.checks.start_permit(run.id, &*self.clock).await;
+            let dir = self.workspaces.workspace_dir(&row);
+            let owner = self
+                .checks
+                .owner(run.worker.as_ref().map(WorkerName::agent));
+            let results = run_gated_commands_for(
+                Some(&self.checks.gate(run.id)),
+                &owner,
+                &dir,
+                job.specs.clone(),
+                self.checks.limits(),
+                &*self.clock,
+            )
+            .instrument(tracing::info_span!("check_run", run = %run.id))
+            .await;
+            drop(permit);
+            results
+        };
+        let results = match self.until_first_edit(&run, edits, commands).await? {
+            Ran::Ended(results) => results,
+            Ran::Edited(path) => return self.end_edited_run(&run, &path).await,
+        };
         let (mut verdict, checked) = self.recheck_workspace(&run, &results).await?;
         let mut refused = None;
         if verdict.state == RunState::Passed
@@ -412,18 +420,66 @@ impl ReviewService {
             .await
     }
 
+    /// The results of `commands`, unless a scan finds an edit first and a snapshot of the workspace then differs from the checked tree: the commands are dropped, which kills their process groups, and the edited path is returned. An edit the snapshot does not confirm, such as a scan of a write made before the run's snapshot, and a workspace that could not be snapshotted or was synced or restored leave the commands running, so the end of the run decides them as before.
+    async fn until_first_edit(
+        &self,
+        run: &CheckRunRow,
+        edits: Option<crate::live::EditWatch>,
+        commands: impl Future<Output = Vec<CommandResult>>,
+    ) -> Result<Ran, ReviewError> {
+        let Some(mut edits) = edits else {
+            return Ok(Ran::Ended(commands.await));
+        };
+        let mut commands = std::pin::pin!(commands);
+        loop {
+            let path = tokio::select! {
+                results = &mut commands => return Ok(Ran::Ended(results)),
+                path = edits.next() => path,
+            };
+            let Some(path) = path else {
+                return Ok(Ran::Ended(commands.await));
+            };
+            let (verdict, checked) = self.recheck_workspace(run, &[]).await?;
+            drop(checked);
+            if verdict.reason == Some(RunReason::FilesChanged) {
+                tracing::info!(run = %run.id, "an edit in the workspace stopped the check run");
+                return Ok(Ran::Edited(path));
+            }
+        }
+    }
+
+    /// One write transaction: the end of a run that an edit stopped as `files_changed`, without results, with the changed path in `checks.finished`, and the result message to the requesting worker.
+    async fn end_edited_run(&self, run: &CheckRunRow, path: &str) -> Result<(), ReviewError> {
+        let verdict = Verdict::failed(RunReason::FilesChanged);
+        let now = self.clock.now();
+        let extra = json!({ "path": path });
+        let mut buffer = EventBuffer::new();
+        let ended = self
+            .store
+            .write(async |tx| {
+                if !end_run_with_in_tx(tx, &mut buffer, run, &[], verdict, &extra, now).await? {
+                    return Ok(false);
+                }
+                let body = edited_message(run, path);
+                tell_requester(tx, &mut buffer, run, &body, now).await?;
+                Ok::<_, ReviewError>(true)
+            })
+            .await?;
+        if ended {
+            self.bus.publish(buffer);
+            self.workspaces.checks_changed().await;
+            tracing::info!(run = %run.id, state = verdict.state.as_str(), reason = verdict.reason.map(RunReason::as_str), "check run ended");
+        }
+        Ok(())
+    }
+
     /// The verdict of a finished run once the workspace is snapshotted again, with that workspace and snapshot when the snapshot equals the checked tree.
     async fn recheck_workspace(
         &self,
         run: &CheckRunRow,
         results: &[CommandResult],
     ) -> Result<(Verdict, Option<(WorkspaceRow, ProposalSnapshot)>), ReviewError> {
-        let live = workspaces::live_task_workspace(self.store.read(), run.task).await?;
-        let Some(live) = live.filter(|live| {
-            Some(live.id) == run.workspace
-                && live.base == run.base
-                && live.state == WorkspaceState::Active
-        }) else {
+        let Some(live) = self.run_workspace(run).await? else {
             return Ok((Verdict::failed(RunReason::WorkspaceChanged), None));
         };
         let snapshot = match self.workspaces.snapshot_for_proposal(&live).await {
@@ -434,9 +490,26 @@ impl ReviewService {
             }
         };
         if snapshot.tree != run.tree {
-            return Ok((Verdict::failed(RunReason::FilesChanged), None));
+            drop(snapshot);
+            // The snapshot waits for the workspace lock, so a sync or restore that held it has committed its base by now; the files it wrote are no edit.
+            let reason = if self.run_workspace(run).await?.is_some() {
+                RunReason::FilesChanged
+            } else {
+                RunReason::WorkspaceChanged
+            };
+            return Ok((Verdict::failed(reason), None));
         }
         Ok((Verdict::of(results), Some((live, snapshot))))
+    }
+
+    /// The task's live workspace while it is still the run's: the same workspace, on the same base, active.
+    async fn run_workspace(&self, run: &CheckRunRow) -> Result<Option<WorkspaceRow>, ReviewError> {
+        let live = workspaces::live_task_workspace(self.store.read(), run.task).await?;
+        Ok(live.filter(|live| {
+            Some(live.id) == run.workspace
+                && live.base == run.base
+                && live.state == WorkspaceState::Active
+        }))
     }
 
     /// One write transaction: the passed run's results and end, the proposal or version it waited for exactly as the command makes it at once, and a message to the author. The snapshot is held until the commit, as a proposal command holds it.
@@ -565,6 +638,13 @@ impl ReviewService {
         }
         Ok(views)
     }
+}
+
+/// How the commands of a task workspace's run ended.
+enum Ran {
+    Ended(Vec<CommandResult>),
+    /// The edit of this path stopped the run before its commands ended.
+    Edited(String),
 }
 
 /// A running run that makes the next version of a proposal when its checks pass: the author's update (`update_proposal`) or a reviewer's fix (`review_fix`). It has no version until then.
@@ -860,6 +940,21 @@ pub(super) fn result_message(
             text
         }
     }
+}
+
+/// The result message of a run that the edit of `path` stopped before its commands ended.
+fn edited_message(run: &CheckRunRow, path: &str) -> String {
+    let mut text = format!(
+        "The checks of {} ({}) failed: {path} changed during the run, so fold stopped the run at once. Do not edit the files of the workspace until checks.finished; when a check wrote the file, put what it writes in .gitignore or .foldignore.",
+        run.task, run.id
+    );
+    if let Some(gate) = gate_sentence(run) {
+        text.push(' ');
+        text.push_str(&gate);
+    } else {
+        text.push_str(&format!(" Call {} again.", again_tool(run.purpose)));
+    }
+    text
 }
 
 /// What a failed run of a proposal command did not make, and how to ask again.

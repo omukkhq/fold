@@ -274,6 +274,11 @@ impl WorkspaceService {
         live.reload_checkpoints(workspace).await;
     }
 
+    /// A watch on the edits of the tracked files of `workspace`; `None` for a service without live state.
+    pub(crate) fn watch_edits(&self, workspace: WorkspaceId) -> Option<crate::live::EditWatch> {
+        self.live.as_ref().map(|live| live.watch_edits(workspace))
+    }
+
     /// After the commit that started or ended a check run: decides the running checks and the stalled flags of the live workspaces at once instead of on the stall job's next tick. A failed decision leaves them to that tick.
     pub(crate) async fn checks_changed(&self) {
         let Some(live) = &self.live else {

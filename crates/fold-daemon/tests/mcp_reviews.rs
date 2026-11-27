@@ -1292,7 +1292,7 @@ async fn create_proposal_answers_with_the_run_and_wait_for_events_wakes_on_its_e
     .await;
     assert_eq!(
         created,
-        json!({"task": "T-1", "workspace": "ws-1", "checks": "running", "run": "cr-1"})
+        json!({"task": "T-1", "workspace": "ws-1", "checks": "running", "run": "cr-1", "hint": fold_daemon::mcp::reviews::checks::EDIT_HINT})
     );
     let woke = ok(
         &frontend,
