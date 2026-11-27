@@ -1092,6 +1092,93 @@ async fn a_check_run_is_read_with_its_logs_and_listed_on_its_proposal() {
     );
 }
 
+/// Starts the checks of T-1 for `author` with `run` as the only check, after a change of `src/lib.rs` to `content`, and returns the run.
+#[cfg(test)]
+async fn start_run(
+    fx: &Fixture,
+    author: &fold_core::Actor,
+    run: &str,
+    content: &str,
+) -> fold_core::CheckRunId {
+    fx.write(1, "src/lib.rs", content);
+    fx.write(
+        1,
+        "fold-checks.toml",
+        &format!("[[check]]\nname = \"unit\"\nrun = \"{run}\"\n"),
+    );
+    let started = fx.reviews().run_checks(author, t(1)).await.unwrap();
+    let fold_daemon::services::reviews::checks::Started::Running { run, .. } = started else {
+        panic!("expected a run");
+    };
+    run
+}
+
+/// The route's answer for `run` once the run has ended.
+#[cfg(test)]
+async fn ended_run(fx: &Fixture, run: fold_core::CheckRunId) -> Value {
+    fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
+        let answer = send(fx, Method::GET, &format!("/check-runs/{run}"), None, None).await;
+        if answer.status == StatusCode::OK && answer.body["state"] != "running" {
+            Ok(answer.body)
+        } else {
+            Err(answer.body)
+        }
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_check_run_names_who_cancelled_it_and_only_a_cancelled_run_does() {
+    let fx = Fixture::new().await;
+    let author = fx.agent("frontend").await;
+    fx.workspaces()
+        .create_workspace(&author, t(1))
+        .await
+        .unwrap();
+
+    let passed = start_run(&fx, &author, "true", "pub fn a() {}\n").await;
+    let passed = ended_run(&fx, passed).await;
+    assert_eq!(passed["state"], "passed", "{passed}");
+    assert!(passed["cancelled_by"].is_null(), "{passed}");
+
+    let failed = start_run(&fx, &author, "false", "pub fn b() {}\n").await;
+    let failed = ended_run(&fx, failed).await;
+    assert_eq!(
+        (&failed["state"], &failed["reason"]),
+        (&json!("failed"), &json!("check_failed")),
+        "{failed}"
+    );
+    assert!(failed["cancelled_by"].is_null(), "{failed}");
+
+    let by_agent = start_run(&fx, &author, "sleep 600", "pub fn c() {}\n").await;
+    let ended = fx
+        .reviews()
+        .cancel_check_runs(
+            &author,
+            fold_daemon::services::reviews::checks::CancelTarget::Run(by_agent),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ended, vec![by_agent]);
+    let by_agent = ended_run(&fx, by_agent).await;
+    assert_eq!(by_agent["reason"], "cancelled", "{by_agent}");
+    assert_eq!(by_agent["cancelled_by"], "frontend", "{by_agent}");
+
+    let by_human = start_run(&fx, &author, "sleep 600", "pub fn d() {}\n").await;
+    let cancel = send(
+        &fx,
+        Method::POST,
+        "/check-runs/cancel",
+        Some(json!({"run": by_human.to_string()})),
+        Some(TANIM),
+    )
+    .await;
+    assert_eq!(cancel.status, StatusCode::OK, "{}", cancel.body);
+    let by_human = ended_run(&fx, by_human).await;
+    assert_eq!(by_human["reason"], "cancelled", "{by_human}");
+    assert_eq!(by_human["cancelled_by"], "human:tanim", "{by_human}");
+}
+
 #[tokio::test]
 async fn approve_and_integrate_wait_while_an_update_runs_its_checks() {
     let fx = Fixture::new().await;

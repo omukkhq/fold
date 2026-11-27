@@ -1,4 +1,4 @@
-use fold_core::events::types;
+use fold_core::events::{EventFilter, types};
 use fold_core::object::ObjectHash;
 use fold_core::reviews::ProposalIntent;
 use fold_core::reviews::checks::{
@@ -11,7 +11,7 @@ use fold_core::{
 use fold_store::reviews::checks::{self, CheckResultRow, CheckRunRow, NewCheckResult, NewCheckRun};
 use fold_store::tasks::claims;
 use fold_store::workspaces::{self, WorkspaceRow, WorkspaceState};
-use fold_store::{SqliteConnection, Store, StoreError, WriteTx, counters, tasks};
+use fold_store::{SqliteConnection, Store, StoreError, WriteTx, counters, events, tasks};
 use serde_json::json;
 use tracing::Instrument as _;
 
@@ -59,6 +59,8 @@ pub struct CheckRunView {
     pub waiting_for_check: Option<(String, Timestamp)>,
     /// The run's place in the queue for a run place under `[runs] max_parallel_runs`, from 1 at the front; `None` when it does not wait for one.
     pub waiting_for_run_slot: Option<usize>,
+    /// The public name of the actor that cancelled the run, from its `checks.finished` event; `None` unless the run ended as `cancelled`.
+    pub cancelled_by: Option<String>,
 }
 
 /// What a request for checks started.
@@ -185,6 +187,7 @@ impl ReviewService {
             .await?
             .ok_or_else(|| run_not_found(run))?;
         let results = checks::list_results(&mut *read, run, logs).await?;
+        let cancelled_by = cancelled_by(&mut read, &row).await?;
         read.commit().await.map_err(StoreError::from)?;
         let waiting_for_memory = self.checks.waiting_for_memory(run);
         let waiting_for_check = self.checks.waiting_for_check(run);
@@ -195,6 +198,7 @@ impl ReviewService {
             waiting_for_memory,
             waiting_for_check,
             waiting_for_run_slot,
+            cancelled_by,
         })
     }
 
@@ -718,15 +722,51 @@ impl ReviewService {
             let waiting_for_memory = runner.waiting_for_memory(run.id);
             let waiting_for_check = runner.waiting_for_check(run.id);
             let waiting_for_run_slot = runner.waiting_for_run_slot(run.id);
+            let cancelled_by = cancelled_by(&mut *conn, &run).await?;
             views.push(CheckRunView {
                 run,
                 results,
                 waiting_for_memory,
                 waiting_for_check,
                 waiting_for_run_slot,
+                cancelled_by,
             });
         }
         Ok(views)
+    }
+}
+
+/// The `by` of the `checks.finished` event of `run` when it ended as `cancelled`, read in pages of the task's `checks.finished` events, as the cancel stores no column for it.
+async fn cancelled_by(
+    conn: &mut SqliteConnection,
+    run: &CheckRunRow,
+) -> Result<Option<String>, ReviewError> {
+    if run.reason != Some(RunReason::Cancelled) {
+        return Ok(None);
+    }
+    let filter = EventFilter {
+        types: vec![types::CHECKS_FINISHED],
+        task: Some(run.task),
+        proposal: None,
+    };
+    let id = run.id.to_string();
+    let mut after = 0;
+    loop {
+        let page = events::read_after(&mut *conn, after, &filter, events::MAX_PAGE).await?;
+        let finished = page
+            .iter()
+            .find(|event| event.data.get("run").and_then(serde_json::Value::as_str) == Some(&id));
+        if let Some(event) = finished {
+            return Ok(event
+                .data
+                .get("by")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned));
+        }
+        match page.last() {
+            Some(last) if page.len() == events::MAX_PAGE => after = last.seq,
+            _ => return Ok(None),
+        }
     }
 }
 

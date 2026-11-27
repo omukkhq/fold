@@ -2560,6 +2560,11 @@ export interface components {
              */
             batch: string | null;
             /**
+             * @description The public name of the actor that cancelled the run, such as `human:ana` or `daemon-lead`, for a run that ended with reason `cancelled`; null otherwise.
+             * @example human:ana
+             */
+            cancelled_by?: string | null;
+            /**
              * Format: int64
              * @description UTC milliseconds.
              */
