@@ -19,6 +19,7 @@ mod adapter;
 mod agents_section;
 mod bench_support;
 mod binary;
+mod checks_cancel;
 mod claude_files;
 mod claude_start;
 mod cost;

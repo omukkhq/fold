@@ -98,6 +98,8 @@ enum Command {
     ShellEnv,
     /// Manage the workers that fold runs: fld worker restart <name> starts one again in a new Claude Code session
     Worker(commands::worker::WorkerArgs),
+    /// Manage the project's check runs: fld checks cancel stops one running run, every running run of a task with --task, or every running run of the project with --all
+    Checks(commands::checks::ChecksArgs),
     /// List main's revisions, newest first, as the web app's repository screen shows them: id and title, then the proposal, task and author or what the revision is, and the time in your local time zone with the Git commit
     Log(commands::log::LogArgs),
     /// Print what the project's supervised workers cost, from the values Claude Code reported: the total of all time, today and the last 7 days, the tokens, by role, by area and the top tasks; --since, --by and --task narrow it
@@ -223,6 +225,7 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
             shell_env::print(std::env::vars_os(), out).map_err(Failure::Write)
         }
         Some(Command::Worker(args)) => commands::worker::run(&args, out).map_err(Failure::Remote),
+        Some(Command::Checks(args)) => commands::checks::run(&args, out).map_err(Failure::Remote),
         Some(Command::Log(args)) => commands::log::run_log(&args, out).map_err(Failure::Remote),
         Some(Command::Cost(args)) => commands::cost::run_cost(&args, out).map_err(Failure::Remote),
         Some(Command::Transcript(args)) => {

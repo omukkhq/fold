@@ -1,4 +1,5 @@
 pub mod account;
+pub mod checks;
 pub mod confirm;
 pub mod cost;
 pub mod folder_status;

@@ -108,6 +108,9 @@ impl Host {
             .env_remove("CLAUDE_CONFIG_DIR")
             .env_remove("FOLD_AGENT")
             .env_remove("FOLD_HUMAN")
+            // Inside a Claude Code session these name that session's inbox, and an adapter started here would push the test daemon's messages into it.
+            .env_remove("CLAUDE_CODE_MESSAGING_SOCKET")
+            .env_remove("CLAUDE_CODE_MESSAGING_TOKEN")
             // The service files set this marker, and a daemon run as a service passes it to every process it starts, check commands too. A daemon started here would then report itself as the service.
             .env_remove("FOLD_SERVICE")
             .stdin(Stdio::piped())
