@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use super::error::from_workspace;
 use super::{FoldServer, parse};
+use crate::services::reviews::checks::SetupState;
 use crate::services::workspaces::{
     RevisionSummary, StateRef, StateSummary, WorkspaceChanges, WorkspaceRef,
 };
@@ -185,7 +186,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CREATE_WORKSPACE,
-            "Create the task workspace for a task: a copy of main under .fold/ws/ where you make your changes. It claims the task for your worker, unless your worker holds the claim already, and moves it to In Progress; the claim follows the rules of claim_task, so a worker that fold started gets worker_claim_denied for a task its lead did not give it. A workspace left by a worker that released the task is adopted instead, with its files as they are, and adopted is true.",
+            "Create the task workspace for a task: a copy of main under .fold/ws/ where you make your changes. It claims the task for your worker, unless your worker holds the claim already, and moves it to In Progress; the claim follows the rules of claim_task, so a worker that fold started gets worker_claim_denied for a task its lead did not give it. A workspace left by a worker that released the task is adopted instead, with its files as they are, and adopted is true. setup running means fold runs the [setup] of fold-checks.toml in the new folder in the background and sends you a message from fold at its end (passed, or the end of the failed log); a check run of the folder waits for it. setup none means there is no setup to run.",
             schema_for_type::<CreateWorkspaceInput>(),
         ),
         Tool::new(
@@ -474,11 +475,15 @@ pub async fn call(
             let input: CreateWorkspaceInput = parse(arguments)?;
             let task = id::<TaskId>(&input.task, "task", "T-12")?;
             let actor = server.actor().await?;
-            let created = server
-                .workspaces
-                .create_workspace(&actor, task)
-                .await
-                .map_err(from_workspace)?;
+            let (created, setup) = match &server.reviews {
+                Some(reviews) => reviews.create_workspace(&actor, task).await,
+                None => server
+                    .workspaces
+                    .create_workspace(&actor, task)
+                    .await
+                    .map(|created| (created, SetupState::None)),
+            }
+            .map_err(from_workspace)?;
             let view = created.workspace;
             json!({
                 "workspace": view.id.to_string(),
@@ -486,6 +491,7 @@ pub async fn call(
                 "base": view.base.to_string(),
                 "task": view.task.map(|task| task.to_string()),
                 "adopted": created.adopted,
+                "setup": setup.as_str(),
             })
         }
         GET_WORKSPACE => {

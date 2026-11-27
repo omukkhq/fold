@@ -27,6 +27,7 @@ use crate::services::workspaces::ProposalSnapshot;
 mod integration;
 pub mod memory;
 mod runner;
+mod setup;
 
 pub(crate) use integration::{Integrating, IntegrationChecks, PassedRun, fold_failed_refusal};
 pub(crate) use runner::HeldRequest;
@@ -35,6 +36,7 @@ pub use runner::{
     RunGate, RunLimits, SlotTicket, commands, run_commands, run_commands_for, run_gated_commands,
     run_gated_commands_for,
 };
+pub use setup::SetupState;
 
 /// The most lines of a failed command's log a result message carries.
 const TAIL_LINES: usize = 30;
@@ -366,6 +368,9 @@ impl ReviewService {
         self.checks.spawn(async move {
             let id = run.id;
             ticket.ready().await;
+            if let Some(workspace) = run.workspace {
+                service.checks.setup_finished(workspace).await;
+            }
             if let Err(error) = service.complete_proposal_run(run, job, actor).await {
                 tracing::warn!(run = %id, code = error.log_code(), "a check run could not end; the next start of the daemon ends it as stopped");
             }

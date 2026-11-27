@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use fold_core::layout::{AGENT_ENV, AGENT_TAGS_ENV};
 use fold_core::reviews::checks::{CHECK_TIMEOUT, ChecksFile, Outcome, Planned};
-use fold_core::{AgentName, CheckRunId, Clock, Timestamp};
+use fold_core::{AgentName, CheckRunId, Clock, Timestamp, WorkspaceId};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 use tokio::sync::{OwnedRwLockReadGuard, OwnedSemaphorePermit, Semaphore};
@@ -166,8 +166,31 @@ pub struct CheckRunner {
     memory_waits: Waits,
     /// The permits of each check with a `max_parallel`, by check name, with the limit they were made for.
     check_limits: CheckLimits,
+    /// The folders whose `[setup]` runs, each with the receiver that turns true at its end.
+    setups: Arc<Mutex<HashMap<WorkspaceId, tokio::sync::watch::Receiver<bool>>>>,
     /// The project's places for runs under `[runs] max_parallel_runs`.
     slots: Arc<RunSlots>,
+}
+
+/// A running setup of a folder: dropping it ends the wait of every check run of the folder.
+#[derive(Debug)]
+pub(crate) struct SetupRunning {
+    workspace: WorkspaceId,
+    done: tokio::sync::watch::Sender<bool>,
+    setups: Arc<Mutex<HashMap<WorkspaceId, tokio::sync::watch::Receiver<bool>>>>,
+}
+
+impl Drop for SetupRunning {
+    fn drop(&mut self) {
+        let _ = self.done.send(true);
+        let mut setups = lock(&self.setups);
+        if setups
+            .get(&self.workspace)
+            .is_some_and(|receiver| receiver.same_channel(&self.done.subscribe()))
+        {
+            setups.remove(&self.workspace);
+        }
+    }
 }
 
 /// The places of a project's runs under `[runs] max_parallel_runs`. Every run that holds a place counts, with or without a limit of its own; a run with a limit waits in the order it asked until fewer runs than its limit hold one, and a run without one takes its place at once, so a file without `[runs]` changes nothing.
@@ -379,7 +402,27 @@ impl CheckRunner {
             held: Arc::default(),
             memory_waits: Arc::default(),
             check_limits: Arc::default(),
+            setups: Arc::default(),
             slots: Arc::default(),
+        }
+    }
+
+    /// Marks the setup of `workspace` as running until the returned guard drops.
+    pub(crate) fn setup_started(&self, workspace: WorkspaceId) -> SetupRunning {
+        let (done, receiver) = tokio::sync::watch::channel(false);
+        lock(&self.setups).insert(workspace, receiver);
+        SetupRunning {
+            workspace,
+            done,
+            setups: Arc::clone(&self.setups),
+        }
+    }
+
+    /// Waits until no setup runs in `workspace`.
+    pub(crate) async fn setup_finished(&self, workspace: WorkspaceId) {
+        let receiver = lock(&self.setups).get(&workspace).cloned();
+        if let Some(mut receiver) = receiver {
+            let _ = receiver.wait_for(|done| *done).await;
         }
     }
 
@@ -1325,6 +1368,45 @@ mod tests {
             CheckPermits::new(0).acquire().await.is_some(),
             "at least one run"
         );
+    }
+
+    #[tokio::test]
+    async fn a_check_run_waits_for_the_setup_of_its_folder_only() {
+        let runner = CheckRunner::default();
+        let folder = WorkspaceId::from_number(1).unwrap();
+        let other = WorkspaceId::from_number(2).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), runner.setup_finished(folder))
+            .await
+            .expect("no setup runs in the folder");
+
+        let first = runner.setup_started(folder);
+        let blocked =
+            tokio::time::timeout(Duration::from_millis(50), runner.setup_finished(folder)).await;
+        assert!(blocked.is_err(), "the folder's setup runs");
+        tokio::time::timeout(Duration::from_secs(5), runner.setup_finished(other))
+            .await
+            .expect("another folder's setup does not hold this folder");
+
+        let waiting = runner.setup_finished(folder);
+        tokio::pin!(waiting);
+        let started = tokio::time::timeout(Duration::from_millis(10), &mut waiting).await;
+        assert!(started.is_err(), "the wait found the first setup");
+        let second = runner.setup_started(folder);
+        drop(first);
+        tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("a wait ends when the setup it found ends");
+        let blocked =
+            tokio::time::timeout(Duration::from_millis(50), runner.setup_finished(folder)).await;
+        assert!(
+            blocked.is_err(),
+            "the end of the first setup keeps the entry of the second"
+        );
+        drop(second);
+        tokio::time::timeout(Duration::from_secs(5), runner.setup_finished(folder))
+            .await
+            .expect("no setup runs after both ended");
+        assert!(lock(&runner.setups).is_empty());
     }
 
     #[cfg(target_os = "linux")]

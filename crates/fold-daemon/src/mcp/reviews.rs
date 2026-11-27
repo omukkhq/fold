@@ -530,7 +530,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CREATE_REVIEW_CHECKOUT,
-            "Get a copy of the current version of a proposal you hold the review claim of, to read, build and test it, and to fix what you find in the task's scope; submit_review_fix makes the fix the next version. When the version conflicted with main at integration, the copy holds it merged onto the current main, with conflict markers in each conflicted text file and main's side of each other conflict as <path>.fold-main: you fix the conflict there, not the author. The review lead never reviews and gets review_lead_delegates.",
+            "Get a copy of the current version of a proposal you hold the review claim of, to read, build and test it, and to fix what you find in the task's scope; submit_review_fix makes the fix the next version. When the version conflicted with main at integration, the copy holds it merged onto the current main, with conflict markers in each conflicted text file and main's side of each other conflict as <path>.fold-main: you fix the conflict there, not the author. setup running means fold runs the [setup] of fold-checks.toml in the new folder in the background and sends you a message from fold at its end (passed, or the end of the failed log); a check run of the folder waits for it. setup none means there is no setup to run. The review lead never reviews and gets review_lead_delegates.",
             schema_for_type::<ProposalIdInput>(),
         ),
         Tool::new(
@@ -1238,6 +1238,7 @@ async fn create_review_checkout(
         "workspace": checkout.workspace.id,
         "path": checkout.workspace.path,
         "version": version(checkout.version),
+        "setup": checkout.setup.as_str(),
     }))
 }
 

@@ -66,6 +66,7 @@ mod acceptance_52_rename_the_git_branch;
 mod acceptance_53_calculated_holds;
 mod acceptance_54_an_edit_stops_the_check_run;
 mod acceptance_55_a_reviewer_waits_parked_for_a_humans_answer;
+mod acceptance_56_setup_in_new_folders;
 mod acceptance_57_a_project_limits_its_parallel_check_runs;
 mod acceptance_58_a_new_main_session_takes_over;
 mod acceptance_5_review_and_integrate;

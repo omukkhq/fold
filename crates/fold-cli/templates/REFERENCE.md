@@ -48,7 +48,7 @@ paths = ["crates/store/migrations/**", "Cargo.lock"]
 
 Keys. Every key is known, and a misspelt key refuses the whole file with `checks_file_invalid`, whose message names the line or the check:
 
-- `[setup]` with `run`: one shell command that runs first in every run, such as installing dependencies. A failed setup fails the run with `setup_failed`, and no check runs (`not_run`).
+- `[setup]` with `run`: one shell command that runs first in every run, such as installing dependencies. A failed setup fails the run with `setup_failed`, and no check runs (`not_run`). fold also runs it in the background in each task workspace that `create_workspace` makes or adopts and in each review checkout that `create_review_checkout` makes, from that folder's own `fold-checks.toml`: the tool answers `setup` `running` (or `none` without a setup), a message from fold reports the end (passed, or the end of the failed log), and a check run of the folder waits until the setup ends.
 - `[[check]]`, at most 64, each with:
   - `name`: 1 to 64 letters, digits, `_`, `-` or `.`, unique in the file.
   - `run`: the shell command, at most 4000 characters. It runs as `sh -c` in the check directory, with stdin closed and without fold's agent and human variables. A fold call from inside a check acts only as the agent of the worker that asked for the run, never as a human.
