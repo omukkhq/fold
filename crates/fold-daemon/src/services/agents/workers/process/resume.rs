@@ -400,7 +400,10 @@ impl Supervisor {
         let Some(worker) = agents::find_worker_process(&mut conn, agent).await? else {
             return Ok(());
         };
-        if worker.role != Role::Reviewer || worker.state.is_running() {
+        if worker.role != Role::Reviewer
+            || worker.state.is_running()
+            || self.held_by_park(&worker).await?
+        {
             return Ok(());
         }
         let mut held = Vec::with_capacity(versions.len());
@@ -629,7 +632,10 @@ impl Supervisor {
         let Some(worker) = worker else {
             return Ok(());
         };
-        if worker.role != Role::TaskWorker || worker.state.is_running() {
+        if worker.role != Role::TaskWorker
+            || worker.state.is_running()
+            || self.held_by_park(&worker).await?
+        {
             return Ok(());
         }
         let mut found = Vec::with_capacity(items.len());

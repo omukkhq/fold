@@ -237,6 +237,10 @@ impl Supervisor {
                 Given::Refused { lost: None }
             });
         }
+        // A parked reviewer waits for its go, so its review lead gives the conflict to another reviewer.
+        if self.held_by_park(&worker).await? {
+            return Ok(Given::Refused { lost: None });
+        }
         let turn = format!("fold resumed you because {turn}");
         let watch = match self.resume(agent, turn.clone(), &[]).await {
             Ok(watch) => watch,

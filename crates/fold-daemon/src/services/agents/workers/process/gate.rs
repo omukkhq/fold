@@ -88,7 +88,10 @@ impl Supervisor {
         let Some(process) = process else {
             return Ok(());
         };
-        if process.role != Role::TaskWorker || process.state.is_running() {
+        if process.role != Role::TaskWorker
+            || process.state.is_running()
+            || self.held_by_park(&process).await?
+        {
             return Ok(());
         }
         let failed: Vec<String> = checks::list_results(read, run, false)

@@ -73,6 +73,7 @@ mod acceptance_59_cancel_a_check_run;
 mod acceptance_5_review_and_integrate;
 mod acceptance_60_watch_tasks_until_done;
 mod acceptance_63_a_stop_cancels_the_workers_check_runs;
+mod acceptance_64_a_parked_worker_stays_parked_when_its_checks_end;
 mod acceptance_6_dependency_unblocks;
 mod acceptance_7_conflicting_proposals;
 mod acceptance_8_restart_recovery;

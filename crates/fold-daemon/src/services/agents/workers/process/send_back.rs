@@ -150,7 +150,10 @@ impl Supervisor {
         let Some(worker) = worker else {
             return Ok(());
         };
-        if worker.role != Role::TaskWorker || worker.state.is_running() {
+        if worker.role != Role::TaskWorker
+            || worker.state.is_running()
+            || self.held_by_park(&worker).await?
+        {
             return Ok(());
         }
         let mut found = Vec::with_capacity(tasks.len());
