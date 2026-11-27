@@ -3,7 +3,7 @@
 # Usage: scripts/build-gate.sh <command...>, such as scripts/build-gate.sh make clippy.
 #
 # - Build output goes to this tree's own target/, which overrides a shared target-dir in ~/.cargo/config.toml. Cargo gives a workspace crate the same build hash in every copy of the tree, so a shared folder would let one workspace link the fold crates another workspace built, and parallel builds would wait on its one lock.
-# - sccache, when installed, shares the compiled dependencies between the target folders.
+# - sccache, when installed, caches compilations. A hit needs the same absolute paths, so it serves later builds of the same tree, such as the integration checks in .fold/checks/main, and not a first build in a new workspace.
 # - FOLD_GATE_SLOTS, FOLD_GATE_JOBS, FOLD_GATE_TEST_THREADS and FOLD_GATE_MIN_FREE_GB override the defaults, which come from the processors and the memory of the machine.
 set -u
 
@@ -46,7 +46,7 @@ export FOLD_GATE_HELD=1
 
 if [ -z "${RUSTC_WRAPPER:-}" ] && command -v sccache >/dev/null 2>&1; then
   export RUSTC_WRAPPER=sccache
-  export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-40G}"
+  export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-100G}"
   # Started before a slot is taken, so the server that outlives the command never holds the slot's lock.
   sccache --start-server >/dev/null 2>&1 || true
 fi
