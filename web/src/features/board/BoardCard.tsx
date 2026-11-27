@@ -28,7 +28,7 @@ import { taskCanMarkAnswered } from "@/features/messages/answered";
 import { activityLine, type ActivityLine } from "./activityLine";
 import { currentCheckRun } from "./checkRun";
 import { taskPath } from "./card";
-import { cardChip, metaFact } from "./chip";
+import { cardChip, heldChip, metaFact, type CardChip } from "./chip";
 import { cardDetails, type DetailRow } from "./details";
 import { hoverPeek, panelBoundary, type HoverPeek } from "./hoverPeek";
 
@@ -285,7 +285,7 @@ function usePeek(): [boolean, HoverPeek] {
 }
 
 /**
- * One read-only card: the title, one line of facts and at most one chip. The title is the only control on the card: a
+ * One read-only card: the title, one line of facts and its chips. The title is the only control on the card: a
  * link stretched over it, so a keyboard user opens the task with Enter and nothing can be dragged or moved. The rest
  * shows in a panel on hover or keyboard focus; `peek` is off on a phone, which has no hover.
  */
@@ -317,7 +317,9 @@ export function BoardCard({
     run === null && card.status !== "done"
       ? workerActivity(streamed, now)
       : null;
-  const chip = cardChip(card, run, activity);
+  const chips = [cardChip(card, run, activity), heldChip(card)].filter(
+    (chip): chip is CardChip => chip !== null,
+  );
   const [open, peek] = usePeek();
   const box = useRef<HTMLDivElement>(null);
   const [boundary, setBoundary] = useState<Element | null>(null);
@@ -373,9 +375,10 @@ export function BoardCard({
             {card.title}
           </HrefLink>
           <MetaLine card={card} />
-          {chip ? (
+          {chips.map((chip) => (
             // A long chip, such as a list of blockers, wraps inside the card; its ids stay whole.
             <Chip
+              key={chip.text}
               tone={chip.tone}
               className="mt-2 max-w-full self-start whitespace-normal"
             >
@@ -384,7 +387,7 @@ export function BoardCard({
                 <IdText text={chip.text} />
               </span>
             </Chip>
-          ) : null}
+          ))}
           {shown ? (
             // Not in a portal: the panel follows the title in the DOM, so Tab reaches Mark answered.
             <RadixPopover.Content

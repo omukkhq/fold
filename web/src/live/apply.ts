@@ -355,6 +355,12 @@ function versionKeys(slug: string, event: StoredEvent): QueryKey[] {
     : [];
 }
 
+/** A hold set or cleared changes `held_by` of every task that waits on the held one, not only of the task the event names. */
+const HOLD_CHANGES: ReadonlySet<string> = new Set([
+  "task.hold_set",
+  "task.hold_cleared",
+]);
+
 function invalidationKeys(
   slug: string,
   type: string,
@@ -392,6 +398,15 @@ function invalidationKeys(
     case "task": {
       // Needs you lists human tasks in To do and tasks on hold, which any task event can add or remove; the human review mark also decides which proposals wait for the human. A change of the labels can move the task to another area, whose lead reads its feedback.
       const readers = task === null ? [] : [keys.taskReaders(slug, task)];
+      if (HOLD_CHANGES.has(type)) {
+        return [
+          board,
+          keys.tasks(slug),
+          ...taskKey,
+          ...readers,
+          keys.needsYou(slug),
+        ];
+      }
       return type === "task.human_review_set" ||
         type === "task.human_review_cleared"
         ? [
@@ -404,6 +419,10 @@ function invalidationKeys(
         : [board, ...taskKey, ...readers, keys.needsYou(slug)];
     }
     case "dependency":
+      // A dependency edge changes which held tasks every dependent waits on, so each open task read is stale.
+      return type === "dependency.added" || type === "dependency.removed"
+        ? [board, keys.tasks(slug), ...taskKey]
+        : [board, ...taskKey];
     case "checklist":
       return [board, ...taskKey];
     case "claim":

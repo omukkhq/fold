@@ -220,3 +220,34 @@ describe("proseRow", () => {
     ).toBeNull();
   });
 });
+
+describe("cardDetails held rows", () => {
+  it("names the held tasks before the prerequisites", () => {
+    const details = cardDetails(
+      boardCard("T-2", {
+        status: "todo",
+        held_by: ["T-3", "T-5"],
+        blocked_by: ["T-1"],
+      }),
+      null,
+      0,
+    );
+    expect(details.rows).toEqual([
+      { kind: "text", name: "Held through", text: "T-3, T-5" },
+      { kind: "text", name: "Needs", text: "T-1" },
+    ]);
+  });
+
+  it("shows no row for a Done task or for no held task", () => {
+    expect(
+      cardDetails(
+        boardCard("T-2", { status: "done", held_by: ["T-3"] }),
+        null,
+        0,
+      ).rows,
+    ).toEqual([]);
+    expect(
+      cardDetails(boardCard("T-2", { status: "todo" }), null, 0).rows,
+    ).toEqual([]);
+  });
+});

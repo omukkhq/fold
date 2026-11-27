@@ -13,7 +13,14 @@ import {
 } from "lucide-react";
 import type { BoardCard, BoardProposal } from "@/api/board";
 import { boardCard } from "@/test/payloads";
-import { SLOT_CHIP_TEXT, cardChip, integratedText, metaFact } from "./chip";
+import {
+  SLOT_CHIP_TEXT,
+  cardChip,
+  heldChip,
+  heldThroughText,
+  integratedText,
+  metaFact,
+} from "./chip";
 
 const proposal = (
   state: BoardProposal["state"],
@@ -475,5 +482,44 @@ describe("metaFact", () => {
       icon: Hand,
       text: "@web-worker failed",
     });
+  });
+});
+
+describe("heldChip", () => {
+  it("names every held task in a muted chip, never gold", () => {
+    const chip = heldChip(
+      boardCard("T-2", { status: "todo", held_by: ["T-3", "T-5"] }),
+    );
+    expect(chip).toEqual({
+      tone: "neutral",
+      icon: CirclePause,
+      text: "Held through T-3, T-5",
+    });
+  });
+
+  it("leaves a task that waits on no held task without the chip", () => {
+    expect(heldChip(boardCard("T-2", { status: "todo" }))).toBeNull();
+    expect(
+      heldChip(boardCard("T-2", { status: "todo", held_by: [] })),
+    ).toBeNull();
+    expect(heldThroughText(boardCard("T-2", {}))).toBeNull();
+    expect(heldThroughText(boardCard("T-2", { held_by: ["T-3"] }))).toBe("T-3");
+  });
+
+  it("gives a Done task no chip", () => {
+    expect(
+      heldChip(boardCard("T-2", { status: "done", held_by: ["T-3"] })),
+    ).toBeNull();
+  });
+
+  it("is apart from the gold manual hold, so a task with both has both", () => {
+    const card = boardCard("T-2", {
+      status: "todo",
+      hold: HOLD,
+      held_by: ["T-3"],
+    });
+    expect(cardChip(card)?.tone).toBe("warn");
+    expect(cardChip(card)?.text).toBe("On hold");
+    expect(heldChip(card)?.tone).toBe("neutral");
   });
 });

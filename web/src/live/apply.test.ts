@@ -1041,6 +1041,23 @@ describe("invalidation rules", () => {
     }
   });
 
+  it("refreshes every task read and the board when a hold or a dependency changes, since dependents show held_by", () => {
+    for (const type of [
+      "task.hold_set",
+      "task.hold_cleared",
+      "dependency.added",
+      "dependency.removed",
+    ]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, { task: "T-3" }));
+      expect(hit(keys.board(slug)), type).toBe(true);
+      expect(refreshes(keys.task(slug, "T-9")), type).toBe(true);
+    }
+    invalidated = [];
+    applyEvent(client, slug, ev("checklist.item_done", { task: "T-3" }));
+    expect(refreshes(keys.task(slug, "T-9"))).toBe(false);
+  });
+
   it("refreshes only the activity list for an event of an unknown type", () => {
     applyEvent(
       client,

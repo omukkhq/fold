@@ -41,12 +41,36 @@ type ChipCard = Pick<
   | "attention"
   | "blocked"
   | "blocked_by"
+  | "held_by"
   | "hold"
   | "kind"
   | "proposal"
   | "report"
   | "status"
 >;
+
+/** `T-3, T-5`: the held tasks a task waits on, in the order the daemon sorted them; null for none. */
+export function heldThroughText(
+  card: Pick<BoardCard, "held_by">,
+): string | null {
+  const ids = card.held_by ?? [];
+  return ids.length === 0 ? null : ids.join(", ");
+}
+
+/**
+ * The muted chip of a task that waits on held tasks, apart from the one chip `cardChip` picks: the manual hold is
+ * gold because it waits for a person, while this calculated hold is only a fact, so it stays neutral. A task with
+ * both shows both. A Done task has none.
+ */
+export function heldChip(
+  card: Pick<BoardCard, "held_by" | "status">,
+): CardChip | null {
+  const ids = heldThroughText(card);
+  if (card.status === "done" || ids === null) {
+    return null;
+  }
+  return { tone: "neutral", icon: CirclePause, text: `Held through ${ids}` };
+}
 
 /** The words of a slot wait on the card, which leave out the slot's role so the narrow chip keeps one line; the details panel names it. */
 export const SLOT_CHIP_TEXT = "Waiting for a free slot";
