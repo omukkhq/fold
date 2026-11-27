@@ -103,6 +103,7 @@ impl ReviewService {
                 runs: true,
                 timeout: None,
                 max_parallel: None,
+                build_slot_wait: None,
             };
             let results =
                 run_commands_for(&owner, &dir, vec![spec], service.checks.limits(), &*service.clock)

@@ -2588,6 +2588,11 @@ export interface components {
             version: number | null;
             /**
              * Format: int64
+             * @description UTC milliseconds since a command of the running run waits for a slot of the machine's build gate; its timeout starts once it has one. Absent while it does not wait.
+             */
+            waiting_for_build_slot_since?: number | null;
+            /**
+             * Format: int64
              * @description UTC milliseconds since the running run holds its permit and waits for free memory before its commands start. Absent while it does not wait.
              */
             waiting_for_memory_since?: number | null;
@@ -2596,7 +2601,7 @@ export interface components {
          * @description Why a run failed or stopped.
          * @enum {string}
          */
-        CheckRunReason: "check_failed" | "setup_failed" | "checks_file_invalid" | "files_changed" | "workspace_changed" | "refused" | "daemon_stopped" | "superseded" | "fold_failed" | "killed" | "cancelled";
+        CheckRunReason: "check_failed" | "setup_failed" | "checks_file_invalid" | "files_changed" | "workspace_changed" | "refused" | "daemon_stopped" | "superseded" | "fold_failed" | "killed" | "no_build_slot" | "cancelled";
         /**
          * @description Where a run stands.
          * @enum {string}

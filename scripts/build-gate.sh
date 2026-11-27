@@ -73,6 +73,7 @@ while :; do
   for i in $(seq 1 "$slots"); do
     exec {fd}>"$locks/slot-$i.lock"
     if flock -n "$fd"; then
+      echo "build-gate: slot taken" >&2
       # The command inherits the locked descriptor, so the slot stays held until the command and everything it started have ended.
       exec nice -n 10 "$@"
     fi

@@ -15,6 +15,9 @@ pub const CHECKS_FILE: &str = "fold-checks.toml";
 /// How long one setup or check command may run before fold stops its process group.
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
+/// How long one command may wait for a slot of the machine's build gate before fold stops it and fails the run as `no_build_slot`, so a full machine is never reported as a slow check: 2 hours unless `[runs] build_slot_wait` says otherwise. The wait counts in no check's timeout.
+pub const BUILD_SLOT_WAIT: Duration = Duration::from_secs(2 * 60 * 60);
+
 /// The most checks one file may name.
 pub const MAX_CHECKS: usize = 64;
 
@@ -89,6 +92,8 @@ define_names!(
         FoldFailed = "fold_failed",
         /// A signal that fold did not send ended a command, as the kernel's OOM killer does when the machine runs out of memory: no later command of the run starts, and the run says nothing of the change.
         Killed = "killed",
+        /// A command waited for a slot of the machine's build gate longer than `[runs] build_slot_wait`: no later command of the run starts, and the run says nothing of the change.
+        NoBuildSlot = "no_build_slot",
         /// A worker, a lead, the main agent or a human cancelled the run: fold ended its running command's process group and started no later command.
         Cancelled = "cancelled",
     }
@@ -151,6 +156,8 @@ pub struct ChecksFile {
     pub lanes: Vec<Lane>,
     /// `[runs] max_parallel_runs`: the most check runs of the project that run their commands at the same time; `None` is no limit.
     pub max_parallel_runs: Option<NonZeroUsize>,
+    /// `[runs] build_slot_wait`: how long one command may wait for a build gate slot; `None` is [`BUILD_SLOT_WAIT`].
+    pub build_slot_wait: Option<Duration>,
 }
 
 /// A check of one stage with whether it runs for the changed paths.
@@ -176,6 +183,7 @@ struct RawFile {
 #[serde(deny_unknown_fields)]
 struct RawRuns {
     max_parallel_runs: Option<toml::Spanned<toml::Value>>,
+    build_slot_wait: Option<toml::Spanned<toml::Value>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -281,13 +289,24 @@ impl ChecksFile {
             });
         }
         let lanes = parse_lanes(raw.serial)?;
-        let max_parallel_runs = raw
-            .runs
-            .and_then(|runs| runs.max_parallel_runs)
+        let (max_parallel_runs, build_slot_wait) = raw.runs.map_or((None, None), |runs| {
+            (runs.max_parallel_runs, runs.build_slot_wait)
+        });
+        let max_parallel_runs = max_parallel_runs
             .map(|value| {
                 whole_number(value.get_ref()).ok_or_else(|| {
                     invalid(format!(
                         "line {}: [runs] max_parallel_runs is a whole number of 1 or more, such as 2",
+                        line_of(text, value.span().start)
+                    ))
+                })
+            })
+            .transpose()?;
+        let build_slot_wait = build_slot_wait
+            .map(|value| {
+                value.get_ref().as_str().and_then(parse_timeout).ok_or_else(|| {
+                    invalid(format!(
+                        "line {}: [runs] build_slot_wait is a whole number and s, m or h, such as \"90m\" or \"3h\", from 1s to {MAX_TIMEOUT_HOURS}h",
                         line_of(text, value.span().start)
                     ))
                 })
@@ -298,6 +317,7 @@ impl ChecksFile {
             checks,
             lanes,
             max_parallel_runs,
+            build_slot_wait,
         })
     }
 
@@ -766,6 +786,25 @@ stage = "integration"
         }
         let unknown = refusal(&format!("[runs]\nmax_parallel = 2\n{check}"));
         assert!(unknown.contains("line 2"), "{unknown}");
+    }
+
+    #[test]
+    fn build_slot_wait_is_a_duration_under_runs() {
+        let check = "[[check]]\nname = \"t\"\nrun = \"y\"\n";
+        assert_eq!(ChecksFile::parse(check).unwrap().build_slot_wait, None);
+        let empty = ChecksFile::parse(&format!("[runs]\n{check}")).unwrap();
+        assert_eq!(empty.build_slot_wait, None);
+        let set = ChecksFile::parse(&format!("[runs]\nbuild_slot_wait = \"3h\"\n{check}")).unwrap();
+        assert_eq!(set.build_slot_wait, Some(Duration::from_secs(3 * 3600)));
+        assert_eq!(set.max_parallel_runs, None);
+        for bad in ["\"0s\"", "\"two hours\"", "\"25h\"", "7200", "true"] {
+            let message = refusal(&format!("[runs]\nbuild_slot_wait = {bad}\n{check}"));
+            assert!(
+                message.contains("line 2: [runs] build_slot_wait is a whole number and s, m or h"),
+                "{bad}: {message}"
+            );
+        }
+        assert!(BUILD_SLOT_WAIT > CHECK_TIMEOUT);
     }
 
     #[test]

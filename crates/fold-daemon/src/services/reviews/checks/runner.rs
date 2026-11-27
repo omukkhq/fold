@@ -6,11 +6,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fold_core::layout::{AGENT_ENV, AGENT_TAGS_ENV};
-use fold_core::reviews::checks::{CHECK_TIMEOUT, ChecksFile, Outcome, Planned};
+use fold_core::reviews::checks::{BUILD_SLOT_WAIT, CHECK_TIMEOUT, ChecksFile, Outcome, Planned};
 use fold_core::{AgentName, CheckRunId, Clock, Timestamp, WorkspaceId};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
-use tokio::sync::{OwnedRwLockReadGuard, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedRwLockReadGuard, OwnedSemaphorePermit, Semaphore, watch};
 use tokio::task::JoinSet;
 
 use super::memory::{self, MemorySource};
@@ -29,12 +29,23 @@ const KILL_GRACE: Duration = Duration::from_secs(5);
 /// How long the output readers may run on after the command exited, for a child that keeps the pipes open.
 const DRAIN_WAIT: Duration = Duration::from_secs(5);
 
+/// The line `scripts/build-gate.sh` writes on stderr when the command takes a slot of the machine's build gate. A command's timeout counts from the first such line.
+pub const BUILD_SLOT_MARKER: &str = "build-gate: slot taken";
+
+/// The start and the end of the line the build gate writes on stderr when every slot is in use: from it until [`BUILD_SLOT_MARKER`], the command waits for a slot, under the build slot wait instead of its timeout.
+const SLOT_WAIT_LINE: (&str, &str) = ("build-gate: all ", " slots are in use; waiting for one");
+
+/// The longest stderr line that is read for the gate's lines; a longer one is no gate line.
+const GATE_LINE_LIMIT: usize = 256;
+
 /// The limits of one command. Tests shorten them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunLimits {
     pub timeout: Duration,
     pub kill_grace: Duration,
     pub log_limit: usize,
+    /// How long a command may wait for a build gate slot; a check file's `[runs] build_slot_wait` replaces it.
+    pub build_slot_wait: Duration,
 }
 
 impl Default for RunLimits {
@@ -43,6 +54,7 @@ impl Default for RunLimits {
             timeout: CHECK_TIMEOUT,
             kill_grace: KILL_GRACE,
             log_limit: LOG_LIMIT,
+            build_slot_wait: BUILD_SLOT_WAIT,
         }
     }
 }
@@ -376,6 +388,7 @@ type Waits = Arc<Mutex<HashMap<CheckRunId, (Waiting, Timestamp)>>>;
 enum Waiting {
     Memory,
     Check(String),
+    BuildSlot,
 }
 
 /// A queued integration that waits for a valid checks file on main. Its stored request keeps no end, so a daemon start serves it again; while the daemon runs, the next revision of main does.
@@ -591,6 +604,14 @@ impl CheckRunner {
         }
     }
 
+    /// Since when a command of `run` waits for a slot of the machine's build gate; `None` when it does not wait.
+    pub fn waiting_for_build_slot(&self, run: CheckRunId) -> Option<Timestamp> {
+        match lock(&self.memory_waits).get(&run) {
+            Some((Waiting::BuildSlot, since)) => Some(*since),
+            _ => None,
+        }
+    }
+
     /// The per-check limits of the project as `run` meets them.
     pub(crate) fn gate(&self, run: CheckRunId) -> RunGate {
         RunGate {
@@ -702,6 +723,16 @@ impl RunGate {
         };
         permits.acquire_owned().await.ok()
     }
+
+    /// Shows the run as waiting for a build gate slot until the returned guard is dropped.
+    fn wait_for_build_slot(&self, clock: &dyn Clock) -> MemoryWait {
+        tracing::info!(run = %self.run, "a command of the check run waits for a build gate slot");
+        lock(&self.waits).insert(self.run, (Waiting::BuildSlot, clock.now()));
+        MemoryWait {
+            waits: Arc::clone(&self.waits),
+            run: self.run,
+        }
+    }
 }
 
 impl Drop for MemoryWait {
@@ -722,6 +753,8 @@ pub struct CommandSpec {
     pub timeout: Option<Duration>,
     /// The most runs of the project that run this check's command at once; `None` is no limit.
     pub max_parallel: Option<NonZeroUsize>,
+    /// The file's `[runs] build_slot_wait`; `None` takes the runner's.
+    pub build_slot_wait: Option<Duration>,
 }
 
 /// What one command did.
@@ -740,6 +773,8 @@ pub struct CommandResult {
     pub fault: bool,
     /// The signal that ended the command when fold did not send it, such as the SIGKILL of the kernel's OOM killer, so its failure says nothing of the tree either.
     pub killed: Option<i32>,
+    /// fold stopped the command because it waited for a build gate slot longer than the build slot wait, so its failure says nothing of the tree either.
+    pub no_build_slot: bool,
 }
 
 impl CommandResult {
@@ -758,6 +793,7 @@ pub fn commands(file: &ChecksFile, plan: &[Planned<'_>]) -> Vec<CommandSpec> {
         runs: true,
         timeout: None,
         max_parallel: None,
+        build_slot_wait: file.build_slot_wait,
     });
     let checks = plan.iter().map(|planned| CommandSpec {
         check: Some(planned.check.name.clone()),
@@ -766,6 +802,7 @@ pub fn commands(file: &ChecksFile, plan: &[Planned<'_>]) -> Vec<CommandSpec> {
         runs: planned.runs,
         timeout: planned.check.timeout,
         max_parallel: planned.check.max_parallel,
+        build_slot_wait: file.build_slot_wait,
     });
     setup.chain(checks).collect()
 }
@@ -810,7 +847,7 @@ pub async fn run_commands_for(
     run_gated_commands_for(None, owner, dir, specs, limits, clock).await
 }
 
-/// [`run_commands_for`] under `gate`, when the run has one: a check with `max_parallel` waits for its limit before its command, and the wait counts in neither its duration nor its timeout.
+/// [`run_commands_for`] under `gate`, when the run has one: a check with `max_parallel` waits for its limit before its command, and the wait counts in neither its duration nor its timeout. While a command waits for a build gate slot, the run shows so under `gate`.
 pub async fn run_gated_commands_for(
     gate: Option<&RunGate>,
     owner: &PeerWorker,
@@ -832,6 +869,7 @@ pub async fn run_gated_commands_for(
             log_bytes: 0,
             fault: false,
             killed: None,
+            no_build_slot: false,
         };
         if stopped {
             results.push(skipped(Outcome::NotRun));
@@ -848,9 +886,10 @@ pub async fn run_gated_commands_for(
         let started = clock.now();
         let own = RunLimits {
             timeout: spec.timeout.unwrap_or(limits.timeout),
+            build_slot_wait: spec.build_slot_wait.unwrap_or(limits.build_slot_wait),
             ..limits
         };
-        let ran = run_command(dir.to_path_buf(), &spec.run, own, owner).await;
+        let ran = run_command(dir.to_path_buf(), &spec.run, own, owner, gate, clock).await;
         drop(limit);
         let duration_ms = clock
             .now()
@@ -868,8 +907,11 @@ pub async fn run_gated_commands_for(
             log_bytes: ran.log_bytes,
             fault: ran.fault,
             killed: ran.killed,
+            no_build_slot: ran.no_build_slot,
         };
-        stopped = (spec.check.is_none() && result.outcome.is_failure()) || result.killed.is_some();
+        stopped = (spec.check.is_none() && result.outcome.is_failure())
+            || result.killed.is_some()
+            || result.no_build_slot;
         results.push(result);
     }
     results
@@ -882,6 +924,7 @@ struct Ran {
     log_bytes: u64,
     fault: bool,
     killed: Option<i32>,
+    no_build_slot: bool,
 }
 
 /// The end of a stream of output, at most `limit` bytes, and the size of the whole.
@@ -922,11 +965,83 @@ async fn read_into(mut stream: impl AsyncRead + Unpin, tail: Arc<Mutex<Tail>>) {
     }
 }
 
+/// What the build gate's lines on a command's stderr said so far.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GateSeen {
+    Nothing,
+    Waiting,
+    Taken,
+}
+
+/// The gate line `line` is, without its line end.
+fn gate_line(line: &[u8]) -> Option<GateSeen> {
+    let line = std::str::from_utf8(line).ok()?.trim_end_matches('\r');
+    if line == BUILD_SLOT_MARKER {
+        return Some(GateSeen::Taken);
+    }
+    let (start, end) = SLOT_WAIT_LINE;
+    (line.starts_with(start) && line.ends_with(end)).then_some(GateSeen::Waiting)
+}
+
+/// [`read_into`] of stderr that also tells `seen` of the build gate's lines. Once the slot is taken, the lines are no longer read.
+async fn read_stderr(
+    mut stream: impl AsyncRead + Unpin,
+    tail: Arc<Mutex<Tail>>,
+    seen: watch::Sender<GateSeen>,
+) {
+    let mut chunk = vec![0_u8; 8192];
+    let mut line: Vec<u8> = Vec::new();
+    let mut long = false;
+    let mut taken = false;
+    while let Ok(read) = stream.read(&mut chunk).await {
+        if read == 0 {
+            break;
+        }
+        lock(&tail).push(&chunk[..read]);
+        if taken {
+            continue;
+        }
+        for &byte in &chunk[..read] {
+            if byte != b'\n' {
+                if line.len() < GATE_LINE_LIMIT {
+                    line.push(byte);
+                } else {
+                    long = true;
+                }
+                continue;
+            }
+            if !long && let Some(gate) = gate_line(&line) {
+                seen.send_if_modified(|now| {
+                    let new = *now != GateSeen::Taken && *now != gate;
+                    if new {
+                        *now = gate;
+                    }
+                    new
+                });
+                if gate == GateSeen::Taken {
+                    taken = true;
+                    break;
+                }
+            }
+            line.clear();
+            long = false;
+        }
+    }
+}
+
 fn note(tail: &Arc<Mutex<Tail>>, text: &str) {
     lock(tail).push(text.as_bytes());
 }
 
-async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWorker) -> Ran {
+/// Runs one command until it exits or runs out of time. Its timeout counts from its start, or from the build gate's [`BUILD_SLOT_MARKER`] when its stderr writes one; while the gate says it waits for a slot, the build slot wait from the command's start replaces the timeout, and a command stopped at it ends with `no_build_slot`.
+async fn run_command(
+    dir: PathBuf,
+    run: &str,
+    limits: RunLimits,
+    owner: &PeerWorker,
+    gate: Option<&RunGate>,
+    clock: &dyn Clock,
+) -> Ran {
     let tail = Arc::new(Mutex::new(Tail {
         bytes: Vec::new(),
         total: 0,
@@ -948,6 +1063,7 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
                 log_bytes,
                 fault: true,
                 killed: None,
+                no_build_slot: false,
             };
         }
     };
@@ -963,49 +1079,87 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
     if let Some(stdout) = child.stdout.take() {
         readers.spawn(read_into(stdout, Arc::clone(&tail)));
     }
+    let (seen, mut gate_seen) = watch::channel(GateSeen::Nothing);
     if let Some(stderr) = child.stderr.take() {
-        readers.spawn(read_into(stderr, Arc::clone(&tail)));
+        readers.spawn(read_stderr(stderr, Arc::clone(&tail), seen));
     }
-    let (outcome, exit_code, fault, killed) =
-        match tokio::time::timeout(limits.timeout, child.wait()).await {
-            Ok(Ok(status)) => {
-                let outcome = if status.success() {
-                    Outcome::Passed
-                } else {
-                    Outcome::Failed
-                };
-                let killed = killed_by_signal(status);
-                if let Some(signal) = killed {
-                    note(&tail, &killed_note(signal));
+    let started = tokio::time::Instant::now();
+    let mut deadline = started + limits.timeout;
+    let mut phase = GateSeen::Nothing;
+    let mut gate_open = true;
+    let mut slot_wait = None;
+    let waited = loop {
+        tokio::select! {
+            status = child.wait() => break Ok(status),
+            () = tokio::time::sleep_until(deadline) => break Err(phase),
+            changed = gate_seen.changed(), if gate_open => {
+                if changed.is_err() {
+                    gate_open = false;
+                    continue;
                 }
-                (outcome, status.code(), false, killed)
-            }
-            Ok(Err(error)) => {
-                note(
-                    &tail,
-                    &format!("\nfold could not wait for the command: {}\n", error.kind()),
-                );
-                (Outcome::Failed, None, true, None)
-            }
-            Err(_) => {
-                signal(group, rustix::process::Signal::TERM);
-                if tokio::time::timeout(limits.kill_grace, child.wait())
-                    .await
-                    .is_err()
-                {
-                    signal(group, rustix::process::Signal::KILL);
-                    let _ = child.wait().await;
+                let now = *gate_seen.borrow_and_update();
+                match now {
+                    GateSeen::Waiting if phase == GateSeen::Nothing => {
+                        deadline = started + limits.build_slot_wait;
+                        slot_wait = gate.map(|gate| gate.wait_for_build_slot(clock));
+                    }
+                    GateSeen::Taken => {
+                        deadline = tokio::time::Instant::now() + limits.timeout;
+                        slot_wait = None;
+                        gate_open = false;
+                    }
+                    GateSeen::Waiting | GateSeen::Nothing => continue,
                 }
-                note(
-                    &tail,
-                    &format!(
-                        "\nfold stopped the command after {} s\n",
-                        limits.timeout.as_secs()
-                    ),
-                );
-                (Outcome::TimedOut, None, false, None)
+                phase = now;
             }
-        };
+        }
+    };
+    drop(slot_wait);
+    let (outcome, exit_code, fault, killed, no_build_slot) = match waited {
+        Ok(Ok(status)) => {
+            let outcome = if status.success() {
+                Outcome::Passed
+            } else {
+                Outcome::Failed
+            };
+            let killed = killed_by_signal(status);
+            if let Some(signal) = killed {
+                note(&tail, &killed_note(signal));
+            }
+            (outcome, status.code(), false, killed, false)
+        }
+        Ok(Err(error)) => {
+            note(
+                &tail,
+                &format!("\nfold could not wait for the command: {}\n", error.kind()),
+            );
+            (Outcome::Failed, None, true, None, false)
+        }
+        Err(phase) => {
+            signal(group, rustix::process::Signal::TERM);
+            if tokio::time::timeout(limits.kill_grace, child.wait())
+                .await
+                .is_err()
+            {
+                signal(group, rustix::process::Signal::KILL);
+                let _ = child.wait().await;
+            }
+            let no_build_slot = phase == GateSeen::Waiting;
+            let text = if no_build_slot {
+                format!(
+                    "\nfold stopped the command: no build slot was free on the machine for {} s\n",
+                    limits.build_slot_wait.as_secs()
+                )
+            } else {
+                format!(
+                    "\nfold stopped the command after {} s\n",
+                    limits.timeout.as_secs()
+                )
+            };
+            note(&tail, &text);
+            (Outcome::TimedOut, None, false, None, no_build_slot)
+        }
+    };
     drop(guard);
     let drained = tokio::time::timeout(DRAIN_WAIT, async {
         while readers.join_next().await.is_some() {}
@@ -1022,6 +1176,7 @@ async fn run_command(dir: PathBuf, run: &str, limits: RunLimits, owner: &PeerWor
         log_bytes,
         fault,
         killed,
+        no_build_slot,
     }
 }
 
@@ -1128,6 +1283,7 @@ mod tests {
             runs: true,
             timeout: None,
             max_parallel: None,
+            build_slot_wait: None,
         }
     }
 
@@ -1201,6 +1357,7 @@ mod tests {
             timeout: Duration::from_secs(20),
             kill_grace: Duration::from_millis(200),
             log_limit: 1024,
+            build_slot_wait: Duration::from_secs(20),
         }
     }
 
@@ -1323,6 +1480,114 @@ mod tests {
         assert_eq!(results[0].outcome, Outcome::TimedOut);
         assert_eq!(results[0].exit_code, None);
         assert!(String::from_utf8_lossy(&results[0].log).contains("fold stopped the command"));
+    }
+
+    #[test]
+    fn only_the_gate_lines_are_gate_lines() {
+        assert_eq!(gate_line(b"build-gate: slot taken"), Some(GateSeen::Taken));
+        assert_eq!(
+            gate_line(b"build-gate: slot taken\r"),
+            Some(GateSeen::Taken)
+        );
+        assert_eq!(
+            gate_line(b"build-gate: all 3 slots are in use; waiting for one"),
+            Some(GateSeen::Waiting)
+        );
+        for other in [
+            &b"build-gate: slot taken twice"[..],
+            b"  build-gate: slot taken",
+            b"build-gate: waiting for 20 GB of free disk; 3 GB is free.",
+            b"\xff\xfe",
+            b"",
+        ] {
+            assert_eq!(gate_line(other), None, "{other:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_timeout_of_a_gated_command_counts_from_the_slot_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let limits = RunLimits {
+            timeout: Duration::from_millis(400),
+            build_slot_wait: Duration::from_secs(20),
+            ..quick()
+        };
+        let waits = "echo 'build-gate: all 1 slots are in use; waiting for one' >&2; sleep 1";
+        let results = run_commands(
+            dir.path(),
+            vec![
+                spec(
+                    "waits",
+                    &format!("{waits}; echo 'build-gate: slot taken' >&2; echo ran"),
+                ),
+                spec(
+                    "runs long",
+                    &format!("{waits}; echo 'build-gate: slot taken' >&2; sleep 30"),
+                ),
+            ],
+            limits,
+            &clock(),
+        )
+        .await;
+        assert_eq!(results[0].outcome, Outcome::Passed);
+        assert!(!results[0].no_build_slot);
+        assert_eq!(results[1].outcome, Outcome::TimedOut);
+        assert!(!results[1].no_build_slot);
+        assert!(
+            String::from_utf8_lossy(&results[1].log).contains("fold stopped the command after 0 s")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_command_without_a_slot_in_time_ends_with_no_build_slot_and_stops_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = CheckRunner::new(CheckPermits::new(1));
+        let gate = runner.gate(run(1));
+        let limits = RunLimits {
+            timeout: Duration::from_millis(100),
+            build_slot_wait: Duration::from_secs(30),
+            ..quick()
+        };
+        let go = dir.path().join("go");
+        let waits = format!(
+            "echo 'build-gate: all 1 slots are in use; waiting for one' >&2; until [ -e '{}' ]; do sleep 0.05; done; sleep 30",
+            go.display()
+        );
+        let own = CommandSpec {
+            build_slot_wait: Some(Duration::from_millis(1500)),
+            ..spec("never", &waits)
+        };
+        let work = dir.path().to_path_buf();
+        let task = tokio::spawn(async move {
+            run_gated_commands(
+                &gate,
+                &work,
+                vec![own, spec("later", "echo later")],
+                limits,
+                &clock(),
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while runner.waiting_for_build_slot(run(1)).is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let results = tokio::time::timeout(Duration::from_secs(20), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(runner.waiting_for_build_slot(run(1)), None);
+        assert_eq!(results[0].outcome, Outcome::TimedOut);
+        assert!(results[0].no_build_slot);
+        assert!(
+            String::from_utf8_lossy(&results[0].log).contains(
+                "fold stopped the command: no build slot was free on the machine for 1 s"
+            )
+        );
+        assert_eq!(results[1].outcome, Outcome::NotRun);
     }
 
     #[tokio::test]

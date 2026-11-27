@@ -59,6 +59,8 @@ pub struct CheckRunView {
     pub waiting_for_check: Option<(String, Timestamp)>,
     /// The run's place in the queue for a run place under `[runs] max_parallel_runs`, from 1 at the front; `None` when it does not wait for one.
     pub waiting_for_run_slot: Option<usize>,
+    /// Since when a command of the running run waits for a slot of the machine's build gate.
+    pub waiting_for_build_slot: Option<Timestamp>,
     /// The public name of the actor that cancelled the run, from its `checks.finished` event; `None` unless the run ended as `cancelled`.
     pub cancelled_by: Option<String>,
 }
@@ -98,10 +100,13 @@ impl Verdict {
         }
     }
 
-    /// From the commands' results alone: a command that a signal fold did not send ended, then a blocking setup failure, then a blocking check failure, else a pass. A killed command fails the run even when it is not required, because no later command of the run started.
+    /// From the commands' results alone: a command that a signal fold did not send ended, then a command that found no build gate slot in time, then a blocking setup failure, then a blocking check failure, else a pass. A killed command or one without a slot fails the run even when it is not required, because no later command of the run started.
     pub(super) fn of(results: &[CommandResult]) -> Self {
         if results.iter().any(|result| result.killed.is_some()) {
             return Self::failed(RunReason::Killed);
+        }
+        if results.iter().any(|result| result.no_build_slot) {
+            return Self::failed(RunReason::NoBuildSlot);
         }
         if results
             .iter()
@@ -192,12 +197,14 @@ impl ReviewService {
         let waiting_for_memory = self.checks.waiting_for_memory(run);
         let waiting_for_check = self.checks.waiting_for_check(run);
         let waiting_for_run_slot = self.checks.waiting_for_run_slot(run);
+        let waiting_for_build_slot = self.checks.waiting_for_build_slot(run);
         Ok(CheckRunView {
             run: row,
             results,
             waiting_for_memory,
             waiting_for_check,
             waiting_for_run_slot,
+            waiting_for_build_slot,
             cancelled_by,
         })
     }
@@ -722,6 +729,7 @@ impl ReviewService {
             let waiting_for_memory = runner.waiting_for_memory(run.id);
             let waiting_for_check = runner.waiting_for_check(run.id);
             let waiting_for_run_slot = runner.waiting_for_run_slot(run.id);
+            let waiting_for_build_slot = runner.waiting_for_build_slot(run.id);
             let cancelled_by = cancelled_by(&mut *conn, &run).await?;
             views.push(CheckRunView {
                 run,
@@ -729,6 +737,7 @@ impl ReviewService {
                 waiting_for_memory,
                 waiting_for_check,
                 waiting_for_run_slot,
+                waiting_for_build_slot,
                 cancelled_by,
             });
         }
@@ -888,6 +897,9 @@ pub(super) async fn insert_proposal_run(
 
 /// What a run that waits for its place under `[runs] max_parallel_runs` shows as `waiting_for`.
 pub const RUN_SLOT: &str = "run_slot";
+
+/// What a run whose command waits for a slot of the machine's build gate shows as `waiting_for`.
+pub const BUILD_SLOT: &str = "build_slot";
 
 /// A passed run of a proposal command with what its version needs.
 struct Gated<'a> {
@@ -1069,6 +1081,10 @@ pub(super) fn result_message(
                     "{} killed: out of memory or by a signal, not a test failure, so no later check ran; run the checks again when the machine has free memory",
                     killed_names(results).join(", ")
                 ),
+                RunReason::NoBuildSlot => format!(
+                    "{} found no free build slot: the machine has no free build slot, not a fault of the code, so no later check ran; run the checks again when the machine is less busy",
+                    no_slot_names(results).join(", ")
+                ),
                 _ => failed.join(", "),
             };
             let mut text = format!("{subject} failed: {what}.");
@@ -1101,6 +1117,15 @@ fn killed_names(results: &[CommandResult]) -> Vec<String> {
             let name = result.check.as_deref().unwrap_or("setup");
             Some(format!("{name} (signal {signal})"))
         })
+        .collect()
+}
+
+/// The commands that fold stopped because no build gate slot was free in time.
+fn no_slot_names(results: &[CommandResult]) -> Vec<&str> {
+    results
+        .iter()
+        .filter(|result| result.no_build_slot)
+        .map(|result| result.check.as_deref().unwrap_or("setup"))
         .collect()
 }
 
@@ -1295,6 +1320,7 @@ mod tests {
             log_bytes: 19,
             fault: false,
             killed: None,
+            no_build_slot: false,
         }
     }
 
@@ -1359,6 +1385,31 @@ mod tests {
         );
         let text = result_message(&run(), &[optional], Verdict::failed(RunReason::Killed));
         assert!(text.contains("test (signal 9) killed"), "{text}");
+    }
+
+    #[test]
+    fn a_command_without_a_build_slot_fails_the_run_with_no_build_slot() {
+        let waited = CommandResult {
+            required: false,
+            no_build_slot: true,
+            ..result(Some("test"), Outcome::TimedOut, true)
+        };
+        let red = result(Some("lint"), Outcome::Failed, true);
+        let verdict = Verdict::of(&[red, waited.clone()]);
+        assert_eq!(verdict, Verdict::failed(RunReason::NoBuildSlot));
+        let killed = CommandResult {
+            killed: Some(9),
+            ..result(Some("lint"), Outcome::Failed, true)
+        };
+        assert_eq!(
+            Verdict::of(&[killed, waited.clone()]),
+            Verdict::failed(RunReason::Killed)
+        );
+        let text = result_message(&run(), &[waited], verdict);
+        assert!(
+            text.contains("test found no free build slot: the machine has no free build slot, not a fault of the code"),
+            "{text}"
+        );
     }
 
     #[test]

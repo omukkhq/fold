@@ -423,7 +423,7 @@ const INVALID_REQUEST_REASONS: [&str; 19] = [
     "folder_held",
 ];
 
-const NON_TOOL_NAMES: [&str; 81] = [
+const NON_TOOL_NAMES: [&str; 83] = [
     "next_offset",
     "file_count",
     "human_review",
@@ -500,6 +500,8 @@ const NON_TOOL_NAMES: [&str; 81] = [
     "wait_for",
     "needs_person",
     "waiting_for",
+    "build_slot",
+    "no_build_slot",
     "max_parallel",
     "waiting_check",
     "created_at",

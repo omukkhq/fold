@@ -98,6 +98,8 @@ pub enum CheckRunReason {
     FoldFailed,
     /// A signal that fold did not send ended a command, such as the kernel's OOM killer; no later command of the run started.
     Killed,
+    /// A command waited longer than `[runs] build_slot_wait` for a slot of the machine's build gate; no later command of the run started, and the code was not at fault.
+    NoBuildSlot,
     /// A worker, a lead, the main agent or a human cancelled the run; `checks.finished` names who.
     Cancelled,
 }
@@ -115,6 +117,7 @@ impl From<RunReason> for CheckRunReason {
             RunReason::Superseded => Self::Superseded,
             RunReason::FoldFailed => Self::FoldFailed,
             RunReason::Killed => Self::Killed,
+            RunReason::NoBuildSlot => Self::NoBuildSlot,
             RunReason::Cancelled => Self::Cancelled,
         }
     }
@@ -195,6 +198,9 @@ pub struct CheckRun {
     /// UTC milliseconds since the running run holds its permit and waits for free memory before its commands start. Absent while it does not wait.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waiting_for_memory_since: Option<i64>,
+    /// UTC milliseconds since a command of the running run waits for a slot of the machine's build gate; its timeout starts once it has one. Absent while it does not wait.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_for_build_slot_since: Option<i64>,
     /// The public name of the actor that cancelled the run, such as `human:ana` or `daemon-lead`, for a run that ended with reason `cancelled`; null otherwise.
     #[schema(example = "human:ana")]
     pub cancelled_by: Option<String>,
@@ -216,6 +222,9 @@ impl From<CheckRunView> for CheckRun {
             finished_at: run.finished_at.map(|at| at.as_millis()),
             batch: run.batch.map(|batch| batch.to_string()),
             waiting_for_memory_since: view.waiting_for_memory.map(|since| since.as_millis()),
+            waiting_for_build_slot_since: view
+                .waiting_for_build_slot
+                .map(|since| since.as_millis()),
             cancelled_by: view.cancelled_by,
             results: view
                 .results

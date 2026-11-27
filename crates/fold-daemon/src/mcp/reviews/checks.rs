@@ -9,7 +9,9 @@ use super::super::error::from_review;
 use super::super::parse;
 use super::{id, task_id, version};
 use crate::services::reviews::ReviewService;
-use crate::services::reviews::checks::{CancelTarget, CheckRunView, RUN_SLOT, Started, log_tail};
+use crate::services::reviews::checks::{
+    BUILD_SLOT, CancelTarget, CheckRunView, RUN_SLOT, Started, log_tail,
+};
 
 pub const RUN_CHECKS: &str = "run_checks";
 pub const GET_CHECK_RUN: &str = "get_check_run";
@@ -60,7 +62,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_CHECK_RUN,
-            "Read one check run: its stage, state and reason, and each command that failed with its outcome, exit code, duration and the end of its log (the last 60 lines, at most 3000 characters), with not_shown counting the other commands; pass detail full for every command and the last 200 lines of each failed log. A running run with waiting_for memory holds its permit and waits until the machine has enough free memory to start its commands; with waiting_for check, it waits before the command of waiting_check until fewer runs than that check's max_parallel run it; with waiting_for run_slot, it waits at position (1 is next) until fewer runs of the project than [runs] max_parallel_runs of fold-checks.toml run.",
+            "Read one check run: its stage, state and reason, and each command that failed with its outcome, exit code, duration and the end of its log (the last 60 lines, at most 3000 characters), with not_shown counting the other commands; pass detail full for every command and the last 200 lines of each failed log. A running run with waiting_for memory holds its permit and waits until the machine has enough free memory to start its commands; with waiting_for check, it waits before the command of waiting_check until fewer runs than that check's max_parallel run it; with waiting_for run_slot, it waits at position (1 is next) until fewer runs of the project than [runs] max_parallel_runs of fold-checks.toml run; with waiting_for build_slot, a command waits for a slot of the machine's build gate, and its timeout starts once it has one.",
             schema_for_type::<GetCheckRunInput>(),
         ),
         Tool::new(
@@ -225,6 +227,10 @@ pub fn run_json(view: &CheckRunView) -> Value {
     if let Some((check, since)) = &view.waiting_for_check {
         line["waiting_for"] = json!("check");
         line["waiting_check"] = json!(check);
+        line["waiting_since"] = json!(since.as_millis());
+    }
+    if let Some(since) = view.waiting_for_build_slot {
+        line["waiting_for"] = json!(BUILD_SLOT);
         line["waiting_since"] = json!(since.as_millis());
     }
     if let Some(position) = view.waiting_for_run_slot {

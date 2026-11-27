@@ -102,6 +102,7 @@ impl ReviewService {
                     log: message,
                     fault: false,
                     killed: None,
+                    no_build_slot: false,
                 };
                 let verdict = Verdict::failed(RunReason::ChecksFileInvalid);
                 if at.batch.is_some() {
@@ -570,6 +571,10 @@ fn send_back_message(
             "a check was killed: out of memory or by a signal, not a failure of the change"
                 .to_owned()
         }
+        Some(RunReason::NoBuildSlot) => {
+            "a check found no free build slot on the machine in time, not a failure of the change"
+                .to_owned()
+        }
         _ => results
             .iter()
             .filter(|result| result.blocks())
@@ -667,6 +672,7 @@ mod tests {
             log_bytes: 12,
             fault: false,
             killed: None,
+            no_build_slot: false,
         }];
         let text = send_back_message(at, &run, &results, Verdict::failed(RunReason::CheckFailed));
         assert!(text.starts_with(
@@ -676,6 +682,8 @@ mod tests {
         assert!(text.contains("The end of the log of e2e:\nstep 1\nboom"));
         let changed = send_back_message(at, &run, &[], Verdict::failed(RunReason::FilesChanged));
         assert!(changed.contains("changed tracked files"));
+        let no_slot = send_back_message(at, &run, &[], Verdict::failed(RunReason::NoBuildSlot));
+        assert!(no_slot.contains("found no free build slot on the machine in time"));
         let lane = lane_send_back_message(
             at,
             &run,
