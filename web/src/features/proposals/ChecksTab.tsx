@@ -26,6 +26,8 @@ import {
   type RunItem,
 } from "./runList";
 import { OUTCOME_ICONS, RUN_ICONS } from "./checkIcons";
+import { StopRunButton } from "./StopRunButton";
+import { showsStop } from "./stopRun";
 import { detailHref, type DetailSearch } from "./view";
 
 function CopyLog({ log }: { log: string }) {
@@ -167,10 +169,19 @@ export interface ChecksTabProps {
   items: readonly RunItem[] | null;
   search: DetailSearch;
   now: number;
+  /** The signed-in human; null before the name prompt is answered. */
+  human: string | null;
 }
 
 /** Each run with its steps on one side, and the log of the chosen step across the rest of the width. */
-export function ChecksTab({ slug, id, items, search, now }: ChecksTabProps) {
+export function ChecksTab({
+  slug,
+  id,
+  items,
+  search,
+  now,
+  human,
+}: ChecksTabProps) {
   if (items === null) {
     return <Skeleton className="m-24" />;
   }
@@ -222,6 +233,9 @@ export function ChecksTab({ slug, id, items, search, now }: ChecksTabProps) {
                   {reasonText(item.run.reason)}
                 </p>
               )}
+              {showsStop(item.run, human) ? (
+                <StopRunButton slug={slug} run={item.run.id} />
+              ) : null}
               <ul className="flex flex-col gap-2">
                 {item.run.results.map((result) => {
                   const step = OUTCOME_ICONS[result.outcome];

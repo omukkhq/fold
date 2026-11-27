@@ -208,6 +208,20 @@ export async function integrateProposal(
   );
 }
 
+/** A named human cancels one running proposal-stage check run; it answers with the runs the cancel ended. Rejects with `check_run_ended` when the run ended first, `check_run_not_found`, or `invalid_request` for an integration run. */
+export async function cancelCheckRun(
+  slug: string,
+  run: string,
+): Promise<string[]> {
+  const result = await unwrap(
+    api.POST("/api/v1/projects/{slug}/check-runs/cancel", {
+      params: { path: { slug } },
+      body: { run },
+    }),
+  );
+  return result.cancelled;
+}
+
 /** One check run with the stored end of each command's output; a proposal lists its runs without the logs. */
 export async function getCheckRun(slug: string, id: string): Promise<CheckRun> {
   return unwrap(

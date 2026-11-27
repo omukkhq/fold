@@ -1281,6 +1281,71 @@ describe("Proposal detail", () => {
     );
   });
 
+  it("stops a running check run, stays pending until the stream reports the end, then hides Stop", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      checks: [checkRun(16, { state: "running", finished_at: null })],
+    }));
+    daemon.on("POST /api/v1/projects/:slug/check-runs/cancel", () =>
+      ok({ cancelled: ["cr-16"] }),
+    );
+    const { queryClient } = renderAt("/p/demo/proposals/P-4?tab=checks");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Stop cr-16" }));
+    await waitFor(() => {
+      expect(
+        writes("POST /api/v1/projects/demo/check-runs/cancel")[0]?.body,
+      ).toEqual({ run: "cr-16" });
+    });
+    const stop = await screen.findByRole("button", { name: "Stop cr-16" });
+    await waitFor(() => {
+      expect(stop.getAttribute("aria-busy")).toBe("true");
+    });
+    update("P-4", (p) => ({
+      ...p,
+      checks: [
+        checkRun(16, {
+          state: "failed",
+          reason: "cancelled",
+          stage: "proposal",
+        }),
+      ],
+    }));
+    deliver(queryClient, "checks.finished", {
+      proposal: "P-4",
+      task: "T-3",
+      data: { run: "cr-16", stage: "proposal", state: "failed" },
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Stop cr-16" })).toBeNull();
+    });
+    expect(
+      screen.getByText("fold stopped the run because someone cancelled it."),
+    ).toBeTruthy();
+  });
+
+  it("shows the refusal code of a cancel and keeps Stop available", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      checks: [checkRun(16, { state: "running", finished_at: null })],
+    }));
+    daemon.on("POST /api/v1/projects/:slug/check-runs/cancel", () =>
+      refuse(409, "check_run_ended"),
+    );
+    renderAt("/p/demo/proposals/P-4?tab=checks");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Stop cr-16" }));
+    expect(
+      await screen.findByText("The run ended before the cancel reached it."),
+    ).toBeTruthy();
+    expect(screen.getByText("code: check_run_ended")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: "Stop cr-16" })
+        .getAttribute("aria-busy"),
+    ).toBeNull();
+  });
+
   it("disables Approve while a check of the current version runs, and enables it when the stream reports the end", async () => {
     update("P-4", (p) => ({
       ...p,

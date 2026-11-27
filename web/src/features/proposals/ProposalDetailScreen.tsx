@@ -411,6 +411,7 @@ export function ProposalDetailScreen({
             items={runItems}
             search={search}
             now={now}
+            human={human}
           />
         </RadixTabs.Content>
         <RadixTabs.Content value="conversation" className={content}>
