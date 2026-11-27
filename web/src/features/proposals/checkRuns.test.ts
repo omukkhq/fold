@@ -8,6 +8,7 @@ import {
   reasonText,
   resultOf,
   runReasonLine,
+  waitLine,
 } from "./checkRuns";
 
 function result(fields: Partial<CheckResult> = {}): CheckResult {
@@ -161,5 +162,29 @@ describe("runReasonLine", () => {
 
   it("gives nothing for a run with no reason", () => {
     expect(runReasonLine(run({}))).toBeNull();
+  });
+});
+
+describe("waitLine", () => {
+  it("names the build slot wait of a running run", () => {
+    expect(
+      waitLine(run({ state: "running", waiting_for_build_slot_since: 5 })),
+    ).toBe("Waits for a free build slot on the machine.");
+  });
+
+  it("is null while the run does not wait for a slot", () => {
+    expect(waitLine(run({ state: "running" }))).toBeNull();
+    expect(
+      waitLine(run({ state: "running", waiting_for_build_slot_since: null })),
+    ).toBeNull();
+    expect(
+      waitLine(run({ state: "running", waiting_for_memory_since: 5 })),
+    ).toBeNull();
+  });
+
+  it("is null once the run ended", () => {
+    expect(
+      waitLine(run({ state: "passed", waiting_for_build_slot_since: 5 })),
+    ).toBeNull();
   });
 });

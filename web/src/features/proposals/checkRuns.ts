@@ -37,6 +37,13 @@ export function runReasonLine(run: CheckRun): Segments | null {
   return [reasonText(run.reason)];
 }
 
+/** The line under a run header while the running run waits for a slot of the machine's build gate; its timeout starts once it has one. Null while it does not wait or has ended. */
+export function waitLine(run: CheckRun): string | null {
+  if (run.state !== "running") return null;
+  if (run.waiting_for_build_slot_since == null) return null;
+  return "Waits for a free build slot on the machine.";
+}
+
 function seconds(ms: number): string {
   return ms < 1000 ? `${String(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
 }

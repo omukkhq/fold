@@ -1324,6 +1324,23 @@ describe("Proposal detail", () => {
     ).toBeTruthy();
   });
 
+  it("shows that a running run waits for a build slot", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      checks: [
+        checkRun(16, {
+          state: "running",
+          finished_at: null,
+          waiting_for_build_slot_since: 5,
+        }),
+      ],
+    }));
+    renderAt("/p/demo/proposals/P-4?tab=checks");
+    expect(
+      await screen.findByText("Waits for a free build slot on the machine."),
+    ).toBeTruthy();
+  });
+
   it("shows the refusal code of a cancel and keeps Stop available", async () => {
     update("P-4", (p) => ({
       ...p,

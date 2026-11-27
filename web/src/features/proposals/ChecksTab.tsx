@@ -17,7 +17,7 @@ import { cn } from "@/lib/cn";
 import { ActorText } from "@/people/ActorText";
 import { focusRing } from "@/lib/focus";
 import { runTime } from "./checkRunTime";
-import { outcomeText, resultOf, runReasonLine } from "./checkRuns";
+import { outcomeText, resultOf, runReasonLine, waitLine } from "./checkRuns";
 import {
   chosenStep,
   firstError,
@@ -50,6 +50,16 @@ function CopyLog({ log }: { log: string }) {
         </span>
       )}
     </span>
+  );
+}
+
+function RunWait({ run }: { run: CheckRun }) {
+  const line = waitLine(run);
+  if (line === null) return null;
+  return (
+    <p role="status" className="px-6 text-14 text-text-2">
+      {line}
+    </p>
   );
 }
 
@@ -240,6 +250,7 @@ export function ChecksTab({
                 <RunTimeLabel run={item.run} now={now} />
               </div>
               <RunReason run={item.run} />
+              <RunWait run={item.run} />
               {showsStop(item.run, human) ? (
                 <StopRunButton slug={slug} run={item.run.id} />
               ) : null}
