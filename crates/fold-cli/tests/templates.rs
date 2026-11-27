@@ -1173,6 +1173,30 @@ fn the_skill_uses_exactly_the_four_verdicts() {
     }
 }
 
+#[test]
+fn the_approving_reviewer_keeps_its_claim_until_the_proposal_ends() {
+    for (role, rule) in [
+        (
+            Role::Reviewer,
+            "it keeps its claim and session until the proposal is integrated or closed",
+        ),
+        (
+            Role::Reviewer,
+            "fold resumes it there for a new version or a conflict",
+        ),
+        (
+            Role::ReviewLead,
+            "That reviewer keeps its claim and session until the proposal is integrated or closed",
+        ),
+        (
+            Role::ReviewLead,
+            "or when its session is gone, fold sends you a notice",
+        ),
+    ] {
+        assert!(role_skill(role).contains(rule), "{role}: {rule}");
+    }
+}
+
 /// A session loads its role skill whole on every start, so each one stays short: the rarer procedures are in the on-demand files.
 #[test]
 fn each_role_skill_stays_within_its_size() {

@@ -250,6 +250,8 @@ struct Inner {
     groups: Mutex<ResumeGroups>,
     /// The finished workers whose stop waits for their turn to end; a `wait_for_events` of one of them returns at once.
     finishing: tokio::sync::watch::Sender<BTreeSet<AgentName>>,
+    /// The conflicts, by proposal and version, that fold gives their reviewer now, so a second event that gives the same one while the first waits for the reviewer's stop leaves it to the first.
+    giving_conflicts: Mutex<HashSet<(fold_core::ProposalId, u32)>>,
     /// The leads that a daemon start left without a process because no work waited for them; their rows stay `idle`, and the first work that comes runs them.
     dormant: Mutex<HashSet<AgentName>>,
 }
@@ -326,6 +328,7 @@ impl Supervisor {
                 windows: Mutex::default(),
                 groups: Mutex::default(),
                 finishing: tokio::sync::watch::Sender::new(BTreeSet::new()),
+                giving_conflicts: Mutex::default(),
                 dormant: Mutex::default(),
             }),
         };

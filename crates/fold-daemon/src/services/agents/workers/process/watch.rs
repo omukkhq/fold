@@ -630,6 +630,7 @@ pub(super) async fn watch_done(
             tokio::spawn(supervisor.clone().resume_owed_send_backs());
             tokio::spawn(supervisor.clone().resume_owed_gate_runs());
             tokio::spawn(supervisor.clone().resume_owed_reviewers(None));
+            tokio::spawn(supervisor.clone().give_owed_conflicts_to_ended());
             tokio::spawn(supervisor.resume_pending());
         }
     }

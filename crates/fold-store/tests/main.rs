@@ -28,6 +28,7 @@ mod integrations_schema;
 mod main_workspaces_schema;
 mod messages_schema;
 mod notify_outbox;
+mod owed_starts;
 mod proposals_schema;
 mod registry;
 mod removal;

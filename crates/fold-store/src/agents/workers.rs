@@ -1494,7 +1494,7 @@ pub struct OwedStart {
     pub resume: fold_core::roles::OwedResume,
 }
 
-/// Every resume that fold owes a stopped or failed task worker or reviewer, one per worker, oldest first: the requested changes, conflicts and failed integration checks of [`pending_resumes`], the send-backs of `reports::owed_send_backs`, the failed proposal checks of `checks::owed_gate_runs` and the reviews of [`reviews_owed_to_ended_reviewers`], each dated by the time its work came after the worker last started. A worker owed several is dated by its oldest. Each comes with the running workers of its role in its area, so the limits can say whether it can take a place.
+/// Every resume that fold owes a stopped or failed task worker or reviewer, one per worker, oldest first: the requested changes, conflicts and failed integration checks of [`pending_resumes`], the send-backs of `reports::owed_send_backs`, the failed proposal checks of `checks::owed_gate_runs`, the reviews of [`reviews_owed_to_ended_reviewers`] and the conflicts, or lane failures of integration checks, of an open proposal whose newest version the reviewer approved and whose review claim it holds, while the latest verdict does not request changes and the reviewer's session is not gone, each dated by the time its work came after the worker last started. A worker owed several is dated by its oldest. Each comes with the running workers of its role in its area, so the limits can say whether it can take a place.
 pub async fn owed_starts(executor: impl SqliteExecutor<'_>) -> Result<Vec<OwedStart>, StoreError> {
     let rows = sqlx::query!(
         r#"WITH latest AS (
@@ -1573,6 +1573,28 @@ pub async fn owed_starts(executor: impl SqliteExecutor<'_>) -> Result<Vec<OwedSt
                JOIN workers k ON k.id = c.worker_id AND k.agent_id = w.agent_id
                WHERE w.role = 'reviewer' AND w.state IN ('stopped', 'failed')
                  AND (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) IS NULL
+               UNION ALL
+               SELECT w.id,
+                      COALESCE(
+                          (SELECT MIN(i.created_at) FROM integrations i
+                           WHERE i.version_id = l.version_id AND i.result = 'conflicted' AND i.created_at > w.started_at),
+                          (SELECT MIN(r.finished_at) FROM check_runs r
+                           WHERE r.version_id = l.version_id AND r.stage = 'integration' AND r.state = 'failed'
+                             AND r.finished_at > w.started_at)),
+                      t.number, p.number
+               FROM worker_processes w
+               JOIN worker_proposals b ON b.worker_process_id = w.id
+               JOIN proposals p ON p.id = b.proposal_id AND p.state = 'open' AND p.conflicted
+               JOIN tasks t ON t.id = p.task_id
+               JOIN latest l ON l.proposal_id = p.id
+               JOIN claims c ON c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL
+               JOIN workers k ON k.id = c.worker_id AND k.agent_id = w.agent_id
+               WHERE w.role = 'reviewer' AND w.state IN ('stopped', 'failed')
+                 AND w.failed_reason IS NOT 'session_lost'
+                 AND EXISTS (SELECT 1 FROM reviews r JOIN workers rw ON rw.id = r.reviewer_worker_id
+                             WHERE r.version_id = l.version_id AND r.verdict = 'approve'
+                               AND rw.agent_id = w.agent_id)
+                 AND COALESCE((SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id), '') <> 'request_changes'
            )
            SELECT g.name AS "agent!: String", w.role AS "role!: String", ar.name AS "area?: String",
                   (SELECT COUNT(*) FROM worker_processes y

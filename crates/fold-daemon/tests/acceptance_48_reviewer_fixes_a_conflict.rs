@@ -13,20 +13,20 @@ use crate::worker_resume::{
 };
 use crate::workers_support::FakeClaude;
 
-const LEAD: &str = "review-lead";
-const SECOND_REVIEWER: &str = "reviewer-2";
+pub const LEAD: &str = "review-lead";
+pub const SECOND_REVIEWER: &str = "reviewer-2";
 /// Both tasks rewrite the one line of `README.md` in `r1`.
 const SCREEN: &str = "# demo: the login screen\n";
 const ENDPOINT: &str = "# demo: the login endpoint\n";
 /// The reviewer's resolution keeps both changes.
 const RESOLVED: &str = "# demo: the login screen and the login endpoint\n";
 
-async fn status(harness: &Harness, task: &str) -> Value {
+pub async fn status(harness: &Harness, task: &str) -> Value {
     harness.call(MAIN, "get_task", json!({"id": task})).await["status"].clone()
 }
 
 /// One task worker proposes `P-1` for `T-1` and `P-2` for `T-2`, which change the same line of `README.md`; fold then stops it. The review lead runs and is connected.
-async fn two_conflicting_proposals(fake: &FakeClaude) -> (Harness, Work) {
+pub async fn two_conflicting_proposals(fake: &FakeClaude) -> (Harness, Work) {
     let mut harness = task_worker_for(
         fake,
         &["Name the login screen", "Name the login endpoint"],
@@ -84,7 +84,7 @@ async fn approved_by_a_reviewer(harness: &mut Harness, proposal: &str, reviewer:
 }
 
 /// Every message sent to `agent`, read or not: a running agent's push can count a message as read, so the stored threads are read instead of the inbox.
-async fn told(harness: &Harness, agent: &str) -> Vec<Value> {
+pub async fn told(harness: &Harness, agent: &str) -> Vec<Value> {
     let mut found = Vec::new();
     for event in harness.events().await {
         let to_agent = event.kind == "message.sent"

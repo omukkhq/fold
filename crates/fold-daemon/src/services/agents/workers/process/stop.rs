@@ -124,12 +124,14 @@ impl Supervisor {
     /// Stops `agent` in a task of its own, as a worker whose work is done, once its turn has settled (see [`Supervisor::until_turn_settled`]).
     ///
     /// A worker that kept working meanwhile is stopped only while it is still done by the rule of [`Supervisor::stop_done_workers`] and no user turn waits in its stdin, since a requested change or a message can have given it work again. While the stop waits, the worker's `wait_for_events` returns at once.
+    ///
+    /// The worker is marked finishing before the task runs, so a handoff that the next event of the bus gives it, such as the conflict of the integration its approval started, sees the stop and waits for it (see [`Supervisor::until_stop_settled`]).
     pub(super) fn spawn_stop(&self, agent: AgentName) {
+        self.inner.finishing.send_modify(|set| {
+            set.insert(agent.clone());
+        });
         let supervisor = self.clone();
         tokio::spawn(async move {
-            supervisor.inner.finishing.send_modify(|set| {
-                set.insert(agent.clone());
-            });
             let stop = match supervisor.until_turn_settled(&agent).await {
                 Settled::AtOnce => true,
                 Settled::TurnEnded => supervisor.still_done(&agent, false).await,
@@ -142,6 +144,36 @@ impl Supervisor {
                 set.remove(&agent);
             });
         });
+    }
+
+    /// Whether fold waits to stop `agent` as a finished worker, or stops it now.
+    pub(super) async fn is_stopping(&self, agent: &AgentName) -> Result<bool, StoreError> {
+        if self.inner.finishing.borrow().contains(agent) {
+            return Ok(true);
+        }
+        let mut conn = self.inner.store.read().acquire().await?;
+        Ok(agents::find_worker_process(&mut conn, agent)
+            .await?
+            .is_some_and(|row| row.state == WorkerState::Stopping))
+    }
+
+    /// Waits until fold neither waits to stop `agent` as a finished worker nor stops it, at most as long as the wait for its turn and the steps of a stop take; false when that time passed first.
+    pub(super) async fn until_stop_settled(&self, agent: &AgentName) -> bool {
+        let timeouts = *lock(&self.inner.timeouts);
+        let most = DONE_GRACE + timeouts.interrupt + timeouts.sigint + timeouts.sigterm + KILL_WAIT;
+        let settled = async {
+            loop {
+                match self.is_stopping(agent).await {
+                    Ok(false) => return true,
+                    Ok(true) => tokio::time::sleep(DONE_POLL).await,
+                    Err(error) => {
+                        tracing::warn!(%agent, code = error.log_code(), "could not read whether a worker stops");
+                        return false;
+                    }
+                }
+            }
+        };
+        tokio::time::timeout(most, settled).await.unwrap_or(false)
     }
 
     /// Whether `agent` is still a finished worker after the wait for its turn: done by the rule of [`Supervisor::stop_done_workers`], with no user turn waiting in its stdin besides the turn it is `in_turn`.

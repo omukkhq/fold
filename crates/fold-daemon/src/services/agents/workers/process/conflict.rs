@@ -2,7 +2,9 @@ use std::sync::atomic::Ordering;
 
 use fold_core::events::EventFilter;
 use fold_core::events::types;
-use fold_core::{AgentName, CheckRunId, Event, EventActor, NewEvent, ProposalId, Role, codes};
+use fold_core::{
+    AgentName, CheckRunId, Event, EventActor, NewEvent, ProposalId, Role, WorkerState, codes,
+};
 use fold_store::reviews::{self, ProposalRow, ProposalState, checks};
 use fold_store::{StoreError, agents, events};
 use serde_json::{Value, json};
@@ -66,7 +68,7 @@ pub(super) fn conflict_fixer(event: &Event) -> Option<Owed> {
     })
 }
 
-/// What the reviewer still owes for `version`, from the handoff and `worker.resumed` events of one proposal in `seq` order: the newest handoff of that version, unless a `worker.resumed` of reason `conflict` for that version follows it.
+/// What the reviewer still owes for `version`, from the handoff and `worker.resumed` events of one proposal in `seq` order: the newest handoff of that version, unless a `worker.resumed` of reason `conflict` for that version follows it: a resume that ran, or with `resumed` false the notice that handed the conflict to the review lead.
 pub(super) fn owed_fixer(events: &[Event], version: u32) -> Option<Owed> {
     let of_version = |event: &Event| {
         event.data.get("version").and_then(Value::as_u64) == Some(u64::from(version))
@@ -93,23 +95,46 @@ enum Given {
     Resumed,
     /// The reviewer cannot take it; `lost` is its worker row when its session is gone.
     Refused { lost: Option<i64> },
+    /// fold stops the reviewer as a finished worker, so a turn sent now would be lost: the conflict goes to it once the stop has settled.
+    AfterStop,
+    /// The worker limits hold the resume back: the conflict stays owed, an owed resume ranked by its time, and a freed place gives it.
+    Waits,
     /// Nothing to give now: the version moved on, was integrated or closed, its conflict is gone, or a pause holds the start back.
     Stale,
 }
 
 impl Supervisor {
-    /// Gives the conflict of `version` to `agent`, the reviewer that approved it: a running reviewer gets the conflict report as its next turn, and a stopped or failed one is resumed in its own session with it, with `worker.resumed` of reason `conflict` once that session runs. When the reviewer cannot take it, because it lost the review claim, the worker limits refuse its start, its session is gone or its process ends before it runs, the review lead gets the notice to start a reviewer for the conflict instead. A version that moved on, or a proposal that left `open`, is left alone, and so is a start that a pause refuses: the resume of the pause gives the conflict.
+    /// Gives the conflict of `version` to `agent`, the reviewer that approved it: a running reviewer gets the conflict report as its next turn, and a stopped or failed one is resumed in its own session with it, with `worker.resumed` of reason `conflict` once that session runs. A reviewer that fold stops as finished, as it does once the reviewer's approval is in, which is often just before the integration that approval started conflicts, gets the conflict once the stop has settled: resumed in its own session when it stopped, told when it kept running. A start that the worker limits refuse leaves the conflict owed, and the next freed place gives it (see [`Supervisor::give_owed_conflicts_to_ended`]). Only when the reviewer cannot take it, because it lost the review claim, its session is gone or its process ends before it runs, does the review lead get the notice to start a reviewer for the conflict. A version that moved on, or a proposal that left `open`, is left alone, and so is a start that a pause refuses: the resume of the pause gives the conflict.
     pub(super) async fn give_conflict_to_reviewer(self, owed: Owed) {
+        self.give_conflict_once(owed, false).await;
+    }
+
+    /// Gives each conflict that [`Supervisor::give_owed_conflicts`] finds to its reviewer when that reviewer has stopped or failed, such as one whose start the worker limits refused; a running reviewer is left until it stops again. A retry that finds the reviewer cannot take the conflict, such as a resume whose process ends before its turn, a session another resume lost or a claim that moved, sends the review lead the notice, once for each version. The watcher runs it when a place may have freed: a worker stopped or failed, or the limits changed.
+    pub(super) async fn give_owed_conflicts_to_ended(self) {
+        self.give_owed(true).await;
+    }
+
+    async fn give_conflict_once(self, owed: Owed, ended_only: bool) {
         if !self.start_ticket().await {
             return;
         }
-        if let Err(error) = self.give_conflict(&owed).await {
+        let key = (owed.proposal, owed.version);
+        if !lock(&self.inner.giving_conflicts).insert(key) {
+            return;
+        }
+        let given = self.give_conflict(&owed, ended_only).await;
+        lock(&self.inner.giving_conflicts).remove(&key);
+        if let Err(error) = given {
             tracing::warn!(agent = %owed.agent, proposal = %owed.proposal, code = crate::services::agents::code_of(&error), "could not give a conflict to its reviewer");
         }
     }
 
     /// Gives each conflict that its reviewer has not taken, from the stored state: an open proposal flagged with a conflict and no requested changes, whose current version's newest `integration.conflicted` names a fixer that no `worker.resumed` of reason `conflict` answered (see [`owed_fixer`]). The watcher runs it after it fell behind the bus and a daemon start runs it, because the live event that gives a conflict can be lost; a reviewer that ran when fold told it of the conflict hears of it again then. A read that fails is logged and the rest is served.
     pub(super) async fn give_owed_conflicts(self) {
+        self.give_owed(false).await;
+    }
+
+    async fn give_owed(self, ended_only: bool) {
         let read = self.inner.store.read();
         let open = match reviews::list_proposals(read, Some(ProposalState::Open), None).await {
             Ok(open) => open,
@@ -142,12 +167,12 @@ impl Supervisor {
                 }
             };
             if let Some(owed) = owed {
-                self.clone().give_conflict_to_reviewer(owed).await;
+                self.clone().give_conflict_once(owed, ended_only).await;
             }
         }
     }
 
-    async fn give_conflict(&self, owed: &Owed) -> Result<(), AgentError> {
+    async fn give_conflict(&self, owed: &Owed, ended_only: bool) -> Result<(), AgentError> {
         let read = self.inner.store.read();
         let Some(row) = reviews::get_proposal(read, owed.proposal).await? else {
             return Ok(());
@@ -176,18 +201,24 @@ impl Supervisor {
             }
         };
         let lane = owed.lane.as_deref();
-        let given = self
-            .offer(&row, owed.version, &handoff, &owed.agent, lane)
+        let mut given = self
+            .offer(&row, owed.version, &handoff, &owed.agent, lane, ended_only)
             .await?;
+        if matches!(given, Given::AfterStop) && self.until_stop_settled(&owed.agent).await {
+            given = self
+                .offer(&row, owed.version, &handoff, &owed.agent, lane, ended_only)
+                .await?;
+        }
         match given {
-            Given::Told | Given::Stale => Ok(()),
+            // A stop that has not settled in time ends with `worker.stopped`, whose freed place gives the conflict.
+            Given::Told | Given::Stale | Given::Waits | Given::AfterStop => Ok(()),
             Given::Resumed => {
                 self.record_conflict_resumed(&row, owed.version, &owed.agent)
                     .await
             }
             Given::Refused { lost } => {
                 let why = NoReviewer::NotResumed(owed.agent.clone());
-                self.conflict_to_review_lead(&row, &handoff, &why, lost, lane)
+                self.conflict_to_review_lead(&row, owed, &handoff, &why, lost, lane)
                     .await
             }
         }
@@ -200,6 +231,7 @@ impl Supervisor {
         handoff: &Handoff<'_>,
         agent: &AgentName,
         lane: Option<&str>,
+        ended_only: bool,
     ) -> Result<Given, AgentError> {
         // The proposal, the claim and the row are read under the lock, so a second start of the reviewer finds it running.
         let resuming = self.inner.resuming.lock().await;
@@ -229,6 +261,19 @@ impl Supervisor {
             return Ok(Given::Refused { lost: None });
         };
         drop(conn);
+        // A session that another resume lost, such as one for a message, cannot take the conflict either.
+        if worker.state == WorkerState::Failed
+            && worker.failed_reason.as_deref() == Some(SESSION_LOST)
+        {
+            return Ok(Given::Refused { lost: None });
+        }
+        // A retry leaves a running reviewer alone: it was told, or it runs for other work and gets the conflict once it stops again.
+        if ended_only && worker.state.is_running() {
+            return Ok(Given::Stale);
+        }
+        if self.is_stopping(agent).await? {
+            return Ok(Given::AfterStop);
+        }
         let turn = reviewer_turn(handoff, row.task, lane);
         if worker.state.is_running() {
             return Ok(if self.tell_running(agent, turn) {
@@ -254,7 +299,7 @@ impl Supervisor {
             // The conflict stays owed, and the resume of the pause gives it.
             Err(error) if is_paused_refusal(&error) => return Ok(Given::Stale),
             Err(AgentError::Fold(error)) if error.code() == codes::WORKER_LIMIT_REACHED => {
-                return Ok(Given::Refused { lost: None });
+                return Ok(Given::Waits);
             }
             Err(error) => return Err(error),
         };
@@ -312,10 +357,11 @@ impl Supervisor {
         Ok(())
     }
 
-    /// The notice for a conflict its reviewer could not take, to the review lead or, for a task of main, the main agent; `lost` is the worker row whose session is gone, recorded so a later start begins a new session.
+    /// The notice for a conflict its reviewer could not take, to the review lead or, for a task of main, the main agent; `lost` is the worker row whose session is gone, recorded so a later start begins a new session. The same write appends `worker.resumed` of reason `conflict` with `resumed` false for the version, so [`owed_fixer`] counts the conflict as handed on and no retry or daemon start sends the notice again.
     async fn conflict_to_review_lead(
         &self,
         row: &ProposalRow,
+        owed: &Owed,
         handoff: &Handoff<'_>,
         why: &NoReviewer,
         lost: Option<i64>,
@@ -331,7 +377,19 @@ impl Supervisor {
                 }
                 handoff_notice_in_tx(tx, &mut buffer, handoff, row.task, why, lane, now)
                     .await
-                    .map_err(AgentError::from)
+                    .map_err(AgentError::from)?;
+                let handed = NewEvent::new(types::WORKER_RESUMED, EventActor::fold())?
+                    .task(row.task)
+                    .proposal(row.id)
+                    .data(json!({
+                        "agent": owed.agent.as_str(),
+                        "proposal": row.id.to_string(),
+                        "version": owed.version,
+                        "reason": "conflict",
+                        "resumed": false,
+                    }))?;
+                buffer.append(tx, &handed, now).await?;
+                Ok::<_, AgentError>(())
             })
             .await?;
         self.inner.bus.publish(buffer);
