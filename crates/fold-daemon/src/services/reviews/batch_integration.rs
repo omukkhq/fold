@@ -917,6 +917,7 @@ impl ReviewService {
                 },
             })
             .collect::<Vec<_>>();
+        self.find_queue_conflicts_later(previous);
         tracing::info!(batch = %batch, members = revisions.len(), revision = %previous, "review batch integrated");
         Ok(Attempted::Published {
             revisions,

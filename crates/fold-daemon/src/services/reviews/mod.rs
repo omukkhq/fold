@@ -20,6 +20,7 @@ pub mod checks;
 mod claims;
 mod comments;
 mod conflicts;
+mod early_conflicts;
 mod human_edits;
 mod human_review;
 mod integrate;

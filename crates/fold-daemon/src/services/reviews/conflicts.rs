@@ -32,10 +32,12 @@ pub(super) struct FoundConflict<'a> {
     /// The version the caller asked to integrate, and whether the daemon integrates on its own: the gates read both again.
     pub expected_version: Option<u32>,
     pub automatic: bool,
+    /// fold test-merged the version after another integration moved main, before the version's own turn.
+    pub before_turn: bool,
 }
 
 impl ReviewService {
-    /// Step 4 of the integration procedure, under the integration mutex. One write transaction records the `conflicted` integration with its report and `integration.conflicted`, whose `lane` names the lane of a member that main moved in since the version's base, sets the proposal's conflict flag and recalculates the task, which stays in Review while the proposal stays open. The conflict goes to the reviewer agent that approved the version and still holds its review claim: the event names it as `fixer`, and the worker supervisor gives it the conflict report. Without one, because a human or an agent that is not a reviewer approved the version or the reviewer lost its claim, the same transaction sends the review lead a message from `fold` to start a reviewer for the conflict. The author gets no conflict notice. Nothing is published: no revision, no move of main, no completion. False, with nothing written, when main moved, the proposal left that version or the gates refuse the caller, so the procedure starts again and its gate step reports why.
+    /// Step 4 of the integration procedure, under the integration mutex, and the record of a conflict that the test-merge after another integration found before the version's turn, whose event has `before_turn` true. One write transaction records the `conflicted` integration with its report and `integration.conflicted`, whose `lane` names the lane of a member that main moved in since the version's base, sets the proposal's conflict flag and recalculates the task, which stays in Review while the proposal stays open. The conflict goes to the reviewer agent that approved the version and still holds its review claim: the event names it as `fixer`, and the worker supervisor gives it the conflict report. Without one, because a human or an agent that is not a reviewer approved the version or the reviewer lost its claim, the same transaction sends the review lead a message from `fold` to start a reviewer for the conflict. The author gets no conflict notice. Nothing is published: no revision, no move of main, no completion. False, with nothing written, when main moved, the proposal left that version or the gates refuse the caller, so the procedure starts again and its gate step reports why. True with nothing written when a conflict of the version on the same main is already recorded.
     pub(super) async fn record_conflict(
         &self,
         actor: &Actor,
@@ -50,6 +52,7 @@ impl ReviewService {
             conflicts,
             expected_version,
             automatic,
+            before_turn,
         } = found;
         let lane = self.moved_lane(proposal, trees.main).await?;
         let label = actor.event_actor();
@@ -73,9 +76,18 @@ impl ReviewService {
                 };
                 let standing = agents::standing_of(tx.conn(), actor).await?;
                 let caller = caller_facts(actor, standing, automatic)?;
-                if decide(&facts, &caller, expected_version).is_err()
-                    || !reviews::mark_conflicted(tx, proposal, now).await?
+                if decide(&facts, &caller, expected_version).is_err() {
+                    return Ok(None);
+                }
+                // The test-merge after an integration and the version's own turn can find the same conflict on the same main: the first record stands for both.
+                if row.conflicted
+                    && reviews::conflict_report(tx.conn(), proposal, version)
+                        .await?
+                        .is_some_and(|report| report.main_revision == main)
                 {
+                    return Ok(Some(None));
+                }
+                if !reviews::mark_conflicted(tx, proposal, now).await? {
                     return Ok(None);
                 }
                 let base_revision = reviews::list_versions(tx.conn(), proposal)
@@ -118,6 +130,7 @@ impl ReviewService {
                         "files": report.files.len(),
                         "fixer": fixer_name,
                         "lane": lane,
+                        "before_turn": before_turn,
                     }))?;
                 buffer.append(tx, &event, now).await?;
                 if let Fixer::ReviewLead(why) = &fixer {
@@ -134,14 +147,16 @@ impl ReviewService {
                     .await?;
                 }
                 buffer.extend(recompute(tx, &[task], now).await?.events);
-                Ok::<_, ReviewError>(Some((integration, report.files.len())))
+                Ok::<_, ReviewError>(Some(Some((integration, report.files.len()))))
             })
             .await?;
-        let Some((integration, files)) = recorded else {
+        let Some(recorded) = recorded else {
             return Ok(false);
         };
-        self.bus.publish(buffer);
-        tracing::info!(proposal = %proposal, version, revision = %main, integration = %integration, files, "proposal conflicts with main");
+        if let Some((integration, files)) = recorded {
+            self.bus.publish(buffer);
+            tracing::info!(proposal = %proposal, version, revision = %main, integration = %integration, files, before_turn, "proposal conflicts with main");
+        }
         Ok(true)
     }
 }
@@ -544,6 +559,8 @@ pub enum ConflictedReason {
     MergeConflict {
         /// The reviewer that fixes it; `None` when the review lead got the conflict.
         fixer: Option<AgentName>,
+        /// fold found the conflict by its test-merge after another integration moved main, before the version's own turn.
+        before_turn: bool,
     },
     /// The integration checks failed on the merge with main after another member of the lane integrated.
     LaneChecksFailed {
@@ -565,7 +582,11 @@ fn handoff_reason(event: &Event, version: u32) -> Option<ConflictedReason> {
         .and_then(Value::as_str)
         .and_then(|name| AgentName::parse(name).ok());
     if event.event_type == types::INTEGRATION_CONFLICTED {
-        return Some(ConflictedReason::MergeConflict { fixer });
+        let before_turn = data
+            .get("before_turn")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        return Some(ConflictedReason::MergeConflict { fixer, before_turn });
     }
     if event.event_type != types::CHECKS_FINISHED {
         return None;

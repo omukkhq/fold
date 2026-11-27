@@ -870,6 +870,7 @@ impl ReviewService {
                         conflicts: &conflicts,
                         expected_version,
                         automatic,
+                        before_turn: false,
                     };
                     #[cfg(feature = "failpoints")]
                     fail::fail_point!("integration_before_conflict_record");
@@ -994,6 +995,7 @@ impl ReviewService {
                 tracing::info!(changeset = %changeset, revision = %next, integration = %integration, "direct change integrated");
             }
         }
+        self.find_queue_conflicts_later(next);
         Ok(Integrated::Succeeded(next))
     }
 

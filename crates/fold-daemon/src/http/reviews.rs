@@ -364,7 +364,7 @@ pub enum ConflictedReason {
 impl From<service::ConflictedReason> for ConflictedReason {
     fn from(reason: service::ConflictedReason) -> Self {
         match reason {
-            service::ConflictedReason::MergeConflict { fixer } => Self::MergeConflict {
+            service::ConflictedReason::MergeConflict { fixer, .. } => Self::MergeConflict {
                 fixer: fixer.map(|agent| agent.to_string()),
             },
             service::ConflictedReason::LaneChecksFailed { lane, run, fixer } => {

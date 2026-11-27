@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
+use fold_core::merge::Conflict;
 use fold_core::object::ObjectHash;
 use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{FoldError, WorkspaceId, codes};
 use fold_vcs::batch::{BatchMember, BatchMerge, MergedBatch, merge_batch};
 use fold_vcs::compare::{State, load_flat};
-use fold_vcs::integrate::{MergeOutcome, merge_onto_head};
+use fold_vcs::integrate::{MergeOutcome, merge_onto_head, tree_merge};
 use fold_vcs::revision_store::write_revision;
 use serde_json::json;
 use tokio::sync::{OwnedMutexGuard, OwnedRwLockReadGuard};
@@ -58,6 +59,21 @@ impl WorkspaceService {
         blocking(move || merge_onto_head(&open_objects(&paths)?, &base, &head, &other))
             .await
             .map_err(integration_failed)
+    }
+
+    /// The conflicts of merging `other` onto main's tree `head` against `base`, in path order, with the sides as [`WorkspaceService::merge_for_integration`] gives them, so a report reads the same from either; empty when the merge is clean. It writes no object, so it takes no lock and leaves nothing for garbage collection to keep.
+    pub(crate) async fn test_merge(
+        &self,
+        base: ObjectHash,
+        head: ObjectHash,
+        other: ObjectHash,
+    ) -> Result<Vec<Conflict>, WorkspaceError> {
+        if base == head {
+            return Ok(Vec::new());
+        }
+        let paths = self.paths.clone();
+        blocking(move || Ok(tree_merge(&open_objects(&paths)?, &base, &other, &head)?.conflicts))
+            .await
     }
 
     /// Merges the batch members onto main's tree `main` one after another in the object store, with their line origins. A clean merge also goes into the project's [`BatchMergeCache`](super::BatchMergeCache), so a view of the batch's merged change reads it without merging again. A failure to read or write an object is the store's own error; the caller reports it as its command's.

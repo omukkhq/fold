@@ -240,11 +240,12 @@ async fn acceptance_67_a_full_reviewer_limit_keeps_the_conflict_owed_until_a_pla
     approve(&mut harness, "P-2", SECOND_REVIEWER).await;
     until_state(&harness, SECOND_REVIEWER, WorkerState::Stopped).await;
     let session = worker(&harness, SECOND_REVIEWER).await.session_id;
-    harness
-        .call(LEAD, "integrate_proposal", json!({"id": "P-1"}))
-        .await;
+    // The limit comes first: the test-merge after P-1's integration can find P-2's conflict before the call below does.
     harness
         .call(MAIN, "set_worker_limits", json!({"reviewer": 0}))
+        .await;
+    harness
+        .call(LEAD, "integrate_proposal", json!({"id": "P-1"}))
         .await;
 
     let refused = harness
@@ -301,10 +302,10 @@ async fn acceptance_67_a_held_conflict_whose_resume_fails_tells_the_review_lead_
     approve(&mut harness, "P-2", SECOND_REVIEWER).await;
     until_state(&harness, SECOND_REVIEWER, WorkerState::Stopped).await;
     harness
-        .call(LEAD, "integrate_proposal", json!({"id": "P-1"}))
+        .call(MAIN, "set_worker_limits", json!({"reviewer": 0}))
         .await;
     harness
-        .call(MAIN, "set_worker_limits", json!({"reviewer": 0}))
+        .call(LEAD, "integrate_proposal", json!({"id": "P-1"}))
         .await;
     let refused = harness
         .refused(LEAD, "integrate_proposal", json!({"id": "P-2"}))
