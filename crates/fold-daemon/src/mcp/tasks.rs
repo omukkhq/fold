@@ -20,7 +20,7 @@ use super::{FoldServer, FooterCounts, FooterPart, FooterSource, footer};
 use crate::services::agents::{AgentService, SessionContext};
 use crate::services::tasks::{
     ChecklistItemPatch, ClaimView, Claimed, CreateTask, DetailEdge, ItemContent, LabelView,
-    NewChecklistItem, TaskDetail, TaskPatch, TaskService, item_content,
+    NewChecklistItem, TaskDetail, TaskPatch, TaskService, WatchView, item_content,
 };
 
 pub mod requests;
@@ -48,6 +48,8 @@ pub const COMPLETE_TASK: &str = "complete_task";
 pub const SEND_BACK_TASK: &str = "send_back_task";
 pub const SET_HOLD: &str = "set_hold";
 pub const CLEAR_HOLD: &str = "clear_hold";
+pub const WATCH_TASKS: &str = "watch_tasks";
+pub const UNWATCH_TASKS: &str = "unwatch_tasks";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -108,6 +110,21 @@ pub struct CreateTaskInput {
     /// proposal (the default), no_proposal or human. A no_proposal task is for work that changes no project file, such as designs made through an MCP server: its task worker claims it, does the work without a workspace and calls report_task, and a lead check completes it. A human task is work only a person can do outside every agent, such as verifying an app with a provider: no agent claims it, and a human, or the main agent when the user says so, marks it Done with complete_task. Only the main agent, a human or the lead of the task's area creates a no_proposal or human task.
     #[serde(default)]
     pub kind: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct WatchTasksInput {
+    /// The tasks to watch, such as ["T-12", "T-13"]: 1 to 100, each an existing task. A task named twice is watched once.
+    pub tasks: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct UnwatchTasksInput {
+    /// The tasks to stop watching, such as ["T-12"]. Leave it out to end the whole watch.
+    #[serde(default)]
+    pub tasks: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -401,6 +418,16 @@ pub fn tools() -> Vec<Tool> {
             "Take a task off hold, so agents can take it again. Only a human or the main agent takes a hold off, and the main agent only when the user says the task can start.",
             schema_for_type::<TaskIdInput>(),
         ),
+        Tool::new(
+            WATCH_TASKS,
+            "Watch tasks without blocking your turn: fold sends you one message when each watched task is Done, and a last message when every one is, and the watch then ends. A task that is Done already is reported at once. A second call adds its tasks to your watch. Refused with task_not_found for an unknown task, with task_closed for an archived task that is not Done, and with invalid_request for more than 100 watched tasks. A watched task that is archived or deleted later leaves the watch without a message, and a watch whose last tasks leave that way ends without a last message. The watch lives in the daemon's memory: a restart of the daemon ends it, so call watch_tasks again after one.",
+            schema_for_type::<WatchTasksInput>(),
+        ),
+        Tool::new(
+            UNWATCH_TASKS,
+            "Stop watching tasks that you watch with watch_tasks, or every task of your watch when tasks is left out. A watch with no task left ends without a last message.",
+            schema_for_type::<UnwatchTasksInput>(),
+        ),
     ]
 }
 
@@ -601,6 +628,8 @@ async fn run(
         SEND_BACK_TASK => send_back_task(server, actor, arguments).await?,
         SET_HOLD => set_hold(server, actor, arguments).await?,
         CLEAR_HOLD => clear_hold(server, actor, arguments).await?,
+        WATCH_TASKS => watch_tasks(server, actor, arguments).await?,
+        UNWATCH_TASKS => unwatch_tasks(server, actor, arguments)?,
         _ => return Ok(None),
     };
     Ok(Some(value))
@@ -1108,6 +1137,42 @@ async fn clear_hold(
         .await
         .map_err(from_task)?;
     Ok(json!({"id": view.id, "hold": view.hold.is_some()}))
+}
+
+fn task_ids(tasks: &[String]) -> Result<Vec<TaskId>, FoldError> {
+    tasks.iter().map(|task| id(task)).collect()
+}
+
+fn watch_json(view: &WatchView) -> Value {
+    json!({"watching": view.watching, "done": view.done})
+}
+
+async fn watch_tasks(
+    server: &FoldServer,
+    actor: &Actor,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: WatchTasksInput = parse(arguments)?;
+    let view = server
+        .tasks
+        .watch_tasks(actor, &task_ids(&input.tasks)?)
+        .await
+        .map_err(from_task)?;
+    Ok(watch_json(&view))
+}
+
+fn unwatch_tasks(
+    server: &FoldServer,
+    actor: &Actor,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: UnwatchTasksInput = parse(arguments)?;
+    let tasks = input.tasks.as_deref().map(task_ids).transpose()?;
+    let view = server
+        .tasks
+        .unwatch_tasks(actor, tasks.as_deref())
+        .map_err(from_task)?;
+    Ok(json!({"watching": view.watching}))
 }
 
 async fn send_back_task(

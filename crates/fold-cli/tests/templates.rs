@@ -90,7 +90,7 @@ fn skill_identifiers() -> BTreeSet<String> {
         .collect()
 }
 
-const FOLD_TOOLS: [&str; 101] = [
+const FOLD_TOOLS: [&str; 103] = [
     "register_agent",
     "list_agents",
     "define_area",
@@ -131,6 +131,8 @@ const FOLD_TOOLS: [&str; 101] = [
     "send_back_task",
     "set_hold",
     "clear_hold",
+    "watch_tasks",
+    "unwatch_tasks",
     "get_repository_state",
     "get_revision",
     "compare_revisions",
@@ -195,7 +197,7 @@ const FOLD_TOOLS: [&str; 101] = [
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
-const PENDING_TOOLS: [&str; 0] = [];
+const PENDING_TOOLS: [&str; 2] = ["watch_tasks", "unwatch_tasks"];
 
 /// Every code of the error table and the named `invalid_request` reasons.
 const FOLD_ERROR_CODES: [&str; 190] = [

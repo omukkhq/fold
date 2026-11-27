@@ -356,6 +356,15 @@ async fn every_task_tool_succeeds_and_ends_with_the_footer() {
         .map(|task| task["id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, ["T-1", "T-2"]);
+
+    assert_eq!(
+        ok(&client, "watch_tasks", json!({"tasks": ["T-1", "T-2"]})).await,
+        json!({"watching": ["T-1", "T-2"], "done": []})
+    );
+    assert_eq!(
+        ok(&client, "unwatch_tasks", json!({})).await,
+        json!({"watching": []})
+    );
 }
 
 #[tokio::test]
@@ -536,7 +545,7 @@ async fn bad_input_is_refused_with_a_code() {
 #[test]
 fn every_task_tool_input_field_has_a_description() {
     let tools = fold_daemon::mcp::tasks::tools();
-    assert_eq!(tools.len(), 23);
+    assert_eq!(tools.len(), 25);
     for tool in &tools {
         assert!(tool.description.is_some(), "{}", tool.name);
         let properties = tool

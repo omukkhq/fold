@@ -27,7 +27,7 @@ use crate::services::projects::{
 };
 use crate::services::reviews::ReviewService;
 use crate::services::reviews::checks::{CheckPermits, CheckRunner, recover_check_runs};
-use crate::services::tasks::TaskService;
+use crate::services::tasks::{TaskService, follow_task_watches};
 use crate::services::workspaces::{
     BatchMergeCache, CarryCache, WorkspaceLocks, WorkspaceService, follow_closed_workspaces,
     follow_stall_turns,
@@ -93,6 +93,8 @@ pub struct ProjectHandle {
     stall_turns: ProjectTask,
     /// Gives each workspace its watch or its rest on the timer scan again after each start or end of a worker process or a session.
     watch_owners: ProjectTask,
+    /// Reports the watched tasks that become Done.
+    task_watches: ProjectTask,
     /// Runs the queued worker starts when a place frees.
     queued_starts: ProjectTask,
     /// The device and inode of the database file this handle opened. SQLite keeps reading a file that was deleted, so only this tells the handle's database from a new one at the same path.
@@ -242,6 +244,11 @@ impl ProjectHandle {
             bus.subscribe(),
         ));
         let watch_owners = ProjectTask::spawn(follow_watch_owners(live.clone(), bus.subscribe()));
+        let task_watches = ProjectTask::spawn(follow_task_watches(
+            tasks.clone(),
+            bus.clone(),
+            bus.subscribe(),
+        ));
         let presence = SeenPresence::new();
         let queue_service = AgentService::new(store.clone(), bus.clone(), clock.clone())
             .with_project_config(paths.clone())
@@ -293,6 +300,7 @@ impl ProjectHandle {
             cleanup_due,
             stall_turns,
             watch_owners,
+            task_watches,
             queued_starts,
             database_file,
         })
@@ -394,7 +402,7 @@ impl ProjectHandle {
         }
     }
 
-    /// Waits up to `timeout` for the commit writer, the push delivery, the removal of closed workspace directories, the stall decisions and the watch moves to end after [`EventBus::close`], all at the same time, then aborts them, so none outlives the project's database.
+    /// Waits up to `timeout` for the commit writer, the push delivery, the removal of closed workspace directories, the stall decisions, the watch moves and the task watches to end after [`EventBus::close`], all at the same time, then aborts them, so none outlives the project's database.
     pub async fn stop_tasks(&self, timeout: Duration) {
         tokio::join!(
             self.auto_commit.stopped(timeout),
@@ -402,6 +410,7 @@ impl ProjectHandle {
             self.workspace_cleanup.stopped(timeout),
             self.stall_turns.stopped(timeout),
             self.watch_owners.stopped(timeout),
+            self.task_watches.stopped(timeout),
             self.queued_starts.stopped(timeout),
         );
     }

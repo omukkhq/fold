@@ -32,6 +32,7 @@ mod recompute;
 mod removal;
 mod requests;
 mod views;
+mod watches;
 
 pub use attention::{AttentionItem, AttentionKind, PersonAction, attention, stalled_tasks};
 pub use checklists::{
@@ -71,6 +72,7 @@ pub use views::{
     ChangesetSummary, ChecklistCounts, DetailChecklist, DetailEdge, DetailItem, GraphTask,
     HISTORY_LIMIT, TaskDetail, TaskGraph, TaskIntegration, TaskProposal, TaskRef, WorkspaceInfo,
 };
+pub use watches::{MAX_WATCHED, TaskWatches, WatchView, follow_task_watches};
 
 /// Refusals carry a stable code; anything else is a database failure.
 #[derive(Debug, Error)]
@@ -173,6 +175,8 @@ pub struct TaskService {
     ops: Arc<WorkspaceLocks>,
     /// Where request attachments are stored, with the project's object lock (`ProjectHandle::objects`). Without it a request with attachments is refused.
     objects: Option<ObjectAccess>,
+    /// The project's task watches; every clone of the service shares them.
+    watches: TaskWatches,
 }
 
 #[derive(Clone)]
@@ -192,6 +196,7 @@ impl TaskService {
             live: None,
             ops: Arc::new(WorkspaceLocks::default()),
             objects: None,
+            watches: TaskWatches::default(),
         }
     }
 

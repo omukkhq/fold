@@ -340,6 +340,8 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
             "send_back_task",
             "set_hold",
             "clear_hold",
+            "watch_tasks",
+            "unwatch_tasks",
             "create_request",
             "list_requests",
             "get_request",
