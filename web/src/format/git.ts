@@ -15,10 +15,22 @@ const FAILURES: Record<string, string> = {
   remote_not_set: "the remote is no longer set",
 };
 
+/** The caption of the first row: fold works on this branch of the repository, not on the remote's. */
+export const LOCAL_BRANCH_LABEL = "Local branch";
+
+/** What a remote row says about where fold pushes: the remote and its branch, as Git names them. */
+export function pushTarget(remote: Pick<GitRemote, "name" | "branch">): string {
+  return `Pushes to ${remote.name}/${remote.branch}`;
+}
+
 export interface RemoteLine {
   name: string;
   location: string;
   branch: string;
+  /** "Pushes to origin/dev". */
+  target: string;
+  /** True when fold does not push after an integration; the row then says "push off". */
+  pushOff: boolean;
   /** The Git commit of the newest revision on the remote; null before the first push or while the revision has none. */
   commit: string | null;
   tone: "ok" | "failed" | "idle";
@@ -31,6 +43,8 @@ export function remoteLine(remote: GitRemote): RemoteLine {
     name: remote.name,
     location: remote.location,
     branch: remote.branch,
+    target: pushTarget(remote),
+    pushOff: !remote.push_on_integrate,
     commit: remote.pushed?.commit ?? null,
   };
   if (remote.failed) {
@@ -50,6 +64,7 @@ export function remoteLine(remote: GitRemote): RemoteLine {
 export interface GitSummary {
   repository: string;
   branch: string;
+  branchLabel: string;
   remotes: RemoteLine[];
   /** The command to add a remote, shown only when there is none. */
   addRemote: string | null;
@@ -59,6 +74,7 @@ export function gitSummary(git: ProjectGit): GitSummary {
   return {
     repository: git.repository,
     branch: git.branch,
+    branchLabel: LOCAL_BRANCH_LABEL,
     remotes: git.remotes.map(remoteLine),
     addRemote: git.remotes.length === 0 ? ADD_REMOTE_COMMAND : null,
   };

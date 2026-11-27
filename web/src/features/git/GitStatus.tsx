@@ -68,11 +68,13 @@ function Folder({ path }: { path: string }) {
   );
 }
 
-function Branch({ name }: { name: string }) {
+/** A branch cell: the icon, a caption that says whose branch it is, and the name when the caption leaves it out. */
+function Branch({ label, name }: { label: string; name?: string }) {
   return (
     <span className="flex w-git-branch shrink-0 items-center gap-4">
       <GitBranch aria-hidden size={14} className="shrink-0 text-text-2" />
-      <Mono className="truncate text-13 text-text-2">{name}</Mono>
+      <span className="truncate text-13 text-text-2">{label}</span>
+      {name ? <Mono className="truncate text-13 text-text">{name}</Mono> : null}
     </span>
   );
 }
@@ -112,7 +114,7 @@ export function GitStatus({
           ) : (
             <Location>{summary.repository}</Location>
           )}
-          <Branch name={summary.branch} />
+          <Branch label={summary.branchLabel} name={summary.branch} />
           <span className="flex-1" />
         </Row>
         {summary.addRemote ? (
@@ -130,8 +132,11 @@ export function GitStatus({
               <Mono className="truncate text-13 text-text">{remote.name}</Mono>
             </Key>
             <Location>{remote.location}</Location>
-            <Branch name={remote.branch} />
+            <Branch label={remote.target} />
             <span className="flex-1" />
+            {remote.pushOff ? (
+              <span className="shrink-0 text-13 text-text-2">push off</span>
+            ) : null}
             <span
               title={remote.status}
               className={cn(

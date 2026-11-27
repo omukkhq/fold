@@ -30,6 +30,8 @@ describe("GitStatus", () => {
     });
     show();
     expect(await screen.findByText("/home/ana/ledger")).toBeTruthy();
+    expect(screen.getByText("Local branch")).toBeTruthy();
+    expect(screen.getByText("main")).toBeTruthy();
     const command = screen.getByText("fld remote add <name> <url>");
     expect(command.tagName).toBe("CODE");
     expect(command.className).toContain("text-13");
@@ -59,6 +61,8 @@ describe("GitStatus", () => {
       await screen.findByText("push failed: remote has newer commits"),
     ).toBeTruthy();
     expect(screen.getByText("/mnt/backup/ledger.git")).toBeTruthy();
+    expect(screen.getByText("Pushes to backup/trunk")).toBeTruthy();
+    expect(screen.getByText("push off")).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Copy commit 4f2a9c1" }),
     ).toBeTruthy();
@@ -86,6 +90,7 @@ describe("GitStatus", () => {
     });
     show();
     const status = await screen.findByText("pushed r12345");
+    expect(screen.queryByText("push off")).toBeNull();
     expect(status.className).toContain("tabular-nums");
     expect(status.className).toContain("min-w-0");
     expect(status.className).toContain("truncate");
