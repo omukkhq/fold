@@ -170,7 +170,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             GET_REPOSITORY_STATE,
-            "Show the head of main, the path of the read-only main directory and the newest 10 revisions.",
+            "Show the head of main, the path of the read-only main directory, the newest 10 revisions and, while Git sync is on, `git`: the local Git branch that integrations are committed to and each remote with the remote branch main is pushed to. fold's own line is always main; the Git branch names can differ. git is null without Git sync or while .fold/config.toml cannot be read.",
             schema_for_type::<GetRepositoryStateInput>(),
         ),
         Tool::new(
@@ -394,6 +394,14 @@ pub async fn get_repository_state(
         "head": state.head,
         "main_path": state.main_path.to_string_lossy(),
         "recent": state.recent.iter().map(revision_line).collect::<Vec<_>>(),
+        "git": state.git.as_ref().map(|git| json!({
+            "branch": git.branch,
+            "remotes": git.remotes.iter().map(|remote| json!({
+                "name": remote.name,
+                "branch": remote.branch,
+                "push_on_integrate": remote.push_on_integrate,
+            })).collect::<Vec<_>>(),
+        })),
     }))
 }
 

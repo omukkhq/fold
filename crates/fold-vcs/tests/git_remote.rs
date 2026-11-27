@@ -8,8 +8,8 @@ use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_export::{ExportBase, ExportRevision, ExportTarget, Signature, write_commits};
 use fold_vcs::git_remote::{
     EXCLUDE_LINK, add_exclude_patterns, branch_ref, checked_out_branch, create_local_remote,
-    default_branch, exclude_fold_dir, fetch_branch, is_ancestor, merge_base, prepare_mirror,
-    push_branch, remote_ref, remove_remote, set_ref,
+    default_branch, exclude_fold_dir, fetch_branch, is_ancestor, merge_base, operation_in_progress,
+    prepare_mirror, push_branch, remote_ref, remove_remote, rename_branch, set_ref,
 };
 use fold_vcs::git_sync_map::SYNC_MAP_FILE;
 use fold_vcs::objects::ObjectStore;
@@ -684,4 +684,67 @@ fn git_follows_the_fold_exclude_file() {
         .output()
         .unwrap();
     assert_eq!(String::from_utf8(status.stdout).unwrap(), "?? kept.md\n");
+}
+
+#[test]
+fn a_branch_rename_moves_head_and_refuses_a_name_that_exists() {
+    let fixture = Fixture::new();
+    let root = fixture.path("project");
+    std::fs::create_dir_all(&root).unwrap();
+    fixture.git.init_checkout(&root, "main").unwrap();
+    git(&root, &["commit", "--quiet", "--allow-empty", "-m", "one"]);
+    let tip = git(&root, &["rev-parse", "HEAD"]);
+    let repo = root.join(".git");
+    rename_branch(&fixture.git, &repo, "main", "dev").unwrap();
+    assert_eq!(
+        checked_out_branch(&fixture.git, &repo).unwrap(),
+        Some("dev".to_owned())
+    );
+    assert_eq!(git(&root, &["rev-parse", "refs/heads/dev"]), tip);
+    assert!(
+        fixture
+            .git
+            .ref_commit(&repo, &branch_ref("main"))
+            .unwrap()
+            .is_none()
+    );
+    git(&root, &["branch", "taken"]);
+    let error = rename_branch(&fixture.git, &repo, "dev", "taken").unwrap_err();
+    assert_eq!(error.code(), codes::GIT_FAILED);
+    assert_eq!(
+        checked_out_branch(&fixture.git, &repo).unwrap(),
+        Some("dev".to_owned())
+    );
+    let error = rename_branch(&fixture.git, &repo, "dev", "-x").unwrap_err();
+    assert_ne!(error.code(), codes::GIT_FAILED);
+}
+
+#[test]
+fn each_marker_git_leaves_names_its_operation() {
+    let fixture = Fixture::new();
+    let dir = fixture.path("gitdir");
+    std::fs::create_dir_all(&dir).unwrap();
+    assert_eq!(operation_in_progress(&dir), None);
+    for (marker, operation, folder) in [
+        ("MERGE_HEAD", "merge", false),
+        ("rebase-merge", "rebase", true),
+        ("rebase-apply", "rebase", true),
+        ("CHERRY_PICK_HEAD", "cherry-pick", false),
+        ("REVERT_HEAD", "revert", false),
+        ("BISECT_LOG", "bisect", false),
+    ] {
+        let path = dir.join(marker);
+        if folder {
+            std::fs::create_dir(&path).unwrap();
+        } else {
+            std::fs::write(&path, "x\n").unwrap();
+        }
+        assert_eq!(operation_in_progress(&dir), Some(operation), "{marker}");
+        if folder {
+            std::fs::remove_dir(&path).unwrap();
+        } else {
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+    assert_eq!(operation_in_progress(&dir), None);
 }

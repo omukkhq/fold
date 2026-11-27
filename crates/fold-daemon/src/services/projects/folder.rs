@@ -11,7 +11,7 @@ use fold_store::{Store, StoreError};
 use fold_vcs::checkout::{FolderEntry, Followed, folder_changes, follow, overlay};
 use fold_vcs::compare::load_flat;
 use fold_vcs::git::{CommitId, Git};
-use fold_vcs::git_remote::{BranchState, branch_state};
+use fold_vcs::git_remote::{BranchState, branch_ref, branch_state};
 use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::ignore::IgnoreRules;
 use fold_vcs::index::StatIndex;
@@ -26,6 +26,7 @@ use fold_core::events::types;
 use fold_core::{Actor, EventError, NewEvent};
 
 use super::agent_changes::{SeenChange, seen_changes};
+use super::branch::moved_hint;
 use super::commits::{Committed, commit_main};
 use super::remote::{RemoteContext, blocking};
 use super::{ProjectAttention, ProjectError, load_config};
@@ -47,6 +48,8 @@ pub struct FolderFollowed {
     pub unrecorded: bool,
     /// What the `[git]` branch shows, read while Git sync is on.
     pub branch: Option<BranchState>,
+    /// Whether `refs/heads/<branch>` of the `[git]` branch exists, read with `branch`, so a hint names `git switch` only for a branch that is there.
+    pub branch_present: bool,
     /// Each path where the folder differs from its checkout record after the follow, with the time that places the change, in path order.
     pub seen: Vec<SeenChange>,
     /// The paths the follow's read of the folder left out, such as a file over the size limit, an unreadable one or one that kept changing, in path order: the read kept their recorded entries without seeing them, so they settle no mark of a worker's change.
@@ -142,10 +145,13 @@ pub(crate) async fn note_attention(context: &RemoteContext, synced: &FolderSync,
         .await
         .map(|config| config.git.branch)
         .unwrap_or_default();
+    let present = synced.followed.branch_present;
     let raised = attention.kinds();
     if raise || !raised.contains(&ProjectAttention::HeadMoved) {
         attention.note_moved(
-            synced.moved().map(|moved| moved.hint(&branch)),
+            synced
+                .moved()
+                .map(|moved| moved_hint(&branch, moved, present)),
             context.clock.now(),
         );
     }
@@ -191,7 +197,7 @@ pub(crate) async fn note_attention(context: &RemoteContext, synced: &FolderSync,
                     event.data(serde_json::json!({
                         "branch": branch,
                         "reason": reason,
-                        "hint": synced.moved().map(|moved| moved.hint(&branch)),
+                        "hint": synced.moved().map(|moved| moved_hint(&branch, moved, present)),
                     }))
                 })
             }
@@ -295,6 +301,8 @@ pub(crate) struct FolderRead {
     pub(crate) lay: Option<(ObjectHash, ObjectHash)>,
     /// What the `[git]` branch shows, read while Git sync is on; `None` while it is off or could not be read.
     pub(crate) branch: Option<BranchState>,
+    /// Whether `refs/heads/<branch_name>` exists, read with `branch`.
+    pub(crate) branch_present: bool,
     pub(crate) synced: bool,
     /// The conflicted paths of the stash entry whose unstash conflict waits in the folder.
     pub(crate) stash_held: Option<Vec<String>>,
@@ -368,13 +376,17 @@ pub(crate) async fn read_folder(
             let known = |commit: &CommitId| {
                 map.revision_of(commit).is_some() || merged.contains(commit.as_str())
             };
-            branch_state(
+            let state = branch_state(
                 &git,
                 &paths,
                 &branch,
                 &known,
                 map.last().map(|(_, commit)| commit),
-            )
+            )?;
+            let present = git
+                .ref_commit(&paths.git_dir(), &branch_ref(&branch))?
+                .is_some();
+            Ok((state, present))
         })
         .await;
         // A branch that cannot be read keeps the folder as it is; the commit writer reports the failure.
@@ -391,6 +403,10 @@ pub(crate) async fn read_folder(
     } else {
         None
     };
+    let (branch, branch_present) = match branch {
+        Some((state, present)) => (Some(state), present),
+        None => (None, false),
+    };
     Ok(Some(FolderRead {
         max_file_bytes: config.max_file_bytes,
         branch_name: config.git.branch,
@@ -401,6 +417,7 @@ pub(crate) async fn read_folder(
         human_change,
         lay: lay.map(|change| (change.base_tree, change.tree)),
         branch,
+        branch_present,
         synced,
         stash_held,
         unstash,
@@ -463,6 +480,7 @@ pub(crate) async fn follow_folder(
         human_change,
         lay,
         branch,
+        branch_present,
         stash_held,
         unstash,
         ..
@@ -541,6 +559,7 @@ pub(crate) async fn follow_folder(
         held,
         unrecorded,
         branch,
+        branch_present,
         seen,
         unread,
         marks_before_read,

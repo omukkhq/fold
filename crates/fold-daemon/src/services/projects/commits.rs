@@ -49,9 +49,10 @@ pub async fn commit_main(
     if git_sync(store.read()).await?.is_none() {
         return Ok(Committed::default());
     }
-    let branch = load_config(paths).await?.git.branch;
     let fold_dir = paths.fold_dir();
     let (held, map) = blocking(move || SyncMap::lock(&fold_dir)).await?;
+    // Read under the lock, which a rename of the branch holds while it renames it and rewrites the config.
+    let branch = load_config(paths).await?.git.branch;
     let (_held, _map, committed) = commit_locked(
         store,
         paths,

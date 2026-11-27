@@ -622,6 +622,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/git/branch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Renames the local Git branch of the project folder's repository and the `[git] branch` of `.fold/config.toml` together, as `fld git branch <name>` asks, so the next integration commits to the new name. The commits, the working tree, the index, the remotes and the remote branches stay as they are. A call after a rename that stopped between its two steps finishes it. Socket only; the human comes from `x-fold-human`. */
+        post: operations["rename_git_branch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/labels": {
         parameters: {
             query?: never;
@@ -3468,6 +3485,21 @@ export interface components {
          * @enum {string}
          */
         GcWorkspaceReason: "owner_ended" | "past_window" | "owner_process" | "owner_session" | "session_inside" | "invalid_path" | "other_filesystem" | "failed";
+        /** @description What renaming the project's Git branch did. */
+        GitBranchRenamedView: {
+            /** @description False when the branch had the name already and nothing changed. */
+            changed: boolean;
+            /**
+             * @description The `[git] branch` before the call.
+             * @example main
+             */
+            from: string;
+            /**
+             * @description The `[git] branch` now, which the project folder has checked out.
+             * @example dev
+             */
+            to: string;
+        };
         /** @description What turning Git on did. */
         GitEnabledView: {
             /** @description The commit the Git branch points to; null while main holds only the empty genesis. */
@@ -4780,17 +4812,47 @@ export interface components {
             /** @example ws-9 */
             workspace: string;
         };
+        /** @description The new name of the project's local Git branch. */
+        RenameGitBranch: {
+            /**
+             * @description The branch name, as `git check-ref-format --branch` accepts it, such as `dev`.
+             * @example dev
+             */
+            to: string;
+        };
         /**
          * @description How a lead check answered a report.
          * @enum {string}
          */
         ReportResolution: "completed" | "sent_back";
+        /** @description Git's names, which differ from fold's: fold's line of integrated revisions is always `main`, while the local branch and each remote branch have their own names. */
+        RepositoryGitView: {
+            /**
+             * @description The `[git] branch` of `.fold/config.toml`: the local branch of the project folder's repository that every integration is committed to and that the folder has checked out. It is the configured name, not a read of `HEAD`.
+             * @example main
+             */
+            branch: string;
+            /** @description The remotes of `.fold/config.toml`, ordered by name. */
+            remotes: components["schemas"]["RepositoryRemoteView"][];
+        };
+        RepositoryRemoteView: {
+            /**
+             * @description The branch of the remote that main is pushed to and pulled from.
+             * @example dev
+             */
+            branch: string;
+            /** @example origin */
+            name: string;
+            /** @description Whether fold pushes to this remote after each integration. */
+            push_on_integrate: boolean;
+        };
         RepositoryView: {
             /**
              * @description The main revision the project folder holds, apart from the changes no revision records, such as `r16`: behind `head` while the folder waits on such a change on a path main changed, or on the Git branch. Null before fold first wrote the folder.
              * @example r16
              */
             folder: string | null;
+            git?: components["schemas"]["RepositoryGitView"] | null;
             /**
              * @description The revision `main` names; null only before `r1` exists.
              * @example r17
@@ -9830,6 +9892,105 @@ export interface operations {
             };
             /** @description Not on the socket, or the slug is not registered */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A Git command failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open, or git is not on PATH */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    rename_git_branch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameGitBranch"];
+            };
+        };
+        responses: {
+            /** @description The branch has the new name, or had it already */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitBranchRenamedView"];
+                };
+            };
+            /** @description The body or the branch name is not valid, or the rename is refused with `invalid_request` and `details.reason`: `git_sync_off`, `legacy_remote` (`[git] remote` names the remote), `branch_exists` (the new branch exists), `head_moved` (the folder is not on the project's branch) or `folder_held` (a Git operation waits half-done, or `fld status` lists a blocker) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_required`: only a human renames the branch; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The config or the sync map is invalid */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

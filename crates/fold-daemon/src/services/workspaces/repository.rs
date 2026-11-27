@@ -126,6 +126,25 @@ pub struct RepositoryState {
     pub folder: Option<RevisionId>,
     /// The newest revisions, newest first.
     pub recent: Vec<RevisionSummary>,
+    /// The Git branch and remotes while Git sync is on; `None` while it is off or while `.fold/config.toml` cannot be read.
+    pub git: Option<RepositoryGit>,
+}
+
+/// The Git branch of the project folder and the remotes main is pushed to, as `.fold/config.toml` names them. fold's own line of revisions is always `main`; these are Git's names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryGit {
+    /// The `[git] branch`: the local branch of the project folder's repository that every integration is committed to.
+    pub branch: String,
+    /// Ordered by name.
+    pub remotes: Vec<RepositoryRemote>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryRemote {
+    pub name: String,
+    /// The branch of the remote that main is pushed to and pulled from.
+    pub branch: String,
+    pub push_on_integrate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,11 +168,42 @@ impl WorkspaceService {
         let head = workspaces::head(read).await?.map(|row| row.number);
         let recent = workspaces::list_recent(read, RECENT_REVISIONS, None).await?;
         let folder = workspaces::checkout(read).await?.map(|row| row.revision);
+        let git = match workspaces::git_sync(read).await? {
+            Some(_) => self.repository_git().await,
+            None => None,
+        };
         Ok(RepositoryState {
             head,
             main_path: self.paths.root().to_path_buf(),
             folder,
             recent: recent.into_iter().map(RevisionSummary::from).collect(),
+            git,
+        })
+    }
+
+    /// The Git part of the state; `None` for a `.fold/config.toml` that cannot be read, which the state is no less readable for: the commands that need the config refuse with its error.
+    async fn repository_git(&self) -> Option<RepositoryGit> {
+        let config = match crate::services::projects::load_config(&self.paths).await {
+            Ok(config) => config,
+            Err(error) => {
+                tracing::warn!(
+                    code = error.log_code(),
+                    "the repository state leaves out Git: the project configuration cannot be read"
+                );
+                return None;
+            }
+        };
+        Some(RepositoryGit {
+            branch: config.git.branch,
+            remotes: config
+                .remotes
+                .into_iter()
+                .map(|(name, remote)| RepositoryRemote {
+                    name,
+                    branch: remote.branch,
+                    push_on_integrate: remote.push_on_integrate,
+                })
+                .collect(),
         })
     }
 

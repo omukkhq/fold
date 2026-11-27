@@ -62,6 +62,7 @@ mod acceptance_49_a_batch_member_approved_alone_integrates;
 mod acceptance_4_live_diff;
 mod acceptance_50_a_serial_lane_integrates_in_turn;
 mod acceptance_51_main_agent_reads_needs_you;
+mod acceptance_52_rename_the_git_branch;
 mod acceptance_5_review_and_integrate;
 mod acceptance_6_dependency_unblocks;
 mod acceptance_7_conflicting_proposals;
@@ -105,6 +106,8 @@ mod crash_integration;
 mod crash_messages;
 #[cfg(feature = "failpoints")]
 mod crash_record;
+#[cfg(feature = "failpoints")]
+mod crash_rename_branch;
 #[cfg(feature = "failpoints")]
 mod crash_reset;
 #[cfg(feature = "failpoints")]

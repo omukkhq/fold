@@ -69,8 +69,8 @@ pub use lifecycle::{
 pub use reconcile::{Reconciled, Reconciliation};
 pub(crate) use repository::file_path;
 pub use repository::{
-    DEFAULT_REVISION_PAGE, RECENT_REVISIONS, RepositoryState, RevisionDetail, RevisionOrigin,
-    RevisionPage, RevisionSummary,
+    DEFAULT_REVISION_PAGE, RECENT_REVISIONS, RepositoryGit, RepositoryRemote, RepositoryState,
+    RevisionDetail, RevisionOrigin, RevisionPage, RevisionSummary,
 };
 pub(crate) use review_fix::ReviewFixTree;
 pub use shared::{LISTED_UNSEEN, SharedFileKind, SharedFileState, SharedState};

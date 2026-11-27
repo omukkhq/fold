@@ -108,6 +108,19 @@ pub fn can_enable_git(actor: &Actor) -> Result<(), PolicyDenied> {
     }
 }
 
+/// Renaming the project's Git branch renames a branch in the human's own repository and rewrites `.fold/config.toml`, so only a named human runs `fld git branch <name>`.
+pub fn can_rename_branch(actor: &Actor) -> Result<(), PolicyDenied> {
+    if actor.is_human() {
+        Ok(())
+    } else {
+        Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human renames the project's Git branch",
+            hint: "ask a human to run `fld git branch <name>` in the project folder",
+        })
+    }
+}
+
 /// Taking a project off fold, and bringing it back, changes what every person on the host sees, so only a named human does it; an agent that thinks a project should go asks the human.
 pub fn can_remove_project(actor: &Actor) -> Result<(), PolicyDenied> {
     if actor.is_human() {
@@ -281,6 +294,21 @@ mod tests {
             let denied = can_reset_folder(&actor).unwrap_err();
             assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
             assert!(denied.hint().contains("fld reset"));
+        }
+    }
+
+    #[test]
+    fn only_a_human_renames_the_git_branch() {
+        assert!(can_rename_branch(&Actor::human(HumanName::parse("ana").unwrap())).is_ok());
+        let agent = Actor::Agent(AgentActor {
+            agent: AgentName::parse("main").unwrap(),
+            worker: WorkerName::parse("main").unwrap(),
+            tags: Vec::new(),
+        });
+        for actor in [agent, Actor::System] {
+            let denied = can_rename_branch(&actor).unwrap_err();
+            assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
+            assert!(denied.hint().contains("fld git branch <name>"));
         }
     }
 

@@ -28,7 +28,7 @@ pub use integrate::{
 };
 pub use projects::{
     can_add_exclude_patterns, can_change_notifications, can_drop_stash, can_enable_git, can_pull,
-    can_record, can_remove_project, can_reset_folder, can_restore_agent_changes,
+    can_record, can_remove_project, can_rename_branch, can_reset_folder, can_restore_agent_changes,
     can_settle_agent_changes, can_share_paths, can_stash, can_untrack_fold_skills,
 };
 pub use questions::{
