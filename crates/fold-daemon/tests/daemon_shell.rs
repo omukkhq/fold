@@ -178,6 +178,30 @@ async fn the_socket_is_private_and_a_second_daemon_is_refused() {
     host.start().await.shutdown().await;
 }
 
+/// nextest runs each test in its own process, so lowering this process's soft limit first shows that the start raises it.
+#[tokio::test]
+async fn the_start_raises_the_soft_open_file_limit_to_the_hard_one() {
+    use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
+    let before = getrlimit(Resource::Nofile);
+    let Some(hard) = before.maximum else {
+        return;
+    };
+    setrlimit(
+        Resource::Nofile,
+        Rlimit {
+            current: Some(hard.min(256)),
+            maximum: Some(hard),
+        },
+    )
+    .unwrap();
+    let host = Host::new();
+    let daemon = host.start().await;
+    let after = getrlimit(Resource::Nofile);
+    assert_eq!(after.current, Some(hard));
+    assert_eq!(after.maximum, Some(hard));
+    daemon.shutdown().await;
+}
+
 #[tokio::test]
 async fn on_loopback_and_on_every_address_the_api_needs_the_session_cookie_over_tcp_only() {
     for listen in ["127.0.0.1:0", "0.0.0.0:0"] {

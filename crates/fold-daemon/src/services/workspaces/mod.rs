@@ -30,6 +30,8 @@ mod compare;
 mod direct;
 mod exclude;
 mod files;
+mod handles;
+pub(crate) use handles::is_out_of_handles_error;
 mod human_change;
 mod human_edit;
 mod integration;

@@ -23,6 +23,7 @@ use crate::services::events::EventBuffer;
 use crate::services::tasks::worker_row;
 use crate::services::workspaces::{
     ArchiveReason, WorkspaceError, WorkspaceRef, WorkspaceView, archive_in_tx,
+    is_out_of_handles_error,
 };
 
 /// A review checkout with the proposal version its files hold.
@@ -305,6 +306,7 @@ async fn find_worker(store: &Store, actor: &AgentActor) -> Result<WorkerRow, Rev
 /// `checkout_failed` with the code of what stopped the write. A refusal that is not about the files keeps its own code.
 fn checkout_failed(proposal: ProposalId, error: WorkspaceError) -> ReviewError {
     match error {
+        WorkspaceError::Fold(cause) if is_out_of_handles_error(&cause) => cause.into(),
         WorkspaceError::Fold(cause) => FoldError::new(
             codes::CHECKOUT_FAILED,
             format!("the checkout of {proposal} could not be written"),
