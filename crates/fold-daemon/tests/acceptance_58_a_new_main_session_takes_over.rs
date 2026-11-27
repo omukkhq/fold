@@ -207,6 +207,109 @@ async fn acceptance_58_the_same_adapter_that_reconnects_early_never_takes_itself
 }
 
 #[tokio::test]
+async fn acceptance_58_a_replayed_handshake_after_a_restart_never_takes_over_a_newer_session() {
+    let host = Host::start().await;
+    let a_socket = host.root.parent().unwrap().join("a-inbox.sock");
+    let b_socket = host.root.parent().unwrap().join("b-inbox.sock");
+    let c_socket = host.root.parent().unwrap().join("c-inbox.sock");
+    let mut a_inbox = session_inbox(&a_socket);
+    let mut b_inbox = session_inbox(&b_socket);
+    let mut c_inbox = session_inbox(&c_socket);
+    let (accepted, rest) = handshake(host.state(), &main_hello(&host, &a_socket)).await;
+    assert!(accepted.ok, "{accepted:?}");
+    let a = mcp(rest).await;
+    host.clock.advance(Duration::from_secs(1)).unwrap();
+    let mut b_hello = main_hello(&host, &b_socket);
+    b_hello["keep_others"] = json!(true);
+    let (accepted, rest) = handshake(host.state(), &b_hello).await;
+    assert!(accepted.ok, "{accepted:?}");
+    let b = mcp(rest).await;
+
+    let host = host.restart().await;
+    drop(a);
+    drop(b);
+    // Each `fld mcp` replays its line with the mark; B reconnects first.
+    host.clock.advance(Duration::from_secs(1)).unwrap();
+    b_hello["reconnect"] = json!(true);
+    let (accepted, rest) = handshake(host.state(), &b_hello).await;
+    assert!(accepted.ok, "{accepted:?}");
+    let b = mcp(rest).await;
+    let mut a_hello = main_hello(&host, &a_socket);
+    a_hello["reconnect"] = json!(true);
+    let (accepted, rest) = handshake(host.state(), &a_hello).await;
+    assert!(accepted.ok, "{accepted:?}");
+    let a = mcp(rest).await;
+
+    let handle = open_handle(&host);
+    assert_eq!(handle.main_sessions.count(&main_name()), 2);
+    let notice = fold_core::agents::push::Notice {
+        agent: main_name(),
+        text: "fold: task T-1 is ready.".to_owned(),
+        next_tool: "get_task",
+    };
+    handle.push.deliver(&[notice], 1);
+    assert!(next_notice(&mut a_inbox).await.contains("T-1 is ready"));
+    assert!(next_notice(&mut b_inbox).await.contains("T-1 is ready"));
+    for client in [&a, &b] {
+        assert_eq!(
+            list_agents(client).await["agents"][0]["name"],
+            json!("main")
+        );
+    }
+
+    // A new `fld claude` without the mark still takes over both.
+    host.clock.advance(Duration::from_secs(1)).unwrap();
+    let (accepted, rest) = handshake(host.state(), &main_hello(&host, &c_socket)).await;
+    assert!(accepted.ok, "{accepted:?}");
+    let c = mcp(rest).await;
+    for client in [a, b] {
+        tokio::time::timeout(WAIT, client.waiting())
+            .await
+            .expect("fold closes the replayed connection")
+            .unwrap();
+    }
+    assert!(next_notice(&mut a_inbox).await.contains("took over"));
+    assert!(next_notice(&mut b_inbox).await.contains("took over"));
+    assert_eq!(handle.main_sessions.count(&main_name()), 1);
+    message_main(&host).await;
+    assert!(next_notice(&mut c_inbox).await.contains("m-1 arrived"));
+    c.cancel().await.unwrap();
+    host.daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn acceptance_58_a_replayed_handshake_of_a_taken_over_adapter_is_still_refused() {
+    let host = Host::start().await;
+    let old_socket = host.root.parent().unwrap().join("old-inbox.sock");
+    let new_socket = host.root.parent().unwrap().join("new-inbox.sock");
+    let _old_inbox = session_inbox(&old_socket);
+    let mut new_inbox = session_inbox(&new_socket);
+    let (accepted, rest) = handshake(host.state(), &main_hello(&host, &old_socket)).await;
+    assert!(accepted.ok, "{accepted:?}");
+    let old = mcp(rest).await;
+    host.clock.advance(Duration::from_secs(1)).unwrap();
+    let (accepted, rest) = handshake(host.state(), &main_hello(&host, &new_socket)).await;
+    assert!(accepted.ok, "{accepted:?}");
+    let new = mcp(rest).await;
+    tokio::time::timeout(WAIT, old.waiting())
+        .await
+        .expect("fold closes the old connection")
+        .unwrap();
+
+    let mut replay = main_hello(&host, &old_socket);
+    replay["reconnect"] = json!(true);
+    let line = format!("{replay}\n");
+    let (code, _) = refused(host.state(), line.as_bytes()).await;
+    assert_eq!(code, "main_session_taken_over");
+    let handle = open_handle(&host);
+    assert_eq!(handle.main_sessions.count(&main_name()), 1);
+    message_main(&host).await;
+    assert!(next_notice(&mut new_inbox).await.contains("m-1 arrived"));
+    new.cancel().await.unwrap();
+    host.daemon.shutdown().await;
+}
+
+#[tokio::test]
 async fn acceptance_58_a_taken_over_process_that_starts_a_new_conversation_gets_no_notices_again() {
     let host = Host::start().await;
     let old_socket = host.root.parent().unwrap().join("old-inbox.sock");

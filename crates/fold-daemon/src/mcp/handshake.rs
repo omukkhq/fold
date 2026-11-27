@@ -57,6 +57,9 @@ pub struct HelloOptions {
     /// `true` keeps the live connections of an earlier session of the same main agent open next to this one, and both get notices. Without it, a session that registers with the `main` tag from outside every worker's process tree takes over: fold posts the takeover notice to each earlier session's inbox and closes its connection. It changes nothing for any other session, and an adapter that sends `false` omits the field.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub keep_others: bool,
+    /// `true` marks the line as a replay: `fld mcp` sends it again when it reconnects to the same session, such as after a daemon restart. A main handshake with the mark never takes over and connects next to the live connections as `keep_others` does, so a replay never ends a session that started after this one; it is still refused with `main_session_taken_over` when a newer session took this adapter over. An adapter that sends `false` omits the field.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reconnect: bool,
 }
 
 /// `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN` of the session. Its `Debug` leaves the token out, so a logged handshake never shows it.
@@ -274,7 +277,7 @@ pub fn parse_line(line: &[u8]) -> Result<(Hello, HelloOptions), FoldError> {
         None => return Err(invalid("the handshake line has no protocol version")),
     }
     let options: HelloOptions = serde_json::from_value(value.clone())
-        .map_err(|_| invalid("keep_others must be true or false"))?;
+        .map_err(|_| invalid("keep_others and reconnect must be true or false"))?;
     let mut hello: Hello = serde_json::from_value(value)
         .map_err(|_| invalid("the handshake line needs fold, cwd, pid and agent"))?;
     let canonical = hello.cwd.is_absolute()
@@ -354,6 +357,7 @@ async fn open(state: &AppState, line: &[u8], peer: SocketPeer) -> Result<Opened,
         pid,
         inbox: inbox_socket,
         keep_others: options.keep_others,
+        reconnect: options.reconnect,
     };
     let main = match agents
         .enter_main_connection(&session, &tags, &connection)

@@ -84,7 +84,7 @@ impl Host {
     }
 
     /// Stops the daemon and starts a new one on the same folders, as `fld restart` does.
-    async fn restart(self) -> Self {
+    pub(crate) async fn restart(self) -> Self {
         let Self {
             _dir,
             _project,
@@ -786,6 +786,28 @@ fn parse_line_reads_keep_others_and_an_adapter_without_it_takes_over() {
     assert_eq!(serde_json::to_string(&options).unwrap(), "{}");
     let error = handshake::parse_line(
         br#"{"fold":1,"cwd":"/src/app","pid":3,"agent":"main","keep_others":"yes"}"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "invalid_handshake");
+}
+
+#[test]
+fn parse_line_reads_the_replay_mark_and_an_adapter_without_it_sends_a_new_handshake() {
+    let (_, options) = handshake::parse_line(
+        br#"{"fold":1,"cwd":"/src/app","pid":3,"agent":"main","tags":["main"],"reconnect":true}"#,
+    )
+    .unwrap();
+    assert!(options.reconnect);
+    assert!(!options.keep_others);
+    assert_eq!(
+        serde_json::to_string(&options).unwrap(),
+        r#"{"reconnect":true}"#
+    );
+    let (_, options) =
+        handshake::parse_line(br#"{"fold":1,"cwd":"/src/app","pid":3,"agent":"main"}"#).unwrap();
+    assert!(!options.reconnect);
+    let error = handshake::parse_line(
+        br#"{"fold":1,"cwd":"/src/app","pid":3,"agent":"main","reconnect":1}"#,
     )
     .unwrap_err();
     assert_eq!(error.code(), "invalid_handshake");

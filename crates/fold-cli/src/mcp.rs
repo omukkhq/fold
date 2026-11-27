@@ -68,7 +68,10 @@ pub fn run(args: &McpArgs) -> Result<(), McpError> {
     let keep_others = keeps_others(&hello.tags, std::env::var_os(KEEP_OTHERS_ENV));
     let hello = HelloLine {
         hello,
-        options: HelloOptions { keep_others },
+        options: HelloOptions {
+            keep_others,
+            reconnect: false,
+        },
     };
     let runtime = serve::current_thread_runtime().map_err(McpError::Runtime)?;
     let outcome = runtime.block_on(session(&config, &hello));
@@ -171,7 +174,10 @@ mod tests {
         assert!(!String::from_utf8_lossy(&plain).contains("keep_others"));
         let kept = HelloLine {
             hello: hello.clone(),
-            options: HelloOptions { keep_others: true },
+            options: HelloOptions {
+                keep_others: true,
+                reconnect: false,
+            },
         };
         let line = serde_json::to_vec(&kept).unwrap();
         let (parsed, options) = fold_daemon::mcp::handshake::parse_line(&line).unwrap();

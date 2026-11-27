@@ -24,6 +24,14 @@ pub struct MainConnection {
     pub inbox: Option<PathBuf>,
     /// The handshake's `keep_others`: the connection leaves the live connections of the agent's other sessions open.
     pub keep_others: bool,
+    /// The handshake's `reconnect`: the line is a replay of an adapter that was connected before, so it takes nothing over either.
+    pub reconnect: bool,
+}
+
+impl MainConnection {
+    fn takes_over(&self) -> bool {
+        !self.keep_others && !self.reconnect
+    }
 }
 
 /// The live adapter connections of the project's interactive main sessions, by session row id, and the adapters that a newer session took over. Only one Claude Code process works as the main agent unless a handshake asks to keep the others.
@@ -102,7 +110,7 @@ impl MainSessions {
             .any(|(old_pid, old_inbox)| *old_pid == pid && old_inbox.as_ref() == inbox)
     }
 
-    /// Counts `session` as live and, unless `keep_others`, removes the agent's other live connections and remembers those of another adapter as taken over, in one step, so two handshakes at the same moment never both stay.
+    /// Counts `session` as live and, when the connection takes over, removes the agent's other live connections and remembers those of another adapter as taken over, in one step, so two handshakes at the same moment never both stay.
     fn enter(
         &self,
         session: i64,
@@ -116,7 +124,7 @@ impl MainSessions {
             state.retired.retain(|(_, socket)| socket != inbox);
         }
         let mut old = Vec::new();
-        if !connection.keep_others {
+        if connection.takes_over() {
             let ids: Vec<i64> = state
                 .live
                 .iter()
@@ -184,7 +192,7 @@ impl AgentService {
         Ok(())
     }
 
-    /// Counts the bound session `ctx` as a live main connection when it is an interactive main agent that registered with `tags` from its handshake, and returns the signal that fires when a newer main session takes it over; `None` for every other session. Unless `connection.keep_others`, it takes over the agent's other live connections: each old session's inbox sockets registered up to its start, except the new session's own inbox, get [`TAKEN_OVER`] as their last notice and are dropped, and then its signal fires. An old session without an inbox socket gets no text. A connection whose peer is already gone is forgotten the same way, so it never stands in the new session's way.
+    /// Counts the bound session `ctx` as a live main connection when it is an interactive main agent that registered with `tags` from its handshake, and returns the signal that fires when a newer main session takes it over; `None` for every other session. Unless `connection` keeps the others or is a replay, it takes over the agent's other live connections: each old session's inbox sockets registered up to its start, except the new session's own inbox, get [`TAKEN_OVER`] as their last notice and are dropped, and then its signal fires. An old session without an inbox socket gets no text. A connection whose peer is already gone is forgotten the same way, so it never stands in the new session's way.
     pub async fn enter_main_connection(
         &self,
         ctx: &SessionContext,
