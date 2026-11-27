@@ -640,7 +640,7 @@ pub(crate) const INBOX_TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
 /// The session-start hook of `agent` with the session's inbox, through the daemon's socket router.
 #[cfg(test)]
-async fn session_start_hook(host: &Host, agent: &str, socket: &Path) -> Value {
+pub(crate) async fn session_start_hook(host: &Host, agent: &str, socket: &Path) -> Value {
     let body = json!({"cwd": host.root, "agent": agent, "socket": socket, "token": INBOX_TOKEN});
     let request = axum::http::Request::builder()
         .header(fold_daemon::http::host::CLIENT_HEADER, "test")

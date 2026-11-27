@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::mcp_handshake::{
     Host, INBOX_TOKEN, WAIT, handshake, list_agents, mcp, message_main, next_notice, refused,
-    session_inbox,
+    session_inbox, session_start_hook,
 };
 /// The hello of the interactive main session `fld claude` starts, with its Claude Code inbox at `socket`.
 #[cfg(test)]
@@ -202,6 +202,117 @@ async fn acceptance_58_the_same_adapter_that_reconnects_early_never_takes_itself
     assert_eq!(handle.main_sessions.count(&main_name()), 1);
     message_main(&host).await;
     assert!(next_notice(&mut inbox).await.contains("m-1 arrived"));
+    third.cancel().await.unwrap();
+    host.daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn acceptance_58_a_taken_over_process_that_starts_a_new_conversation_gets_no_notices_again() {
+    let host = Host::start().await;
+    let old_socket = host.root.parent().unwrap().join("old-inbox.sock");
+    let new_socket = host.root.parent().unwrap().join("new-inbox.sock");
+    let mut old_inbox = session_inbox(&old_socket);
+    let mut new_inbox = session_inbox(&new_socket);
+    let (accepted, rest) = handshake(host.state(), &main_hello(&host, &old_socket)).await;
+    assert!(accepted.ok, "{accepted:?}");
+    let old = mcp(rest).await;
+    host.clock.advance(Duration::from_secs(1)).unwrap();
+    let (accepted, rest) = handshake(host.state(), &main_hello(&host, &new_socket)).await;
+    assert!(accepted.ok, "{accepted:?}");
+    let new = mcp(rest).await;
+    assert!(next_notice(&mut old_inbox).await.contains("took over"));
+    tokio::time::timeout(WAIT, old.waiting())
+        .await
+        .expect("fold closes the old connection")
+        .unwrap();
+
+    // `/clear` or a compaction in the old process runs its session-start hook again with the same inbox socket, which Claude Code names after its process.
+    host.clock.advance(Duration::from_secs(1)).unwrap();
+    let answer = session_start_hook(&host, "main", &old_socket).await;
+    assert!(
+        answer["context"].as_str().unwrap().contains("took over"),
+        "{answer}"
+    );
+    let handle = open_handle(&host);
+    assert_eq!(
+        handle.push.sockets(&main_name()),
+        std::slice::from_ref(&new_socket)
+    );
+
+    // `/clear` in the live session registers its own inbox again and keeps every notice.
+    let answer = session_start_hook(&host, "main", &new_socket).await;
+    assert!(
+        !answer["context"].as_str().unwrap().contains("took over"),
+        "{answer}"
+    );
+    assert_eq!(
+        handle.push.sockets(&main_name()),
+        std::slice::from_ref(&new_socket)
+    );
+    message_main(&host).await;
+    assert!(next_notice(&mut new_inbox).await.contains("m-1 arrived"));
+    let notice = fold_core::agents::push::Notice {
+        agent: main_name(),
+        text: "fold: task T-1 is ready.".to_owned(),
+        next_tool: "get_task",
+    };
+    handle.push.deliver(&[notice], 2);
+    assert!(next_notice(&mut new_inbox).await.contains("T-1 is ready"));
+    assert!(
+        old_inbox.try_recv().is_err(),
+        "the taken-over process gets no more notices"
+    );
+    new.cancel().await.unwrap();
+    host.daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn acceptance_58_a_new_process_with_the_socket_of_a_taken_over_one_gets_every_notice() {
+    let host = Host::start().await;
+    let old_socket = host.root.parent().unwrap().join("old-inbox.sock");
+    let new_socket = host.root.parent().unwrap().join("new-inbox.sock");
+    let mut old_inbox = session_inbox(&old_socket);
+    let mut new_inbox = session_inbox(&new_socket);
+    let (accepted, rest) = handshake(host.state(), &main_hello(&host, &old_socket)).await;
+    assert!(accepted.ok, "{accepted:?}");
+    let old = mcp(rest).await;
+    host.clock.advance(Duration::from_secs(1)).unwrap();
+    let (accepted, rest) = handshake(host.state(), &main_hello(&host, &new_socket)).await;
+    assert!(accepted.ok, "{accepted:?}");
+    let new = mcp(rest).await;
+    assert!(next_notice(&mut old_inbox).await.contains("took over"));
+    tokio::time::timeout(WAIT, old.waiting())
+        .await
+        .expect("fold closes the old connection")
+        .unwrap();
+
+    // The old process ended and a new `fld claude` got its pid, so Claude Code gives it the same inbox socket path; its adapter is another process.
+    host.clock.advance(Duration::from_secs(1)).unwrap();
+    let mut hello = main_hello(&host, &old_socket);
+    hello["pid"] = json!(4343);
+    let (accepted, rest) = handshake(host.state(), &hello).await;
+    assert!(accepted.ok, "{accepted:?}");
+    let third = mcp(rest).await;
+    assert!(next_notice(&mut new_inbox).await.contains("took over"));
+    let handle = open_handle(&host);
+    assert_eq!(
+        handle.push.sockets(&main_name()),
+        std::slice::from_ref(&old_socket)
+    );
+
+    // Its session-start hook, at the start or after `/clear`, keeps its inbox and gets no takeover notice.
+    let answer = session_start_hook(&host, "main", &old_socket).await;
+    assert!(
+        !answer["context"].as_str().unwrap().contains("took over"),
+        "{answer}"
+    );
+    assert_eq!(
+        handle.push.sockets(&main_name()),
+        std::slice::from_ref(&old_socket)
+    );
+    message_main(&host).await;
+    assert!(next_notice(&mut old_inbox).await.contains("m-1 arrived"));
+    new.cancel().await.ok();
     third.cancel().await.unwrap();
     host.daemon.shutdown().await;
 }

@@ -501,17 +501,17 @@ impl PushTargets {
         }
     }
 
-    /// Drops the agent's targets registered at or before `at`, except the socket `keep`, with their kept files, after each posts `farewell` as its last notice in place of the notices still waiting for it. A new main session that takes over passes the start of the session it replaces and its own inbox, so the old session learns why fold went quiet and only the new one gets notices from now on. Returns how many targets it dropped.
+    /// Drops the agent's targets registered at or before `at`, except the socket `keep`, with their kept files, after each posts `farewell` as its last notice in place of the notices still waiting for it. A new main session that takes over passes the start of the session it replaces and its own inbox, so the old session learns why fold went quiet and only the new one gets notices from now on. Returns the sockets it dropped.
     pub async fn retire_registered_by(
         &self,
         agent: &AgentName,
         at: Timestamp,
         keep: Option<&Path>,
         farewell: &str,
-    ) -> usize {
+    ) -> Vec<PathBuf> {
         if !postable(farewell, MAX_NOTICE_LEN) {
             tracing::error!(agent = %agent, "session push refused a malformed farewell");
-            return 0;
+            return Vec::new();
         }
         let mut removed: Vec<Target> = Vec::new();
         {
@@ -527,7 +527,7 @@ impl PushTargets {
                 }
             }
         }
-        let count = removed.len();
+        let mut sockets = Vec::with_capacity(removed.len());
         for target in removed {
             target.queue.finish(Queued {
                 text: Arc::from(farewell),
@@ -537,8 +537,9 @@ impl PushTargets {
                 digest: None,
             });
             self.drop_file(agent, &target.socket).await;
+            sockets.push(target.socket);
         }
-        count
+        sockets
     }
 
     /// Drops every socket target and every held inbox and leaves the kept files, for a daemon that stops or starts while the sessions may live on.

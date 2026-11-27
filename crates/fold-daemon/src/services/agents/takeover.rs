@@ -37,6 +37,8 @@ struct State {
     live: HashMap<i64, Live>,
     /// The (pid, inbox) of each closed connection, newest last.
     taken_over: VecDeque<(u32, Option<PathBuf>)>,
+    /// The inbox sockets that a takeover retired, by agent, newest last. Claude Code names its inbox socket after its own process and keeps it across `/clear` and compactions, so the socket identifies a taken-over process when its session-start hook registers again, while the hook's own peer pid is a new process at every run.
+    retired: VecDeque<(AgentName, PathBuf)>,
 }
 
 #[derive(Debug)]
@@ -63,6 +65,36 @@ impl MainSessions {
             .count()
     }
 
+    /// Whether `socket` is the inbox of a main connection of `agent` that a newer session took over. The inbox of a live connection of `agent` never is: a new `fld claude` whose process got the pid of a taken-over one has the same socket path.
+    fn was_inbox_taken_over(&self, agent: &AgentName, socket: &PathBuf) -> bool {
+        let state = self.lock();
+        if state
+            .live
+            .values()
+            .any(|live| &live.agent == agent && live.inbox.as_ref() == Some(socket))
+        {
+            return false;
+        }
+        state
+            .retired
+            .iter()
+            .any(|(old_agent, old_socket)| old_agent == agent && old_socket == socket)
+            || state
+                .taken_over
+                .iter()
+                .any(|(_, old_inbox)| old_inbox.as_ref() == Some(socket))
+    }
+
+    fn remember_retired(&self, agent: &AgentName, sockets: Vec<PathBuf>) {
+        let mut state = self.lock();
+        for socket in sockets {
+            state.retired.push_back((agent.clone(), socket));
+            if state.retired.len() > TAKEN_OVER_KEPT {
+                state.retired.pop_front();
+            }
+        }
+    }
+
     fn was_taken_over(&self, pid: u32, inbox: Option<&PathBuf>) -> bool {
         self.lock()
             .taken_over
@@ -80,6 +112,9 @@ impl MainSessions {
     ) -> (Arc<Notify>, Vec<Live>) {
         let close = Arc::new(Notify::new());
         let mut state = self.lock();
+        if let Some(inbox) = &connection.inbox {
+            state.retired.retain(|(_, socket)| socket != inbox);
+        }
         let mut old = Vec::new();
         if !connection.keep_others {
             let ids: Vec<i64> = state
@@ -129,6 +164,18 @@ fn taken_over() -> AgentError {
 }
 
 impl AgentService {
+    /// Refuses a push target of `agent` at `socket` with `main_session_taken_over` when `socket` is the inbox of a main session that a newer session took over, so the old Claude Code process gets no notices again after a `/clear` or a compaction.
+    pub(super) fn refuse_taken_over_inbox(
+        &self,
+        agent: &AgentName,
+        socket: &PathBuf,
+    ) -> Result<(), AgentError> {
+        if self.main_sessions.was_inbox_taken_over(agent, socket) {
+            return Err(taken_over());
+        }
+        Ok(())
+    }
+
     /// Refuses the handshake of an adapter whose connection a newer main session took over, with `main_session_taken_over`. `fld mcp` reconnects with the same line when fold closes its connection, and without this refusal it would take the new session over in turn.
     pub fn refuse_taken_over(&self, pid: u32, inbox: Option<&PathBuf>) -> Result<(), AgentError> {
         if self.main_sessions.was_taken_over(pid, inbox) {
@@ -160,7 +207,8 @@ impl AgentService {
             .main_sessions
             .enter(ctx.session_id, agent, started_at, connection);
         for live in &old {
-            self.push
+            let retired = self
+                .push
                 .retire_registered_by(
                     agent,
                     live.started_at,
@@ -168,6 +216,7 @@ impl AgentService {
                     TAKEN_OVER,
                 )
                 .await;
+            self.main_sessions.remember_retired(agent, retired);
             live.close.notify_one();
         }
         if !old.is_empty() {
