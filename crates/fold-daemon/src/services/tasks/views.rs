@@ -7,6 +7,8 @@ use fold_core::reviews::ProposalStanding;
 use fold_core::reviews::checks::{Purpose, Stage};
 use fold_core::status::status_reason;
 use fold_core::tasks::areas::{FeedbackReader, areas_conflict, feedback_readers};
+use fold_core::tasks::dag::Dag;
+use fold_core::tasks::holds::held_back_by;
 use fold_core::{
     AgentName, AreaName, ChangesetId, CheckRunId, ChecklistName, DependencyOrigin, Event, HoldMark,
     LabelName, ProposalId, RevisionId, TaskId, TaskKind, TaskStatus, TaskTitle, Timestamp,
@@ -17,7 +19,7 @@ use fold_store::reviews::{self, ProposalSummary, ReviewEntry};
 use fold_store::tasks::checklists::{self, ItemContent};
 use fold_store::tasks::claims;
 use fold_store::tasks::reports;
-use fold_store::tasks::{self, BoardSnapshot};
+use fold_store::tasks::{self, BoardSnapshot, EdgeRow, TaskRow};
 use fold_store::workspaces::{self, Checkpoint};
 use fold_store::{SqliteConnection, StoreError, agents, events};
 
@@ -182,7 +184,9 @@ pub struct TaskDetail {
     pub attention: Vec<AttentionItem>,
     /// When the human review mark was last set: the time of the newest `task.human_review_set` event. `None` without a mark.
     pub human_review_set_at: Option<Timestamp>,
-    /// The rule of the status calculation that decided the status, named with the ids it used.
+    /// The held tasks upstream of this one, directly or through open prerequisites, sorted by id; empty when none. Calculated on each read, never stored.
+    pub held_by: Vec<TaskId>,
+    /// The rule of the status calculation that decided the status, named with the ids it used, and the tasks of `held_by`.
     pub status_reason: String,
     pub workspace_info: Option<WorkspaceInfo>,
     pub activity: Option<Activity>,
@@ -226,6 +230,8 @@ pub struct GraphTask {
     pub holder: Option<WorkerName>,
     /// `None` while the task is not on hold.
     pub hold: Option<HoldMark>,
+    /// See [`TaskDetail::held_by`].
+    pub held_by: Vec<TaskId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -252,6 +258,8 @@ pub struct BoardCard {
     pub human_review: Option<HumanReviewMark>,
     /// `None` while the task is not on hold.
     pub hold: Option<HoldMark>,
+    /// See [`TaskDetail::held_by`].
+    pub held_by: Vec<TaskId>,
     /// How many messages name the task.
     pub messages: u32,
     pub completed_at: Option<Timestamp>,
@@ -431,6 +439,11 @@ impl TaskService {
             .await?
             .remove(&id)
             .unwrap_or_default();
+        let all_tasks = tasks::list_conn(&mut tx, false).await?;
+        let all_edges = tasks::edges_conn(&mut tx).await?;
+        let held_by = held_by_of(&all_tasks, &all_edges)
+            .remove(&id)
+            .unwrap_or_default();
         tx.commit().await.map_err(StoreError::from)?;
         if let Some(row) = &live {
             self.scan_waiting(row.id, row.state).await;
@@ -486,7 +499,7 @@ impl TaskService {
             .map(|p| p.id);
         let edits_after_version = self.edits_after_version(workspace, open);
         let check_run = self.check_run(workspace);
-        let status_reason = status_reason(&facts, workspace, open);
+        let status_reason = with_holds(status_reason(&facts, workspace, open), &held_by);
         Ok(TaskDetail {
             task: view(row, labels, &areas),
             checklists,
@@ -497,6 +510,7 @@ impl TaskService {
             workspace,
             attention,
             human_review_set_at,
+            held_by,
             status_reason,
             workspace_info: info,
             activity,
@@ -587,6 +601,7 @@ impl TaskService {
         area: Option<&AreaName>,
     ) -> Result<TaskGraph, TaskError> {
         let mut snapshot = tasks::board_snapshot(self.store.read()).await?;
+        let mut held_by = held_by_of(&snapshot.tasks, &snapshot.edges);
         if let Some(name) = area {
             let label = named_area::<TaskError>(self.store.read(), name)
                 .await?
@@ -617,6 +632,7 @@ impl TaskService {
                 blocked: row.blocked,
                 kind: row.kind,
                 hold: row.hold,
+                held_by: held_by.remove(&row.id).unwrap_or_default(),
             })
             .collect();
         Ok(TaskGraph { tasks, done_count })
@@ -645,6 +661,7 @@ impl TaskService {
             .collect();
         let is_done = |task: &TaskId| statuses.get(task) == Some(&TaskStatus::Done);
         let needs = needs_by_task(&snapshot);
+        let mut held_by = held_by_of(&snapshot.tasks, &snapshot.edges);
         let mut blocks: BTreeMap<TaskId, u32> = BTreeMap::new();
         for edge in &snapshot.edges {
             if !is_done(&edge.task) && !is_done(&edge.needs) {
@@ -697,6 +714,7 @@ impl TaskService {
                 workspace: snapshot.workspaces.get(&row.id).copied(),
                 human_review: row.human_review,
                 hold: row.hold,
+                held_by: held_by.remove(&row.id).unwrap_or_default(),
                 messages: snapshot.messages.get(&row.id).copied().unwrap_or(0),
                 completed_at: snapshot.completions.get(&row.id).copied(),
                 proposal,
@@ -733,6 +751,31 @@ impl TaskService {
         }
         Ok(Board { columns })
     }
+}
+
+/// The held tasks upstream of each task of `rows` that is not Done, as [`held_back_by`] calculates them over `edges`.
+fn held_by_of(rows: &[TaskRow], edges: &[EdgeRow]) -> BTreeMap<TaskId, Vec<TaskId>> {
+    let dag = Dag::from_edges(edges.iter().map(|edge| (edge.task, edge.needs)));
+    let held: BTreeSet<TaskId> = rows
+        .iter()
+        .filter(|row| row.hold.is_some())
+        .map(|row| row.id)
+        .collect();
+    held_back_by(
+        &dag,
+        rows.iter()
+            .map(|row| (row.id, row.status == TaskStatus::Done)),
+        &held,
+    )
+}
+
+/// `reason` with ", held through T-x" appended when `held_by` names a task, the ids joined by ", ".
+fn with_holds(reason: String, held_by: &[TaskId]) -> String {
+    if held_by.is_empty() {
+        return reason;
+    }
+    let ids: Vec<String> = held_by.iter().map(ToString::to_string).collect();
+    format!("{reason}, held through {}", ids.join(", "))
 }
 
 fn needs_by_task(snapshot: &BoardSnapshot) -> BTreeMap<TaskId, Vec<TaskId>> {

@@ -288,7 +288,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             GET_TASK_GRAPH,
-            "Read the task graph: every task that is not archived and not Done, or with include_done the Done tasks too, with its status, blocked flag, kind, labels, the tasks it needs and its claim holder, and the reason of its hold when it is on hold, and done_count, the number of Done tasks. A task without labels, needs or holder leaves that field out; pass detail full for every field on each task. No agent takes a human task or a task on hold.",
+            "Read the task graph: every task that is not archived and not Done, or with include_done the Done tasks too, with its status, blocked flag, kind, labels, the tasks it needs and its claim holder, the reason of its hold when it is on hold, and held_by, the held tasks it waits on directly or through other open tasks, and done_count, the number of Done tasks. A task without labels, needs, holder or held_by leaves that field out; pass detail full for every field on each task. No agent takes a human task or a task on hold.",
             schema_for_type::<GetTaskGraphInput>(),
         ),
         Tool::new(
@@ -298,7 +298,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_TASK,
-            "Read one task: description, labels, checklists with progress, dependencies, dependents, claim, workspace, its hold with the reason, and for a no_proposal task its reports and lead checks. history holds the newest 5 events of the task, newest first, and history_count the number that history all gives (at most 50); pass history all to read them, such as to see who changed the task and when.",
+            "Read one task: description, labels, checklists with progress, dependencies, dependents, claim, workspace, its hold with the reason, held_by (the held tasks it waits on directly or through other open tasks; the status reason names them), and for a no_proposal task its reports and lead checks. history holds the newest 5 events of the task, newest first, and history_count the number that history all gives (at most 50); pass history all to read them, such as to see who changed the task and when.",
             schema_for_type::<GetTaskInput>(),
         ),
         Tool::new(
@@ -508,6 +508,7 @@ fn detail_json(detail: &TaskDetail, all_history: bool) -> Value {
             "set_by": hold.set_by.as_str(),
             "set_at": hold.set_at,
         })),
+        "held_by": detail.held_by,
         "status_reason": detail.status_reason,
         "workspace_info": detail.workspace_info.as_ref().map(|info| json!({
             "directory": info.directory,
@@ -643,6 +644,7 @@ async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<V
             if let Some(hold) = &task.hold {
                 node["hold"] = json!({"reason": hold.reason.as_str()});
             }
+            node["held_by"] = json!(task.held_by);
             if !full && let Some(fields) = node.as_object_mut() {
                 fields.retain(|_, value| !is_empty(value));
             }

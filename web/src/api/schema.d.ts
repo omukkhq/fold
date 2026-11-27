@@ -2354,6 +2354,8 @@ export interface components {
             completed_at: number | null;
             /** @description Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them. */
             edits_after_version: boolean | null;
+            /** @description The held tasks this task waits on, directly or through other open tasks, as public task ids sorted by number. Calculated on each read; left out when none. */
+            held_by?: string[];
             hold: components["schemas"]["HoldMark"] | null;
             human_review: components["schemas"]["HumanReviewMark"] | null;
             kind: components["schemas"]["TaskKind"];
@@ -5998,6 +6000,8 @@ export interface components {
             description: string;
             /** @description Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them. */
             edits_after_version: boolean | null;
+            /** @description The held tasks this task waits on, directly or through other open tasks, as public task ids sorted by number. Calculated on each read; left out when none. */
+            held_by?: string[];
             /** @description The task's newest stored events, newest first, at most 50. */
             history: components["schemas"]["TaskEvent"][];
             hold: components["schemas"]["HoldMark"] | null;
@@ -6015,7 +6019,7 @@ export interface components {
             /** @description The task worker's reports on a `no_proposal` task, newest first; the first one without a resolution waits for a lead check. */
             reports: components["schemas"]["TaskReport"][];
             status: components["schemas"]["TaskStatus"];
-            /** @description The rule of the status calculation that decided the status, with the ids it used. */
+            /** @description The rule of the status calculation that decided the status, with the ids it used, and ", held through T-x" when `held_by` names a task. */
             status_reason: string;
             /** @example T-12 */
             task: string;

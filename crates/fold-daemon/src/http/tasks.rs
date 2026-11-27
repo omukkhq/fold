@@ -289,6 +289,10 @@ pub struct BoardCard {
     /// The hold; null while the task is not on hold.
     #[schema(required = true)]
     pub hold: Option<HoldMark>,
+    /// The held tasks this task waits on, directly or through other open tasks, as public task ids sorted by number. Calculated on each read; left out when none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schema(required = false)]
+    pub held_by: Vec<String>,
     /// How many messages name the task.
     pub messages: u32,
     /// UTC milliseconds of the completion record; null until the task is Done.
@@ -432,6 +436,7 @@ impl From<service::BoardCard> for BoardCard {
             workspace: card.workspace.map(|workspace| workspace.to_string()),
             human_review: card.human_review.map(HumanReviewMark::from),
             hold: card.hold.map(HoldMark::from),
+            held_by: ids(&card.held_by),
             messages: card.messages,
             completed_at: card.completed_at.map(|at| at.as_millis()),
             attention: attention(card.attention),
@@ -589,8 +594,12 @@ pub struct TaskView {
     /// The hold; null while the task is not on hold.
     #[schema(required = true)]
     pub hold: Option<HoldMark>,
+    /// The held tasks this task waits on, directly or through other open tasks, as public task ids sorted by number. Calculated on each read; left out when none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schema(required = false)]
+    pub held_by: Vec<String>,
     pub attention: Vec<AttentionItem>,
-    /// The rule of the status calculation that decided the status, with the ids it used.
+    /// The rule of the status calculation that decided the status, with the ids it used, and ", held through T-x" when `held_by` names a task.
     pub status_reason: String,
     /// The live task workspace; null without one.
     #[schema(required = true)]
@@ -857,6 +866,7 @@ impl From<service::TaskDetail> for TaskView {
             attention: attention(detail.attention),
             human_review_set_at: detail.human_review_set_at.map(|at| at.as_millis()),
             hold: task.hold.map(HoldMark::from),
+            held_by: ids(&detail.held_by),
             status_reason: detail.status_reason,
             workspace_info: detail.workspace_info.map(|info| TaskWorkspaceInfo {
                 directory: info.directory,
