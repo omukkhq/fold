@@ -198,7 +198,7 @@ async fn run(
         handle.integration.clone(),
     );
     for _ in 0..ATTEMPTS {
-        let serial = handle.integration.clone().lock_owned().await;
+        let serial = handle.integration.lock().await;
         let head = workspaces::head(handle.store.read())
             .await?
             .ok_or(StoreError::Corrupt("refs.main"))?;

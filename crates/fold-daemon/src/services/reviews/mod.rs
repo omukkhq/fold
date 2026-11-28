@@ -32,6 +32,7 @@ mod questions;
 mod queue;
 mod review_fixes;
 mod scopes;
+mod turns;
 mod verdicts;
 mod views;
 
@@ -79,6 +80,7 @@ pub use queue::{
 };
 pub use review_fixes::{FixOutcome, FixedVersion, MAX_CHECKS_CHARS, MAX_FIXES, ReviewFix};
 pub use scopes::{SuggestedScope, scope_suggestion};
+pub use turns::{IntegrationLock, IntegrationTurn, TurnKind, may_take_turn};
 pub use verdicts::SubmittedReview;
 pub use views::{
     CommentCounts, ProposalView, ReviewView, TaskRequirements, direct_conflicted,
@@ -157,7 +159,7 @@ pub struct ReviewService {
     clock: Arc<dyn Clock>,
     workspaces: WorkspaceService,
     registry: Option<Store>,
-    integration: Arc<tokio::sync::Mutex<()>>,
+    integration: Arc<IntegrationLock>,
     /// The project's background check runs and the machine-wide permits they take.
     checks: CheckRunner,
 }
@@ -179,7 +181,7 @@ impl ReviewService {
         bus: EventBus,
         clock: Arc<dyn Clock>,
         workspaces: WorkspaceService,
-        integration: Arc<tokio::sync::Mutex<()>>,
+        integration: Arc<IntegrationLock>,
     ) -> Self {
         Self {
             store,

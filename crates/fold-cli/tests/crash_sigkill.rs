@@ -68,32 +68,26 @@ async fn project(host: &Host) -> ProjectPaths {
         WorkspaceService::new(store.clone(), bus.clone(), clock.clone(), paths.clone(), 5);
     workspaces.create_workspace(&author, task).await.unwrap();
     std::fs::write(paths.ws_dir().join("t-1/src/new.rs"), "pub fn z() {}\n").unwrap();
-    ReviewService::new(
-        store.clone(),
-        bus,
-        clock,
-        workspaces,
-        Arc::new(tokio::sync::Mutex::new(())),
-    )
-    .create_proposal(
-        &author,
-        task,
-        "Add the page",
-        fold_core::reviews::ProposalIntent {
-            summary: "Adds z.".to_owned(),
-            parts: vec![fold_core::reviews::IntentPart {
-                name: "New function".to_owned(),
-                does: "Adds z.".to_owned(),
-                files: vec!["src/new.rs".to_owned()],
-            }],
-            ..Default::default()
-        },
-        None,
-    )
-    .await
-    .unwrap()
-    .detail()
-    .unwrap();
+    ReviewService::new(store.clone(), bus, clock, workspaces, Arc::default())
+        .create_proposal(
+            &author,
+            task,
+            "Add the page",
+            fold_core::reviews::ProposalIntent {
+                summary: "Adds z.".to_owned(),
+                parts: vec![fold_core::reviews::IntentPart {
+                    name: "New function".to_owned(),
+                    does: "Adds z.".to_owned(),
+                    files: vec!["src/new.rs".to_owned()],
+                }],
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap()
+        .detail()
+        .unwrap();
     store.close().await.unwrap();
     paths
 }

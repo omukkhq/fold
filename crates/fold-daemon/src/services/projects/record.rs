@@ -388,7 +388,7 @@ pub(super) async fn withdraw_waiting(
     handle: &ProjectHandle,
     actor: &Actor,
 ) -> Result<(), ProjectError> {
-    let _serial = handle.integration.clone().lock_owned().await;
+    let _serial = handle.integration.lock().await;
     let waiting = {
         let mut conn = handle
             .store
@@ -646,7 +646,7 @@ pub(crate) async fn integrate_change(
     );
     let (base_tree, human_tree) = (change.base_tree, change.tree);
     for _ in 0..ATTEMPTS {
-        let serial = handle.integration.clone().lock_owned().await;
+        let serial = handle.integration.lock().await;
         let head = workspaces::head(handle.store.read())
             .await?
             .ok_or(StoreError::Corrupt("refs.main"))?;

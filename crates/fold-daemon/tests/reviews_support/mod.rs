@@ -55,7 +55,7 @@ pub struct Fixture {
     objects: Arc<tokio::sync::RwLock<()>>,
     locks: Arc<WorkspaceLocks>,
     /// The project's integration mutex, shared by every review service of the fixture.
-    pub integration: Arc<tokio::sync::Mutex<()>>,
+    pub integration: Arc<fold_daemon::services::reviews::IntegrationLock>,
     /// The background work of every review service of the fixture, such as the test-merge of the queue after an integration: a test waits for it with `wait_idle`.
     pub checks: CheckRunner,
     pub frontend: Agent,
@@ -119,7 +119,7 @@ impl Fixture {
         let objects = Arc::new(tokio::sync::RwLock::new(()));
         let locks = Arc::new(WorkspaceLocks::default());
         let workspaces = workspace_service(&project, &bus, &objects, &locks);
-        let integration = Arc::new(tokio::sync::Mutex::new(()));
+        let integration = Arc::new(fold_daemon::services::reviews::IntegrationLock::default());
         let checks = CheckRunner::default();
         let reviews = ReviewService::new(
             project.store().clone(),
@@ -203,7 +203,7 @@ impl Fixture {
         self.bus = EventBus::new();
         self.objects = Arc::new(tokio::sync::RwLock::new(()));
         self.locks = Arc::new(WorkspaceLocks::default());
-        self.integration = Arc::new(tokio::sync::Mutex::new(()));
+        self.integration = Arc::new(fold_daemon::services::reviews::IntegrationLock::default());
         self.agents = AgentService::new(
             self.project.store().clone(),
             self.bus.clone(),

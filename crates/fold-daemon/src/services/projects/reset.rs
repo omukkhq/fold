@@ -394,7 +394,7 @@ async fn drop_waiting_change(
     actor: &Actor,
     abandon: bool,
 ) -> Result<Option<DroppedChange>, ProjectError> {
-    let _serial = handle.integration.clone().lock_owned().await;
+    let _serial = handle.integration.lock().await;
     let waiting = {
         let mut conn = handle
             .store

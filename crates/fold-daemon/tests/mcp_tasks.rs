@@ -80,7 +80,7 @@ impl Fixture {
             self.bus.clone(),
             Arc::new(self.project.clock().clone()),
             workspaces.clone(),
-            Arc::new(tokio::sync::Mutex::new(())),
+            Arc::default(),
         )
         .with_registry(self.project.registry().clone());
         let server = FoldServer::new(

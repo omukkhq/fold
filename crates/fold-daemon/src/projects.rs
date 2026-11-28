@@ -25,8 +25,8 @@ use crate::services::projects::{
     FoldSkills, GitAttention, ProjectError, RemoteContext, ToolWindows, keep_fold_skills_out,
     load_config,
 };
-use crate::services::reviews::ReviewService;
 use crate::services::reviews::checks::{CheckPermits, CheckRunner, recover_check_runs};
+use crate::services::reviews::{IntegrationLock, ReviewService};
 use crate::services::tasks::{TaskService, follow_task_watches};
 use crate::services::workspaces::{
     BatchMergeCache, CarryCache, WorkspaceLocks, WorkspaceService, follow_closed_workspaces,
@@ -48,8 +48,8 @@ pub struct ProjectHandle {
     pub presence: SeenPresence,
     /// Reads the claim lease from the project's configuration on each use, so every transport applies the same lease; the footer's near-stale count reads it again only when the file changed.
     pub tasks: TaskService,
-    /// Held for the whole integration procedure, so a proposal integration and a pull integration never run at the same time. Every review service of the project shares it.
-    pub integration: Arc<tokio::sync::Mutex<()>>,
+    /// Held for the whole integration procedure, so a proposal integration and a pull integration never run at the same time; a direct change takes first place in its queue. Every review service of the project shares it.
+    pub integration: Arc<IntegrationLock>,
     /// Held for a whole garbage collection run, so a second run is refused instead of queued.
     pub gc: tokio::sync::Mutex<()>,
     /// Keeps the sweep away from objects that are about to be named. A reused object must not be deleted between its refresh and the row that names it, and the sweep cannot see a row that is not committed. So every path that writes or refreshes objects and then records a row naming them holds this shared from its first object write until that transaction commits, and writes or refreshes each object less than the grace period before the row names it. The sweep holds it exclusive while it lists, checks and deletes objects. It is an `Arc` so a guard can move into blocking work and outlive an aborted caller.
@@ -277,7 +277,7 @@ impl ProjectHandle {
             bus,
             presence,
             tasks,
-            integration: Arc::new(tokio::sync::Mutex::new(())),
+            integration: Arc::new(IntegrationLock::default()),
             gc: tokio::sync::Mutex::new(()),
             objects,
             remote_lock,

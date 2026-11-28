@@ -36,6 +36,7 @@ use super::conflicts::FoundConflict;
 use super::lanes::lane_held_refusal;
 use super::notify;
 use super::proposals::{Retirement, proposal_not_found, retire_proposal};
+use super::turns::TurnKind;
 use super::verdicts::update_refusal;
 use super::views::integration_conflicted;
 use super::{ReviewError, ReviewService};
@@ -603,7 +604,7 @@ impl ReviewService {
         )
     }
 
-    /// Integrates a direct change of the main agent: the newest changeset of its main workspace, with the Git commit message it wrote. The user approved the change in the main agent's conversation, so no review gate and no check runs (the integration checks run only when a proposal integrates); `policy::can_change_main_directly` admits the main agent only, and the main workspace must be active and owned by its worker. A clean merge moves main by compare-and-swap, records a `direct` integration with the changeset and the message, and archives the main workspace, in one transaction. A conflicting merge writes nothing and returns the conflicts: the main agent syncs the workspace, records again and submits the new changeset.
+    /// Integrates a direct change of the main agent: the newest changeset of its main workspace, with the Git commit message it wrote. The user approved the change in the main agent's conversation, so no review gate and no check runs (the integration checks run only when a proposal integrates), and it takes first place in the integration queue: it waits only for the integration that runs and the direct changes submitted before it; `policy::can_change_main_directly` admits the main agent only, and the main workspace must be active and owned by its worker. A clean merge moves main by compare-and-swap, records a `direct` integration with the changeset and the message, and archives the main workspace, in one transaction. A conflicting merge writes nothing and returns the conflicts: the main agent syncs the workspace, records again and submits the new changeset.
     pub async fn integrate_direct(
         &self,
         actor: &Actor,
@@ -778,13 +779,19 @@ impl ReviewService {
         })
     }
 
-    /// The one procedure behind every kind. The project's integration mutex is held throughout, so two integrations never run at the same time.
+    /// The one procedure behind every kind. The project's integration mutex is held throughout, so two integrations never run at the same time; a direct change takes first place in its queue.
     async fn integrate(
         &self,
         actor: &Actor,
         request: IntegrationRequest<'_>,
     ) -> Result<Integrated, ReviewError> {
-        let _serial = self.integration.lock().await;
+        let kind = match request {
+            IntegrationRequest::Direct(_) => TurnKind::First,
+            IntegrationRequest::Proposal { .. }
+            | IntegrationRequest::Pull(_)
+            | IntegrationRequest::Record(_) => TurnKind::Queued,
+        };
+        let _serial = self.integration.lock_as(kind).await;
         self.integrate_locked(actor, request).await
     }
 
