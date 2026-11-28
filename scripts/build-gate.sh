@@ -80,7 +80,9 @@ while :; do
         flock -n "$probe" || busy=$(( busy + 1 ))
         exec {probe}>&-
       done
-      test_threads=$(( cpus / busy > jobs ? cpus / busy : jobs ))
+      # At least 12 even when every slot is busy: the tests mostly wait on SQLite and files, so threads beyond the slot's share of processors still finish them sooner.
+      test_floor=$(( jobs > 12 ? jobs : 12 ))
+      test_threads=$(( cpus / busy > test_floor ? cpus / busy : test_floor ))
       test_threads=${FOLD_GATE_TEST_THREADS:-$test_threads}
       export NEXTEST_TEST_THREADS="$test_threads"
       export VITEST_MAX_WORKERS="$test_threads"
