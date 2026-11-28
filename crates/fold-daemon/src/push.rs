@@ -16,10 +16,9 @@ use fold_core::push::{
 };
 use fold_core::requests::{Requester, deputy};
 use fold_core::{
-    AgentName, Clock, Event, FoldError, LiveEvent, MessageId, Tag, TaskId, TaskKind, TaskStatus,
+    AgentName, Clock, Event, FoldError, LiveEvent, MessageId, TaskId, TaskKind, TaskStatus,
     Timestamp, codes,
 };
-use fold_store::agents::AgentRow;
 use fold_store::reviews;
 use fold_store::tasks::{claims, requests};
 use fold_store::{Store, StoreError, agents, events, tasks};
@@ -466,11 +465,6 @@ impl PushTargets {
         }
     }
 
-    /// Whether the agent's notices go to a worker process's stdin.
-    pub fn has_stdin(&self, agent: &AgentName) -> bool {
-        lock(&self.inner.stdin).contains_key(agent)
-    }
-
     /// Drops every socket target of the agent and the notices waiting for them.
     pub fn clear(&self, agent: &AgentName) {
         let removed = lock(&self.inner.agents).remove(agent);
@@ -637,7 +631,8 @@ impl PushTargets {
         }
     }
 
-    /// How many notices wait in the agent's digest.
+    /// How many notices wait in the agent's digest. A test hook: the integration tests wait on it, and the daemon never calls it.
+    #[doc(hidden)]
     pub fn waiting_in_digest(&self, agent: &AgentName) -> usize {
         lock(&self.inner.digests)
             .get(agent)
@@ -1290,7 +1285,7 @@ fn remove_target(dir: &Path, agent: &AgentName, socket: &Path) -> io::Result<()>
     }
 }
 
-/// Removes the `.<name>.<pid>.<n>.tmp` files of writes that stopped before their rename.
+/// Removes every entry of `dir` whose name starts with `.` and ends with `.tmp`, which covers the `.<name>.<pid>.<n>.tmp` files of private writes that stopped before their rename.
 pub(crate) fn remove_temporary(dir: &Path) -> io::Result<()> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -1314,7 +1309,7 @@ pub(crate) fn remove_temporary(dir: &Path) -> io::Result<()> {
 /// The project's push delivery.
 pub type PushTask = ProjectTask;
 
-/// Starts the delivery task of one project: it reads each event from the bus, which carries an event only after its commit, and queues the notices the event sends. Push is a hint: an event committed while no socket was registered is never replayed. The only writes come once a notice gets through: the recipients' `pushed_at` for a notice about a message, followed by a live `message.pushed`, and `delivered_at` on the rows of the messages it carried.
+/// Starts the delivery task of one project: it reads each event from the bus, which carries an event only after its commit, and queues the notices the event sends. Push is a hint: an event committed while no socket was registered is never replayed. The only writes come once a notice gets through: the recipients' `pushed_at` for a notice about a message, followed by a live `message.pushed`, `delivered_at` on the rows of the messages it carried, and the read marks of the messages it gives in full.
 pub fn run(store: Store, clock: Arc<dyn Clock>, bus: &EventBus, targets: PushTargets) -> PushTask {
     targets.record_pushes_in(store.clone(), clock.clone(), bus.clone());
     let receiver = bus.subscribe();
@@ -1372,20 +1367,9 @@ async fn deliver_events(
         };
         let (event, ctx) = loaded;
         let notices = notice_for(&event, &ctx);
-        let main = match main_recipients(&store, &event, &ctx).await {
-            Ok(main) => main,
-            Err(error) => {
-                tracing::warn!(
-                    seq = event.seq,
-                    code = error.log_code(),
-                    "session push could not read the main agents; it posts every notice now"
-                );
-                std::collections::BTreeSet::new()
-            }
-        };
-        let (later, now): (Vec<Notice>, Vec<Notice>) = notices
-            .into_iter()
-            .partition(|notice| main.contains(&notice.agent) && needs_no_action(&event, notice));
+        let (later, now): (Vec<Notice>, Vec<Notice>) = notices.into_iter().partition(|notice| {
+            ctx.main_agents.contains(&notice.agent) && needs_no_action(&event, notice)
+        });
         targets.hold_for_digest(&later, event.seq, clock.now());
         targets.queue(
             &now,
@@ -1403,24 +1387,6 @@ pub fn needs_no_action(event: &Event, notice: &Notice) -> bool {
     }
     let kind = event.event_type;
     kind == types::PROJECT_PAUSED || kind == types::PROJECT_RESUMED || notice.text.contains(SETTLED)
-}
-
-/// The main agents, read only for an event whose notices can need no action: from the context when its rules loaded them, else from the store.
-async fn main_recipients(
-    store: &Store,
-    event: &Event,
-    ctx: &PushContext,
-) -> Result<std::collections::BTreeSet<AgentName>, StoreError> {
-    let kind = event.event_type;
-    let candidate =
-        kind == types::PROJECT_PAUSED || kind == types::PROJECT_RESUMED || event.actor.is_human();
-    if !candidate {
-        return Ok(std::collections::BTreeSet::new());
-    }
-    if !ctx.main_agents.is_empty() {
-        return Ok(ctx.main_agents.clone());
-    }
-    tagged(store, Tag::is_main).await
 }
 
 /// The agent of a worker row's `started_by`, an event actor such as `web-lead`; `None` for a human and for fold.
@@ -1508,7 +1474,7 @@ async fn human_act(store: &Store, event: &Event, ctx: &mut PushContext) -> Resul
         false
     };
     if acts && ctx.main_agents.is_empty() {
-        ctx.main_agents = tagged(store, Tag::is_main).await?;
+        ctx.main_agents = main_agents(store).await?;
     }
     Ok(())
 }
@@ -1566,7 +1532,7 @@ async fn loaded(store: &Store, event: &Event) -> Result<(PushContext, Option<Str
                 .find(|area| Some(&area.name) == request_area.as_ref())
                 .and_then(|area| area.lead.clone());
             ctx.area_leads = areas.into_iter().filter_map(|area| area.lead).collect();
-            ctx.main_agents = tagged(store, Tag::is_main).await?;
+            ctx.main_agents = main_agents(store).await?;
         }
         return Ok((ctx, body));
     }
@@ -1579,7 +1545,7 @@ async fn loaded(store: &Store, event: &Event) -> Result<(PushContext, Option<Str
         || kind == fold_core::events::types::INTEGRATION_HELD
         || kind == fold_core::events::types::FOLDER_AGENT_CHANGED
     {
-        ctx.main_agents = tagged(store, Tag::is_main).await?;
+        ctx.main_agents = main_agents(store).await?;
         return Ok((ctx, None));
     }
     if kind == types::WORKER_FAILED || kind == types::WORKER_STOPPED {
@@ -1593,7 +1559,7 @@ async fn loaded(store: &Store, event: &Event) -> Result<(PushContext, Option<Str
         };
         let reason = event.data.get("reason").and_then(serde_json::Value::as_str);
         if kind == types::WORKER_FAILED && reason.is_some_and(fold_core::roles::needs_restart) {
-            ctx.main_agents = tagged(store, Tag::is_main).await?;
+            ctx.main_agents = main_agents(store).await?;
             let mut conn = store.read().acquire().await?;
             ctx.starter = agents::find_worker_process(&mut conn, &agent)
                 .await?
@@ -1621,7 +1587,7 @@ async fn loaded(store: &Store, event: &Event) -> Result<(PushContext, Option<Str
             .and_then(serde_json::Value::as_str)
             .and_then(|agent| AgentName::parse(agent).ok());
         if let Some(agent) = agent {
-            ctx.main_agents = tagged(store, Tag::is_main).await?;
+            ctx.main_agents = main_agents(store).await?;
             let mut conn = store.read().acquire().await?;
             ctx.starter = agents::find_worker_process(&mut conn, &agent)
                 .await?
@@ -1772,7 +1738,7 @@ async fn route(
             ctx.areas.insert(area.name);
         }
     }
-    ctx.main_agents = tagged(store, Tag::is_main).await?;
+    ctx.main_agents = main_agents(store).await?;
     Ok(())
 }
 
@@ -1849,31 +1815,19 @@ async fn review_leads(store: &Store) -> Result<std::collections::BTreeSet<AgentN
         .collect())
 }
 
-/// The agents with a tag `is_tag` accepts.
-async fn tagged(
-    store: &Store,
-    is_tag: fn(&Tag) -> bool,
-) -> Result<std::collections::BTreeSet<AgentName>, StoreError> {
-    let every = agents::list_agents(store.read()).await?;
-    tagged_among(store, &every, is_tag).await
-}
-
-/// The agents of `every` with a tag `is_tag` accepts.
-async fn tagged_among(
-    store: &Store,
-    every: &[AgentRow],
-    is_tag: fn(&Tag) -> bool,
-) -> Result<std::collections::BTreeSet<AgentName>, StoreError> {
-    let tagged: Vec<i64> = agents::all_tags(store.read())
+/// The agents with the main tag.
+async fn main_agents(store: &Store) -> Result<std::collections::BTreeSet<AgentName>, StoreError> {
+    let main: Vec<i64> = agents::all_tags(store.read())
         .await?
         .into_iter()
-        .filter(|(_, tag)| is_tag(tag))
+        .filter(|(_, tag)| tag.is_main())
         .map(|(agent, _)| agent)
         .collect();
-    Ok(every
-        .iter()
-        .filter(|agent| tagged.contains(&agent.id))
-        .map(|agent| agent.name.clone())
+    Ok(agents::list_agents(store.read())
+        .await?
+        .into_iter()
+        .filter(|agent| main.contains(&agent.id))
+        .map(|agent| agent.name)
         .collect())
 }
 
@@ -1943,6 +1897,29 @@ mod tests {
         assert!(carrier("a".repeat(MAX_CARRIED_LEN)));
         assert!(!carrier("a".repeat(MAX_CARRIED_LEN + 1)));
         assert!(!carrier("two\nlines".to_owned()));
+    }
+
+    #[test]
+    fn holding_one_inbox_past_the_limit_drops_only_the_oldest() {
+        let targets = PushTargets::new();
+        let token = PushToken::parse("0123456789abcdef").unwrap();
+        let agent = |n: usize| AgentName::parse(&format!("agent-{n}")).unwrap();
+        let held = MAX_PENDING + 1;
+        for n in 0..held {
+            let at = Timestamp::from_millis(i64::try_from(1_000 + n).unwrap()).unwrap();
+            targets.hold(
+                &agent(n),
+                PathBuf::from(format!("/s/{n}")),
+                token.clone(),
+                at,
+            );
+        }
+        let pending = lock(&targets.inner.pending);
+        assert_eq!(pending.len(), MAX_PENDING);
+        assert!(!pending.contains_key(&agent(0)));
+        for n in 1..held {
+            assert!(pending.contains_key(&agent(n)), "agent-{n} was dropped");
+        }
     }
 
     #[test]
