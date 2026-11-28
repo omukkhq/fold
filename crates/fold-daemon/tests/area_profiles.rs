@@ -138,6 +138,7 @@ async fn a_task_worker_of_the_design_area_starts_with_the_areas_servers_model_an
             "instructions": "Draw screens in Pencil.",
             "model": "opus",
             "mcp": ["fold", "pencil"],
+            "deny_commands": null,
         })
     );
     let lead = first_run(&fake, LEAD).await;
@@ -318,6 +319,27 @@ async fn only_the_main_agent_or_a_human_changes_a_profile_and_bad_values_are_ref
         .await;
     assert_eq!(status, StatusCode::OK, "{area}");
     assert_eq!(area["mcp"], json!(["pencil"]));
+    assert_eq!(area["deny_commands"], Value::Null);
+    let (status, area) = h
+        .http(
+            Method::PATCH,
+            &path,
+            Some(&json!({"deny_commands": ["Bash(psql:*)"]})),
+            "tanim",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{area}");
+    assert_eq!(area["deny_commands"], json!(["Bash(psql:*)"]));
+    let (status, bad_rule) = h
+        .http(
+            Method::PATCH,
+            &path,
+            Some(&json!({"deny_commands": ["Bash(fld:*)"]})),
+            "tanim",
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{bad_rule}");
+    assert_eq!(bad_rule["error"]["code"], codes::INVALID_PERMISSION_RULE);
     assert_eq!(area["model"], Value::Null);
     let (status, refused) = h
         .http(Method::PATCH, &path, Some(&json!({})), "tanim")

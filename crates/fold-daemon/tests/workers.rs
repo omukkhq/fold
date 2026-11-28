@@ -1075,7 +1075,7 @@ async fn a_human_defines_areas_and_starts_and_stops_leads_over_http() {
     assert_eq!(status, StatusCode::CREATED, "{area}");
     assert_eq!(
         area,
-        json!({"name": "web", "label": "ui", "lead": null, "instructions": null, "model": null, "mcp": null})
+        json!({"name": "web", "label": "ui", "lead": null, "instructions": null, "model": null, "mcp": null, "deny_commands": null})
     );
     let (status, again) = harness
         .socket(

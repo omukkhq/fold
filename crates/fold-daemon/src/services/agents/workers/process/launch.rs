@@ -83,6 +83,16 @@ impl Supervisor {
                 }
             }
         }
+        if row.role == Role::Reviewer {
+            match reviewer_denies(self.inner.store.read(), row.id, settings).await {
+                Ok(with_denies) => settings = with_denies,
+                Err(error) => {
+                    tracing::warn!(agent = %row.agent, code = error.log_code(), "could not read the area profiles of a reviewer's proposals");
+                    self.fail(row.id, &row.agent, "config").await?;
+                    return Ok(None);
+                }
+            }
+        }
         let launcher = lock(&self.inner.launcher).clone();
         let account = match config.account.as_ref() {
             None => None,
@@ -546,6 +556,39 @@ struct WorkerFiles {
     start: Option<PathBuf>,
 }
 
+/// A reviewer's settings with the denied commands of each area of its bound proposals' tasks, in area-name order: the rules of the area whose work it reviews hold for it too.
+async fn reviewer_denies(
+    pool: &fold_store::SqlitePool,
+    worker_process_id: i64,
+    mut settings: RoleSettings,
+) -> Result<RoleSettings, StoreError> {
+    for name in agents::areas_of_bound_proposals(pool, worker_process_id).await? {
+        if let Some(area) = agents::find_area(pool, &name).await? {
+            settings = settings.with_area_denies(&area.profile);
+        }
+    }
+    Ok(settings)
+}
+
+/// Writes the merged denied commands as the settings' `permissions.deny`, after any rule the settings deny already. No list leaves the settings as they are.
+fn with_deny_rules(mut settings: Value, rules: &[String]) -> Value {
+    if rules.is_empty() {
+        return settings;
+    }
+    let present: Vec<String> = settings["permissions"]["deny"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let merged = fold_core::roles::merged_deny_rules(&present, [rules]);
+    settings["permissions"]["deny"] = json!(merged);
+    settings
+}
+
 /// Whether a worker of `role` starts in its own start folder instead of the project folder. Every role but the main agent changes files only in a workspace, so none of its commands needs the project folder as its working directory.
 pub(in crate::services::agents::workers) fn starts_apart(role: Role) -> bool {
     role != Role::Main
@@ -622,6 +665,7 @@ async fn write_files(
     let agent = row.agent.clone();
     let prompt_text = row.role.prompt();
     let limit = settings.mcp.clone();
+    let deny_rules = settings.deny_commands.clone();
     let claude = launcher.claude.clone();
     let root = paths.root().to_owned();
     let start = starts_apart(role).then(|| paths.worker_start_dir(&row.agent));
@@ -677,6 +721,7 @@ async fn write_files(
             }
             None => session_settings(),
         };
+        let worker_settings = with_deny_rules(worker_settings, &deny_rules);
         write_new_file(
             &own_settings,
             worker_settings.to_string().as_bytes(),
@@ -841,6 +886,23 @@ async fn give_back_claims(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deny_rules_follow_the_rules_the_settings_deny_already_and_no_list_changes_nothing() {
+        let rules = vec!["Bash(psql:*)".to_owned(), "Bash(ssh:*)".to_owned()];
+        let settings = with_deny_rules(worker_settings(), &rules);
+        assert_eq!(settings["permissions"]["deny"], json!(rules));
+        assert_eq!(
+            settings["permissions"]["allow"],
+            worker_settings()["permissions"]["allow"]
+        );
+        let before = json!({"permissions": {"deny": ["Bash(ssh:*)", "Bash(rm:*)"]}});
+        assert_eq!(
+            with_deny_rules(before, &rules)["permissions"]["deny"],
+            json!(["Bash(ssh:*)", "Bash(rm:*)", "Bash(psql:*)"])
+        );
+        assert_eq!(with_deny_rules(session_settings(), &[]), session_settings());
+    }
 
     /// A project folder with Claude Code settings, fold's index skill and a worker whose folder fold made.
     fn project_with_worker() -> (tempfile::TempDir, PathBuf, PathBuf) {

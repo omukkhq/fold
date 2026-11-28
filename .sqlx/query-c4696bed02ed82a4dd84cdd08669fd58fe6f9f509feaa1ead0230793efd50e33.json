@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT a.id AS \"id!: i64\", a.name, a.label_id, l.name AS label, g.name AS \"lead?: String\",\n                  a.instructions, a.model,\n                  (SELECT json_group_array(m.name ORDER BY m.position) FROM area_mcp_servers m\n                   WHERE m.area_id = a.id) AS \"mcp!: String\",\n                  a.created_by, a.created_at\n           FROM areas a JOIN labels l ON l.id = a.label_id LEFT JOIN agents g ON g.id = a.lead_agent_id\n           ORDER BY a.name",
+  "query": "SELECT a.id AS \"id!: i64\", a.name, a.label_id, l.name AS label, g.name AS \"lead?: String\",\n                  a.instructions, a.model,\n                  (SELECT json_group_array(m.name ORDER BY m.position) FROM area_mcp_servers m\n                   WHERE m.area_id = a.id) AS \"mcp!: String\",\n                  (SELECT json_group_array(d.rule ORDER BY d.position) FROM area_deny_commands d\n                   WHERE d.area_id = a.id) AS \"deny_commands!: String\",\n                  a.created_by, a.created_at\n           FROM areas a JOIN labels l ON l.id = a.label_id LEFT JOIN agents g ON g.id = a.lead_agent_id\n           ORDER BY a.name",
   "describe": {
     "columns": [
       {
@@ -87,8 +87,14 @@
         "origin": "Expression"
       },
       {
-        "name": "created_by",
+        "name": "deny_commands!: String",
         "ordinal": 8,
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "name": "created_by",
+        "ordinal": 9,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -99,7 +105,7 @@
       },
       {
         "name": "created_at",
-        "ordinal": 9,
+        "ordinal": 10,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -121,9 +127,10 @@
       true,
       true,
       true,
+      true,
       false,
       false
     ]
   },
-  "hash": "5cff9efb6c3ae3de6b3975844017d4e9409c3850dab613d280ba5120ac238bc4"
+  "hash": "c4696bed02ed82a4dd84cdd08669fd58fe6f9f509feaa1ead0230793efd50e33"
 }

@@ -2250,6 +2250,13 @@ export interface components {
         /** @description A part of the project that one area lead owns through one task label. */
         AreaEntry: {
             /**
+             * @description The Claude Code Bash rules the area's workers and the reviewers of its proposals get as `permissions.deny`, after the project's; null for none.
+             * @example [
+             *       "Bash(psql:*)"
+             *     ]
+             */
+            deny_commands: string[] | null;
+            /**
              * @description The instructions every worker of the area starts with; null for none.
              * @example Draw the screens in Pencil.
              */
@@ -3056,6 +3063,8 @@ export interface components {
             version: string;
         };
         DefineAreaBody: {
+            /** @description Claude Code Bash rules, such as `Bash(psql:*)`, that the area's workers may never run; leave it out for none. */
+            deny_commands?: string[] | null;
             /** @description What every worker of the area must know about its kind of work, at most 8000 characters. */
             instructions?: string | null;
             /**
@@ -6435,12 +6444,16 @@ export interface components {
         };
         /** @description A change of an area's profile; a field left out and not cleared stays as it is. */
         UpdateAreaBody: {
+            /** @description True removes the area's denied commands. */
+            clear_deny_commands?: boolean;
             /** @description True removes the instructions. */
             clear_instructions?: boolean;
             /** @description True gives the area's workers the role's MCP servers again. */
             clear_mcp?: boolean;
             /** @description True gives the area's workers the role's model again. */
             clear_model?: boolean;
+            /** @description The new denied commands; they replace the old list. */
+            deny_commands?: string[] | null;
             instructions?: string | null;
             mcp?: string[] | null;
             model?: string | null;
@@ -8386,7 +8399,7 @@ export interface operations {
                     "application/json": components["schemas"]["AreaEntry"];
                 };
             };
-            /** @description `invalid_request` (also with `details.reason` `two_areas` when the label shares a task with another area's label, named in `details.tasks`), `invalid_name` or `invalid_label_name` */
+            /** @description `invalid_request` (also with `details.reason` `two_areas` when the label shares a task with another area's label, named in `details.tasks`), `invalid_name`, `invalid_label_name` or `invalid_permission_rule` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -8478,7 +8491,7 @@ export interface operations {
                     "application/json": components["schemas"]["AreaEntry"];
                 };
             };
-            /** @description `invalid_request` or `invalid_name` */
+            /** @description `invalid_request`, `invalid_name` or `invalid_permission_rule` */
             400: {
                 headers: {
                     [name: string]: unknown;

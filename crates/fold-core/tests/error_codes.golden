@@ -205,3 +205,4 @@ directory_other_filesystem
 database_replaced
 daemon_restarting
 main_session_taken_over
+invalid_permission_rule

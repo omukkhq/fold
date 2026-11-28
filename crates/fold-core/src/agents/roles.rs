@@ -21,7 +21,7 @@ pub use handoff::{
 pub use owed::{OWED_RESUME_WAITS, OwedResume, check_owed_first, owed_ahead, waits_for_place};
 pub use profile::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, FieldChange, MAX_AREA_INSTRUCTIONS_CHARS,
-    area_prompt,
+    MAX_DENY_RULE_CHARS, area_prompt, check_deny_rules, merged_deny_rules,
 };
 pub use update::{needs_update_note, reload_note, session_fingerprint, update_note};
 

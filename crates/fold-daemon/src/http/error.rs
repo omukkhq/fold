@@ -75,7 +75,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::INVALID_LAST_EVENT_ID
         | codes::INVALID_PUSH_TARGET
         | codes::INVALID_EVENT_FILTER
-        | codes::INVALID_DRAFT => Some(StatusCode::BAD_REQUEST),
+        | codes::INVALID_DRAFT
+        | codes::INVALID_PERMISSION_RULE => Some(StatusCode::BAD_REQUEST),
         codes::HUMAN_NAME_REQUIRED
         | codes::AUTH_REQUIRED
         | codes::INVALID_TOKEN
@@ -348,6 +349,7 @@ mod tests {
             (codes::PROJECT_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::WEB_NOT_BUILT, StatusCode::NOT_FOUND),
             (codes::INVALID_REQUEST, StatusCode::BAD_REQUEST),
+            (codes::INVALID_PERMISSION_RULE, StatusCode::BAD_REQUEST),
             (codes::REVISION_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::WORKSPACE_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::PATH_NOT_IN_COMPARISON, StatusCode::NOT_FOUND),

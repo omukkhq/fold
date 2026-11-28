@@ -36,7 +36,7 @@ Approval covers implementation and task splits within the agreed scope, acceptan
 
 After the OK:
 
-1. Use `create_label` and `define_area` for missing areas, or `update_area` for an approved profile change.
+1. Use `create_label` and `define_area` for missing areas, `update_area` for an approved profile change (also `deny_commands`).
 2. Publish tasks together with `create_task_plan`, with every field the skill describes. Never add their dependencies or marks later. Publish more than 100 tasks as complete dependency groups in prerequisite order.
 3. Check the returned ids and graph; after a refusal, submit only missing work.
 4. Start each missing lead with `start_worker`, role `area_lead` or `review_lead`, with the approved scope and constraints in `instructions`. Message running leads about new work; never start duplicates.

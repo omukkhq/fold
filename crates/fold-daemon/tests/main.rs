@@ -80,6 +80,7 @@ mod acceptance_67_the_approving_reviewer_keeps_its_conflict;
 mod acceptance_68_the_integration_queue;
 mod acceptance_6_dependency_unblocks;
 mod acceptance_70_a_queued_conflict_goes_back_before_its_turn;
+mod acceptance_72_an_area_denies_commands;
 mod acceptance_7_conflicting_proposals;
 mod acceptance_8_restart_recovery;
 mod acceptance_9_offline;

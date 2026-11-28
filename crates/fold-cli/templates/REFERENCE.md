@@ -79,7 +79,7 @@ Changing the checks. A proposal version that adds, changes or removes `fold-chec
 
 ## Project config
 
-`.fold/config.toml` holds the project's settings. `fld init` writes it with every value commented out at its default. It is outside the project's tree, so agents never edit it: tell the user the exact lines to change. `set_worker_limits` rewrites only `[workers]`. fold reads the file when it uses a value, so most edits apply at once; the watcher reads `debounce_ms`, `rescan_seconds` and `max_file_bytes` when the daemon opens the project, so an edit of them reaches it after `fld restart`. The bullet "How fold follows workspace changes" below describes the watcher. An invalid file fails the commands that read it with `invalid_config`, which names the key.
+`.fold/config.toml` holds the project's settings. `fld init` writes it with every value commented out at its default. It is outside the project's tree, so agents never edit it: tell the user the exact lines to change. `set_worker_limits` rewrites only `[workers]`. fold reads the file when it uses a value, so most edits apply at once; the watcher reads `debounce_ms`, `rescan_seconds` and `max_file_bytes` when the daemon opens the project, so an edit of them reaches it after `fld restart`. The bullet "How fold follows workspace changes" below describes the watcher. An invalid file fails the commands that read it with `invalid_config`, which names the key. The top-level key `deny_commands` holds the Claude Code Bash rules that every worker of the project gets as `permissions.deny`, such as `deny_commands = ["Bash(psql:*)"]`; an area's `deny_commands` add to it, with the same checks.
 
 ```toml
 lease_minutes = 30                   # a claim expires after this long without a heartbeat
@@ -133,13 +133,14 @@ Role prompts. `.fold/roles/<role>.md` (`area_lead`, `review_lead`, `task_worker`
 
 ## Areas
 
-An area is a part of the project that one area lead owns, with one label that every task of the area carries. Make the label with `create_label`, then `define_area(name, label, instructions?, model?, mcp?)`; change it with `update_area(name, instructions?, model?, mcp?, clear_instructions?, clear_model?, clear_mcp?)`. The profile:
+An area is a part of the project that one area lead owns, with one label that every task of the area carries. Make the label with `create_label`, then `define_area(name, label, instructions?, model?, mcp?, deny_commands?)`; change it with `update_area(name, instructions?, model?, mcp?, deny_commands?, clear_instructions?, clear_model?, clear_mcp?, clear_deny_commands?)`. The profile:
 
 - `instructions`: at most 8000 characters, added to the system prompt of the area's lead and task workers under `## Area <name>`. Name the folders the area owns and what matters for its work. They specialize work inside the role and never widen its rights or the approved scope.
 - `model`: a Claude Code model name or alias without spaces, such as `opus` or `sonnet`.
 - `mcp`: a list of distinct server names, never empty. The fold server is always there, and `["fold"]` gives the workers no other server.
+- `deny_commands`: a list of distinct Claude Code Bash rules, never empty, such as `["Bash(psql:*)", "Bash(docker exec:*)"]`, for shell commands the area's workers may never run, such as commands that reach a production database. fold writes them as `permissions.deny` into the Claude Code settings of the area's lead, its task workers and the reviewers of its proposals, after the top-level `deny_commands` of `.fold/config.toml`, each rule once. Each rule is `Bash(<command>)` of at most 200 characters whose command word has no `*`; a rule for another tool, a rule that denies every command, `cd` or `fld`, which fold's own work needs, and a rule named twice are refused with `invalid_permission_rule`, the rule in `details.rule`. Claude Code checks each part of a compound command such as `cd '<workspace>' && psql ...` against the rules, so a prefix rule still applies there. A rule is not a security boundary: Claude Code does not unwrap a wrapper such as `docker exec` or `sh -c`, so list each wrapper that reaches the same program as a rule of its own, such as `Bash(docker exec:*)`.
 
-A field left out falls back to `[roles.<role>]` of `.fold/config.toml`, and the `model` and `instructions` of a `start_worker` call come before the profile. Reviewers take no area profile. fold writes the prompt at each start, so a changed profile reaches the next start and never a running worker.
+A field left out falls back to `[roles.<role>]` of `.fold/config.toml`, and the `model` and `instructions` of a `start_worker` call come before the profile. A reviewer takes only the `deny_commands` of each area whose tasks its proposals are for, in area-name order. fold writes the prompt and the settings at each start and resume, so a changed profile reaches the next start or resume and never a running worker.
 
 ```text
 create_label(name: "design")

@@ -64,6 +64,7 @@ export function areaEntry(
     instructions: null,
     model: null,
     mcp: null,
+    deny_commands: null,
     ...fields,
   };
 }

@@ -202,7 +202,7 @@ const FOLD_TOOLS: [&str; 105] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 193] = [
+const FOLD_ERROR_CODES: [&str; 194] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -396,6 +396,7 @@ const FOLD_ERROR_CODES: [&str; 193] = [
     "account_token_rejected",
     "daemon_restarting",
     "main_session_taken_over",
+    "invalid_permission_rule",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
@@ -424,7 +425,7 @@ const INVALID_REQUEST_REASONS: [&str; 19] = [
     "folder_held",
 ];
 
-const NON_TOOL_NAMES: [&str; 84] = [
+const NON_TOOL_NAMES: [&str; 86] = [
     "waits_for",
     "next_offset",
     "file_count",
@@ -454,6 +455,8 @@ const NON_TOOL_NAMES: [&str; 84] = [
     "clear_instructions",
     "clear_model",
     "clear_mcp",
+    "deny_commands",
+    "clear_deny_commands",
     "no_proposal",
     "human_change",
     "new_files",

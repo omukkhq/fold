@@ -41,6 +41,9 @@ pub struct ProjectConfig {
         deserialize_with = "stored_account"
     )]
     pub account: Option<AccountName>,
+    /// The Claude Code rules every worker of the project gets as `permissions.deny`, before the lists of its areas; each passes [`crate::roles::check_deny_rules`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub deny_commands: Vec<String>,
 }
 
 /// The `[workers]` section: how many short-lived workers of each role fold runs at once, and optionally how many task workers in one area. The leads are outside these limits. A limit of 0 lets no worker of its role start.
@@ -101,6 +104,8 @@ pub struct RoleSettings {
     /// `None` for a long-lived role, which never stops for being idle.
     pub idle_minutes: Option<u64>,
     pub mcp: Option<Vec<String>>,
+    /// The `permissions.deny` rules of the worker: the project's, then its areas' (see [`crate::roles::merged_deny_rules`]).
+    pub deny_commands: Vec<String>,
     /// `None` for a short-lived role, which stops when its work is done and is never refreshed.
     pub handoff_at: Option<HandoffAt>,
 }
@@ -164,6 +169,9 @@ fn stored_account<'de, D: serde::Deserializer<'de>>(
 /// The top-level key that names the project's account.
 pub const ACCOUNT_KEY: &str = "account";
 
+/// The top-level key of the project's denied commands.
+pub const DENY_COMMANDS_KEY: &str = "deny_commands";
+
 /// The `[integration]` section.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -205,6 +213,7 @@ impl Default for ProjectConfig {
             main: MainConfig::default(),
             roles: BTreeMap::new(),
             account: None,
+            deny_commands: Vec::new(),
         }
     }
 }
@@ -218,6 +227,7 @@ impl ProjectConfig {
             idle_minutes: (!role.is_long_lived())
                 .then(|| section.idle_minutes.unwrap_or(DEFAULT_IDLE_MINUTES)),
             mcp: section.mcp,
+            deny_commands: self.deny_commands.clone(),
             handoff_at: role.is_long_lived().then(|| match section.handoff_at {
                 Some(percent) => HandoffAt::Percent(percent),
                 None if role == Role::ReviewLead => {
@@ -234,6 +244,7 @@ impl ProjectConfig {
             .map_err(|error| invalid("config.toml is not valid TOML", error.message()))?;
         lift_unnamed_remote(&mut table)?;
         let known = known_keys();
+        let mut checked_denies = None;
         for (key, value) in &table {
             if key == GIT_SECTION {
                 check_git_section(value)?;
@@ -271,6 +282,10 @@ impl ProjectConfig {
                 })?;
                 continue;
             }
+            if key == DENY_COMMANDS_KEY {
+                checked_denies = Some(check_deny_commands(value)?);
+                continue;
+            }
             if !known.contains(key) {
                 return Err(refused(key, "is not a config key"));
             }
@@ -278,6 +293,9 @@ impl ProjectConfig {
                 Some(number) if number > 0 => {}
                 _ => return Err(refused(key, "must be a whole number above 0")),
             }
+        }
+        if let Some(rules) = checked_denies {
+            table.insert(DENY_COMMANDS_KEY.to_owned(), rules);
         }
         table
             .try_into()
@@ -296,6 +314,40 @@ fn known_keys() -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The checked rules, trimmed, as the value that replaces the key's.
+fn check_deny_commands(value: &toml::Value) -> Result<toml::Value, FoldError> {
+    let rules = value
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .map(|item| item.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+        })
+        .ok_or_else(|| refused(DENY_COMMANDS_KEY, "must be a list of rules in quotes"))?;
+    let rules = crate::roles::check_deny_rules(rules).map_err(|error| {
+        let detail = |name: &str| {
+            error
+                .details()
+                .and_then(|details| details.get(name))
+                .cloned()
+                .unwrap_or_default()
+        };
+        refused(
+            DENY_COMMANDS_KEY,
+            "must hold Claude Code Bash rules such as Bash(psql:*), each once, that deny neither cd, fld nor every command",
+        )
+        .with_details([
+            ("key", serde_json::json!(DENY_COMMANDS_KEY)),
+            ("rule", detail("rule")),
+            ("reason", detail("reason")),
+        ])
+    })?;
+    Ok(toml::Value::Array(
+        rules.into_iter().map(toml::Value::String).collect(),
+    ))
 }
 
 fn check_git_section(value: &toml::Value) -> Result<(), FoldError> {
@@ -652,6 +704,43 @@ mod tests {
         // Only comments: the file as written changes nothing.
         let as_written = ProjectConfig::from_toml(CONFIG_TEMPLATE).unwrap();
         assert_eq!(as_written, ProjectConfig::default());
+    }
+
+    #[test]
+    fn deny_commands_is_a_checked_list_of_bash_rules() {
+        let config = ProjectConfig::from_toml(
+            "deny_commands = [\" Bash(psql:*)\", \"Bash(docker exec:*)\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config.deny_commands,
+            ["Bash(psql:*)", "Bash(docker exec:*)"]
+        );
+        assert_eq!(
+            config.role(Role::AreaLead).deny_commands,
+            ["Bash(psql:*)", "Bash(docker exec:*)"]
+        );
+        let without = ProjectConfig::from_toml("lease_minutes = 30\n").unwrap();
+        assert_eq!(without, ProjectConfig::default());
+        assert!(without.role(Role::TaskWorker).deny_commands.is_empty());
+        for (bad, reason) in [
+            ("deny_commands = \"Bash(psql:*)\"\n", None),
+            ("deny_commands = [3]\n", None),
+            ("deny_commands = [\"Read(/srv/**)\"]\n", Some("not_bash")),
+            ("deny_commands = [\"Bash(cd:*)\"]\n", Some("fold_command")),
+            (
+                "deny_commands = [\"Bash(psql:*)\", \"Bash(psql:*)\"]\n",
+                Some("duplicate"),
+            ),
+        ] {
+            let error = ProjectConfig::from_toml(bad).unwrap_err();
+            assert_eq!(error.code(), codes::INVALID_CONFIG, "{bad}");
+            let details = error.details().unwrap();
+            assert_eq!(details["key"], serde_json::json!(DENY_COMMANDS_KEY));
+            if let Some(reason) = reason {
+                assert_eq!(details["reason"], serde_json::json!(reason), "{bad}");
+            }
+        }
     }
 
     #[test]

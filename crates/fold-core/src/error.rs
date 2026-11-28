@@ -221,6 +221,7 @@ define_codes! {
     DATABASE_REPLACED = "database_replaced",
     DAEMON_RESTARTING = "daemon_restarting",
     MAIN_SESSION_TAKEN_OVER = "main_session_taken_over",
+    INVALID_PERMISSION_RULE = "invalid_permission_rule",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

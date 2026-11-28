@@ -63,6 +63,9 @@ pub struct DefineAreaInput {
     /// The MCP servers the area's lead and task workers load, by name: fold and servers of the project's .mcp.json, such as ["fold", "pencil"]. Leave it out for the role's servers.
     #[serde(default)]
     pub mcp: Option<Vec<String>>,
+    /// Shell commands the area's lead, task workers and the reviewers of its proposals may never run, as Claude Code Bash rules such as ["Bash(psql:*)", "Bash(docker exec:*)"]. fold writes them as permissions.deny after the project's deny_commands of .fold/config.toml. A rule that denies cd, fld or every command is refused (invalid_permission_rule). Leave it out for none.
+    #[serde(default)]
+    pub deny_commands: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -79,6 +82,9 @@ pub struct UpdateAreaInput {
     /// The new MCP server list of the area's lead and task workers, such as ["fold", "pencil"]. Leave it out to keep it.
     #[serde(default)]
     pub mcp: Option<Vec<String>>,
+    /// The new list of Bash rules the area's workers and the reviewers of its proposals may never run, such as ["Bash(psql:*)"]; it replaces the old list. Leave it out to keep it.
+    #[serde(default)]
+    pub deny_commands: Option<Vec<String>>,
     /// True removes the area's instructions. Do not combine it with instructions.
     #[serde(default)]
     pub clear_instructions: bool,
@@ -88,6 +94,9 @@ pub struct UpdateAreaInput {
     /// True removes the area's MCP server list, so its workers get the role's servers again. Do not combine it with mcp.
     #[serde(default)]
     pub clear_mcp: bool,
+    /// True removes the area's denied commands, so its workers get only the project's. Do not combine it with deny_commands.
+    #[serde(default)]
+    pub clear_deny_commands: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -278,6 +287,7 @@ fn area_json(area: &AreaRow) -> Value {
         "instructions": area.profile.instructions,
         "model": area.profile.model,
         "mcp": area.profile.mcp,
+        "deny_commands": area.profile.deny_commands,
     })
 }
 
@@ -335,7 +345,12 @@ pub async fn define_area(server: &FoldServer, arguments: &JsonObject) -> Result<
     let input: DefineAreaInput = parse(arguments)?;
     let name = AreaName::parse(&input.name)?;
     let label = LabelName::parse(&input.label)?;
-    let profile = AreaProfile::from_request(input.instructions, input.model, input.mcp)?;
+    let profile = AreaProfile::from_request(
+        input.instructions,
+        input.model,
+        input.mcp,
+        input.deny_commands,
+    )?;
     let actor = server.actor().await?;
     let area = server
         .agents
@@ -352,9 +367,11 @@ pub async fn update_area(server: &FoldServer, arguments: &JsonObject) -> Result<
         instructions: input.instructions,
         model: input.model,
         mcp: input.mcp,
+        deny_commands: input.deny_commands,
         clear_instructions: input.clear_instructions,
         clear_model: input.clear_model,
         clear_mcp: input.clear_mcp,
+        clear_deny_commands: input.clear_deny_commands,
     })?;
     let actor = server.actor().await?;
     let area = server
@@ -364,7 +381,7 @@ pub async fn update_area(server: &FoldServer, arguments: &JsonObject) -> Result<
         .map_err(from_agent)?;
     Ok(json!({
         "area": area_json(&area),
-        "next": "the next start of the area's lead or task workers gets this profile; running workers keep theirs",
+        "next": "the next start or resume of the area's lead, task workers or the reviewers of its proposals gets this profile; running workers keep theirs",
     }))
 }
 
