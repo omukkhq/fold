@@ -20,7 +20,8 @@ use serde_json::json;
 use tracing::Instrument as _;
 
 use super::proposals::{
-    Proposed, VersionInput, add_version_in_tx, no_task_workspace, open_in_tx, usable_workspace,
+    Proposed, VersionInput, add_version_in_tx, no_task_workspace, open_in_tx, same_workspace,
+    usable_workspace,
 };
 use super::{ReviewError, ReviewService};
 use crate::services::events::{EventBuffer, EventBus};
@@ -203,24 +204,9 @@ impl ReviewService {
         let row = checks::get_run(&mut *read, run)
             .await?
             .ok_or_else(|| run_not_found(run))?;
-        let results = checks::list_results(&mut *read, run, logs).await?;
-        let flaky = checks::flaky_positions(&mut *read, run).await?;
-        let cancelled_by = cancelled_by(&mut read, &row).await?;
+        let view = view_of(&mut read, &self.checks, row, logs).await?;
         read.commit().await.map_err(StoreError::from)?;
-        let waiting_for_memory = self.checks.waiting_for_memory(run);
-        let waiting_for_check = self.checks.waiting_for_check(run);
-        let waiting_for_run_slot = self.checks.waiting_for_run_slot(run);
-        let waiting_for_build_slot = self.checks.waiting_for_build_slot(run);
-        Ok(CheckRunView {
-            run: row,
-            results,
-            flaky,
-            waiting_for_memory,
-            waiting_for_check,
-            waiting_for_run_slot,
-            waiting_for_build_slot,
-            cancelled_by,
-        })
+        Ok(view)
     }
 
     /// The checks with flaky failures in the runs of the last `days` days, the most flaky first, then by name. `days` is 1 to [`FLAKY_DAYS_MAX`]; a window that reaches before the clock's start counts every run.
@@ -372,16 +358,16 @@ impl ReviewService {
         let now = self.clock.now();
         let label = actor.event_actor();
         let mut buffer = EventBuffer::new();
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("checks_run_before_write");
         let run = self
             .store
             .write(async |tx| {
-                let live = workspaces::live_task_workspace(tx.conn(), task).await?;
-                let owner = live.as_ref().and_then(|row| row.worker.clone());
-                policy::can_run_checks(actor, owner.as_ref()).map_err(FoldError::from)?;
-                let live = live.ok_or(StoreError::Corrupt("workspaces.task_id"))?;
-                if live.id != snapped.id || live.base != snapped.base {
-                    return Err(changed_meanwhile(snapped.id));
-                }
+                let live = workspaces::live_task_workspace(tx.conn(), task)
+                    .await?
+                    .ok_or_else(|| no_task_workspace(task))?;
+                policy::can_run_checks(actor, live.worker.as_ref()).map_err(FoldError::from)?;
+                same_workspace(snapped, &live)?;
                 let new = NewProposalRun {
                     purpose,
                     task,
@@ -508,7 +494,7 @@ impl ReviewService {
             .await
     }
 
-    /// The results of `commands`, unless a cancel comes first, or a scan finds an edit first and a snapshot of the workspace then differs from the checked tree: the commands are dropped, which kills their process groups or ends their wait for a permit, and the cancel or the edited path is returned. An edit the snapshot does not confirm, such as a scan of a write made before the run's snapshot, and a workspace that could not be snapshotted or was synced or restored leave the commands running, so the end of the run decides them as before.
+    /// The results of `commands`, unless a cancel comes first, or a scan finds an edit first and a snapshot of the workspace then differs from the checked tree: the commands are dropped, which kills their process groups or ends their wait for a permit, and the cancel or the edited path is returned. An edit the snapshot does not confirm, such as a scan of a write made before the run's snapshot, and a workspace that could not be snapshotted or was synced or restored leave the commands running, so `recheck_workspace` at the end of the run decides them.
     pub(super) async fn until_first_edit(
         &self,
         run: &CheckRunRow,
@@ -761,26 +747,32 @@ impl ReviewService {
         let runs = checks::runs_of_version(&mut *conn, task, proposal, version).await?;
         let mut views = Vec::with_capacity(runs.len());
         for run in runs {
-            let results = checks::list_results(&mut *conn, run.id, false).await?;
-            let flaky = checks::flaky_positions(&mut *conn, run.id).await?;
-            let waiting_for_memory = runner.waiting_for_memory(run.id);
-            let waiting_for_check = runner.waiting_for_check(run.id);
-            let waiting_for_run_slot = runner.waiting_for_run_slot(run.id);
-            let waiting_for_build_slot = runner.waiting_for_build_slot(run.id);
-            let cancelled_by = cancelled_by(&mut *conn, &run).await?;
-            views.push(CheckRunView {
-                run,
-                results,
-                flaky,
-                waiting_for_memory,
-                waiting_for_check,
-                waiting_for_run_slot,
-                waiting_for_build_slot,
-                cancelled_by,
-            });
+            views.push(view_of(&mut *conn, runner, run, false).await?);
         }
         Ok(views)
     }
+}
+
+/// The view of the stored run `run` on `conn`, with the logs of its results when `logs` is true and what it waits for in `runner`.
+async fn view_of(
+    conn: &mut SqliteConnection,
+    runner: &CheckRunner,
+    run: CheckRunRow,
+    logs: bool,
+) -> Result<CheckRunView, ReviewError> {
+    let results = checks::list_results(&mut *conn, run.id, logs).await?;
+    let flaky = checks::flaky_positions(&mut *conn, run.id).await?;
+    let cancelled_by = cancelled_by(&mut *conn, &run).await?;
+    Ok(CheckRunView {
+        waiting_for_memory: runner.waiting_for_memory(run.id),
+        waiting_for_check: runner.waiting_for_check(run.id),
+        waiting_for_run_slot: runner.waiting_for_run_slot(run.id),
+        waiting_for_build_slot: runner.waiting_for_build_slot(run.id),
+        run,
+        results,
+        flaky,
+        cancelled_by,
+    })
 }
 
 /// The `by` of the `checks.finished` event of `run` when it ended as `cancelled`, read in pages of the task's `checks.finished` events, as the cancel stores no column for it.
@@ -1353,19 +1345,6 @@ pub(super) fn checks_running(run: CheckRunId, workspace: WorkspaceId) -> ReviewE
         ("workspace", json!(workspace.to_string())),
     ])
     .with_hint("wait for fold's message with the result, then try again")
-    .into()
-}
-
-fn changed_meanwhile(workspace: WorkspaceId) -> ReviewError {
-    FoldError::new(
-        codes::INVALID_REQUEST,
-        format!("{workspace} changed while it was recorded"),
-    )
-    .with_details([
-        ("reason", json!("workspace_changed")),
-        ("workspace", json!(workspace.to_string())),
-    ])
-    .with_hint("call the command again")
     .into()
 }
 

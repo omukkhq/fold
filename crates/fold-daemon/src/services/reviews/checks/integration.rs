@@ -15,19 +15,13 @@ use fold_store::{StoreError, WriteTx, counters};
 use serde_json::json;
 
 use super::runner::{self, CommandResult};
-use super::{Verdict, end_run_in_tx, end_run_with_in_tx, log_tail};
+use super::{TAIL_CHARS, TAIL_LINES, Verdict, end_run_in_tx, end_run_with_in_tx, log_tail};
 use crate::services::events::EventBuffer;
 use crate::services::messages::send_from_fold_in_tx;
 use crate::services::reviews::conflicts::{Fixer, Handoff, conflict_fixer, handoff_notice_in_tx};
 use crate::services::reviews::lanes::lane_moved_note;
 use crate::services::reviews::{ReviewError, ReviewService};
 use crate::services::tasks::recompute;
-
-/// The most lines of a failed integration check's log a result message carries.
-const TAIL_LINES: usize = 30;
-
-/// The most characters of a failed integration check's log a result message carries.
-const TAIL_CHARS: usize = 3000;
 
 /// A passed integration run whose end waits for the integration's own transaction, so a revision never exists without it and a stop before that leaves the run without an end.
 #[derive(Debug, Clone)]
