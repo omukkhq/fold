@@ -3,7 +3,7 @@
 Write the description of every task in this form:
 
 - A summary paragraph that says what the task delivers.
-- **Refs**: the documents, tasks and code the worker must read.
+- **Refs**: the documents, tasks and code the worker must read, and the existing helpers, components and patterns the work must build on.
 - **Scope**: what to build, with the files or modules. For a bug, name the class of the defect and ask the worker to search for every instance of it.
 - **Out of scope**: what belongs to other tasks.
 - **Acceptance**: the checks that show the task is done, each one testable. A bug task has a line that shows the search for every instance of the defect.
