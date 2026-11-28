@@ -9,6 +9,7 @@ import {
   GitPullRequest,
   Hand,
   Hourglass,
+  ListOrdered,
   KeyRound,
   LoaderCircle,
   MessageCircle,
@@ -19,12 +20,14 @@ import {
 import type { BoardCard } from "@/api/board";
 import type { ChipTone } from "@/components/badge/chips";
 import { planWaitLabel } from "@/features/proposals/planWait";
+import type { QueueWaitState } from "@/features/proposals/queueWait";
 import type { WorkerActivity } from "@/live/workerActivity";
 import { attentionChipText, hasKind } from "./attention";
 import {
   blockedText,
   checklistText,
   kindText,
+  integrationWait,
   leadCheckMark,
   needsText,
 } from "./card";
@@ -159,6 +162,17 @@ export function cardChip(
   return proposalChip(card);
 }
 
+function waitIcon(state: QueueWaitState): LucideIcon {
+  switch (state) {
+    case "queue":
+      return ListOrdered;
+    case "person":
+      return UserCheck;
+    case "waiting":
+      return Hourglass;
+  }
+}
+
 function proposalChip(card: ChipCard): CardChip | null {
   const proposal = card.proposal;
   if (proposal?.state === "conflict") {
@@ -194,6 +208,15 @@ function proposalChip(card: ChipCard): CardChip | null {
           icon: Hourglass,
           text: `${proposal.id} ${planWaitLabel(proposal.review_plan)}`,
         };
+  }
+  // The title never depends on the clock; only the detail, which the detail panel shows, names an estimate.
+  const wait = proposal ? integrationWait(proposal, 0) : null;
+  if (proposal && wait !== null) {
+    return {
+      tone: wait.state === "person" ? "warn" : "neutral",
+      icon: waitIcon(wait.state),
+      text: `${proposal.id} ${wait.title}`,
+    };
   }
   const check = leadCheckMark(card);
   return check === null

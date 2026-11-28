@@ -1008,11 +1008,32 @@ describe("invalidation rules", () => {
     expect(hit(keys.reviewBatches(slug))).toBe(true);
     expect(hit(keys.workers(slug))).toBe(true);
     expect(hit(keys.proposal(slug, "P-3"))).toBe(true);
-    expect(hit(keys.board(slug))).toBe(false);
     for (const type of ["review.submitted", "proposal.version_added"]) {
       invalidated = [];
       applyEvent(client, slug, ev(type));
       expect(hit(keys.reviewBatches(slug)), type).toBe(true);
+    }
+  });
+
+  it("refreshes the board with the proposal pages for each event that moves the integration queue", () => {
+    const events: [string, Parameters<typeof ev>[1]][] = [
+      ["proposal.version_added", { proposal: "P-3" }],
+      ["proposal.human_edited", { proposal: "P-3" }],
+      ["proposal.review_again_requested", { proposal: "P-3" }],
+      ["proposal.reviewer_fixed", { proposal: "P-3" }],
+      ["proposal.closed", { proposal: "P-3" }],
+      ["proposal.integrated", { proposal: "P-3" }],
+      ["review.submitted", { proposal: "P-3" }],
+      ["review.batch_created", { proposal: "P-3" }],
+      ["review.batch_ready", {}],
+      ["integration.queued", { proposal: "P-3" }],
+      ["integration.queued", { data: { batch: "rb-3" } }],
+    ];
+    for (const [type, over] of events) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, over));
+      expect(hit(keys.board(slug)), type).toBe(true);
+      expect(hit(keys.proposalPages(slug)), type).toBe(true);
     }
   });
 

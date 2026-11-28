@@ -9,6 +9,7 @@ import {
   planWaitText,
   proposalLook,
   proposalText,
+  integrationWaitDetail,
   type ProposalLook,
 } from "./card";
 
@@ -110,10 +111,12 @@ export function cardDetails(
     rows.push({
       kind: "proposal",
       name: "Proposal",
-      text: proposalText(card.proposal),
+      text: proposalText(card.proposal, now),
       look: proposalLook(card.proposal),
     });
-    const wait = planWaitText(card.proposal, now);
+    const wait =
+      planWaitText(card.proposal, now) ??
+      integrationWaitDetail(card.proposal, now);
     if (wait !== null) {
       notes.push(wait);
     }

@@ -373,10 +373,10 @@ const QUEUE_MOVES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * An approved proposal's place in the integration queue and the reason it waits depend on every other proposal and on the review batches, so an event that moves one of them changes the queue text of every proposal page and list row. The board cards say nothing of the queue.
+ * An approved proposal's place in the integration queue and the reason it waits depend on every other proposal and on the review batches, so an event that moves one of them changes the queue text of every proposal page, every list row and every board card, which shows the queue of its proposal.
  */
 function queueKeys(slug: string): QueryKey[] {
-  return [keys.proposals(slug), keys.proposalPages(slug)];
+  return [keys.proposals(slug), keys.proposalPages(slug), keys.board(slug)];
 }
 
 function invalidationKeys(

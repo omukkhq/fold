@@ -9,7 +9,9 @@ import {
   Hand,
   Hourglass,
   KeyRound,
+  ListOrdered,
   LoaderCircle,
+  UserCheck,
 } from "lucide-react";
 import type { BoardCard, BoardProposal } from "@/api/board";
 import { boardCard } from "@/test/payloads";
@@ -221,7 +223,63 @@ describe("cardChip", () => {
     );
   });
 
-  it("gives an approved proposal, a quiet card and a Done card no chip", () => {
+  it("gives an approved proposal its queue place or wait reason, and gold only while it waits for a person", () => {
+    const place = {
+      position: 2,
+      ahead: "P-1",
+      batch: null,
+      estimated_start: null,
+      integrating_now: false,
+    };
+    const queued = cardChip(
+      boardCard("T-1", {
+        status: "review",
+        proposal: proposal("approved", { queue: place }),
+      }),
+    );
+    expect(queued).toMatchObject({
+      tone: "neutral",
+      icon: ListOrdered,
+      text: "P-3 2nd in line",
+    });
+    const waits = cardChip(
+      boardCard("T-1", {
+        status: "review",
+        proposal: proposal("approved", {
+          waits_for: { reason: "conflict" },
+        }),
+      }),
+    );
+    expect(waits).toMatchObject({
+      tone: "neutral",
+      icon: Hourglass,
+      text: "P-3 Conflict with main",
+    });
+    const person = cardChip(
+      boardCard("T-1", {
+        status: "review",
+        proposal: proposal("approved", {
+          waits_for: { reason: "human_review", reviewer: null },
+        }),
+      }),
+    );
+    expect(person).toMatchObject({
+      tone: "warn",
+      icon: UserCheck,
+      text: "P-3 Waits for human review",
+    });
+  });
+
+  it("shows no queue text on an unapproved card", () => {
+    expect(
+      chipText({
+        status: "review",
+        proposal: proposal("open", { waits_for: { reason: "not_approved" } }),
+      }),
+    ).toBe("P-3 waits for review");
+  });
+
+  it("gives an approved proposal with no place and no reason, a quiet card and a Done card no chip", () => {
     expect(chipText({ proposal: proposal("approved") })).toBeNull();
     expect(chipText({})).toBeNull();
     expect(

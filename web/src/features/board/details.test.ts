@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { BoardCard, BoardProposal } from "@/api/board";
 import { boardCard } from "@/test/payloads";
 import { PREVIEW_CHARS, PREVIEW_LINES, cardDetails, proseRow } from "./details";
 
@@ -253,5 +254,68 @@ describe("cardDetails held rows", () => {
     expect(
       cardDetails(boardCard("T-2", { status: "todo" }), null, 0).rows,
     ).toEqual([]);
+  });
+});
+
+describe("cardDetails of an approved proposal", () => {
+  const approved = (over: Partial<BoardProposal>): BoardCard =>
+    boardCard("T-1", {
+      status: "review",
+      proposal: {
+        id: "P-1",
+        state: "approved",
+        version: 2,
+        checks_failed: false,
+        revision: null,
+        review_plan: null,
+        review_claim: null,
+        queue: null,
+        waits_for: null,
+        ...over,
+      },
+    });
+
+  it("names the queue place in the proposal row and what follows it in a note", () => {
+    const details = cardDetails(
+      approved({
+        queue: {
+          position: 2,
+          ahead: "P-4",
+          batch: null,
+          estimated_start: null,
+          integrating_now: false,
+        },
+      }),
+      null,
+      0,
+    );
+    expect(details.rows).toContainEqual({
+      kind: "proposal",
+      name: "Proposal",
+      text: "P-1 · 2nd in line",
+      look: "active",
+    });
+    expect(details.notes).toEqual(["after P-4"]);
+  });
+
+  it("names the wait reason, and an unapproved proposal gets no queue text", () => {
+    const waiting = cardDetails(
+      approved({ waits_for: { reason: "checks_failed" } }),
+      null,
+      0,
+    );
+    expect(waiting.rows).toContainEqual(
+      expect.objectContaining({ text: "P-1 · Integration checks failed" }),
+    );
+    expect(waiting.notes).toEqual(["it waits for a new version"]);
+    const open = cardDetails(
+      approved({ state: "open", waits_for: { reason: "not_approved" } }),
+      null,
+      0,
+    );
+    expect(open.rows).toContainEqual(
+      expect.objectContaining({ text: "P-1 · waiting for review" }),
+    );
+    expect(open.notes).toEqual([]);
   });
 });
