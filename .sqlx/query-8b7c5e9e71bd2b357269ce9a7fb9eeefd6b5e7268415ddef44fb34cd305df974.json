@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT c.number AS \"number!: i64\", c.stage, c.purpose,\n                      t.number AS \"task!: i64\",\n                      w.number AS \"workspace?: i64\",\n                      k.name AS \"worker?: String\",\n                      p.number AS \"proposal?: i64\",\n                      v.version AS \"version?: i64\",\n                      r.number AS \"base!: i64\",\n                      c.tree_hash, c.actor, c.title, c.evidence, c.intent, c.state, c.reason,\n                      c.created_at, c.finished_at, b.number AS \"batch?: i64\"\n               FROM check_runs c\n               JOIN tasks t ON t.id = c.task_id\n               JOIN revisions r ON r.id = c.base_revision_id\n               LEFT JOIN workspaces w ON w.id = c.workspace_id\n               LEFT JOIN workers k ON k.id = c.worker_id\n               LEFT JOIN proposals p ON p.id = c.proposal_id\n               LEFT JOIN proposal_versions v ON v.id = c.version_id\n               LEFT JOIN review_batches b ON b.id = c.review_batch_id\n               WHERE c.state = 'running' ORDER BY c.id",
+  "query": "SELECT c.number AS \"number!: i64\", c.stage, c.purpose,\n                      t.number AS \"task?: i64\",\n                      w.number AS \"workspace?: i64\",\n                      k.name AS \"worker?: String\",\n                      p.number AS \"proposal?: i64\",\n                      v.version AS \"version?: i64\",\n                      r.number AS \"base!: i64\",\n                      c.tree_hash, c.actor, c.title, c.evidence, c.intent, c.state, c.reason,\n                      c.created_at, c.finished_at, b.number AS \"batch?: i64\",\n                      s.number AS \"changeset?: i64\"\n               FROM check_runs c\n               LEFT JOIN tasks t ON t.id = c.task_id\n               JOIN revisions r ON r.id = c.base_revision_id\n               LEFT JOIN workspaces w ON w.id = c.workspace_id\n               LEFT JOIN workers k ON k.id = c.worker_id\n               LEFT JOIN proposals p ON p.id = c.proposal_id\n               LEFT JOIN proposal_versions v ON v.id = c.version_id\n               LEFT JOIN review_batches b ON b.id = c.review_batch_id\n               LEFT JOIN changesets s ON s.id = c.changeset_id\n               WHERE s.number = ?1 ORDER BY c.id DESC",
   "describe": {
     "columns": [
       {
@@ -37,7 +37,7 @@
         }
       },
       {
-        "name": "task!: i64",
+        "name": "task?: i64",
         "ordinal": 3,
         "type_info": "Integer",
         "origin": {
@@ -211,32 +211,44 @@
             "name": "number"
           }
         }
+      },
+      {
+        "name": "changeset?: i64",
+        "ordinal": 19,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "changesets",
+            "name": "number"
+          }
+        }
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
       false,
       false,
-      false,
       true,
       true,
-      true,
-      true,
-      false,
-      false,
-      false,
       true,
       true,
       true,
       false,
+      false,
+      false,
+      true,
+      true,
       true,
       false,
       true,
-      true
+      false,
+      true,
+      true,
+      false
     ]
   },
-  "hash": "66351be729dd73966f10e89680642725351a28086720bbbf3d4fa5244658070b"
+  "hash": "8b7c5e9e71bd2b357269ce9a7fb9eeefd6b5e7268415ddef44fb34cd305df974"
 }

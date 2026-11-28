@@ -369,6 +369,7 @@ pub enum CheckPurpose {
     UpdateProposal,
     Integrate,
     ReviewFix,
+    IntegrateDirect,
 }
 
 impl From<Purpose> for CheckPurpose {
@@ -379,6 +380,7 @@ impl From<Purpose> for CheckPurpose {
             Purpose::UpdateProposal => Self::UpdateProposal,
             Purpose::Integrate => Self::Integrate,
             Purpose::ReviewFix => Self::ReviewFix,
+            Purpose::IntegrateDirect => Self::IntegrateDirect,
         }
     }
 }

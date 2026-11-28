@@ -115,7 +115,7 @@ async fn cancellable_runs(
     };
     let starter = starter_of(tx, actor).await?;
     for run in &runs {
-        let labels: Vec<LabelName> = tasks::labels_for_conn(tx.conn(), run.task)
+        let labels: Vec<LabelName> = tasks::labels_for_conn(tx.conn(), run.task_run()?)
             .await?
             .into_iter()
             .map(|label| label.name)
@@ -126,7 +126,7 @@ async fn cancellable_runs(
         policy::can_cancel_check_run(&starter, own_run, &areas).map_err(|denied| {
             FoldError::from(denied).with_details([
                 ("run", json!(run.id.to_string())),
-                ("task", json!(run.task.to_string())),
+                ("task", json!(run.subject())),
                 (
                     "worker",
                     json!(run.worker.as_ref().map(|worker| worker.as_str())),
@@ -157,7 +157,7 @@ async fn worker_runs(tx: &mut WriteTx, agent: &AgentName) -> Result<Vec<CheckRun
             run.worker
                 .as_ref()
                 .is_some_and(|worker| worker.belongs_to(agent))
-                || claimed.contains(&run.task)
+                || run.task.is_some_and(|task| claimed.contains(&task))
         })
         .collect())
 }
@@ -170,7 +170,9 @@ async fn running_proposal_runs(
     Ok(checks::running_runs(tx.conn())
         .await?
         .into_iter()
-        .filter(|run| run.stage == Stage::Proposal && task.is_none_or(|task| run.task == task))
+        .filter(|run| {
+            run.stage == Stage::Proposal && task.is_none_or(|task| run.task == Some(task))
+        })
         .collect())
 }
 

@@ -5,7 +5,8 @@ use fold_core::object::ObjectHash;
 use fold_core::reviews::ProposalIntent;
 use fold_core::reviews::checks::{Outcome, Purpose, RunReason, RunState, Stage};
 use fold_core::{
-    CheckRunId, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId,
+    ChangesetId, CheckRunId, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkerName,
+    WorkspaceId,
 };
 use sqlx::SqliteExecutor;
 
@@ -19,7 +20,8 @@ pub struct NewCheckRun<'a> {
     pub id: CheckRunId,
     pub stage: Stage,
     pub purpose: Purpose,
-    pub task: TaskId,
+    /// `None` only for a direct change.
+    pub task: Option<TaskId>,
     pub workspace: Option<WorkspaceId>,
     /// The row id of the requesting worker.
     pub worker_id: Option<i64>,
@@ -35,6 +37,8 @@ pub struct NewCheckRun<'a> {
     pub intent: Option<&'a ProposalIntent>,
     /// The submitted review batch whose ready members an integration run checks together.
     pub batch: Option<ReviewBatchId>,
+    /// The changeset of the main workspace that a direct change's run checks.
+    pub changeset: Option<ChangesetId>,
 }
 
 /// One stored run with public ids only.
@@ -43,7 +47,8 @@ pub struct CheckRunRow {
     pub id: CheckRunId,
     pub stage: Stage,
     pub purpose: Purpose,
-    pub task: TaskId,
+    /// `None` only for a direct change.
+    pub task: Option<TaskId>,
     pub workspace: Option<WorkspaceId>,
     pub worker: Option<WorkerName>,
     pub proposal: Option<ProposalId>,
@@ -60,6 +65,26 @@ pub struct CheckRunRow {
     pub finished_at: Option<Timestamp>,
     /// The review batch whose members the integration run checked together.
     pub batch: Option<ReviewBatchId>,
+    /// The changeset of the main workspace that a direct change's run checked.
+    pub changeset: Option<ChangesetId>,
+}
+
+impl CheckRunRow {
+    /// The task of the run, for a caller that handles only the runs of a task: a direct change's run is `Invalid`.
+    pub fn task_run(&self) -> Result<TaskId, StoreError> {
+        self.task.ok_or(StoreError::Invalid(
+            "the run of a direct change has no task",
+        ))
+    }
+
+    /// The public id of what the run checks: its task, or the changeset of a direct change.
+    pub fn subject(&self) -> String {
+        match (self.task, self.changeset) {
+            (Some(task), _) => task.to_string(),
+            (None, Some(changeset)) => changeset.to_string(),
+            (None, None) => String::new(),
+        }
+    }
 }
 
 /// One command of a run as the runner reports it.
@@ -94,13 +119,15 @@ pub struct CheckResultRow {
 /// The name a setup result is stored under.
 const SETUP: &str = "setup";
 
-/// Inserts a running run in the caller's write. A second running run of the same workspace, or a second running integration run, fails on its unique index, so the database decides a race.
+/// Inserts a running run in the caller's write. A second running run of the same workspace, or a second running integration run, fails on its unique index, so the database decides a race. A named task, changeset or base revision that does not exist is refused, never stored as null.
 pub async fn insert_run(
     tx: &mut WriteTx,
     new: &NewCheckRun<'_>,
     now: Timestamp,
 ) -> Result<(), StoreError> {
-    let (number, task) = (new.id.to_db(), new.task.to_db());
+    let number = new.id.to_db();
+    let task = new.task.map(TaskId::to_db);
+    let changeset = new.changeset.map(ChangesetId::to_db);
     let workspace = new.workspace.map(WorkspaceId::to_db);
     let proposal = new.proposal.map(ProposalId::to_db);
     let version = new.version.map(i64::from);
@@ -111,16 +138,19 @@ pub async fn insert_run(
     let inserted = sqlx::query!(
         "INSERT INTO check_runs (number, stage, purpose, task_id, workspace_id, worker_id, proposal_id,
                                  version_id, base_revision_id, tree_hash, actor, title, evidence, created_at,
-                                 review_batch_id, intent)
-         SELECT ?1, ?2, ?3, t.id,
+                                 review_batch_id, intent, changeset_id)
+         SELECT ?1, ?2, ?3, (SELECT t.id FROM tasks t WHERE t.number = ?14),
                 (SELECT w.id FROM workspaces w WHERE w.number = ?4),
                 ?5,
                 (SELECT p.id FROM proposals p WHERE p.number = ?6),
                 (SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id
                  WHERE p.number = ?6 AND v.version = ?7),
                 r.id, ?9, ?10, ?11, ?12, ?13,
-                (SELECT b.id FROM review_batches b WHERE b.number = ?15), ?16
-         FROM tasks t, revisions r WHERE t.number = ?14 AND r.number = ?8",
+                (SELECT b.id FROM review_batches b WHERE b.number = ?15), ?16,
+                (SELECT s.id FROM changesets s WHERE s.number = ?17)
+         FROM revisions r WHERE r.number = ?8
+           AND (?14 IS NULL OR EXISTS (SELECT 1 FROM tasks t WHERE t.number = ?14))
+           AND (?17 IS NULL OR EXISTS (SELECT 1 FROM changesets s WHERE s.number = ?17))",
         number,
         stage,
         purpose,
@@ -136,7 +166,8 @@ pub async fn insert_run(
         now,
         task,
         batch,
-        intent
+        intent,
+        changeset
     )
     .execute(tx.conn())
     .await?
@@ -145,7 +176,7 @@ pub async fn insert_run(
         Ok(())
     } else {
         Err(StoreError::Invalid(
-            "the task or base revision does not exist",
+            "the task, changeset or base revision does not exist",
         ))
     }
 }
@@ -248,7 +279,7 @@ struct RawRun {
     number: i64,
     stage: String,
     purpose: String,
-    task: i64,
+    task: Option<i64>,
     workspace: Option<i64>,
     worker: Option<String>,
     proposal: Option<i64>,
@@ -264,6 +295,7 @@ struct RawRun {
     created_at: i64,
     finished_at: Option<i64>,
     batch: Option<i64>,
+    changeset: Option<i64>,
 }
 
 impl RawRun {
@@ -275,7 +307,12 @@ impl RawRun {
             stage: Stage::parse(&row.stage).ok_or(StoreError::Corrupt("check_runs.stage"))?,
             purpose: Purpose::parse(&row.purpose)
                 .ok_or(StoreError::Corrupt("check_runs.purpose"))?,
-            task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
+            task: row
+                .task
+                .map(|number| {
+                    TaskId::try_from_db(number).ok_or(StoreError::Corrupt("tasks.number"))
+                })
+                .transpose()?,
             workspace: row
                 .workspace
                 .map(|number| {
@@ -324,6 +361,12 @@ impl RawRun {
                         .ok_or(StoreError::Corrupt("review_batches.number"))
                 })
                 .transpose()?,
+            changeset: row
+                .changeset
+                .map(|number| {
+                    ChangesetId::try_from_db(number).ok_or(StoreError::Corrupt("changesets.number"))
+                })
+                .transpose()?,
         })
     }
 }
@@ -334,22 +377,24 @@ macro_rules! select_runs {
         sqlx::query_as!(
             RawRun,
             r#"SELECT c.number AS "number!: i64", c.stage, c.purpose,
-                      t.number AS "task!: i64",
+                      t.number AS "task?: i64",
                       w.number AS "workspace?: i64",
                       k.name AS "worker?: String",
                       p.number AS "proposal?: i64",
                       v.version AS "version?: i64",
                       r.number AS "base!: i64",
                       c.tree_hash, c.actor, c.title, c.evidence, c.intent, c.state, c.reason,
-                      c.created_at, c.finished_at, b.number AS "batch?: i64"
+                      c.created_at, c.finished_at, b.number AS "batch?: i64",
+                      s.number AS "changeset?: i64"
                FROM check_runs c
-               JOIN tasks t ON t.id = c.task_id
+               LEFT JOIN tasks t ON t.id = c.task_id
                JOIN revisions r ON r.id = c.base_revision_id
                LEFT JOIN workspaces w ON w.id = c.workspace_id
                LEFT JOIN workers k ON k.id = c.worker_id
                LEFT JOIN proposals p ON p.id = c.proposal_id
                LEFT JOIN proposal_versions v ON v.id = c.version_id
                LEFT JOIN review_batches b ON b.id = c.review_batch_id
+               LEFT JOIN changesets s ON s.id = c.changeset_id
                "# + $tail
             $(, $arg)*
         )
@@ -449,6 +494,18 @@ pub async fn runs_of_version(
     )
     .fetch_all(executor)
     .await?;
+    rows(raw)
+}
+
+/// The runs of a direct change's changeset, newest first.
+pub async fn runs_of_changeset(
+    executor: impl SqliteExecutor<'_>,
+    changeset: ChangesetId,
+) -> Result<Vec<CheckRunRow>, StoreError> {
+    let number = changeset.to_db();
+    let raw = select_runs!("WHERE s.number = ?1 ORDER BY c.id DESC", number)
+        .fetch_all(executor)
+        .await?;
     rows(raw)
 }
 

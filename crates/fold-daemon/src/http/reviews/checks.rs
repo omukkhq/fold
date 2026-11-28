@@ -219,7 +219,7 @@ impl From<CheckRunView> for CheckRun {
             id: run.id.to_string(),
             stage: run.stage.into(),
             purpose: run.purpose.into(),
-            task: run.task.to_string(),
+            task: run.task.map(|task| task.to_string()).unwrap_or_default(),
             version: run.version,
             base: run.base.to_string(),
             state: run.state.into(),

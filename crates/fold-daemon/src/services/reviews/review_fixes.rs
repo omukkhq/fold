@@ -257,7 +257,7 @@ impl ReviewService {
         tracing::info!(run = %run.id, proposal = %proposal, checkout = %checkout.id, "check run of a review fix started");
         let checking = FixOutcome::Checking {
             run: run.id,
-            task: run.task,
+            task: run.task_run()?,
             checkout: checkout.id,
         };
         self.spawn_proposal_run(run, job, actor.clone(), ticket);
@@ -312,7 +312,7 @@ impl ReviewService {
             Ran::Cancelled(request) => return self.end_on_cancel(&run, request).await,
         };
         let mut verdict = Verdict::of(&results);
-        let live = workspaces::live_task_workspace(self.store.read(), run.task).await?;
+        let live = workspaces::live_task_workspace(self.store.read(), run.task_run()?).await?;
         let snapshot = match live {
             Some(live) => {
                 let current = current_version(
@@ -375,7 +375,9 @@ impl ReviewService {
                 let made = fix_in_tx(tx, &mut buffer, &input).await?;
                 let body = format!(
                     "fold made {proposal} v{} for {}: the checks of your fix passed ({}).",
-                    made.version, run.task, run.id
+                    made.version,
+                    run.subject(),
+                    run.id
                 );
                 tell_requester(tx, &mut buffer, &run, &body, now).await?;
                 Ok::<_, ReviewError>(Some(made))

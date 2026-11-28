@@ -101,7 +101,7 @@ impl Supervisor {
             .map(|result| result.check.unwrap_or_else(|| "setup".to_owned()))
             .collect();
         let turn = gate_turn(&row, &failed);
-        let watch = match self.resume(&agent, turn.clone(), &[row.task]).await {
+        let watch = match self.resume(&agent, turn.clone(), &[row.task_run()?]).await {
             Ok(watch) => watch,
             // The run stays owed, and the resume of the pause or the next free place serves it.
             Err(error) if is_paused_refusal(&error) || is_limit_refusal(&error) => {
@@ -183,7 +183,9 @@ fn gate_turn(run: &CheckRunRow, failed: &[String]) -> String {
     };
     format!(
         "The checks of {} ({}) did not pass, so {made}: {why}. Read fold's message, or call get_check_run with {} for the logs. Fix the work in your task workspace, call run_checks, then call {again} again.",
-        run.task, run.id, run.id
+        run.subject(),
+        run.id,
+        run.id
     )
 }
 
@@ -233,7 +235,7 @@ mod tests {
             id: CheckRunId::from_number(4).unwrap(),
             stage: Stage::Proposal,
             purpose: Purpose::CreateProposal,
-            task: TaskId::from_number(12).unwrap(),
+            task: TaskId::from_number(12),
             workspace: WorkspaceId::from_number(3),
             worker: None,
             proposal: None,
@@ -249,6 +251,7 @@ mod tests {
             created_at: Timestamp::from_millis(0).unwrap(),
             finished_at: Some(Timestamp::from_millis(1).unwrap()),
             batch: None,
+            changeset: None,
         };
         let text = gate_turn(&run, &["unit".to_owned()]);
         assert!(

@@ -336,7 +336,7 @@ impl ReviewService {
             .await?;
         let checking = Proposed::Checking {
             run: run.id,
-            task: run.task,
+            task: run.task_run()?,
             workspace: snapped.id,
         };
         self.spawn_proposal_run(run, job, actor.clone(), ticket);
@@ -625,7 +625,7 @@ impl ReviewService {
 
     /// The task's live workspace while it is still the run's: the same workspace, on the same base, active.
     async fn run_workspace(&self, run: &CheckRunRow) -> Result<Option<WorkspaceRow>, ReviewError> {
-        let live = workspaces::live_task_workspace(self.store.read(), run.task).await?;
+        let live = workspaces::live_task_workspace(self.store.read(), run.task_run()?).await?;
         Ok(live.filter(|live| {
             Some(live.id) == run.workspace
                 && live.base == run.base
@@ -678,14 +678,15 @@ impl ReviewService {
                             .as_deref()
                             .ok_or(StoreError::Corrupt("check_runs.title"))?;
                         (
-                            open_in_tx(tx, &mut buffer, run.task, title, &input).await?,
+                            open_in_tx(tx, &mut buffer, run.task_run()?, title, &input).await?,
                             1,
                         )
                     }
                 };
                 let body = format!(
                     "fold made {proposal} v{version} for {}: its checks passed ({}).",
-                    run.task, run.id
+                    run.subject(),
+                    run.id
                 );
                 tell_requester(tx, &mut buffer, run, &body, now).await?;
                 Ok::<_, ReviewError>(Some(proposal))
@@ -785,7 +786,7 @@ async fn cancelled_by(
     }
     let filter = EventFilter {
         types: vec![types::CHECKS_FINISHED],
-        task: Some(run.task),
+        task: run.task,
         proposal: None,
     };
     let id = run.id.to_string();
@@ -879,7 +880,7 @@ pub(super) async fn insert_proposal_run(
         id,
         stage: Stage::Proposal,
         purpose: new.purpose,
-        task: new.task,
+        task: Some(new.task),
         workspace: Some(workspace),
         worker_id: new.worker_id,
         proposal: new.waiting.proposal,
@@ -891,6 +892,7 @@ pub(super) async fn insert_proposal_run(
         evidence: new.waiting.evidence,
         intent: new.waiting.intent,
         batch: None,
+        changeset: None,
     };
     match checks::insert_run(tx, &row, now).await {
         Ok(()) => {}
@@ -966,7 +968,8 @@ fn refused_message(run: &CheckRunRow, error: &ReviewError) -> String {
     };
     let mut text = format!(
         "The checks of {} ({}) passed, but {what}: {message}.",
-        run.task, run.id
+        run.subject(),
+        run.id
     );
     if !hint.is_empty() {
         text.push_str(&format!(" Next: {hint}."));
@@ -1098,7 +1101,15 @@ pub(super) async fn tell_requester(
         target: Target::Worker(worker.clone()),
         addressed_as: AddressedAs::Worker,
     };
-    send_from_fold_in_tx(tx, buffer, vec![to], (run.task, run.proposal), &body, now).await?;
+    send_from_fold_in_tx(
+        tx,
+        buffer,
+        vec![to],
+        (run.task_run()?, run.proposal),
+        &body,
+        now,
+    )
+    .await?;
     Ok(())
 }
 
@@ -1108,7 +1119,7 @@ pub(super) fn result_message(
     results: &[CommandResult],
     verdict: Verdict,
 ) -> String {
-    let subject = format!("The checks of {} ({})", run.task, run.id);
+    let subject = format!("The checks of {} ({})", run.subject(), run.id);
     let again = again_tool(run.purpose);
     match verdict.reason {
         None => {
@@ -1193,7 +1204,7 @@ fn no_slot_names(results: &[CommandResult]) -> Vec<&str> {
 fn cancelled_message(run: &CheckRunRow, by: &EventActor) -> String {
     let mut text = format!(
         "The checks of {} ({}) were cancelled by {}: fold stopped the running command and started no later check.",
-        run.task,
+        run.subject(),
         run.id,
         by.as_str()
     );
@@ -1213,7 +1224,8 @@ fn cancelled_message(run: &CheckRunRow, by: &EventActor) -> String {
 fn edited_message(run: &CheckRunRow, path: &str) -> String {
     let mut text = format!(
         "The checks of {} ({}) failed: {path} changed during the run, so fold stopped the run at once. Do not edit the files of the workspace until checks.finished; when a check wrote the file, put what it writes in .gitignore or .foldignore.",
-        run.task, run.id
+        run.subject(),
+        run.id
     );
     if let Some(gate) = gate_sentence(run) {
         text.push(' ');
@@ -1247,6 +1259,7 @@ fn again_tool(purpose: Purpose) -> &'static str {
         Purpose::CreateProposal => "create_proposal",
         Purpose::UpdateProposal => "update_proposal",
         Purpose::ReviewFix => "submit_review_fix",
+        Purpose::IntegrateDirect => "submit_main_change",
         Purpose::Check | Purpose::Integrate => "run_checks",
     }
 }
@@ -1313,7 +1326,7 @@ pub async fn recover_check_runs(
                 let again = again_tool(run.purpose);
                 let body = format!(
                     "fold stopped while the checks of {} ran ({}), so they have no result. Call {again} again.",
-                    run.task, run.id
+                    run.subject(), run.id
                 );
                 tell_requester(tx, &mut buffer, &run, &body, now).await?;
                 Ok::<_, ReviewError>(true)
@@ -1376,7 +1389,7 @@ mod tests {
             id: CheckRunId::from_number(4).unwrap(),
             stage: Stage::Proposal,
             purpose: Purpose::Check,
-            task: TaskId::from_number(12).unwrap(),
+            task: TaskId::from_number(12),
             workspace: WorkspaceId::from_number(3),
             worker: None,
             proposal: None,
@@ -1392,6 +1405,7 @@ mod tests {
             created_at: Timestamp::from_millis(0).unwrap(),
             finished_at: None,
             batch: None,
+            changeset: None,
         }
     }
 

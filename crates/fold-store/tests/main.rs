@@ -10,6 +10,7 @@ mod agent_changes_schema;
 mod agents_schema;
 mod batch_integration_schema;
 mod changesets;
+mod check_runs_direct_schema;
 mod check_runs_schema;
 mod checklists;
 mod checkpoints;

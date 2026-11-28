@@ -296,7 +296,7 @@ impl ReviewService {
                     id,
                     stage: Stage::Integration,
                     purpose: Purpose::Integrate,
-                    task: at.task,
+                    task: Some(at.task),
                     workspace: None,
                     worker_id: None,
                     proposal: Some(at.proposal),
@@ -308,6 +308,7 @@ impl ReviewService {
                     evidence: None,
                     intent: None,
                     batch: at.batch,
+                    changeset: None,
                 };
                 checks::insert_run(tx, &new, now).await?;
                 if at.batch.is_some() {
@@ -639,7 +640,7 @@ mod tests {
             id: CheckRunId::from_number(9).unwrap(),
             stage: Stage::Integration,
             purpose: Purpose::Integrate,
-            task: at.task,
+            task: Some(at.task),
             workspace: None,
             worker: None,
             proposal: Some(at.proposal),
@@ -655,6 +656,7 @@ mod tests {
             created_at: Timestamp::from_millis(0).unwrap(),
             finished_at: None,
             batch: None,
+            changeset: None,
         };
         let results = [CommandResult {
             check: Some("e2e".to_owned()),

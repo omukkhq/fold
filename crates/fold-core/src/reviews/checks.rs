@@ -48,7 +48,7 @@ define_names!(
 );
 
 define_names!(
-    /// What asked for a run: a worker's `run_checks`, the gate of `create_proposal`, `update_proposal` or a reviewer's `submit_review_fix`, or an integration.
+    /// What asked for a run: a worker's `run_checks`, the gate of `create_proposal`, `update_proposal` or a reviewer's `submit_review_fix`, the integration of a proposal, or the integration of the main agent's direct change.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum Purpose {
         Check = "check",
@@ -56,6 +56,8 @@ define_names!(
         UpdateProposal = "update_proposal",
         Integrate = "integrate",
         ReviewFix = "review_fix",
+        /// The integration checks of a direct change from `submit_main_change`: the run checks one changeset of the main workspace and belongs to no task, proposal or version.
+        IntegrateDirect = "integrate_direct",
     }
 );
 

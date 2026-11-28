@@ -50,7 +50,7 @@ fn workspace_run(number: u32) -> NewCheckRun<'static> {
         id: run_id(number),
         stage: Stage::Proposal,
         purpose: Purpose::Check,
-        task: TaskId::from_number(1).unwrap(),
+        task: TaskId::from_number(1),
         workspace: WorkspaceId::from_number(1),
         worker_id: Some(1),
         proposal: None,
@@ -62,6 +62,7 @@ fn workspace_run(number: u32) -> NewCheckRun<'static> {
         evidence: None,
         intent: None,
         batch: None,
+        changeset: None,
     }
 }
 

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO check_runs (number, stage, purpose, task_id, workspace_id, worker_id, proposal_id,\n                                 version_id, base_revision_id, tree_hash, actor, title, evidence, created_at,\n                                 review_batch_id, intent, changeset_id)\n         SELECT ?1, ?2, ?3, (SELECT t.id FROM tasks t WHERE t.number = ?14),\n                (SELECT w.id FROM workspaces w WHERE w.number = ?4),\n                ?5,\n                (SELECT p.id FROM proposals p WHERE p.number = ?6),\n                (SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id\n                 WHERE p.number = ?6 AND v.version = ?7),\n                r.id, ?9, ?10, ?11, ?12, ?13,\n                (SELECT b.id FROM review_batches b WHERE b.number = ?15), ?16,\n                (SELECT s.id FROM changesets s WHERE s.number = ?17)\n         FROM revisions r WHERE r.number = ?8\n           AND (?14 IS NULL OR EXISTS (SELECT 1 FROM tasks t WHERE t.number = ?14))\n           AND (?17 IS NULL OR EXISTS (SELECT 1 FROM changesets s WHERE s.number = ?17))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 17
+    },
+    "nullable": []
+  },
+  "hash": "e2be3ff71a664a0c9c2ea79b176c8184c4d1bae68d9f137dda90d681e991e0e6"
+}

@@ -139,11 +139,14 @@ impl CardCheckRun {
 fn running_by_task(runs: &[CheckRunRow]) -> BTreeMap<TaskId, CardCheckRun> {
     let mut by_task: BTreeMap<TaskId, CardCheckRun> = BTreeMap::new();
     for run in runs {
+        let Some(task) = run.task else {
+            continue;
+        };
         let replace = by_task
-            .get(&run.task)
+            .get(&task)
             .is_none_or(|kept| kept.stage != Stage::Integration || run.stage == Stage::Integration);
         if replace {
-            by_task.insert(run.task, CardCheckRun::of(run));
+            by_task.insert(task, CardCheckRun::of(run));
         }
     }
     by_task
