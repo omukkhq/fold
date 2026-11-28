@@ -27,6 +27,8 @@ pub(super) struct Owed {
     pub lane: Option<String>,
     /// The failed integration run of a lane member; `None` for a conflict.
     pub run: Option<CheckRunId>,
+    /// The `refresh` of the lane that moved, which the reviewer redoes with the conflict.
+    pub refresh: Option<String>,
 }
 
 /// Whether `event` hands a version to a reviewer to fix on main: `integration.conflicted`, or a failed integration `checks.finished` with a `lane`.
@@ -56,6 +58,11 @@ pub(super) fn conflict_fixer(event: &Event) -> Option<Owed> {
         .get("lane")
         .and_then(Value::as_str)
         .map(str::to_owned);
+    let refresh = event
+        .data
+        .get("refresh")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let run = (event.event_type == types::CHECKS_FINISHED)
         .then(|| event.data.get("run").and_then(Value::as_str)?.parse().ok())
         .flatten();
@@ -65,6 +72,7 @@ pub(super) fn conflict_fixer(event: &Event) -> Option<Owed> {
         agent,
         lane,
         run,
+        refresh,
     })
 }
 
@@ -197,7 +205,7 @@ impl Supervisor {
                     return Ok(());
                 };
                 report = found;
-                Handoff::Conflict(&report)
+                Handoff::of_conflict(&report, owed.refresh.as_deref())
             }
         };
         let lane = owed.lane.as_deref();
@@ -470,7 +478,14 @@ mod tests {
         assert_eq!(owed.proposal.to_string(), "P-4");
         assert_eq!(owed.version, 2);
         assert_eq!(owed.agent.as_str(), "reviewer-3");
-        assert_eq!((owed.lane, owed.run), (None, None));
+        assert_eq!((owed.lane, owed.run, owed.refresh), (None, None, None));
+        let refresh = event(
+            types::INTEGRATION_CONFLICTED,
+            json!({"version": 2, "fixer": "reviewer-3", "lane": "m", "refresh": "regenerate it", "files": 0}),
+        );
+        let owed = conflict_fixer(&refresh).unwrap();
+        assert_eq!(owed.lane.as_deref(), Some("m"));
+        assert_eq!(owed.refresh.as_deref(), Some("regenerate it"));
         let lane_checks = event(
             types::CHECKS_FINISHED,
             json!({"version": 2, "fixer": "reviewer-3", "lane": "migrations", "run": "cr-9", "stage": "integration", "state": "failed"}),

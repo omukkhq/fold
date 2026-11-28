@@ -250,6 +250,7 @@ async fn conflict_writes_one_integrations_row_with_the_report() {
             "files": 1,
             "fixer": "review",
             "lane": null,
+            "refresh": null,
             "before_turn": false,
         })
     );

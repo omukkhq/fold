@@ -885,9 +885,32 @@ impl ReviewService {
             proposal,
             task,
             version,
+            expected_version,
+            automatic,
             ..
         } = plan.subject
         {
+            // A lane that moved and names a refresh sends the version to its reviewer before any integration run.
+            let found = FoundConflict {
+                proposal,
+                task,
+                version,
+                main: head.number,
+                trees: ReportTrees {
+                    base: plan.base_tree,
+                    main: head.tree_hash,
+                    version: plan.other_tree,
+                },
+                conflicts: &[],
+                expected_version,
+                automatic,
+                before_turn: false,
+            };
+            match self.record_refresh_if_due(actor, found).await? {
+                None => {}
+                Some(true) => return Ok(Integrated::Conflicted(Vec::new())),
+                Some(false) => return Err(Step::Retry),
+            }
             let at = Integrating {
                 proposal,
                 task,

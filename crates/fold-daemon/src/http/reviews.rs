@@ -348,6 +348,17 @@ pub enum ConflictedReason {
         #[schema(required = true, example = "reviewer")]
         fixer: Option<String>,
     },
+    /// The version's serial lane moved since its base and names a `refresh`, and the merge with main was clean: the reviewer redoes the lane's step on the new main, not the author.
+    LaneRefresh {
+        #[schema(example = "migrations")]
+        lane: String,
+        /// The lane's `refresh` text from main's `fold-checks.toml`.
+        #[schema(example = "regenerate the migration on the current head")]
+        refresh: String,
+        /// The reviewer agent that redoes it; null when the review lead got the refresh to start a reviewer for it.
+        #[schema(required = true, example = "reviewer")]
+        fixer: Option<String>,
+    },
     /// The integration checks failed on the merge with main after another member of the lane integrated, so the reviewer fixes the version on the new main, not the author.
     LaneChecksFailed {
         #[schema(example = "migrations")]
@@ -365,6 +376,16 @@ impl From<service::ConflictedReason> for ConflictedReason {
     fn from(reason: service::ConflictedReason) -> Self {
         match reason {
             service::ConflictedReason::MergeConflict { fixer, .. } => Self::MergeConflict {
+                fixer: fixer.map(|agent| agent.to_string()),
+            },
+            service::ConflictedReason::LaneRefresh {
+                lane,
+                refresh,
+                fixer,
+                ..
+            } => Self::LaneRefresh {
+                lane,
+                refresh,
                 fixer: fixer.map(|agent| agent.to_string()),
             },
             service::ConflictedReason::LaneChecksFailed { lane, run, fixer } => {
@@ -431,6 +452,11 @@ pub enum IntegrationWait {
     Conflict,
     /// The integration checks of the current version failed.
     ChecksFailed,
+    /// The proposal's serial lane moved since its version's base and names a `refresh`: its reviewer redoes the lane's step on the new main and sends a new version.
+    LaneRefresh {
+        #[schema(example = "migrations")]
+        lane: String,
+    },
     /// A member of a serial lane behind its front.
     Lane {
         #[schema(example = "migrations")]
@@ -468,6 +494,7 @@ impl From<WaitReason> for IntegrationWait {
             WaitReason::ConfigInvalid => Self::ConfigInvalid,
             WaitReason::MainChecksInvalid => Self::MainChecksInvalid,
             WaitReason::Conflict => Self::Conflict,
+            WaitReason::LaneRefresh { lane } => Self::LaneRefresh { lane },
             WaitReason::ChecksFailed => Self::ChecksFailed,
             WaitReason::Lane { lane, position } => Self::Lane { lane, position },
             WaitReason::Batch { batch } => Self::Batch {

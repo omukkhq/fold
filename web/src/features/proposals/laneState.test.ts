@@ -8,7 +8,11 @@ import {
   laneFailure,
   laneFailureLine,
   laneFailureText,
+  laneRefresh,
+  laneRefreshLine,
+  laneRefreshText,
   laneText,
+  refresherSegments,
 } from "./laneState";
 
 const failed: ConflictedReason = {
@@ -18,6 +22,42 @@ const failed: ConflictedReason = {
   fixer: "reviewer",
 };
 const merge: ConflictedReason = { kind: "merge_conflict", fixer: "reviewer" };
+const refresh: ConflictedReason = {
+  kind: "lane_refresh",
+  lane: "migrations",
+  refresh: "put the migration on the current head",
+  fixer: "reviewer",
+};
+
+describe("laneRefresh", () => {
+  it("returns only a lane's refresh", () => {
+    expect(laneRefresh(refresh)).toBe(refresh);
+    expect(laneRefresh(failed)).toBeNull();
+    expect(laneRefresh(merge)).toBeNull();
+    expect(laneRefresh(null)).toBeNull();
+  });
+
+  it("is not a merge conflict", () => {
+    const flagged = proposalSummary("P-1", { conflicted: true });
+    expect(isMergeConflict({ ...flagged, conflicted_reason: refresh })).toBe(
+      false,
+    );
+  });
+
+  it("names the lane, its text and who redoes it", () => {
+    const found = laneRefresh(refresh);
+    if (found === null) throw new Error("no refresh");
+    expect(laneRefreshText(found)).toBe(
+      "Lane migrations asks for a refresh: put the migration on the current head",
+    );
+    expect(segmentsText(laneRefreshLine(found))).toBe(
+      "Lane migrations asks for a refresh: put the migration on the current head · @reviewer redoes it",
+    );
+    expect(segmentsText(refresherSegments({ ...found, fixer: null }))).toBe(
+      "a reviewer redoes it",
+    );
+  });
+});
 
 describe("laneFailure", () => {
   it("returns only a lane check failure", () => {

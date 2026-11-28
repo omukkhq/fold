@@ -2924,6 +2924,21 @@ export interface components {
             kind: "merge_conflict";
         } | {
             /**
+             * @description The reviewer agent that redoes it; null when the review lead got the refresh to start a reviewer for it.
+             * @example reviewer
+             */
+            fixer: string | null;
+            /** @enum {string} */
+            kind: "lane_refresh";
+            /** @example migrations */
+            lane: string;
+            /**
+             * @description The lane's `refresh` text from main's `fold-checks.toml`.
+             * @example regenerate the migration on the current head
+             */
+            refresh: string;
+        } | {
+            /**
              * @description The reviewer agent that fixes it; null when the review lead got the failure to start a reviewer for it.
              * @example reviewer
              */
@@ -3812,6 +3827,11 @@ export interface components {
         } | {
             /** @enum {string} */
             reason: "checks_failed";
+        } | {
+            /** @example migrations */
+            lane: string;
+            /** @enum {string} */
+            reason: "lane_refresh";
         } | {
             /** @example migrations */
             lane: string;

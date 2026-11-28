@@ -35,6 +35,8 @@ pub const MAX_LANES: usize = 16;
 /// The most globs one lane may list.
 pub const MAX_LANE_GLOBS: usize = 64;
 const MAX_GLOB_CHARS: usize = 500;
+/// The longest `refresh` text of a lane, in characters.
+pub const MAX_REFRESH_CHARS: usize = 1000;
 
 define_names!(
     /// When a check runs: before fold makes a proposal version, or on the merged tree before an integration reaches main.
@@ -137,6 +139,8 @@ pub struct Lane {
     pub name: String,
     /// The globs as the file writes them, in file order.
     pub paths: Vec<String>,
+    /// `refresh`: the one-line step the approving reviewer redoes on the new main, as the file writes it. When main changed a path of the lane since a member's version base, the daemon starts no integration run for that member: it hands the version to its approving reviewer the way it hands a conflict, with this text, and the reviewer's fix version runs its checks on the new main. `None` keeps the lane's plain order.
+    pub refresh: Option<String>,
     matcher: Regex,
 }
 
@@ -191,6 +195,7 @@ struct RawRuns {
 struct RawLane {
     name: String,
     paths: Vec<String>,
+    refresh: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -493,13 +498,35 @@ fn parse_lanes(raw: Vec<RawLane>) -> Result<Vec<Lane>, FoldError> {
             .size_limit(MAX_PATTERN_BYTES)
             .build()
             .map_err(|_| invalid(format!("{at} are too large to match")))?;
+        let refresh = lane
+            .refresh
+            .map(|text| check_refresh(text, &name, index))
+            .transpose()?;
         lanes.push(Lane {
             name,
             paths: lane.paths,
+            refresh,
             matcher,
         });
     }
     Ok(lanes)
+}
+
+/// A lane's `refresh` text: one line of 1 to [`MAX_REFRESH_CHARS`] characters that is not blank and holds no control character, kept as written.
+fn check_refresh(text: String, name: &str, index: usize) -> Result<String, FoldError> {
+    let at = format!("serial {} ({name}) refresh", index + 1);
+    let count = text.chars().count();
+    if count == 0 || count > MAX_REFRESH_CHARS || text.trim().is_empty() {
+        return Err(invalid(format!(
+            "{at} must have 1 to {MAX_REFRESH_CHARS} characters and not be blank"
+        )));
+    }
+    if text.chars().any(char::is_control) {
+        return Err(invalid(format!(
+            "{at} must be one line without control characters"
+        )));
+    }
+    Ok(text)
 }
 
 /// The regular expression of one glob, unanchored. A glob is a relative path of 1 to [`MAX_GLOB_CHARS`] characters: no leading `/`, no empty, `.` or `..` segment, and `**` only as a whole segment.
@@ -1006,6 +1033,38 @@ paths = ["Cargo.lock", "web/bun.lock", "crates/fold-store/migrations/project/*.s
             Some("migrations".to_owned()),
             "a path of two lanes goes to the first lane in file order"
         );
+    }
+
+    #[test]
+    fn a_lane_refresh_is_one_line_kept_as_written() {
+        let with = |text: &str| format!("{}refresh = {text:?}\n", lane(r#"["m/**"]"#));
+        let file =
+            ChecksFile::parse(&with(" regenerate the migration on the current head ")).unwrap();
+        assert_eq!(
+            file.lanes[0].refresh.as_deref(),
+            Some(" regenerate the migration on the current head ")
+        );
+        assert_eq!(
+            ChecksFile::parse(&lane(r#"["m/**"]"#)).unwrap().lanes[0].refresh,
+            None
+        );
+        let longest = "é".repeat(MAX_REFRESH_CHARS);
+        let file = ChecksFile::parse(&with(&longest)).unwrap();
+        assert_eq!(file.lanes[0].refresh.as_deref(), Some(longest.as_str()));
+        for text in ["", "   ", &"a".repeat(MAX_REFRESH_CHARS + 1)] {
+            assert!(
+                refusal(&with(text))
+                    .contains("serial 1 (m) refresh must have 1 to 1000 characters"),
+                "{text:?}"
+            );
+        }
+        for text in ["redo\nit", "redo\tit"] {
+            assert!(
+                refusal(&with(text))
+                    .contains("refresh must be one line without control characters"),
+                "{text:?}"
+            );
+        }
     }
 
     #[test]

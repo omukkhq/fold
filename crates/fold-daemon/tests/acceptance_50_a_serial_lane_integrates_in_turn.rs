@@ -15,9 +15,9 @@ use crate::common::roles::give_role;
 use crate::worker_resume::{MAIN, REVIEWER, TASK_WORKER, until_runs, until_state};
 use crate::workers_support::FakeClaude;
 
-const LEAD: &str = "review-lead";
+pub(crate) const LEAD: &str = "review-lead";
 const AREA_LEAD: &str = "web-lead";
-const SECOND_REVIEWER: &str = "reviewer-2";
+pub(crate) const SECOND_REVIEWER: &str = "reviewer-2";
 const THIRD_REVIEWER: &str = "reviewer-3";
 
 /// main's checks: one lane for the migrations, and an integration check that refuses two migrations on the same parent, as a second Alembic head would.
@@ -32,20 +32,30 @@ run   = "test -z \"$(cat alembic/versions/*.py | grep '^down' | sort | uniq -d)\
 stage = "integration"
 "#;
 
-fn migration(revision: &str, down: &str) -> String {
+pub(crate) fn migration(revision: &str, down: &str) -> String {
     format!("revision = \"{revision}\"\ndown = \"{down}\"\n")
 }
 
-async fn status(harness: &Harness, task: &str) -> Value {
+pub(crate) async fn status(harness: &Harness, task: &str) -> Value {
     harness.call(MAIN, "get_task", json!({"id": task})).await["status"].clone()
 }
 
 /// Area `web` with its lead, a task for each of `titles` and the task worker that proposes `P-<n>` for `T-<n>` with the files of `changes[n - 1]`, on a main whose `r1` holds [`CHECKS`] and the first migration. The review lead runs and is connected.
 async fn proposed(fake: &FakeClaude, titles: &[&str], changes: &[Vec<(&str, String)>]) -> Harness {
+    proposed_with(fake, CHECKS, titles, changes).await
+}
+
+/// [`proposed`] on a main whose `fold-checks.toml` is `checks`.
+pub(crate) async fn proposed_with(
+    fake: &FakeClaude,
+    checks: &str,
+    titles: &[&str],
+    changes: &[Vec<(&str, String)>],
+) -> Harness {
     let mut harness = Harness::start_with_files(
         fake.launcher.clone(),
         &[
-            ("fold-checks.toml", CHECKS),
+            ("fold-checks.toml", checks),
             ("alembic/versions/0001.py", &migration("0001", "base")),
         ],
     )
@@ -110,7 +120,7 @@ async fn proposed(fake: &FakeClaude, titles: &[&str], changes: &[Vec<(&str, Stri
 }
 
 /// The review lead starts `reviewer` for `proposal`, which approves `v1`; fold then stops it with the review claim. The clock moves on a second after, so each approval has its own time.
-async fn approve(harness: &mut Harness, proposal: &str, reviewer: &str) {
+pub(crate) async fn approve(harness: &mut Harness, proposal: &str, reviewer: &str) {
     let started = harness
         .call(
             LEAD,
@@ -150,7 +160,7 @@ async fn listed_lane(harness: &Harness, proposal: &str) -> Value {
 }
 
 /// The proposal each revision after `r1` integrated, in order.
-async fn integrated_in_order(harness: &Harness, count: u32) -> Vec<String> {
+pub(crate) async fn integrated_in_order(harness: &Harness, count: u32) -> Vec<String> {
     eventually(WAIT, async || {
         let head = harness.head().await.number.number();
         if head > count { Ok(()) } else { Err(head) }

@@ -250,6 +250,18 @@ pub fn direct_conflicted(changeset: ChangesetId, conflicts: &[Conflict]) -> Fold
 
 /// The refusal a transport reports for an integration that conflicted. The details name each path and its kind only, never a hunk, because an error detail carries no file content; the full report is read with the proposal.
 pub fn integration_conflicted(proposal: ProposalId, conflicts: &[Conflict]) -> FoldError {
+    // Only a lane's refresh records a conflicted integration without a conflicting file.
+    if conflicts.is_empty() {
+        return FoldError::new(
+            codes::INTEGRATION_CONFLICTED,
+            format!("{proposal} needs its lane's refresh on the new main and was not integrated"),
+        )
+        .with_details([
+            ("proposal", json!(proposal.to_string())),
+            ("files", json!([])),
+        ])
+        .with_hint("call get_proposal: conflicted_reason lane_refresh names the lane and its refresh; the reviewer that approved the version redoes it in a review checkout merged onto main with submit_review_fix, or the review lead starts a reviewer for it");
+    }
     let files: Vec<_> = conflicts
         .iter()
         .map(ReportFile::from)
@@ -267,4 +279,27 @@ pub fn integration_conflicted(proposal: ProposalId, conflicts: &[Conflict]) -> F
         ("files", json!(files)),
     ])
     .with_hint("call get_proposal to read the conflict report; the reviewer that approved the version fixes it in a review checkout merged onto main with submit_review_fix, or the review lead starts a reviewer for it")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_integration_without_a_conflicting_file_names_the_lane_refresh() {
+        let proposal = ProposalId::from_number(2).unwrap();
+        let refresh = integration_conflicted(proposal, &[]);
+        assert_eq!(refresh.code(), codes::INTEGRATION_CONFLICTED);
+        assert_eq!(
+            refresh.message(),
+            "P-2 needs its lane's refresh on the new main and was not integrated"
+        );
+        assert!(
+            refresh
+                .hint()
+                .is_some_and(|hint| hint.contains("lane_refresh")),
+            "{refresh:?}"
+        );
+        assert!(!refresh.message().contains("conflicts"), "{refresh:?}");
+    }
 }

@@ -63,6 +63,7 @@ Keys. Every key is known, and a misspelt key refuses the whole file with `checks
 - `[[serial]]`, at most 16, each an integration lane with:
   - `name`: 1 to 64 letters, digits, `_`, `-` or `.`, unique among the lanes.
   - `paths`: 1 to 64 globs of 1 to 500 characters each, relative to the root without empty, `.` or `..` segments. `*` and `?` match inside one segment, and `**`, only as a whole segment, matches any number of segments. A path that matches the globs of several lanes belongs to the first of them in the file.
+  - `refresh`, optional: one line of 1 to 1000 characters without control characters that names the step to redo on the new main, such as "put the migration on the current head". When main changed a path of the lane since a member's version base, fold starts no integration run for that member: it sends the version to the reviewer that approved it the way it sends a conflict, with this text, and the reviewer's fix version runs its checks. `get_proposal` names the lane's refresh as the reason the version waits. A member whose base holds main's lane paths integrates without a refresh, and a lane without the key only orders its members.
 
 The file is at most 256 KiB. Prefer one check per tool or part of the repository with a `files` pattern, so a change of the docs runs no test suite.
 

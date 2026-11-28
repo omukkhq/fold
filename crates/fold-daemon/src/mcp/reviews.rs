@@ -512,7 +512,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             INTEGRATE_PROPOSAL,
-            "Integrate the current version of a proposal onto main; only the main agent, the review lead and its reviewers may. Refusals: stale_version, changes_requested, not_approved, human_approval_missing, prerequisites_not_done (the gates are not met), author_cannot_integrate (your agent wrote it), integrator_required, invalid_request with the reason lane_held (the proposal changes a path of a serial lane of main's fold-checks.toml and waits behind the front: lane members integrate one at a time in the order of their first approval; details give lane and position), and integration_conflicted (the version conflicts with main; details list the files and kinds; the reviewer that approved the version fixes it, or the review lead starts a reviewer for it, while the task stays in Review). When fold-checks.toml has integration checks, the result is queued: fold integrates the queued proposals one at a time in the order asked, after the integration checks pass on the merge with main; failed checks (result checks_failed when it ran at once) send the proposal back to its author, except for a member of a serial lane that another member moved since the version's base: that one goes to the reviewer that approved it, flagged like a conflict, with the note that the lane moved, and until a new version the call is refused with invalid_request and the reason checks_failed. While the author's update or a reviewer's fix runs the checks of the next version, the call is refused with update_checks_running. A second call while the version waits in the queue is refused with invalid_request and the reason integration_queued; get_proposal shows integration_queued. When fold itself cannot run the checks, it answers workspace_io with the reason fold_failed: nothing is sent back, and you integrate again once the fault is fixed. When fold-checks.toml on main itself is not valid, the integration stays queued until a revision of main fixes it. fold sends each result as a message.",
+            "Integrate the current version of a proposal onto main; only the main agent, the review lead and its reviewers may. Refusals: stale_version, changes_requested, not_approved, human_approval_missing, prerequisites_not_done (the gates are not met), author_cannot_integrate (your agent wrote it), integrator_required, invalid_request with the reason lane_held (the proposal changes a path of a serial lane of main's fold-checks.toml and waits behind the front: lane members integrate one at a time in the order of their first approval; details give lane and position), and integration_conflicted (the version conflicts with main; details list the files and kinds; the reviewer that approved the version fixes it, or the review lead starts a reviewer for it, while the task stays in Review; with no file, the version's serial lane moved and names a refresh, which that reviewer redoes). When fold-checks.toml has integration checks, the result is queued: fold integrates the queued proposals one at a time in the order asked, after the integration checks pass on the merge with main; failed checks (result checks_failed when it ran at once) send the proposal back to its author, except for a member of a serial lane that another member moved since the version's base: that one goes to the reviewer that approved it, flagged like a conflict, with the note that the lane moved, and until a new version the call is refused with invalid_request and the reason checks_failed. While the author's update or a reviewer's fix runs the checks of the next version, the call is refused with update_checks_running. A second call while the version waits in the queue is refused with invalid_request and the reason integration_queued; get_proposal shows integration_queued. When fold itself cannot run the checks, it answers workspace_io with the reason fold_failed: nothing is sent back, and you integrate again once the fault is fixed. When fold-checks.toml on main itself is not valid, the integration stays queued until a revision of main fixes it. fold sends each result as a message.",
             schema_for_type::<IntegrateProposalInput>(),
         ),
         Tool::new(
@@ -650,6 +650,7 @@ fn put_queue(value: &mut Value, standing: Option<&QueueStanding>) {
                     waits["lane"] = json!(lane);
                     waits["position"] = json!(position);
                 }
+                WaitReason::LaneRefresh { lane } => waits["lane"] = json!(lane),
                 WaitReason::Batch { batch } => waits["batch"] = json!(batch.to_string()),
                 WaitReason::Prerequisites { unfinished } => {
                     waits["prerequisites"] = unfinished
@@ -723,6 +724,18 @@ fn conflicted_reason_json(reason: &ConflictedReason) -> Value {
     match reason {
         ConflictedReason::MergeConflict { fixer, before_turn } => json!({
             "kind": "merge_conflict",
+            "fixer": fixer.as_ref().map(ToString::to_string),
+            "before_turn": before_turn,
+        }),
+        ConflictedReason::LaneRefresh {
+            lane,
+            refresh,
+            fixer,
+            before_turn,
+        } => json!({
+            "kind": "lane_refresh",
+            "lane": lane,
+            "refresh": refresh,
             "fixer": fixer.as_ref().map(ToString::to_string),
             "before_turn": before_turn,
         }),

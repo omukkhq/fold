@@ -7,8 +7,9 @@ use fold_core::reviews::ProposalStanding;
 use fold_core::reviews::checks::Stage;
 use fold_core::{HumanName, ProposalId, ReviewBatchId, TaskId, TaskStatus, Timestamp};
 use fold_store::StoreError;
-use fold_store::reviews::checks;
+use fold_store::reviews::{self, checks};
 
+use super::conflicts::{ConflictedReason, conflicted_reason};
 use super::integrate::{AutomaticSkip, AutomaticTurn};
 use super::{ReviewError, ReviewService};
 use crate::services::projects::load_config;
@@ -61,6 +62,8 @@ pub enum WaitReason {
     ChecksFailed,
     /// A lane member behind the front of its lane.
     Lane { lane: String, position: u32 },
+    /// Its lane moved since its version's base and names a `refresh`: the reviewer that redoes the step sends a new version.
+    LaneRefresh { lane: String },
     /// A review batch holds it back to integrate with the other members, or the batch is not ready for its turn.
     Batch { batch: ReviewBatchId },
     /// fold could not run its integration checks on this version and main; a caller's integrate or a move of main tries again.
@@ -86,6 +89,7 @@ impl WaitReason {
             WaitReason::Conflict => "conflict",
             WaitReason::ChecksFailed => "checks_failed",
             WaitReason::Lane { .. } => "lane",
+            WaitReason::LaneRefresh { .. } => "lane_refresh",
             WaitReason::Batch { .. } => "batch",
             WaitReason::FoldFailedChecks => "fold_failed_checks",
             WaitReason::NextVersionRun => "next_version_run",
@@ -303,7 +307,46 @@ impl ReviewService {
                 (proposal, standing)
             })
             .collect();
+        let proposals = self.name_refreshes(proposals).await?;
         Ok(IntegrationQueue { proposals })
+    }
+
+    /// Each proposal of `proposals` that waits for a conflict which is its lane's refresh waits for [`WaitReason::LaneRefresh`] instead.
+    async fn name_refreshes(
+        &self,
+        proposals: Vec<(ProposalId, QueueStanding)>,
+    ) -> Result<Vec<(ProposalId, QueueStanding)>, ReviewError> {
+        if !proposals
+            .iter()
+            .any(|(_, standing)| *standing == QueueStanding::Waits(WaitReason::Conflict))
+        {
+            return Ok(proposals);
+        }
+        let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
+        let mut named = Vec::with_capacity(proposals.len());
+        for (proposal, standing) in proposals {
+            let standing = match standing {
+                QueueStanding::Waits(WaitReason::Conflict) => {
+                    let version = reviews::get_proposal(&mut *read, proposal)
+                        .await?
+                        .map(|row| row.current_version);
+                    let reason = match version {
+                        Some(version) => conflicted_reason(&mut read, proposal, version).await?,
+                        None => None,
+                    };
+                    QueueStanding::Waits(match reason {
+                        Some(ConflictedReason::LaneRefresh { lane, .. }) => {
+                            WaitReason::LaneRefresh { lane }
+                        }
+                        _ => WaitReason::Conflict,
+                    })
+                }
+                other => other,
+            };
+            named.push((proposal, standing));
+        }
+        read.commit().await.map_err(StoreError::from)?;
+        Ok(named)
     }
 }
 

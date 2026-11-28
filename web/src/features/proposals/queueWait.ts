@@ -125,6 +125,12 @@ function waitText(wait: IntegrationWait): QueueWait {
         "Integration checks failed",
         "it waits for a new version",
       );
+    case "lane_refresh":
+      return result(
+        "waiting",
+        `Lane ${wait.lane} asks for a refresh`,
+        "its reviewer redoes it on the new main",
+      );
     case "lane":
       return result(
         "waiting",

@@ -30,7 +30,7 @@ impl ReviewService {
         });
     }
 
-    /// Test-merges the current version of each proposal that takes its own turn in the automatic integration queue onto `main`, the head an integration just published, without the integration mutex and without a write to main, a workspace or the object store. A version that conflicts is recorded as a conflict at integration is, by fold, with `before_turn` true: it leaves the queue and goes to the reviewer that approved it, or the review lead gets the notice. A version that merges cleanly keeps its place. A merge that a later integration makes stale does no harm: the record checks that main is still at `main`, and the version's own turn merges again. Returns the proposals it found in conflict, in queue order; nothing once main moved past `main`.
+    /// Test-merges the current version of each proposal that takes its own turn in the automatic integration queue onto `main`, the head an integration just published, without the integration mutex and without a write to main, a workspace or the object store. A version that conflicts is recorded as a conflict at integration is, by fold, with `before_turn` true: it leaves the queue and goes to the reviewer that approved it, or the review lead gets the notice. A version that merges cleanly keeps its place, unless its lane moved since its base and names a `refresh`: that is recorded the same way, with no conflicting file and the lane's text. A merge that a later integration makes stale does no harm: the record checks that main is still at `main`, and the version's own turn merges again. Returns the proposals it found in conflict, in queue order; nothing once main moved past `main`.
     pub async fn find_queue_conflicts(
         &self,
         main: RevisionId,
@@ -73,9 +73,6 @@ impl ReviewService {
             .workspaces
             .test_merge(target.base_tree, head.tree_hash, target.tree)
             .await?;
-        if conflicts.is_empty() {
-            return Ok(Merged::Clean);
-        }
         let conflict = FoundConflict {
             proposal,
             task: facts.proposal.task,
@@ -91,7 +88,15 @@ impl ReviewService {
             automatic: true,
             before_turn: true,
         };
-        Ok(if self.record_conflict(&Actor::System, conflict).await? {
+        let recorded = if conflicts.is_empty() {
+            match self.record_refresh_if_due(&Actor::System, conflict).await? {
+                Some(recorded) => recorded,
+                None => return Ok(Merged::Clean),
+            }
+        } else {
+            self.record_conflict(&Actor::System, conflict).await?
+        };
+        Ok(if recorded {
             Merged::Conflicted
         } else {
             Merged::Skipped

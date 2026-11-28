@@ -155,6 +155,10 @@ describe("queueWait reasons", () => {
       "Integration checks failed · it waits for a new version",
     ],
     [
+      { reason: "lane_refresh", lane: "migrations" },
+      "Lane migrations asks for a refresh · its reviewer redoes it on the new main",
+    ],
+    [
       { reason: "lane", lane: "migrations", position: 2 },
       "Waits in lane migrations · position 2",
     ],
