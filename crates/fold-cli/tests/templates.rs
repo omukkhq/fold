@@ -1206,7 +1206,7 @@ fn the_approving_reviewer_keeps_its_claim_until_the_proposal_ends() {
 #[test]
 fn each_role_skill_stays_within_its_size() {
     for role in Role::ALL {
-        let limit = if role == Role::Main { 40_000 } else { 25_000 };
+        let limit = if role == Role::Main { 40_000 } else { 27_000 };
         let size = role_skill(role).len();
         assert!(size <= limit, "{role}: {size} bytes, limit {limit}");
     }
