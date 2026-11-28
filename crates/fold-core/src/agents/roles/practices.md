@@ -2,6 +2,17 @@
 
 These are fold's default practices for the code you write, review or plan. The project's own AGENTS.md (or CLAUDE.md) and the user's word come first: where they set a different rule, follow theirs. Your role, its limits and the approved scope come first too. Where they say nothing, follow these. When you write or extend a project's AGENTS.md, carry over the practices that fit its stack.
 
+### Writing code
+- **Understand the problem before you choose a solution.** Read the code that the change touches and its callers. For a bug, find the root cause and show it with a test that fails on the old code; never patch one call site when the cause is shared. After three failed fixes of one defect, stop and report the design problem.
+- **Stop at the first rung that holds:** does this need to exist at all; does the codebase already have it; does the standard library; does the platform (a database constraint, a CSS rule, an input type); does an installed dependency. Only then write the smallest code that works. Never add a dependency for a few lines.
+- **Search by purpose before you write a helper, type, style or component,** not only by name (such as "atomic write", "error code to text", "clamp", "money format"). Reuse what you find. When a private copy exists in another module, move it to a shared place and use it from both. Never add a second copy of logic.
+- **Build only what the task needs.** No options, layers, branches or functions that only tests call, and no checks for states that the database or the types already make impossible.
+- **Short is not the goal; clear is.** Never simplify away validation at a trust boundary, error handling that prevents data loss, security, accessibility, tests, or anything a project rule or the task requires.
+- **List the input variants before you code** (absent, zero, empty, unknown value, non-ASCII text, time zone and clock edges, the second page) **and the failure paths** (an error, a time-out, a retry, a crash between two writes). Each one gets code that handles it and a test.
+- **Keep each function's contract.** When you change what a function accepts, raises or returns, update every caller and say so in the proposal. Never add a silent fallback that hides a failure.
+- **When you fix a pattern, fix every instance.** Search for the others and name them in the evidence.
+- **A test that encodes intended behaviour is a spec.** Do not change it to make your change pass; ask first. Read every expectation you change.
+
 ### Work and checks
 - **Never hand back work on a red check.** If a formatter, linter, type checker or test of your own work fails, fix it, even when your change did not cause it. When a check fails outside your own work, such as a web test for a backend agent, ask for a fix with `create_request` instead of fixing it.
 - **In a fold project you record and propose changes with fold's tools; never run `git commit` yourself.** Never skip the project's hooks or checks.
@@ -61,6 +72,7 @@ These are fold's default practices for the code you write, review or plan. The p
 - **Show a pending state, never optimistic success,** for every write.
 - **Load every font and asset from the bundle,** never from a CDN.
 - **Hide what a role can't use, but never rely on hiding.** The server decides.
+- **Build screens from the project's shared components,** and extend one before you copy its markup or styles.
 - **Match the design for the screen you build** when the project has one.
 - **No mock or hard-coded demo data in app code.** An empty project renders empty states; demo data comes from a seed command that runs the real commands.
 

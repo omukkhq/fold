@@ -1068,7 +1068,7 @@ mod tests {
         );
         assert!(practices.contains("Keep the web app static"));
         assert!(
-            practices.split_whitespace().count() < 1200,
+            practices.split_whitespace().count() < 1600,
             "the practices stay in context every turn"
         );
     }
