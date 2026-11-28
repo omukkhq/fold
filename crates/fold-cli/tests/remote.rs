@@ -213,7 +213,7 @@ fn remote_add_writes_a_named_section_keeps_the_rest_and_configures_the_mirror() 
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         stdout(&output),
-        "remote origin added: fold syncs main with its branch main\n"
+        "remote origin added: fold main → local branch `main` → origin/`main`\n"
     );
     let text = fs::read_to_string(&config_path).unwrap();
     assert!(text.starts_with(&template), "{text}");
@@ -324,14 +324,20 @@ fn push_goes_through_the_daemon_and_needs_git_on_its_path() {
         let _daemon = sandbox.serve(&system_path());
         let output = sandbox.push(&project);
         assert!(output.status.success(), "{output:?}");
-        assert_eq!(stdout(&output), "pushed r1 to origin/main: 1 commit\n");
+        assert_eq!(
+            stdout(&output),
+            "pushed r1, 1 commit: fold main → local branch `main` → origin/`main`\n"
+        );
         let message = git(&remote, &["log", "-1", "--format=%B", "main"]);
         assert_eq!(
             message,
             "Record the changes of the project folder\n\nFold-Revision: r1\n\n"
         );
         let again = sandbox.push(&project);
-        assert_eq!(stdout(&again), "origin/main is up to date: r1 is pushed\n");
+        assert_eq!(
+            stdout(&again),
+            "up to date, r1 is pushed: fold main → local branch `main` → origin/`main`\n"
+        );
         fs::create_dir(sandbox.path("elsewhere")).unwrap();
         let outside = sandbox.push(&sandbox.path("elsewhere"));
         assert!(
@@ -386,20 +392,20 @@ fn remote_add_without_a_branch_takes_the_remote_default_branch_or_main() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         stdout(&output),
-        "remote origin added: fold syncs main with its branch trunk\n"
+        "remote origin added: fold main → local branch `main` → origin/`trunk`\nthe remote branch `trunk` has another name than the local branch `main`; `fld git branch trunk` gives the local branch the same name\n"
     );
     // A new empty repository and a path that does not exist yet have no default branch.
     let empty = sandbox.remote("empty.git");
     let output = sandbox.add_remote(&project, "empty", &empty, None);
     assert_eq!(
         stdout(&output),
-        "remote empty added: fold syncs main with its branch main\n"
+        "remote empty added: fold main → local branch `main` → empty/`main`\n"
     );
     let absent = sandbox.path("absent.git");
     let output = sandbox.add_remote(&project, "absent", &absent, None);
     assert_eq!(
         stdout(&output),
-        "remote absent added: fold syncs main with its branch main\n"
+        "remote absent added: fold main → local branch `main` → absent/`main`\n"
     );
     // Adding a name twice is refused, as Git does, and the first remote stays as it was.
     let config_before = fs::read_to_string(&config_path).unwrap();
@@ -490,12 +496,18 @@ fn push_and_pull_leave_out_the_name_of_the_only_remote_and_need_it_among_several
             .success()
     );
     let pushed = sandbox.sync("push", &project, None);
-    assert_eq!(stdout(&pushed), "pushed r1 to origin/main: 1 commit\n");
+    assert_eq!(
+        stdout(&pushed),
+        "pushed r1, 1 commit: fold main → local branch `main` → origin/`main`\n"
+    );
     let head = git(&origin, &["rev-parse", "--short=7", "main"]);
     let pulled = sandbox.sync("pull", &project, None);
     assert_eq!(
         stdout(&pulled),
-        format!("main is up to date with origin/main: it holds {head}")
+        format!(
+            "fold main is up to date, it holds {}: fold main → local branch `main` → origin/`main`\n",
+            head.trim()
+        )
     );
 
     let backup = sandbox.remote("backup.git");
@@ -519,14 +531,20 @@ fn push_and_pull_leave_out_the_name_of_the_only_remote_and_need_it_among_several
     let pulled = sandbox.sync("pull", &project, Some("backup"));
     assert_eq!(
         stdout(&pulled),
-        "the remote has no branch backup/main; nothing to pull\n"
+        "the remote has no branch backup/`main`; nothing to pull: fold main → local branch `main` → backup/`main`\n"
     );
     let pushed = sandbox.sync("push", &project, Some("backup"));
-    assert_eq!(stdout(&pushed), "pushed r1 to backup/main: 1 commit\n");
+    assert_eq!(
+        stdout(&pushed),
+        "pushed r1, 1 commit: fold main → local branch `main` → backup/`main`\n"
+    );
     let pulled = sandbox.sync("pull", &project, Some("origin"));
     assert_eq!(
         stdout(&pulled),
-        format!("main is up to date with origin/main: it holds {head}")
+        format!(
+            "fold main is up to date, it holds {}: fold main → local branch `main` → origin/`main`\n",
+            head.trim()
+        )
     );
 }
 

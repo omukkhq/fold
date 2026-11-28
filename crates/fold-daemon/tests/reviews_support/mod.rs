@@ -10,6 +10,7 @@ use fold_core::{
 };
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::EventBus;
+use fold_daemon::services::reviews::checks::CheckRunner;
 use fold_daemon::services::reviews::{ReviewError, ReviewService};
 use fold_daemon::services::tasks::{self, CreateTask, TaskError, TaskService};
 use fold_daemon::services::workspaces::{WorkspaceError, WorkspaceLocks, WorkspaceService};
@@ -54,7 +55,9 @@ pub struct Fixture {
     objects: Arc<tokio::sync::RwLock<()>>,
     locks: Arc<WorkspaceLocks>,
     /// The project's integration mutex, shared by every review service of the fixture.
-    pub integration: Arc<tokio::sync::Mutex<()>>,
+    pub integration: Arc<fold_daemon::services::reviews::IntegrationLock>,
+    /// The background work of every review service of the fixture, such as the test-merge of the queue after an integration: a test waits for it with `wait_idle`.
+    pub checks: CheckRunner,
     pub frontend: Agent,
     pub backend: Agent,
     pub review: Agent,
@@ -116,14 +119,16 @@ impl Fixture {
         let objects = Arc::new(tokio::sync::RwLock::new(()));
         let locks = Arc::new(WorkspaceLocks::default());
         let workspaces = workspace_service(&project, &bus, &objects, &locks);
-        let integration = Arc::new(tokio::sync::Mutex::new(()));
+        let integration = Arc::new(fold_daemon::services::reviews::IntegrationLock::default());
+        let checks = CheckRunner::default();
         let reviews = ReviewService::new(
             project.store().clone(),
             bus.clone(),
             clock,
             workspaces.clone(),
             Arc::clone(&integration),
-        );
+        )
+        .with_checks(checks.clone());
         let frontend = register(&agents, "frontend", &[]).await;
         let backend = if reviewers {
             register(&agents, "backend", &["main"]).await
@@ -179,6 +184,7 @@ impl Fixture {
             objects,
             locks,
             integration,
+            checks,
             frontend,
             backend,
             review,
@@ -197,7 +203,7 @@ impl Fixture {
         self.bus = EventBus::new();
         self.objects = Arc::new(tokio::sync::RwLock::new(()));
         self.locks = Arc::new(WorkspaceLocks::default());
-        self.integration = Arc::new(tokio::sync::Mutex::new(()));
+        self.integration = Arc::new(fold_daemon::services::reviews::IntegrationLock::default());
         self.agents = AgentService::new(
             self.project.store().clone(),
             self.bus.clone(),
@@ -235,6 +241,7 @@ impl Fixture {
             workspaces,
             Arc::clone(&self.integration),
         )
+        .with_checks(self.checks.clone())
     }
 
     /// `frontend` takes `T-1`, changes `src/lib.rs`, adds `src/new.rs` and the symlink `docs/readme -> ../README.md`, and opens `P-1`.

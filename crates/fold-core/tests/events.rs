@@ -156,6 +156,7 @@ fn all_equals_the_plans_event_types() {
         "request.escalated",
         "worker.start_queued",
         "worker.queued_start_dropped",
+        "checks.flaky",
     ]);
     assert_eq!(declared, expected);
 }

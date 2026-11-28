@@ -10,7 +10,7 @@ use fold_store::messages;
 use fold_store::tasks::requests;
 
 use super::overview::OverviewFilter;
-use super::{AgentError, AgentService};
+use super::{AgentError, AgentService, TAKEN_OVER};
 use crate::services::tasks::TaskService;
 
 /// The longest context the session-start hook hands to Claude Code, in characters.
@@ -197,7 +197,7 @@ pub fn render(facts: &SessionFacts) -> String {
 }
 
 impl AgentService {
-    /// The session-start hook: stores the session's inbox socket when the hook sent one, then builds [`AgentService::session_context`]. For an agent the project does not know yet the socket only waits in memory, because the adapter registers the agent only when it connects, and that registration takes it.
+    /// The session-start hook: stores the session's inbox socket when the hook sent one, then builds [`AgentService::session_context`]. A process whose main session a newer session took over gets no target and [`TAKEN_OVER`] as its context. For an agent the project does not know yet the socket only waits in memory, because the adapter registers the agent only when it connects, and that registration takes it.
     pub async fn session_start(
         &self,
         project: &str,
@@ -209,6 +209,9 @@ impl AgentService {
             match self.register_push_target(agent, socket, token).await {
                 Ok(()) => {}
                 Err(AgentError::Fold(error)) if error.code() == codes::AGENT_NOT_REGISTERED => {}
+                Err(AgentError::Fold(error)) if error.code() == codes::MAIN_SESSION_TAKEN_OVER => {
+                    return Ok(TAKEN_OVER.to_owned());
+                }
                 Err(error) => return Err(error),
             }
         }

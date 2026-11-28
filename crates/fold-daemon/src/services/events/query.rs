@@ -59,7 +59,11 @@ pub(super) fn parse_filter(
                 invalid("an event type in types is not declared").with_details([
                     ("type", json!(name)),
                     ("nearest", json!(nearest_name(name, declared.clone()))),
-                    ("declared", json!(declared.collect::<Vec<_>>())),
+                    (
+                        "closest",
+                        json!(nearest_names(name, declared, CLOSEST_TYPES)),
+                    ),
+                    ("declared_count", json!(EventType::ALL.len())),
                 ])
             })
         })
@@ -77,6 +81,26 @@ pub(super) fn parse_filter(
         task,
         proposal,
     })
+}
+
+/// How many declared types an `invalid_event_filter` refusal lists in `closest`; the whole list has about 150.
+pub const CLOSEST_TYPES: usize = 5;
+
+/// The `count` candidates with the fewest single-character edits from `name`, closest first, in candidate order on a tie.
+pub fn nearest_names<'a>(
+    name: &str,
+    candidates: impl Iterator<Item = &'a str>,
+    count: usize,
+) -> Vec<&'a str> {
+    let mut ranked: Vec<(usize, &'a str)> = candidates
+        .map(|candidate| (edit_distance(name, candidate), candidate))
+        .collect();
+    ranked.sort_by_key(|(distance, _)| *distance);
+    ranked
+        .into_iter()
+        .take(count)
+        .map(|(_, candidate)| candidate)
+        .collect()
 }
 
 /// The candidate with the fewest single-character edits from `name`, the first one in candidate order on a tie; `None` only without candidates.
@@ -249,13 +273,17 @@ impl EventService {
         read_since_cursor(&self.store, worker, query).await
     }
 
-    /// How many events after the worker's cursor concern its agent by the rule of `fold_core::concerns`, counted up to one more than [`NEW_EVENTS_CAP`]. It only reads, in one read transaction, so building a footer never moves the cursor and never loads the events it counts.
+    /// How many events after the worker's cursor concern its agent by the rule of `fold_core::concerns`, counted up to one more than [`NEW_EVENTS_CAP`]. A task worker or a reviewer counts none: fold pushes it what its work needs, and it never acted on the count. It only reads, in one read transaction, so building a footer never moves the cursor and never loads the events it counts.
     pub async fn new_event_count(
         &self,
         worker: &WorkerRow,
         agent: &AgentName,
     ) -> Result<u64, EventsError> {
         let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
+        let standing = fold_store::agents::standing(&mut *tx, agent).await?;
+        if standing.role.is_some_and(|role| !role.is_long_lived()) {
+            return Ok(0);
+        }
         let after = events::cursor(&mut *tx, worker.id).await?;
         let facts = events::agent_facts(&mut tx, worker.agent_id, agent).await?;
         let mut tasks = facts.claimed.clone();
@@ -281,7 +309,7 @@ impl EventService {
 mod tests {
     use fold_core::EventType;
 
-    use super::{edit_distance, nearest_name};
+    use super::{edit_distance, nearest_name, nearest_names};
 
     fn declared() -> impl Iterator<Item = &'static str> {
         EventType::ALL.iter().map(|declared| declared.as_str())
@@ -313,5 +341,15 @@ mod tests {
         );
         assert_eq!(nearest_name("b", ["a", "c"].into_iter()), Some("a"));
         assert_eq!(nearest_name("x", std::iter::empty()), None);
+    }
+
+    #[test]
+    fn the_nearest_names_are_the_closest_first_and_in_candidate_order_on_a_tie() {
+        let names = ["abcd", "abd", "abc", "zzzz", "ab"].into_iter();
+        assert_eq!(nearest_names("abc", names, 3), vec!["abc", "abcd", "abd"]);
+        assert_eq!(nearest_names("x", ["a"].into_iter(), 5), vec!["a"]);
+        let closest = nearest_names("proposal.created", declared(), 5);
+        assert_eq!(closest.len(), 5);
+        assert_eq!(closest[0], "proposal.opened");
     }
 }

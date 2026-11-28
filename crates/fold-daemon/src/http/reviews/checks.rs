@@ -1,22 +1,29 @@
 use axum::Json;
 use axum::extract::{Path, State};
-use fold_core::CheckRunId;
 use fold_core::reviews::checks::{Outcome, RunReason, RunState, Stage};
-use serde::Serialize;
-use utoipa::ToSchema;
+use fold_core::{CheckRunId, TaskId};
+use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::super::Project;
-use super::super::error::{ApiError, ErrorEnvelope};
+use super::super::actor::Human;
+use super::super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use super::super::tasks::id;
 use super::service;
 use crate::daemon::AppState;
 pub use crate::live::CheckPurpose;
-use crate::services::reviews::checks::{CheckRunView, VersionRun};
+use crate::services::reviews::checks::{
+    CancelTarget, CheckRunView, FLAKY_DAYS_DEFAULT, VersionRun,
+};
+use fold_store::reviews::checks::FlakyCheck as FlakyCheckRow;
 
 pub fn routes() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(get_check_run))
+    OpenApiRouter::new()
+        .routes(routes!(get_check_run))
+        .routes(routes!(cancel_check_runs))
+        .routes(routes!(list_flaky_checks))
 }
 
 /// When a check runs.
@@ -93,8 +100,12 @@ pub enum CheckRunReason {
     Superseded,
     /// fold itself could not run the checks; the integration can be asked again once the fault is fixed.
     FoldFailed,
-    /// A SIGKILL that fold did not send ended a required command, such as the kernel's OOM killer.
+    /// A signal that fold did not send ended a command, such as the kernel's OOM killer; no later command of the run started.
     Killed,
+    /// A command waited longer than `[runs] build_slot_wait` for a slot of the machine's build gate; no later command of the run started, and the code was not at fault.
+    NoBuildSlot,
+    /// A worker, a lead, the main agent or a human cancelled the run; `checks.finished` names who.
+    Cancelled,
 }
 
 impl From<RunReason> for CheckRunReason {
@@ -110,6 +121,8 @@ impl From<RunReason> for CheckRunReason {
             RunReason::Superseded => Self::Superseded,
             RunReason::FoldFailed => Self::FoldFailed,
             RunReason::Killed => Self::Killed,
+            RunReason::NoBuildSlot => Self::NoBuildSlot,
+            RunReason::Cancelled => Self::Cancelled,
         }
     }
 }
@@ -157,6 +170,8 @@ pub struct CheckResult {
     pub log: String,
     /// The stored log is the end of a longer output.
     pub truncated: bool,
+    /// The command failed, and a later run of the same check on the same tree passed: the failure is flaky, not the change's.
+    pub flaky: bool,
 }
 
 /// One run of a project's checks by fold.
@@ -189,6 +204,12 @@ pub struct CheckRun {
     /// UTC milliseconds since the running run holds its permit and waits for free memory before its commands start. Absent while it does not wait.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waiting_for_memory_since: Option<i64>,
+    /// UTC milliseconds since a command of the running run waits for a slot of the machine's build gate; its timeout starts once it has one. Absent while it does not wait.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_for_build_slot_since: Option<i64>,
+    /// The public name of the actor that cancelled the run, such as `human:ana` or `daemon-lead`, for a run that ended with reason `cancelled`; null otherwise.
+    #[schema(example = "human:ana")]
+    pub cancelled_by: Option<String>,
 }
 
 impl From<CheckRunView> for CheckRun {
@@ -198,7 +219,7 @@ impl From<CheckRunView> for CheckRun {
             id: run.id.to_string(),
             stage: run.stage.into(),
             purpose: run.purpose.into(),
-            task: run.task.to_string(),
+            task: run.task.map(|task| task.to_string()).unwrap_or_default(),
             version: run.version,
             base: run.base.to_string(),
             state: run.state.into(),
@@ -207,10 +228,15 @@ impl From<CheckRunView> for CheckRun {
             finished_at: run.finished_at.map(|at| at.as_millis()),
             batch: run.batch.map(|batch| batch.to_string()),
             waiting_for_memory_since: view.waiting_for_memory.map(|since| since.as_millis()),
+            waiting_for_build_slot_since: view
+                .waiting_for_build_slot
+                .map(|since| since.as_millis()),
+            cancelled_by: view.cancelled_by,
             results: view
                 .results
                 .into_iter()
                 .map(|result| CheckResult {
+                    flaky: view.flaky.contains(&result.position),
                     setup: result.check.is_none(),
                     name: result.check.unwrap_or_else(|| "setup".to_owned()),
                     required: result.required,
@@ -251,4 +277,143 @@ pub async fn get_check_run(
     let run: CheckRunId = id(&run)?;
     let view = service(&state, &project).get_check_run(run, true).await?;
     Ok(Json(view.into()))
+}
+
+/// The running check runs to cancel: give exactly one of `run`, `task` and `all`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CancelCheckRunsBody {
+    /// One running run, such as cr-4.
+    #[serde(default)]
+    #[schema(example = "cr-4")]
+    pub run: Option<String>,
+    /// A task, such as T-12: every running run of its task workspace and review checkouts.
+    #[serde(default)]
+    #[schema(example = "T-12")]
+    pub task: Option<String>,
+    /// True for every running run of the project.
+    #[serde(default)]
+    pub all: bool,
+}
+
+/// The runs a cancel ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct CancelledCheckRuns {
+    /// Each run that ended as failed with reason `cancelled`, oldest first; empty when the task or the project had no running run.
+    #[schema(example = json!(["cr-4"]))]
+    pub cancelled: Vec<String>,
+}
+
+/// Cancels running check runs: the running command's process group ends, no later command starts, and each run ends as failed with reason `cancelled`. Integration runs are not cancelled: a run id of one is `invalid_request` with `details.reason` `integration_run`, and `task` and `all` leave them out.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/check-runs/cancel",
+    operation_id = "cancel_check_runs",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+    ),
+    request_body = CancelCheckRunsBody,
+    responses(
+        (status = 200, description = "The cancelled runs", body = CancelledCheckRuns),
+        (status = 400, description = "`invalid_request`: not exactly one of `run`, `task` and `all`, or `details.reason` `integration_run`; or `invalid_id`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`check_run_not_found`, `task_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`check_run_ended`: the run ended before the cancel", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn cancel_check_runs(
+    State(state): State<AppState>,
+    human: Human,
+    project: Project,
+    ApiJson(body): ApiJson<CancelCheckRunsBody>,
+) -> Result<Json<CancelledCheckRuns>, ApiError> {
+    let target = match (body.run.as_deref(), body.task.as_deref(), body.all) {
+        (Some(run), None, false) => CancelTarget::Run(id::<CheckRunId>(run)?),
+        (None, Some(task), false) => CancelTarget::Task(id::<TaskId>(task)?),
+        (None, None, true) => CancelTarget::All,
+        _ => {
+            return Err(ApiError::invalid_request(
+                "give exactly one of run, task and all",
+            ));
+        }
+    };
+    let cancelled = service(&state, &project)
+        .cancel_check_runs(&human.actor(), target)
+        .await?;
+    Ok(Json(CancelledCheckRuns {
+        cancelled: cancelled.iter().map(ToString::to_string).collect(),
+    }))
+}
+
+/// The window of the flaky checks.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct FlakyChecksQuery {
+    /// The number of days back from now, 1 to 365; 14 when left out.
+    #[serde(default)]
+    pub days: Option<u32>,
+}
+
+/// One check whose failures a later pass of the same check on the same tree made flaky.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct FlakyCheck {
+    /// The check's name in fold-checks.toml.
+    #[schema(example = "test")]
+    pub check: String,
+    /// The number of its flaky failures in the window.
+    pub count: u32,
+    /// The runs of those failures, oldest first.
+    #[schema(example = json!(["cr-4", "cr-9"]))]
+    pub runs: Vec<String>,
+}
+
+/// The flaky checks of a window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct FlakyChecks {
+    /// The window in days.
+    pub days: u32,
+    /// The most flaky failures first, then by name; empty when no check failed flakily.
+    pub checks: Vec<FlakyCheck>,
+}
+
+impl From<FlakyCheckRow> for FlakyCheck {
+    fn from(row: FlakyCheckRow) -> Self {
+        Self {
+            check: row.check,
+            count: row.count,
+            runs: row.runs.iter().map(ToString::to_string).collect(),
+        }
+    }
+}
+
+/// The checks of the project that failed and later passed on the same tree, by the number of such flaky failures in the runs of the last `days` days.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/checks/flaky",
+    operation_id = "list_flaky_checks",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        FlakyChecksQuery,
+    ),
+    responses(
+        (status = 200, description = "The flaky checks", body = FlakyChecks),
+        (status = 400, description = "`invalid_request`: days is not 1 to 365", body = ErrorEnvelope),
+        (status = 404, description = "`project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn list_flaky_checks(
+    State(state): State<AppState>,
+    project: Project,
+    ApiQuery(query): ApiQuery<FlakyChecksQuery>,
+) -> Result<Json<FlakyChecks>, ApiError> {
+    let days = query.days.unwrap_or(FLAKY_DAYS_DEFAULT);
+    let checks = service(&state, &project).flaky_checks(days).await?;
+    Ok(Json(FlakyChecks {
+        days,
+        checks: checks.into_iter().map(FlakyCheck::from).collect(),
+    }))
 }

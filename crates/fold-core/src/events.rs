@@ -185,7 +185,39 @@ define_event_types! {
     REQUEST_ESCALATED = "request.escalated",
     WORKER_START_QUEUED = "worker.start_queued",
     WORKER_QUEUED_START_DROPPED = "worker.queued_start_dropped",
+    CHECKS_FLAKY = "checks.flaky",
 }
+
+/// Types that record what the machinery does, not what the work needs: sessions, workers, claims, checkpoints, workspace upkeep and acknowledgements. They never concern an agent, even on one of its tasks.
+pub const LIFECYCLE: &[&str] = &[
+    "session.started",
+    "session.ended",
+    "session.bind_refused",
+    "agent.registered",
+    "worker.registered",
+    "worker.started",
+    "worker.stopped",
+    "worker.failed",
+    "worker.refreshed",
+    "worker.resumed",
+    "worker.parked",
+    "worker.stalled",
+    "claim.acquired",
+    "claim.renewed",
+    "checkpoint.recorded",
+    "checkpoint.restored",
+    "checkpoint.pruned",
+    "workspace.created",
+    "workspace.adopted",
+    "workspace.synced",
+    "workspace.archived",
+    "workspace.watch_degraded",
+    "workspace.watch_restored",
+    "checks.started",
+    "changeset.recorded",
+    "message.acknowledged",
+    "git.committed",
+];
 
 impl EventType {
     pub fn parse(name: &str) -> Result<EventType, EventError> {
@@ -198,6 +230,10 @@ impl EventType {
 
     pub fn as_str(self) -> &'static str {
         self.0
+    }
+
+    pub fn is_lifecycle(self) -> bool {
+        LIFECYCLE.contains(&self.0)
     }
 
     /// `workspace.changed`, `agent.presence_changed`, `worker.output` and `message.pushed` are the live types: they are sent on the bus and never stored.
@@ -496,9 +532,9 @@ impl AgentEventFacts {
     }
 }
 
-/// An event concerns an agent when it touches a task the agent works on or needs, a proposal it wrote or reviews, or moves main. What the agent's own workers did is never news to it.
+/// An event concerns an agent when it touches a task the agent works on or needs, a proposal it wrote or reviews, or moves main. What the agent's own workers did is never news to it, and a lifecycle type never is.
 pub fn concerns(event: &Event, facts: &AgentEventFacts) -> bool {
-    if event.actor.agent() == Some(facts.agent.as_str()) {
+    if event.event_type.is_lifecycle() || event.actor.agent() == Some(facts.agent.as_str()) {
         return false;
     }
     event.event_type == types::MAIN_ADVANCED
@@ -614,6 +650,41 @@ mod tests {
         assert!(!concerns(&on_task(9, "backend"), &facts()));
         assert!(!concerns(&on_proposal(9, "backend"), &facts()));
         assert!(!concerns(&event(types::TASK_CREATED, "backend"), &facts()));
+    }
+
+    #[test]
+    fn a_lifecycle_event_never_concerns_the_agent() {
+        for name in LIFECYCLE {
+            let event_type = EventType::parse(name).unwrap();
+            assert!(event_type.is_lifecycle(), "{name}");
+            let on_task = Event {
+                task: Some(task(1)),
+                proposal: Some(proposal(3)),
+                ..event(event_type, "backend")
+            };
+            assert!(!concerns(&on_task, &facts()), "{name}");
+        }
+        assert!(!types::TASK_UPDATED.is_lifecycle());
+        assert!(!types::MAIN_ADVANCED.is_lifecycle());
+        assert!(!types::CLAIM_RELEASED.is_lifecycle());
+    }
+
+    #[test]
+    fn the_lifecycle_list_holds_every_session_and_checkpoint_type() {
+        for event_type in EventType::ALL {
+            let name = event_type.as_str();
+            if name.starts_with("session.") || name.starts_with("checkpoint.") {
+                assert!(
+                    event_type.is_lifecycle(),
+                    "{name} is missing from LIFECYCLE"
+                );
+            }
+        }
+        let mut seen = BTreeSet::new();
+        for name in LIFECYCLE {
+            assert!(EventType::parse(name).is_ok(), "{name} is not declared");
+            assert!(seen.insert(*name), "{name} is listed twice");
+        }
     }
 
     #[test]

@@ -30,6 +30,8 @@ mod compare;
 mod direct;
 mod exclude;
 mod files;
+mod handles;
+pub(crate) use handles::is_out_of_handles_error;
 mod human_change;
 mod human_edit;
 mod integration;
@@ -47,7 +49,7 @@ pub(crate) use adoption::{adopt_if_orphaned, hand_over_proposal};
 pub use attachments::WorkspaceFile;
 pub use auto::{AutoCheckpoint, QuietCheckpoint};
 pub(crate) use auto::{auto_checkpoint_in_tx, pruned_event};
-pub use changes::{WorkspaceChanges, WorkspaceEntry};
+pub use changes::{ChangesView, CheckoutChanges, WorkspaceChanges, WorkspaceEntry};
 pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
@@ -69,8 +71,8 @@ pub use lifecycle::{
 pub use reconcile::{Reconciled, Reconciliation};
 pub(crate) use repository::file_path;
 pub use repository::{
-    DEFAULT_REVISION_PAGE, RECENT_REVISIONS, RepositoryState, RevisionDetail, RevisionOrigin,
-    RevisionPage, RevisionSummary,
+    DEFAULT_REVISION_PAGE, RECENT_REVISIONS, RepositoryGit, RepositoryRemote, RepositoryState,
+    RevisionDetail, RevisionOrigin, RevisionPage, RevisionSummary,
 };
 pub(crate) use review_fix::ReviewFixTree;
 pub use shared::{LISTED_UNSEEN, SharedFileKind, SharedFileState, SharedState};
@@ -199,6 +201,11 @@ impl WorkspaceService {
         &self.lease
     }
 
+    /// The project's folders, whose `config.toml` the review services read too.
+    pub(crate) fn paths(&self) -> &ProjectPaths {
+        &self.paths
+    }
+
     /// Shares one capabilities probe with every other service of the project.
     #[must_use]
     pub fn with_capabilities(mut self, caps: Arc<OnceLock<Capabilities>>) -> Self {
@@ -251,7 +258,7 @@ impl WorkspaceService {
         }
     }
 
-    /// Gives the live state of `workspace` its open proposal, the tree of the proposal's newest version to compare the working files against, and its checkpoints after the commit of a proposal command.
+    /// Gives the live state of `workspace` its open proposal, the version trees to compare the working files against (see [`crate::live::compared_trees`]), and its checkpoints after the commit of a proposal command.
     pub(crate) async fn proposal_changed(
         &self,
         workspace: WorkspaceId,
@@ -260,18 +267,23 @@ impl WorkspaceService {
         let Some(live) = &self.live else {
             return;
         };
-        let tree = match proposal {
+        let trees = match proposal {
             Some(proposal) => match reviews::list_versions(self.store.read(), proposal).await {
-                Ok(mut versions) => versions.pop().map(|version| version.tree),
+                Ok(versions) => crate::live::compared_trees(versions),
                 Err(error) => {
                     tracing::warn!(workspace = %workspace, code = error.log_code(), "the version tree was not read");
-                    None
+                    Vec::new()
                 }
             },
-            None => None,
+            None => Vec::new(),
         };
-        live.set_proposal(workspace, proposal, tree).await;
+        live.set_proposal(workspace, proposal, trees).await;
         live.reload_checkpoints(workspace).await;
+    }
+
+    /// A watch on the edits of the tracked files of `workspace`; `None` for a service without live state.
+    pub(crate) fn watch_edits(&self, workspace: WorkspaceId) -> Option<crate::live::EditWatch> {
+        self.live.as_ref().map(|live| live.watch_edits(workspace))
     }
 
     /// After the commit that started or ended a check run: decides the running checks and the stalled flags of the live workspaces at once instead of on the stall job's next tick. A failed decision leaves them to that tick.

@@ -10,7 +10,7 @@ use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{
     Actor, AgentActor, EventFilter, RevisionId, TaskDescription, TaskTitle, WorkerName,
 };
-use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
+use fold_daemon::mcp::{FoldServer, FooterCounts, FooterPart, FooterSource};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBus, EventService};
 use fold_daemon::services::messages::MessageService;
@@ -50,15 +50,11 @@ type Client = RunningService<RoleClient, ()>;
 struct OneUnread;
 
 impl FooterSource for OneUnread {
-    fn part(&self) -> FooterPart {
-        FooterPart::Unread
-    }
-
     fn count<'a>(
         &'a self,
         _session: &'a SessionContext,
-    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
-        Box::pin(async { 1 })
+    ) -> Pin<Box<dyn Future<Output = FooterCounts> + Send + 'a>> {
+        Box::pin(async move { FooterCounts::default().with(FooterPart::Unread, 1) })
     }
 }
 
@@ -263,7 +259,7 @@ async fn an_agent_works_in_its_workspace_from_create_to_abandon() {
     let created = call(&frontend, "create_workspace", json!({"task": "T-1"})).await;
     assert_eq!(
         created,
-        json!({"workspace": "ws-1", "path": ".fold/ws/t-1", "base": "r1", "task": "T-1", "adopted": false})
+        json!({"workspace": "ws-1", "path": ".fold/ws/t-1", "base": "r1", "task": "T-1", "adopted": false, "setup": "none"})
     );
     let lib = fx.file(".fold/ws/t-1", "src/lib.rs");
     assert_eq!(fs::read(&lib).unwrap(), BASE);
@@ -596,7 +592,7 @@ async fn a_stale_claim_and_a_released_workspace_move_to_the_next_agent() {
     call(&frontend, "release_task", json!({"id": "T-2"})).await;
     assert_eq!(
         call(&backend, "create_workspace", json!({"task": "T-2"})).await,
-        json!({"workspace": "ws-2", "path": ".fold/ws/t-2", "base": "r1", "task": "T-2", "adopted": true})
+        json!({"workspace": "ws-2", "path": ".fold/ws/t-2", "base": "r1", "task": "T-2", "adopted": true, "setup": "none"})
     );
     assert!(
         fx.event_types()

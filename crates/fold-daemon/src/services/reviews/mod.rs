@@ -20,6 +20,7 @@ pub mod checks;
 mod claims;
 mod comments;
 mod conflicts;
+mod early_conflicts;
 mod human_edits;
 mod human_review;
 mod integrate;
@@ -28,8 +29,10 @@ mod notify;
 mod plans;
 mod proposals;
 mod questions;
+mod queue;
 mod review_fixes;
 mod scopes;
+mod turns;
 mod verdicts;
 mod views;
 
@@ -65,13 +68,19 @@ pub use plans::{
     ReviewPlanView, proposal_plan, proposal_plans, related_plan_tasks,
 };
 pub(crate) use plans::{mark_plan_started, refuse_planned, settle_plans, take_plan_for_start};
+pub(crate) use proposals::is_human_edit;
 pub(crate) use proposals::proposal_missing;
 pub use proposals::{
     DEFAULT_PROPOSAL_LIST, MAX_PROPOSAL_LIST, ProposalDetail, ProposalFilter, ProposalListing,
     ProposalSummary, Proposed, Retirement, Turn, VersionView, retire_proposal,
 };
+pub use queue::{
+    ESTIMATE_RUNS, IntegrationQueue, QueueItem, QueuePlace, QueueStanding, QueuedBoard, WaitReason,
+    estimate_starts, places,
+};
 pub use review_fixes::{FixOutcome, FixedVersion, MAX_CHECKS_CHARS, MAX_FIXES, ReviewFix};
 pub use scopes::{SuggestedScope, scope_suggestion};
+pub use turns::{IntegrationLock, IntegrationTurn, TurnKind, may_take_turn};
 pub use verdicts::SubmittedReview;
 pub use views::{
     CommentCounts, ProposalView, ReviewView, TaskRequirements, direct_conflicted,
@@ -150,7 +159,7 @@ pub struct ReviewService {
     clock: Arc<dyn Clock>,
     workspaces: WorkspaceService,
     registry: Option<Store>,
-    integration: Arc<tokio::sync::Mutex<()>>,
+    integration: Arc<IntegrationLock>,
     /// The project's background check runs and the machine-wide permits they take.
     checks: CheckRunner,
 }
@@ -172,7 +181,7 @@ impl ReviewService {
         bus: EventBus,
         clock: Arc<dyn Clock>,
         workspaces: WorkspaceService,
-        integration: Arc<tokio::sync::Mutex<()>>,
+        integration: Arc<IntegrationLock>,
     ) -> Self {
         Self {
             store,

@@ -21,13 +21,13 @@ use fold_core::Timestamp;
 
 use super::error::{from_agent, from_review};
 use super::parse;
-use super::{FoldServer, FooterPart, FooterSource};
+use super::{FoldServer, FooterCounts, FooterPart, FooterSource};
 use crate::services::agents::{
     AgentOverview, ClaimSummary, OverviewFilter, PauseState, ProposalSummary, QueueEntry,
     QueuedWorkerStart, RestartOutcome, StartOutcome, StartWorker, StartedWorker, WorkerOverview,
     WorkspaceSummary,
 };
-use crate::services::agents::{AgentService, NeedsYouItem, SessionContext};
+use crate::services::agents::{AgentService, NeedsYouGroup, NeedsYouItem, SessionContext};
 
 pub const GET_ACTIVITY: &str = "get_activity";
 pub const LIST_AGENTS: &str = "list_agents";
@@ -63,6 +63,9 @@ pub struct DefineAreaInput {
     /// The MCP servers the area's lead and task workers load, by name: fold and servers of the project's .mcp.json, such as ["fold", "pencil"]. Leave it out for the role's servers.
     #[serde(default)]
     pub mcp: Option<Vec<String>>,
+    /// Shell commands the area's lead, task workers and the reviewers of its proposals may never run, as Claude Code Bash rules such as ["Bash(psql:*)", "Bash(docker exec:*)"]. fold writes them as permissions.deny after the project's deny_commands of .fold/config.toml. A rule that denies cd, fld or every command is refused (invalid_permission_rule). Leave it out for none.
+    #[serde(default)]
+    pub deny_commands: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -79,6 +82,9 @@ pub struct UpdateAreaInput {
     /// The new MCP server list of the area's lead and task workers, such as ["fold", "pencil"]. Leave it out to keep it.
     #[serde(default)]
     pub mcp: Option<Vec<String>>,
+    /// The new list of Bash rules the area's workers and the reviewers of its proposals may never run, such as ["Bash(psql:*)"]; it replaces the old list. Leave it out to keep it.
+    #[serde(default)]
+    pub deny_commands: Option<Vec<String>>,
     /// True removes the area's instructions. Do not combine it with instructions.
     #[serde(default)]
     pub clear_instructions: bool,
@@ -88,6 +94,9 @@ pub struct UpdateAreaInput {
     /// True removes the area's MCP server list, so its workers get the role's servers again. Do not combine it with mcp.
     #[serde(default)]
     pub clear_mcp: bool,
+    /// True removes the area's denied commands, so its workers get only the project's. Do not combine it with deny_commands.
+    #[serde(default)]
+    pub clear_deny_commands: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -156,6 +165,9 @@ pub struct ListWorkersInput {
     /// True gives each area's instructions. Leave it out to give only instructions_chars, their length.
     #[serde(default)]
     pub include_instructions: bool,
+    /// True gives the start of each worker's newest hand-off note in handoff.text. Leave it out to give only the note's session, created_at and chars, its length.
+    #[serde(default)]
+    pub include_handoffs: bool,
     /// Only this area and its workers, such as web, with stopped_count counting its stopped workers. Leave it out for every area.
     #[serde(default)]
     pub area: Option<String>,
@@ -231,7 +243,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_WORKERS,
-            "List the areas with their leads, models and MCP servers, and the workers that run or failed, each with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human. A worker whose last turn ended because Claude Code could not reach the model or reached a usage limit, or whose login the API refused, has waits_for, network, usage_limit or login: fold runs that turn again in its session once the cause has passed (for login, once a person gives the account a working token or switches the account), so do not restart or replace it. stopped_count counts the stopped workers; pass include_stopped true to list them, such as to read a finished worker's sessions, and include_instructions true for each area's instructions. queue lists the worker starts that wait for a place, in the order fold runs them. A reviewer that fixes a member of a serial lane on main, after a conflict or failed integration checks once the lane moved, has lane_fix: each proposal with its lane name, position and held reason.",
+            "List the areas with their leads, models and MCP servers, and the workers that run or failed, each with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note (its session, time and length; pass include_handoffs true for the start of its text) and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human. A worker whose last turn ended because Claude Code could not reach the model or reached a usage limit, or whose login the API refused, has waits_for, network, usage_limit or login: fold runs that turn again in its session once the cause has passed (for login, once a person gives the account a working token or switches the account), so do not restart or replace it. stopped_count counts the stopped workers; pass include_stopped true to list them, such as to read a finished worker's sessions, and include_instructions true for each area's instructions. queue lists the worker starts that wait for a place, in the order fold runs them. A reviewer that fixes a member of a serial lane on main, after a conflict or failed integration checks once the lane moved, has lane_fix: each proposal with its lane name, position and held reason.",
             schema_for_type::<ListWorkersInput>(),
         ),
         Tool::new(
@@ -275,6 +287,7 @@ fn area_json(area: &AreaRow) -> Value {
         "instructions": area.profile.instructions,
         "model": area.profile.model,
         "mcp": area.profile.mcp,
+        "deny_commands": area.profile.deny_commands,
     })
 }
 
@@ -332,7 +345,12 @@ pub async fn define_area(server: &FoldServer, arguments: &JsonObject) -> Result<
     let input: DefineAreaInput = parse(arguments)?;
     let name = AreaName::parse(&input.name)?;
     let label = LabelName::parse(&input.label)?;
-    let profile = AreaProfile::from_request(input.instructions, input.model, input.mcp)?;
+    let profile = AreaProfile::from_request(
+        input.instructions,
+        input.model,
+        input.mcp,
+        input.deny_commands,
+    )?;
     let actor = server.actor().await?;
     let area = server
         .agents
@@ -349,9 +367,11 @@ pub async fn update_area(server: &FoldServer, arguments: &JsonObject) -> Result<
         instructions: input.instructions,
         model: input.model,
         mcp: input.mcp,
+        deny_commands: input.deny_commands,
         clear_instructions: input.clear_instructions,
         clear_model: input.clear_model,
         clear_mcp: input.clear_mcp,
+        clear_deny_commands: input.clear_deny_commands,
     })?;
     let actor = server.actor().await?;
     let area = server
@@ -361,7 +381,7 @@ pub async fn update_area(server: &FoldServer, arguments: &JsonObject) -> Result<
         .map_err(from_agent)?;
     Ok(json!({
         "area": area_json(&area),
-        "next": "the next start of the area's lead or task workers gets this profile; running workers keep theirs",
+        "next": "the next start or resume of the area's lead, task workers or the reviewers of its proposals gets this profile; running workers keep theirs",
     }))
 }
 
@@ -587,9 +607,9 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
         value["cache_ttl"] = config.as_ref().map_or(Value::Null, |config| {
             json!(config.role(worker.role).cache_ttl.as_str())
         });
-        value["handoff"] = notes
-            .remove(&worker.agent)
-            .map_or(Value::Null, |note| handoff_json(&note));
+        value["handoff"] = notes.remove(&worker.agent).map_or(Value::Null, |note| {
+            handoff_json(&note, input.include_handoffs)
+        });
         if let Some(sessions) = previous.remove(&worker.agent) {
             add_previous_sessions(&mut value, &sessions);
         }
@@ -650,13 +670,16 @@ fn add_previous_sessions(value: &mut Value, sessions: &[PreviousSessionRow]) {
 /// How much of a hand-off note `list_workers` shows. The whole note goes to the lead's next session; the list only lets the main agent see what each lead was doing.
 const HANDOFF_PREVIEW_CHARS: usize = 300;
 
-fn handoff_json(note: &HandoffRow) -> Value {
-    json!({
+fn handoff_json(note: &HandoffRow, with_text: bool) -> Value {
+    let mut value = json!({
         "session": note.session_id,
         "created_at": note.created_at,
-        "text": shorten(&note.body, HANDOFF_PREVIEW_CHARS),
         "chars": note.body.chars().count(),
-    })
+    });
+    if with_text {
+        value["text"] = json!(shorten(&note.body, HANDOFF_PREVIEW_CHARS));
+    }
+    value
 }
 
 fn claim_json(claim: &ClaimSummary) -> Value {
@@ -773,12 +796,16 @@ mod tests {
             body: "é".repeat(HANDOFF_PREVIEW_CHARS + 50),
             created_at: Timestamp::from_millis(5).unwrap(),
         };
-        let shown = handoff_json(&note);
+        let shown = handoff_json(&note, true);
         let text = shown["text"].as_str().unwrap();
         assert_eq!(text.chars().count(), HANDOFF_PREVIEW_CHARS);
         assert!(text.ends_with('…'));
         assert_eq!(shown["chars"], HANDOFF_PREVIEW_CHARS + 50);
         assert_eq!(shown["session"], "s1");
+        let short = handoff_json(&note, false);
+        assert!(short.get("text").is_none(), "{short}");
+        assert_eq!(short["chars"], HANDOFF_PREVIEW_CHARS + 50);
+        assert_eq!(short["session"], "s1");
     }
 }
 
@@ -874,7 +901,7 @@ fn age(since: Timestamp, now: Timestamp) -> String {
     }
 }
 
-/// The `wait for the user` part of the main agent's footer: how many items of [`get_needs_you`] wait. Every other agent counts none, without reading the list.
+/// The parts of the main agent's footer that count the items of [`get_needs_you`] from one read of the list: `questions for the user`, `wait for the user` for the other items and `held` for the holds. Every other agent counts none, without reading the list.
 pub struct NeedsYouFooter {
     agents: AgentService,
     project: std::sync::Weak<crate::projects::ProjectHandle>,
@@ -894,43 +921,54 @@ impl NeedsYouFooter {
         }
     }
 
-    async fn waiting(&self, session: &SessionContext) -> Result<u64, FoldError> {
+    async fn waiting(&self, session: &SessionContext) -> Result<FooterCounts, FoldError> {
         let Some(project) = self.project.upgrade() else {
-            return Ok(0);
+            return Ok(FooterCounts::default());
         };
         let actor = self.agents.actor(session).await.map_err(from_agent)?;
         let standing = fold_store::agents::standing_of(project.store.read(), &actor)
             .await
             .map_err(crate::services::error::from_store)?;
         if !standing.is_main_agent() {
-            return Ok(0);
+            return Ok(FooterCounts::default());
         }
         let items = project.needs_you_for(&actor, self.notify.as_ref()).await?;
-        Ok(u64::try_from(items.len()).unwrap_or(u64::MAX))
+        Ok(needs_you_counts(&items))
     }
 }
 
-impl FooterSource for NeedsYouFooter {
-    fn part(&self) -> FooterPart {
-        FooterPart::WaitForUser
-    }
+/// The footer counts of the main agent's items, one part for each [`NeedsYouGroup`].
+fn needs_you_counts(items: &[NeedsYouItem]) -> FooterCounts {
+    let count = |group: NeedsYouGroup| {
+        let n = items
+            .iter()
+            .filter(|item| item.kind.group() == group)
+            .count();
+        u64::try_from(n).unwrap_or(u64::MAX)
+    };
+    FooterCounts::default()
+        .with(FooterPart::QuestionsForUser, count(NeedsYouGroup::Question))
+        .with(FooterPart::WaitForUser, count(NeedsYouGroup::Waiting))
+        .with(FooterPart::Held, count(NeedsYouGroup::Held))
+}
 
+impl FooterSource for NeedsYouFooter {
     fn count<'a>(
         &'a self,
         session: &'a SessionContext,
-    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = FooterCounts> + Send + 'a>> {
         Box::pin(async move {
             if session.agent.is_none() {
-                return 0;
+                return FooterCounts::default();
             }
             match self.waiting(session).await {
-                Ok(count) => count,
+                Ok(counts) => counts,
                 Err(error) => {
                     tracing::warn!(
                         code = error.code(),
                         "could not count the items that wait for the user"
                     );
-                    0
+                    FooterCounts::default()
                 }
             }
         })

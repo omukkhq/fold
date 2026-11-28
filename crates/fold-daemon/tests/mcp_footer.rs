@@ -48,13 +48,17 @@ fn each_combination_of_counts_gives_its_exact_line() {
 #[test]
 fn the_order_on_the_line_is_fixed_whatever_the_order_of_the_counts() {
     let reversed = FooterCounts::default()
-        .with(FooterPart::WaitForUser, 4)
+        .with(FooterPart::Held, 6)
+        .with(FooterPart::WaitForUser, 5)
+        .with(FooterPart::QuestionsForUser, 4)
         .with(FooterPart::ClaimsNearStale, 3)
         .with(FooterPart::NewEvents, 2)
         .with(FooterPart::Unread, 1);
     assert_eq!(
         footer(&reversed).as_deref(),
-        Some("fold: 1 unread · 2 new events · 3 claims near stale · 4 wait for the user")
+        Some(
+            "fold: 1 unread · 2 new events · 3 claims near stale · 4 questions for the user · 5 wait for the user · 6 held"
+        )
     );
     assert_eq!(
         FooterPart::ORDER,
@@ -62,7 +66,9 @@ fn the_order_on_the_line_is_fixed_whatever_the_order_of_the_counts() {
             FooterPart::Unread,
             FooterPart::NewEvents,
             FooterPart::ClaimsNearStale,
-            FooterPart::WaitForUser
+            FooterPart::QuestionsForUser,
+            FooterPart::WaitForUser,
+            FooterPart::Held
         ]
     );
 }
@@ -74,6 +80,33 @@ fn the_items_that_wait_for_the_user_show_alone_as_their_own_part() {
         footer(&counts).as_deref(),
         Some("fold: 3 wait for the user")
     );
+}
+
+#[test]
+fn a_question_and_a_hold_are_counted_apart_with_the_question_first() {
+    let counts = FooterCounts::default()
+        .with(FooterPart::Held, 1)
+        .with(FooterPart::QuestionsForUser, 1);
+    assert_eq!(
+        footer(&counts).as_deref(),
+        Some("fold: 1 questions for the user · 1 held")
+    );
+}
+
+#[test]
+fn the_counts_of_two_sources_add_up_part_by_part() {
+    let one = FooterCounts::default()
+        .with(FooterPart::Unread, 2)
+        .with(FooterPart::Held, 1);
+    let other = FooterCounts::default()
+        .with(FooterPart::Unread, 3)
+        .with(FooterPart::NewEvents, u64::MAX);
+    let sum = one
+        .plus(other)
+        .plus(FooterCounts::default().with(FooterPart::NewEvents, 1));
+    assert_eq!(sum.get(FooterPart::Unread), 5);
+    assert_eq!(sum.get(FooterPart::Held), 1);
+    assert_eq!(sum.get(FooterPart::NewEvents), u64::MAX);
 }
 
 #[test]

@@ -7,8 +7,8 @@ use fold_cli::claude_files;
 use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient};
 use fold_cli::main_reload::{self, Current, Loaded, Turn, prompt_turn};
 use fold_core::layout::{SHELL_TOOLS, START_DIR_ENV};
-use fold_core::roles::Role;
-use fold_core::{AgentName, ProjectPaths, codes};
+use fold_core::roles::{HandoffAt, MAIN_HANDOFF_NOTE, Role, handoff_due};
+use fold_core::{AgentName, ProjectConfig, ProjectPaths, codes};
 use hyper::Method;
 use serde_json::{Value, json};
 
@@ -245,6 +245,27 @@ impl MainSession {
     fn loads(&self, current: Current<'_>) {
         claude::record_loaded(&self.record, &current.loaded_by(&self.session));
     }
+
+    /// The marker of the session that got the hand-off note: the session id in a file next to the fingerprint record. A new session after `/clear` has another id, so it gets the note again once its own context grows large.
+    fn handoff_marker(&self) -> PathBuf {
+        self.record.with_extension("handoff")
+    }
+
+    /// Whether this turn gets the hand-off note: the session's context in `transcript` has reached the main role's `handoff_at`, and the session has not had the note. A due note is marked first, and a marker that cannot be written gives no note, so the note never comes on every turn. Any failure to read gives no note.
+    fn handoff_due(&self, transcript: Option<&Path>) -> bool {
+        let marker = self.handoff_marker();
+        if std::fs::read_to_string(&marker).is_ok_and(|text| text.trim() == self.session) {
+            return false;
+        }
+        let Some(context) = transcript.and_then(transcript_context) else {
+            return false;
+        };
+        let Some(at) = main_handoff_at(&self.root) else {
+            return false;
+        };
+        handoff_due(context, assumed_window(context), at)
+            && std::fs::write(&marker, &self.session).is_ok()
+    }
 }
 
 /// Runs only on this machine, without the daemon, so a turn never waits for it.
@@ -265,19 +286,114 @@ fn user_prompt_submit(agent: &str) -> Result<Option<Value>, String> {
     if turn != Turn::Quiet {
         let _ = claude_files::write_skills(&main.root, Dirs::from_env().home.as_deref());
     }
-    match turn {
+    let reload = match turn {
         Turn::Loads => {
             main.loads(current);
-            Ok(None)
+            None
         }
-        Turn::Remind(note) => Ok(Some(json!({
+        Turn::Remind(note) => Some(note),
+        Turn::Quiet => None,
+    };
+    let transcript = input["transcript_path"].as_str().map(Path::new);
+    Ok(prompt_answer(
+        reload.as_deref(),
+        main.handoff_due(transcript),
+    ))
+}
+
+/// The prompt hook's answer: the reload note and the hand-off note that are due, in one additional context, or nothing.
+fn prompt_answer(reload: Option<&str>, handoff: bool) -> Option<Value> {
+    let notes: Vec<&str> = reload
+        .into_iter()
+        .chain(handoff.then_some(MAIN_HANDOFF_NOTE))
+        .collect();
+    (!notes.is_empty()).then(|| {
+        json!({
             "hookSpecificOutput": {
                 "hookEventName": main_reload::PROMPT_HOOK_EVENT,
-                "additionalContext": note,
+                "additionalContext": notes.join("\n\n"),
             }
-        }))),
-        Turn::Quiet => Ok(None),
+        })
+    })
+}
+
+/// The most bytes of the transcript's end that the hand-off check reads: the newest assistant entry lies near the end, and a long transcript is never read whole on each turn.
+const TRANSCRIPT_TAIL: u64 = 1 << 20;
+
+/// The windows Claude Code's models have. The transcript does not record the window of a session, so the check takes the smallest one that holds the context.
+const SMALL_WINDOW: u64 = 200_000;
+const LARGE_WINDOW: u64 = 1_000_000;
+
+/// The window of a session whose context is `context` tokens: [`SMALL_WINDOW`] while the context fits in it, else [`LARGE_WINDOW`].
+fn assumed_window(context: u64) -> u64 {
+    if context <= SMALL_WINDOW {
+        SMALL_WINDOW
+    } else {
+        LARGE_WINDOW
     }
+}
+
+/// One transcript line, read only for its type and the token counts of its model call; serde skips every other field, the content too.
+#[derive(serde::Deserialize)]
+struct TranscriptEntry {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(rename = "isSidechain", default)]
+    sidechain: bool,
+    message: Option<EntryMessage>,
+}
+
+#[derive(serde::Deserialize)]
+struct EntryMessage {
+    usage: Option<EntryUsage>,
+}
+
+#[derive(serde::Deserialize)]
+struct EntryUsage {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    cache_creation_input_tokens: u64,
+    #[serde(default)]
+    cache_read_input_tokens: u64,
+}
+
+/// The context size of the newest model call of the session's own thread in the transcript at `path`, counted as the daemon counts a worker's: input, cache writes and cache reads. `None` when the file cannot be read or holds no such entry.
+fn transcript_context(path: &Path) -> Option<u64> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    let start = length.saturating_sub(TRANSCRIPT_TAIL);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut tail = Vec::new();
+    file.take(TRANSCRIPT_TAIL).read_to_end(&mut tail).ok()?;
+    let text = String::from_utf8_lossy(&tail);
+    // A tail that starts inside a line loses that line's start, which then does not parse and is skipped.
+    text.lines().rev().find_map(|line| {
+        let entry: TranscriptEntry = serde_json::from_str(line).ok()?;
+        if entry.kind != "assistant" || entry.sidechain {
+            return None;
+        }
+        let usage = entry.message?.usage?;
+        let context = usage
+            .input_tokens
+            .saturating_add(usage.cache_creation_input_tokens)
+            .saturating_add(usage.cache_read_input_tokens);
+        (context > 0).then_some(context)
+    })
+}
+
+/// The main role's `handoff_at` from the project's config, the defaults when the project has no config file. `None` when the file cannot be read or parsed, or the role has no `handoff_at`.
+fn main_handoff_at(root: &Path) -> Option<HandoffAt> {
+    let text = match std::fs::read_to_string(ProjectPaths::new(root).config()) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(_) => return None,
+    };
+    ProjectConfig::from_toml(&text)
+        .ok()?
+        .role(Role::Main)
+        .handoff_at
 }
 
 fn post_tool_use(agent: &str) -> Result<Option<Value>, String> {
@@ -1129,5 +1245,172 @@ mod tests {
         ] {
             assert_eq!(shell_guard(&workspace, command, &start), None, "{command}");
         }
+    }
+
+    const MAIN_SESSION: &str = "5d1c7e2a-0b3f-4a6d-9e8c-7f6a5b4c3d2e";
+
+    /// A project folder with its sessions folder, and the main session of `session` in it.
+    fn main_session(session: &str) -> (tempfile::TempDir, MainSession) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_owned();
+        std::fs::create_dir_all(root.join(".fold/sessions")).unwrap();
+        let main = MainSession {
+            record: root.join(".fold/sessions/main.fingerprint"),
+            root,
+            session: session.to_owned(),
+            loaded: None,
+        };
+        (dir, main)
+    }
+
+    fn assistant(context: u64) -> String {
+        json!({
+            "type": "assistant",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "secret words"}], "usage": {
+                "input_tokens": 10,
+                "cache_creation_input_tokens": 990,
+                "cache_read_input_tokens": context - 1000,
+                "output_tokens": 500,
+            }},
+        })
+        .to_string()
+    }
+
+    /// Writes `lines` as a transcript in `dir`, in a file of its own for each set of lines.
+    fn write_transcript(dir: &Path, lines: &[String]) -> PathBuf {
+        let name = transcript_name(lines);
+        let path = dir.join(name);
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        path
+    }
+
+    fn transcript_name(lines: &[String]) -> String {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        lines.hash(&mut hasher);
+        format!("{:x}.jsonl", hasher.finish())
+    }
+
+    #[test]
+    fn the_context_is_the_newest_call_of_the_sessions_own_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let sidechain = json!({"type": "assistant", "isSidechain": true, "message": {"usage": {"input_tokens": 900_000}}}).to_string();
+        let user =
+            json!({"type": "user", "message": {"role": "user", "content": "hi"}}).to_string();
+        let empty =
+            json!({"type": "assistant", "message": {"usage": {"input_tokens": 0}}}).to_string();
+        let path = write_transcript(
+            dir.path(),
+            &[
+                assistant(50_000),
+                assistant(120_000),
+                sidechain,
+                user,
+                empty,
+                "not json".to_owned(),
+            ],
+        );
+        assert_eq!(transcript_context(&path), Some(120_000));
+        assert_eq!(transcript_context(&dir.path().join("missing.jsonl")), None);
+        let none = write_transcript(dir.path(), &[json!({"type": "user"}).to_string()]);
+        assert_eq!(transcript_context(&none), None);
+    }
+
+    #[test]
+    fn a_long_transcript_is_read_from_its_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let filler = "x".repeat(usize::try_from(TRANSCRIPT_TAIL).unwrap());
+        let path = write_transcript(dir.path(), &[assistant(30_000), filler, assistant(40_000)]);
+        assert_eq!(transcript_context(&path), Some(40_000));
+    }
+
+    #[test]
+    fn the_window_is_the_smallest_that_holds_the_context() {
+        assert_eq!(assumed_window(1), SMALL_WINDOW);
+        assert_eq!(assumed_window(SMALL_WINDOW), SMALL_WINDOW);
+        assert_eq!(assumed_window(SMALL_WINDOW + 1), LARGE_WINDOW);
+    }
+
+    #[test]
+    fn a_large_context_gets_the_note_once_per_session() {
+        let (dir, main) = main_session(MAIN_SESSION);
+        let small = write_transcript(dir.path(), &[assistant(169_999)]);
+        assert!(!main.handoff_due(Some(&small)), "below 85% of 200k");
+        assert!(!main.handoff_marker().exists());
+        let large = write_transcript(dir.path(), &[assistant(170_000)]);
+        assert!(main.handoff_due(Some(&large)));
+        assert_eq!(
+            std::fs::read_to_string(main.handoff_marker()).unwrap(),
+            MAIN_SESSION
+        );
+        assert!(!main.handoff_due(Some(&large)), "the note comes once");
+        let larger = write_transcript(dir.path(), &[assistant(400_000)]);
+        assert!(!main.handoff_due(Some(&larger)));
+
+        let cleared = MainSession {
+            session: "a-new-session".to_owned(),
+            ..main
+        };
+        assert!(!cleared.handoff_due(Some(&small)));
+        assert!(
+            cleared.handoff_due(Some(&large)),
+            "a new session can get it again"
+        );
+    }
+
+    #[test]
+    fn the_main_roles_handoff_at_sets_the_share() {
+        let (dir, main) = main_session(MAIN_SESSION);
+        std::fs::write(
+            main.root.join(".fold/config.toml"),
+            "[roles.main]\nhandoff_at = 20\n",
+        )
+        .unwrap();
+        let path = write_transcript(dir.path(), &[assistant(40_000)]);
+        assert!(main.handoff_due(Some(&path)));
+    }
+
+    #[test]
+    fn a_missing_or_unreadable_input_gives_no_note() {
+        let (dir, main) = main_session(MAIN_SESSION);
+        let large = write_transcript(dir.path(), &[assistant(190_000)]);
+        assert!(!main.handoff_due(None));
+        assert!(!main.handoff_due(Some(&dir.path().join("missing.jsonl"))));
+        let config = main.root.join(".fold/config.toml");
+        std::fs::write(&config, "not = [valid").unwrap();
+        assert!(
+            !main.handoff_due(Some(&large)),
+            "a config that does not parse"
+        );
+        std::fs::remove_file(&config).unwrap();
+        std::fs::create_dir(&config).unwrap();
+        assert!(
+            !main.handoff_due(Some(&large)),
+            "a config that cannot be read"
+        );
+        std::fs::remove_dir(&config).unwrap();
+        std::fs::remove_dir_all(main.root.join(".fold/sessions")).unwrap();
+        assert!(
+            !main.handoff_due(Some(&large)),
+            "a marker that cannot be written"
+        );
+        assert!(!main.handoff_marker().exists());
+    }
+
+    #[test]
+    fn the_answer_holds_each_due_note() {
+        assert_eq!(prompt_answer(None, false), None);
+        let context = |answer: Option<Value>| {
+            answer.unwrap()["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(context(prompt_answer(Some("reload"), false)), "reload");
+        assert_eq!(context(prompt_answer(None, true)), MAIN_HANDOFF_NOTE);
+        assert_eq!(
+            context(prompt_answer(Some("reload"), true)),
+            format!("reload\n\n{MAIN_HANDOFF_NOTE}")
+        );
     }
 }

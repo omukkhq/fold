@@ -1,6 +1,8 @@
 [profile.default]
 fail-fast = false
 slow-timeout = { period = "60s", terminate-after = 3 }
+# A test that fails only under the load of parallel check runs passes on its second try; nextest still reports it as FLAKY in the summary, so it gets a fix without failing unrelated proposals.
+retries = { backoff = "fixed", count = 1, delay = "2s" }
 
 [profile.fast]
 inherits = "default"

@@ -189,6 +189,15 @@ impl Supervisor {
                 .any(|owed| owed.agent == *agent))
     }
 
+    /// Whether the park of `row` keeps it stopped: another agent parked it, and no go of that agent or of a person waits for it. The requested changes, check runs, send-backs, versions and conflicts that would resume it stay owed, so the start of the go serves them. A reviewer that parked itself to wait for a person keeps these resumes.
+    pub(super) async fn held_by_park(&self, row: &WorkerProcessRow) -> Result<bool, AgentError> {
+        let Some(park) = row.park.as_ref().filter(|park| park.by != row.agent) else {
+            return Ok(false);
+        };
+        let owed = messages::owed_to_stopped(self.inner.store.read(), Some(&row.agent)).await?;
+        Ok(!owed.iter().any(|owed| is_go(&owed.sender, &park.by)))
+    }
+
     /// Whether the worker limits refuse a start of the worker of `row` now.
     async fn limits_refuse(&self, row: &WorkerProcessRow) -> Result<bool, AgentError> {
         let limits = load_config(&self.inner.paths).await?.workers.limits();

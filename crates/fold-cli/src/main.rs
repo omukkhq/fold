@@ -58,14 +58,16 @@ enum Command {
     Token(token::TokenArgs),
     /// Print a one-time link that signs you in to the web interface; it works once, for a few minutes, starting the daemon when needed
     Web(commands::web::WebArgs),
-    /// Add, remove and list the remote Git repositories that fld push and fld pull sync main with
+    /// Add, remove and list the remote Git repositories that fld push and fld pull sync fold main with
     Remote(commands::remote::RemoteArgs),
-    /// Push main's Git history, one commit per revision, to a Git remote, without force; the remote's name can be left out when the project has only one
+    /// Push fold main's Git history, one commit per revision, from the local branch to a Git remote's branch, without force; the remote's name can be left out when the project has only one
     Push(commands::remote::PushArgs),
+    /// Manage the project's local Git branch: fld git branch <name> renames the branch that each integration commits fold main to
+    Git(commands::git::GitArgs),
     /// Run a Claude Code hook; the settings that fld setup and fold's sessions get call these
     #[command(hide = true)]
     Hook(hook::HookArgs),
-    /// Bring the commits of a Git remote into main; a conflict becomes a sync task. The remote's name can be left out when the project has only one
+    /// Bring the commits of a Git remote's branch into fold main; a conflict becomes a sync task. The remote's name can be left out when the project has only one
     Pull(commands::remote::PullArgs),
     /// Send the project's events to webhooks, Slack or Discord: list, add, edit, remove, test and log the notice targets
     Notify(commands::notify::NotifyArgs),
@@ -96,6 +98,8 @@ enum Command {
     ShellEnv,
     /// Manage the workers that fold runs: fld worker restart <name> starts one again in a new Claude Code session
     Worker(commands::worker::WorkerArgs),
+    /// Manage the project's check runs: fld checks cancel stops one running run, every running run of a task with --task, or every running run of the project with --all
+    Checks(commands::checks::ChecksArgs),
     /// List main's revisions, newest first, as the web app's repository screen shows them: id and title, then the proposal, task and author or what the revision is, and the time in your local time zone with the Git commit
     Log(commands::log::LogArgs),
     /// Print what the project's supervised workers cost, from the values Claude Code reported: the total of all time, today and the last 7 days, the tokens, by role, by area and the top tasks; --since, --by and --task narrow it
@@ -169,6 +173,7 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::Push(args)) => {
             commands::remote::run_push(&args, out).map_err(Failure::Remote)
         }
+        Some(Command::Git(args)) => commands::git::run(&args, out).map_err(Failure::Remote),
         Some(Command::Hook(args)) => {
             hook::run(&args, out);
             Ok(())
@@ -220,6 +225,7 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
             shell_env::print(std::env::vars_os(), out).map_err(Failure::Write)
         }
         Some(Command::Worker(args)) => commands::worker::run(&args, out).map_err(Failure::Remote),
+        Some(Command::Checks(args)) => commands::checks::run(&args, out).map_err(Failure::Remote),
         Some(Command::Log(args)) => commands::log::run_log(&args, out).map_err(Failure::Remote),
         Some(Command::Cost(args)) => commands::cost::run_cost(&args, out).map_err(Failure::Remote),
         Some(Command::Transcript(args)) => {
@@ -368,7 +374,7 @@ mod tests {
             panic!("expected a parse failure, got {result:?}");
         };
         assert_eq!(error.kind(), ErrorKind::DisplayVersion);
-        assert_eq!(error.to_string().trim(), "fld 0.9.5");
+        assert_eq!(error.to_string().trim(), "fld 0.9.6");
         assert!(out.is_empty());
     }
 

@@ -97,9 +97,9 @@ async fn run(
     let Actor::Human { name: human } = actor else {
         return Err(FoldError::new(codes::HUMAN_REQUIRED, "only a human untracks").into());
     };
-    let config = load_config(&handle.paths).await?;
     let _remote = handle.remote_lock.clone().lock_owned().await;
     let _folder = handle.folder_lock.clone().lock_owned().await;
+    let config = load_config(&handle.paths).await?;
     let mut unstash = None;
     loop {
         let (followed, _) = sync(handle, git, false).await?;

@@ -180,6 +180,8 @@ export function proposalDetail(
     review_plan: null,
     lane: null,
     conflicted_reason: null,
+    queue: null,
+    waits_for: null,
     ...fields,
   };
 }
@@ -315,6 +317,7 @@ export function checkResult(
     log_bytes: 9,
     log: "all good\n",
     truncated: false,
+    flaky: false,
     ...fields,
   };
 }

@@ -158,9 +158,9 @@ async fn run_restore(
     actor: &Actor,
     git: &Git,
 ) -> Result<RestoreOutcome, ProjectError> {
-    let config = load_config(&handle.paths).await?;
     let _remote = handle.remote_lock.clone().lock_owned().await;
     let _folder = handle.folder_lock.clone().lock_owned().await;
+    let config = load_config(&handle.paths).await?;
     let unstash = super::reset::follow_first(handle, git, &config).await?;
     let open: std::collections::BTreeSet<Vec<u8>> =
         workspaces::open_agent_changes(handle.store.read())
@@ -279,9 +279,9 @@ async fn run_drop(
     git: &Git,
     target: StashDrop,
 ) -> Result<StashDropped, ProjectError> {
-    let config = load_config(&handle.paths).await?;
     let _remote = handle.remote_lock.clone().lock_owned().await;
     let _folder = handle.folder_lock.clone().lock_owned().await;
+    let config = load_config(&handle.paths).await?;
     let open = {
         let mut conn = handle
             .store
@@ -432,9 +432,9 @@ async fn run_stash(
     actor: &Actor,
     git: &Git,
 ) -> Result<AfterUnstash<StashOutcome>, ProjectError> {
-    let config = load_config(&handle.paths).await?;
     let _remote = handle.remote_lock.clone().lock_owned().await;
     let _folder = handle.folder_lock.clone().lock_owned().await;
+    let config = load_config(&handle.paths).await?;
     let mut unstash = None;
     loop {
         let (followed, _) = sync(handle, git, false).await?;
@@ -658,9 +658,9 @@ async fn run_unstash(
     actor: &Actor,
     git: &Git,
 ) -> Result<UnstashOutcome, ProjectError> {
-    let config = load_config(&handle.paths).await?;
     let _remote = handle.remote_lock.clone().lock_owned().await;
     let _folder = handle.folder_lock.clone().lock_owned().await;
+    let config = load_config(&handle.paths).await?;
     loop {
         let (followed, _) = sync(handle, git, false).await?;
         refuse_branch(&config.git.branch, &followed)?;
@@ -1120,7 +1120,7 @@ pub(super) async fn settle_markers_on_main(handle: &ProjectHandle) -> Result<(),
 /// A branch that is not fold's keeps the folder's files those of another state, so neither command reads or writes them.
 pub(super) fn refuse_branch(branch: &str, followed: &FolderFollowed) -> Result<(), FoldError> {
     match &followed.branch {
-        Some(BranchState::Moved(moved)) => Err(head_moved(branch, moved)),
+        Some(BranchState::Moved(moved)) => Err(head_moved(branch, moved, followed.branch_present)),
         Some(BranchState::Ahead { from, .. }) => Err(FoldError::new(
             codes::INVALID_REQUEST,
             "your Git commits on the project's branch wait for the main agent, so the project folder holds them",

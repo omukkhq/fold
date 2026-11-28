@@ -50,13 +50,7 @@ function event(type: string, fields: Record<string, unknown>): EventEnvelope {
 describe("proposal keys and the event stream", () => {
   it.each([
     "proposal.opened",
-    "proposal.version_added",
-    "proposal.human_edited",
-    "proposal.reviewer_fixed",
-    "proposal.review_again_requested",
     "proposal.author_changed",
-    "proposal.closed",
-    "review.submitted",
     "review.comment_added",
   ])(
     "%s refreshes the list and that proposal with its comments, and no other proposal",
@@ -74,6 +68,28 @@ describe("proposal keys and the event stream", () => {
     },
   );
 
+  it.each([
+    "proposal.version_added",
+    "proposal.human_edited",
+    "proposal.review_again_requested",
+    "proposal.reviewer_fixed",
+    "proposal.closed",
+    "review.submitted",
+  ])(
+    "%s also refreshes every other proposal page, whose integration queue place it moves",
+    (type) => {
+      applyEvent(client, slug, event(type, { proposal: "P-4" }));
+      expect(stale()).toEqual(
+        expect.arrayContaining([
+          `${slug}/proposals`,
+          `${slug}/proposal/P-4`,
+          `${slug}/proposal/P-5`,
+          `${slug}/board`,
+        ]),
+      );
+    },
+  );
+
   it("a conflict refreshes the proposal, so the detail screen switches to its conflict report", () => {
     applyEvent(
       client,
@@ -87,7 +103,7 @@ describe("proposal keys and the event stream", () => {
         `${slug}/board`,
       ]),
     );
-    expect(stale()).not.toContain(`${slug}/proposal/P-5`);
+    expect(stale()).toContain(`${slug}/proposal/P-5`);
   });
 
   it("an integration refreshes the proposal and the revisions that name its new revision", () => {
@@ -111,6 +127,50 @@ describe("proposal keys and the event stream", () => {
       event("integration.succeeded", { proposal: "P-4", revision: "r9" }),
     );
     expect(stale()).toContain(revisions.join("/"));
+  });
+
+  it.each([
+    "integration.queued",
+    "integration.unqueued",
+    "integration.held",
+    "integration.succeeded",
+    "integration.refused",
+  ])(
+    "%s of a proposal refreshes every proposal page and the list, since each place in the queue shifts",
+    (type) => {
+      applyEvent(client, slug, event(type, { proposal: "P-4" }));
+      expect(stale()).toEqual(
+        expect.arrayContaining([
+          `${slug}/proposals`,
+          `${slug}/proposal/P-4`,
+          `${slug}/proposal/P-5`,
+        ]),
+      );
+    },
+  );
+
+  it("an integration of a review batch refreshes every proposal page, and one that names no proposal or batch refreshes none", () => {
+    applyEvent(
+      client,
+      slug,
+      event("integration.queued", { data: { batch: "rb-2" } }),
+    );
+    expect(stale()).toEqual(
+      expect.arrayContaining([`${slug}/proposals`, `${slug}/proposal/P-5`]),
+    );
+    client = new QueryClient();
+    for (const key of watched) client.setQueryData(key, { cached: true });
+    applyEvent(client, slug, event("integration.succeeded", {}));
+    expect(stale().sort()).toEqual(
+      [`${slug}/board`, revisions.join("/")].sort(),
+    );
+  });
+
+  it("a review batch event refreshes every proposal page, since a ready batch takes its turn first", () => {
+    applyEvent(client, slug, event("review.batch_ready", { task: null }));
+    expect(stale()).toEqual(
+      expect.arrayContaining([`${slug}/proposals`, `${slug}/proposal/P-5`]),
+    );
   });
 
   it("main.advanced refreshes the repository keys and no proposal", () => {

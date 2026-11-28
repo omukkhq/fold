@@ -945,6 +945,7 @@ fn notice(agent: &str, message: u32) -> Notice {
         agent: name(agent),
         text: inbox_text(message),
         next_tool: "get_inbox",
+        needs_no_action: false,
     }
 }
 
@@ -1615,5 +1616,158 @@ async fn a_notice_that_gets_through_records_its_push_time_on_the_agents_rows() {
             ("frontend".to_owned(), None),
         ],
         "a carried message counts as delivered only where its notice got through"
+    );
+}
+
+#[cfg(test)]
+const RESUMED: &str = "the agents are resumed: the paused workers run again. Call list_workers.";
+
+#[cfg(test)]
+fn resumed() -> NewEvent {
+    NewEvent::new(
+        types::PROJECT_RESUMED,
+        EventActor::parse("human:ana").unwrap(),
+    )
+    .unwrap()
+}
+
+#[cfg(test)]
+fn digest_of(count: usize) -> String {
+    let items = vec![RESUMED; count].join(" | ");
+    format!("fold digest, no action needed ({count}): {items}")
+}
+
+#[tokio::test]
+async fn five_notices_that_need_no_action_give_the_main_agent_one_push_after_the_wait() {
+    let fixture = Fixture::new().await;
+    register(&fixture.agents, "main", &["main"]).await;
+    let mut main = fixture.inbox("main", "main.sock").await;
+    for _ in 0..5 {
+        fixture.commit(resumed()).await;
+        fixture
+            .project
+            .clock()
+            .advance(Duration::from_secs(10))
+            .unwrap();
+    }
+    until(|| fixture.targets.waiting_in_digest(&name("main")) == 5).await;
+    assert_eq!(
+        fixture.targets.send_due_digests(fixture.project.now()),
+        0,
+        "the digest waits fifteen minutes from its oldest notice"
+    );
+    fixture
+        .project
+        .clock()
+        .advance(Duration::from_millis(
+            u64::try_from(push::DIGEST_WAIT_MS).unwrap(),
+        ))
+        .unwrap();
+    fixture.targets.send_due_digests(fixture.project.now());
+    assert_eq!(main.next().await, wire(TOKEN, &digest_of(5)));
+    assert_eq!(fixture.targets.waiting_in_digest(&name("main")), 0);
+}
+
+#[tokio::test]
+async fn a_notice_that_needs_action_takes_the_digest_so_far_in_the_same_post() {
+    let fixture = Fixture::new().await;
+    register(&fixture.agents, "main", &["main"]).await;
+    let mut main = fixture.inbox("main", "main.sock").await;
+    let mut lead = fixture.inbox("lead", "lead.sock").await;
+    fixture.commit(resumed()).await;
+    fixture.commit(resumed()).await;
+    until(|| fixture.targets.waiting_in_digest(&name("main")) == 2).await;
+    fixture
+        .send("frontend", &["main"], "the API is ready")
+        .await;
+    let post = main.next().await;
+    let message = carried(1, &[(1, "frontend", "the API is ready")]);
+    assert_eq!(post, wire(TOKEN, &format!("{message} {}", digest_of(2))));
+    assert_eq!(fixture.targets.waiting_in_digest(&name("main")), 0);
+    fixture.send("frontend", &["lead"], "a second note").await;
+    assert_eq!(
+        lead.next().await,
+        wire(TOKEN, &carried(2, &[(2, "frontend", "a second note")])),
+        "an agent that is not a main agent keeps getting each notice at once, with no digest"
+    );
+}
+
+#[test]
+fn only_notices_that_say_no_action_is_needed_wait_in_the_digest() {
+    let event = |kind| fold_core::Event {
+        seq: 1,
+        event_type: kind,
+        actor: EventActor::parse("human:ana").unwrap(),
+        task: None,
+        proposal: None,
+        workspace: None,
+        revision: None,
+        data: json!({}),
+        created_at: fold_core::Timestamp::from_millis(0).unwrap(),
+    };
+    let notice = |text: &str, next_tool| Notice {
+        agent: name("main"),
+        text: text.to_owned(),
+        next_tool,
+        needs_no_action: false,
+    };
+    let settled = Notice {
+        needs_no_action: true,
+        ..notice(
+            "fold: human:ana marked m-30 answered. Call get_thread.",
+            "get_thread",
+        )
+    };
+    assert!(fold_core::push::needs_no_action(
+        &event(types::MESSAGE_ASK_CLOSED),
+        &settled
+    ));
+    assert!(fold_core::push::needs_no_action(
+        &event(types::PROJECT_RESUMED),
+        &notice(RESUMED, "list_workers")
+    ));
+    assert!(!fold_core::push::needs_no_action(
+        &event(types::INTEGRATION_SUCCEEDED),
+        &notice("fold: P-3 integrated as r9. Call get_inbox.", "get_inbox")
+    ));
+    assert!(!fold_core::push::needs_no_action(
+        &event(types::REQUEST_APPROVED),
+        &notice(
+            "fold: RQ-4 approved as T-9. Call get_ready_tasks.",
+            "get_ready_tasks"
+        )
+    ));
+    assert!(!fold_core::push::needs_no_action(
+        &event(types::MESSAGE_SENT),
+        &notice("fold: message m-3 arrived. Call get_inbox.", "get_inbox")
+    ));
+    assert!(!fold_core::push::needs_no_action(
+        &event(types::TASK_STATUS_CHANGED),
+        &notice(
+            "fold: T-4 is ready and has no area. Call update_task.",
+            "update_task"
+        )
+    ));
+}
+
+#[tokio::test]
+async fn a_long_digest_names_its_first_notices_and_counts_the_rest() {
+    let fixture = Fixture::new().await;
+    register(&fixture.agents, "main", &["main"]).await;
+    let mut main = fixture.inbox("main", "main.sock").await;
+    let count = push::DIGEST_ITEMS + 2;
+    for _ in 0..count {
+        fixture.commit(resumed()).await;
+    }
+    until(|| fixture.targets.waiting_in_digest(&name("main")) == count).await;
+    fixture.send("frontend", &["main"], "done").await;
+    let items = vec![RESUMED; push::DIGEST_ITEMS].join(" | ");
+    let message = carried(1, &[(1, "frontend", "done")]);
+    assert_eq!(
+        main.next().await,
+        wire(
+            TOKEN,
+            &format!("{message} fold digest, no action needed ({count}): {items} | and 2 more")
+        )
     );
 }

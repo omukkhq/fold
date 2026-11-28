@@ -154,3 +154,35 @@ async fn a_crash_after_the_commit_of_a_direct_change_keeps_all_of_it() {
     );
     scenario.teardown();
 }
+
+/// A submit whose caller stops waiting once its turn is held, and whose integration then fails, still tells the main agent: fold sends one message that names the changeset and the error code, and main does not move.
+#[tokio::test]
+async fn a_cancelled_direct_change_that_fails_tells_the_main_agent() {
+    let scenario = fail::FailScenario::setup();
+    let fx = Fixture::with_main_frontend().await;
+    let main = main_actor(&fx);
+    let changeset = recorded(&fx, &main).await;
+    fail::cfg("integration_after_merge", "return").unwrap();
+    {
+        // One poll takes the free turn and spawns the integration; dropping the call is the cancel.
+        let mut call = std::pin::pin!(fx.reviews.integrate_direct(&main, change(changeset)));
+        let polled =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(call.as_mut().poll(cx))).await;
+        assert!(polled.is_pending());
+    }
+    let sql = format!(
+        "SELECT COUNT(*) FROM messages WHERE sender_kind = 'fold' AND body LIKE 'The direct change {changeset} did not integrate%(failpoint)%'"
+    );
+    fold_store::testing::eventually(std::time::Duration::from_secs(10), async || {
+        match fx.count(&sql).await {
+            0 => Err("fold has not told the main agent"),
+            told => Ok(told),
+        }
+    })
+    .await;
+    fail::remove("integration_after_merge");
+    assert_eq!(fx.count(&sql).await, 1);
+    assert_eq!(head(&fx).await, r(1));
+    assert_eq!(fx.count("SELECT COUNT(*) FROM integrations").await, 0);
+    scenario.teardown();
+}

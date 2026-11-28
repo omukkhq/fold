@@ -1,16 +1,16 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
 use fold_core::status::ProposalFact;
 use fold_core::{
     Actor, AgentActor, ChangesetId, CheckpointId, EventActor, EventError, FoldError, IdKind,
-    NewEvent, ProposalId, ReviewBatchId, RevisionId, TaskId, TaskStatus, Timestamp, WorkerName,
-    WorkspaceId, codes, policy, review_batch_checkout_path, review_checkout_path,
+    NewEvent, ProjectPaths, ProposalId, ReviewBatchId, RevisionId, TaskId, TaskStatus, Timestamp,
+    WorkerName, WorkspaceId, codes, policy, review_batch_checkout_path, review_checkout_path,
     task_workspace_path,
 };
 use fold_store::agents::WorkerRow;
@@ -23,16 +23,18 @@ use fold_vcs::index::StatIndex;
 use fold_vcs::materialise::{MaterialiseOptions, materialise};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::WorkspaceError as VcsError;
-use fold_vcs::platform::{create_dir_below, sync_dir};
+use fold_vcs::platform::{Capabilities, create_dir_below, sync_dir};
 use serde_json::json;
 
+use super::handles::{Failed, OUT_OF_HANDLES_BACKOFF, retry_out_of_handles};
 use super::sync::path_text;
-use super::{WorkspaceError, WorkspaceService, blocking, capabilities};
+use super::{WorkspaceError, WorkspaceService};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::{
     agent_refusal, already_claimed, check_claim_right, claim_in_tx, closed_refusal,
     proposal_kind_refusal, recompute, task_not_found, worker_row,
 };
+use crate::support;
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -439,46 +441,86 @@ impl WorkspaceService {
         Ok((placed.path, placed.dir))
     }
 
+    /// Places the files by [`place_once`], once more after a short wait when the attempt ran out of file handles, which parallel creates and check runs free a moment later.
     pub(super) async fn place_named(
         &self,
-        name: impl Fn(u32) -> String + Send + 'static,
+        name: impl Fn(u32) -> String + Send + Sync + 'static,
         taken: Vec<String>,
         tree: ObjectHash,
         read_only: bool,
     ) -> Result<Placed, WorkspaceError> {
-        let paths = self.paths.clone();
-        let ws_dir = self.paths.ws_dir();
-        let root = self.paths.root().to_path_buf();
-        let probed = Arc::clone(&self.caps);
-        blocking(move || {
-            create_dir_below(&paths.fold_dir(), &ws_dir).map_err(io_error)?;
-            let objects = ObjectStore::open_existing(&paths.fold_dir()).map_err(FoldError::from)?;
-            let caps = capabilities(&probed, &paths)?;
-            let staging = staging_dir(&ws_dir)?;
-            let opts = MaterialiseOptions { read_only, caps };
-            let index = match materialise(&objects, &tree, &staging, &opts) {
-                Ok(done) => done.index,
-                Err(error) => {
-                    let _ = fs::remove_dir_all(&staging);
-                    return Err(error.into());
+        let name = Arc::new(name);
+        let placed = retry_out_of_handles(
+            || {
+                let paths = self.paths.clone();
+                let probed = Arc::clone(&self.caps);
+                let name = Arc::clone(&name);
+                let taken = taken.clone();
+                async move {
+                    support::blocking(move || {
+                        Ok(place_once(&paths, &probed, &*name, &taken, tree, read_only))
+                    })
+                    .await
+                    .unwrap_or_else(|error| Err(Failed::plain(error)))
                 }
-            };
-            super::shared::link_shared_in(&root, &staging);
-            match rename_into_place(&staging, &root, &name, &taken) {
-                Ok((path, dir)) => match sync_dir(&ws_dir) {
-                    Ok(()) => Ok(Placed { path, dir, index }),
-                    Err(error) => {
-                        let _ = fs::remove_dir_all(&dir);
-                        Err(io_error(error))
-                    }
-                },
-                Err(error) => {
-                    let _ = fs::remove_dir_all(&staging);
-                    Err(error)
-                }
+            },
+            OUT_OF_HANDLES_BACKOFF,
+        )
+        .await?;
+        Ok(placed)
+    }
+}
+
+/// One attempt of a placement: materialises `tree`, with the links of the project's shared paths, into a staging directory under `.fold/ws/` and renames it to the first free name. Blocking work only.
+fn place_once(
+    paths: &ProjectPaths,
+    probed: &OnceLock<Capabilities>,
+    name: &dyn Fn(u32) -> String,
+    taken: &[String],
+    tree: ObjectHash,
+    read_only: bool,
+) -> Result<Placed, Failed> {
+    #[cfg(feature = "failpoints")]
+    fail::fail_point!("workspace_place_out_of_handles", |_| {
+        Err(Failed::classify(VcsError::from(
+            io::Error::from_raw_os_error(rustix::io::Errno::MFILE.raw_os_error()),
+        )))
+    });
+    let ws_dir = paths.ws_dir();
+    let root = paths.root();
+    create_dir_below(&paths.fold_dir(), &ws_dir)
+        .map_err(|error| Failed::classify(VcsError::from(error)))?;
+    let objects = ObjectStore::open_existing(&paths.fold_dir()).map_err(Failed::classify)?;
+    let caps = match probed.get() {
+        Some(caps) => *caps,
+        None => {
+            let caps = Capabilities::probe(&paths.fold_dir())
+                .map_err(|error| Failed::classify(VcsError::from(error)))?;
+            *probed.get_or_init(|| caps)
+        }
+    };
+    let staging = staging_dir(&ws_dir).map_err(Failed::plain)?;
+    let opts = MaterialiseOptions { read_only, caps };
+    let index = match materialise(&objects, &tree, &staging, &opts) {
+        Ok(done) => done.index,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(Failed::classify(error));
+        }
+    };
+    super::shared::link_shared_in(root, &staging);
+    match rename_into_place(&staging, root, name, taken) {
+        Ok((path, dir)) => match sync_dir(&ws_dir) {
+            Ok(()) => Ok(Placed { path, dir, index }),
+            Err(error) => {
+                let _ = fs::remove_dir_all(&dir);
+                Err(Failed::classify(VcsError::from(error)))
             }
-        })
-        .await
+        },
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging);
+            Err(Failed::plain(error))
+        }
     }
 }
 

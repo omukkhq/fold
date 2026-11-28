@@ -8,10 +8,10 @@ use fold_store::agents;
 use fold_store::tasks::reports::{self, Resolution};
 use serde_json::json;
 
-use super::resume::{self, SessionStart};
+use super::resume::SessionStart;
 use super::{Input, Supervisor, lock};
 use crate::services::agents::AgentError;
-use crate::services::agents::workers::is_paused_refusal;
+use crate::services::agents::workers::{is_limit_refusal, is_paused_refusal};
 use crate::services::events::EventBuffer;
 
 /// A sent-back task with the note that sent it back.
@@ -150,7 +150,10 @@ impl Supervisor {
         let Some(worker) = worker else {
             return Ok(());
         };
-        if worker.role != Role::TaskWorker || worker.state.is_running() {
+        if worker.role != Role::TaskWorker
+            || worker.state.is_running()
+            || self.held_by_park(&worker).await?
+        {
             return Ok(());
         }
         let mut found = Vec::with_capacity(tasks.len());
@@ -175,7 +178,7 @@ impl Supervisor {
         let watch = match self.resume(agent, turn.clone(), &bound).await {
             Ok(watch) => watch,
             // The send-back stays owed, and the resume of the pause or the next free place serves it.
-            Err(error) if is_paused_refusal(&error) || resume::is_limit_refusal(&error) => {
+            Err(error) if is_paused_refusal(&error) || is_limit_refusal(&error) => {
                 return Ok(());
             }
             // A start outside this path, such as `resume_worker`, came first; the task worker takes this turn as its next one.

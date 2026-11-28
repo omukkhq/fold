@@ -30,8 +30,8 @@ use super::workspaces::{
 use crate::daemon::AppState;
 use crate::services::reviews::{
     self as service, ChangeRange, CheckoutTarget, CommentInput, CommentLocation,
-    IntegrationOutcome, LaneListing, ListedCheckout, ProposalFilter, ReviewService, Turn,
-    integration_conflicted,
+    IntegrationOutcome, LaneListing, ListedCheckout, ProposalFilter, QueuePlace, QueueStanding,
+    ReviewService, Turn, WaitReason, integration_conflicted,
 };
 
 pub mod batches;
@@ -348,6 +348,17 @@ pub enum ConflictedReason {
         #[schema(required = true, example = "reviewer")]
         fixer: Option<String>,
     },
+    /// The version's serial lane moved since its base and names a `refresh`, and the merge with main was clean: the reviewer redoes the lane's step on the new main, not the author.
+    LaneRefresh {
+        #[schema(example = "migrations")]
+        lane: String,
+        /// The lane's `refresh` text from main's `fold-checks.toml`.
+        #[schema(example = "regenerate the migration on the current head")]
+        refresh: String,
+        /// The reviewer agent that redoes it; null when the review lead got the refresh to start a reviewer for it.
+        #[schema(required = true, example = "reviewer")]
+        fixer: Option<String>,
+    },
     /// The integration checks failed on the merge with main after another member of the lane integrated, so the reviewer fixes the version on the new main, not the author.
     LaneChecksFailed {
         #[schema(example = "migrations")]
@@ -364,7 +375,17 @@ pub enum ConflictedReason {
 impl From<service::ConflictedReason> for ConflictedReason {
     fn from(reason: service::ConflictedReason) -> Self {
         match reason {
-            service::ConflictedReason::MergeConflict { fixer } => Self::MergeConflict {
+            service::ConflictedReason::MergeConflict { fixer, .. } => Self::MergeConflict {
+                fixer: fixer.map(|agent| agent.to_string()),
+            },
+            service::ConflictedReason::LaneRefresh {
+                lane,
+                refresh,
+                fixer,
+                ..
+            } => Self::LaneRefresh {
+                lane,
+                refresh,
                 fixer: fixer.map(|agent| agent.to_string()),
             },
             service::ConflictedReason::LaneChecksFailed { lane, run, fixer } => {
@@ -375,6 +396,139 @@ impl From<service::ConflictedReason> for ConflictedReason {
                 }
             }
         }
+    }
+}
+
+/// The place of an approved open proposal in the automatic integration queue, in the order the job takes the turns: the ready review batches first, then the proposals in number order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct IntegrationQueuePlace {
+    /// From 1: the next turn, or the turn whose integration checks run now.
+    #[schema(example = 2)]
+    pub position: u32,
+    /// The integration checks of this turn run now.
+    pub integrating_now: bool,
+    /// The proposal or review batch one place ahead; null at position 1.
+    #[schema(required = true, example = "P-3")]
+    pub ahead: Option<String>,
+    /// When the turn is estimated to start, in UTC milliseconds, from the average duration of the recent passed integration runs; the start of the run for the turn that integrates now; null without such a run.
+    #[schema(required = true, example = 1_795_804_617_280_i64)]
+    pub estimated_start: Option<i64>,
+    /// The review batch the proposal integrates with, whose place it shares; null for a proposal that integrates on its own.
+    #[schema(required = true, example = "rb-2")]
+    pub batch: Option<String>,
+}
+
+impl IntegrationQueuePlace {
+    fn new(place: QueuePlace, batch: Option<ReviewBatchId>) -> Self {
+        Self {
+            position: place.position,
+            integrating_now: place.integrating_now,
+            ahead: place.ahead.map(|item| item.to_string()),
+            estimated_start: place.estimated_start.map(Timestamp::as_millis),
+            batch: batch.map(|batch| batch.to_string()),
+        }
+    }
+}
+
+/// A prerequisite task that is not Done.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct UnfinishedPrerequisite {
+    #[schema(example = "T-12")]
+    pub task: String,
+    pub status: TaskStatus,
+}
+
+/// Why the automatic integration does not take an approved open proposal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum IntegrationWait {
+    /// `[integration].automatic` is false in the project's configuration: an agent that decides reviews or a human integrates it.
+    AutomaticOff,
+    /// The project's configuration is invalid, so the job skips every run.
+    ConfigInvalid,
+    /// main's `fold-checks.toml` is invalid, so every integration waits for a revision of main that fixes it.
+    MainChecksInvalid,
+    /// The proposal is flagged with a conflict.
+    Conflict,
+    /// The integration checks of the current version failed.
+    ChecksFailed,
+    /// The proposal's serial lane moved since its version's base and names a `refresh`: its reviewer redoes the lane's step on the new main and sends a new version.
+    LaneRefresh {
+        #[schema(example = "migrations")]
+        lane: String,
+    },
+    /// A member of a serial lane behind its front.
+    Lane {
+        #[schema(example = "migrations")]
+        lane: String,
+        #[schema(example = 2)]
+        position: u32,
+    },
+    /// A review batch holds it back to integrate with the other members, and the batch is not ready for its turn.
+    Batch {
+        #[schema(example = "rb-2")]
+        batch: String,
+    },
+    /// fold could not run the integration checks on this version and main; an integrate call or a move of main tries again.
+    FoldFailedChecks,
+    /// The author's update or a reviewer's fix runs the checks of the next version.
+    NextVersionRun,
+    /// Prerequisite tasks are not Done, in number order.
+    Prerequisites {
+        prerequisites: Vec<UnfinishedPrerequisite>,
+    },
+    /// The task's human review mark waits for a human approval.
+    HumanReview {
+        /// The human the mark names; null when any human may approve.
+        #[schema(required = true, example = "tanim")]
+        reviewer: Option<String>,
+    },
+    /// The latest approval does not count for integration, such as one by an agent that does not decide reviews.
+    NotApproved,
+}
+
+impl From<WaitReason> for IntegrationWait {
+    fn from(reason: WaitReason) -> Self {
+        match reason {
+            WaitReason::AutomaticOff => Self::AutomaticOff,
+            WaitReason::ConfigInvalid => Self::ConfigInvalid,
+            WaitReason::MainChecksInvalid => Self::MainChecksInvalid,
+            WaitReason::Conflict => Self::Conflict,
+            WaitReason::LaneRefresh { lane } => Self::LaneRefresh { lane },
+            WaitReason::ChecksFailed => Self::ChecksFailed,
+            WaitReason::Lane { lane, position } => Self::Lane { lane, position },
+            WaitReason::Batch { batch } => Self::Batch {
+                batch: batch.to_string(),
+            },
+            WaitReason::FoldFailedChecks => Self::FoldFailedChecks,
+            WaitReason::NextVersionRun => Self::NextVersionRun,
+            WaitReason::Prerequisites { unfinished } => Self::Prerequisites {
+                prerequisites: unfinished
+                    .into_iter()
+                    .map(|(task, status)| UnfinishedPrerequisite {
+                        task: task.to_string(),
+                        status: status.into(),
+                    })
+                    .collect(),
+            },
+            WaitReason::HumanReview { reviewer } => Self::HumanReview {
+                reviewer: reviewer.map(|name| name.as_str().to_owned()),
+            },
+            WaitReason::NotApproved => Self::NotApproved,
+        }
+    }
+}
+
+/// The `queue` and `waits_for` fields of a proposal: exactly one is set for an open proposal whose latest verdict is an approval, neither for any other.
+pub(super) fn queue_fields(
+    standing: Option<QueueStanding>,
+) -> (Option<IntegrationQueuePlace>, Option<IntegrationWait>) {
+    match standing {
+        Some(QueueStanding::Queued { place, batch }) => {
+            (Some(IntegrationQueuePlace::new(place, batch)), None)
+        }
+        Some(QueueStanding::Waits(reason)) => (None, Some(reason.into())),
+        None => (None, None),
     }
 }
 
@@ -389,6 +543,12 @@ pub struct ListedProposal {
     /// Why the open proposal is `conflicted`; null when it is not.
     #[schema(required = true)]
     pub conflicted_reason: Option<ConflictedReason>,
+    /// The place in the automatic integration queue of an approved open proposal that the job takes; null otherwise.
+    #[schema(required = true)]
+    pub queue: Option<IntegrationQueuePlace>,
+    /// Why the automatic integration does not take an approved open proposal; null for a queued one and for any proposal that is not approved and open.
+    #[schema(required = true)]
+    pub waits_for: Option<IntegrationWait>,
 }
 
 impl From<LaneListing> for ProposalList {
@@ -397,13 +557,17 @@ impl From<LaneListing> for ProposalList {
             listing,
             lanes,
             mut conflicted,
+            queue,
         } = listed;
         let proposals = listing
             .proposals
             .into_iter()
             .map(|summary| {
                 let id = summary.id;
+                let (queue, waits_for) = queue_fields(queue.standing(id).cloned());
                 ListedProposal {
+                    queue,
+                    waits_for,
                     lane: lanes
                         .iter()
                         .find(|place| place.proposal == id)
@@ -1038,12 +1202,21 @@ pub struct ProposalDetail {
     /// Why the open proposal is `conflicted` on its current version; null when it is not.
     #[schema(required = true)]
     pub conflicted_reason: Option<ConflictedReason>,
+    /// The place in the automatic integration queue of an approved open proposal that the job takes; null otherwise.
+    #[schema(required = true)]
+    pub queue: Option<IntegrationQueuePlace>,
+    /// Why the automatic integration does not take an approved open proposal; null for a queued one and for any proposal that is not approved and open.
+    #[schema(required = true)]
+    pub waits_for: Option<IntegrationWait>,
 }
 
 impl From<service::ProposalView> for ProposalDetail {
     fn from(view: service::ProposalView) -> Self {
         let detail = view.detail;
+        let (queue, waits_for) = queue_fields(view.queue);
         Self {
+            queue,
+            waits_for,
             summary: detail.summary.into(),
             task_status: detail.task_status.into(),
             task: ProposalTask {
@@ -1357,13 +1530,14 @@ fn proposal(text: &str) -> Result<ProposalId, ApiError> {
     get,
     path = "/api/v1/projects/{slug}/proposals",
     operation_id = "list_proposals",
+    extensions(("x-fold-takes-human" = json!("optional"))),
     params(
         ("slug" = String, Path, description = "The project slug"),
         ProposalListQuery,
     ),
     responses(
         (status = 200, description = "The proposals", body = ProposalList),
-        (status = 400, description = "`invalid_request`: the query string is not valid", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_name` or `invalid_request`: the human name or the query string is not valid", body = ErrorEnvelope),
         (status = 404, description = "`project_not_found`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -1566,7 +1740,7 @@ pub struct AskAuthorBody {
     request_body = AskAuthorBody,
     responses(
         (status = 201, description = "The stored question", body = MessageView),
-        (status = 400, description = "`invalid_request`: an empty body, some but not all of the four line fields, or a malformed request; `invalid_path` or `invalid_id`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request`: an empty body, some but not all of the four line fields, or a malformed request; `invalid_path`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found`: no such proposal or version, or `project_not_found`", body = ErrorEnvelope),
         (status = 422, description = "`unknown_comment_path` or `invalid_comment_range`: the lines are not in the file on that side", body = ErrorEnvelope),
@@ -1820,7 +1994,7 @@ pub struct ReviewCheckoutView {
     pub path: String,
     /// What the checkout's files hold.
     pub target: ReviewCheckoutTarget,
-    /// The review worker that owns the checkout, such as `review/ci`.
+    /// The review worker that owns the checkout, such as `reviewer-3`.
     #[schema(required = true)]
     pub worker: Option<String>,
     /// The base revision: the version's base for a proposal checkout, the revision of main the members were merged onto for a batch checkout.
@@ -1903,7 +2077,7 @@ pub struct ReviewCheckoutList {
     responses(
         (status = 200, description = "The active review checkouts", body = ReviewCheckoutList),
         (status = 404, description = "`project_not_found`: the slug is not registered", body = ErrorEnvelope),
-        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`: the project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]

@@ -1,4 +1,6 @@
-use fold_core::events::types;
+use std::time::Duration;
+
+use fold_core::events::{EventFilter, types};
 use fold_core::object::ObjectHash;
 use fold_core::reviews::ProposalIntent;
 use fold_core::reviews::checks::{
@@ -8,15 +10,18 @@ use fold_core::{
     Actor, AddressedAs, CheckRunId, Clock, EventActor, FoldError, IdKind, MessageBody, NewEvent,
     ProposalId, Recipient, Target, TaskId, Timestamp, WorkerName, WorkspaceId, codes, policy,
 };
-use fold_store::reviews::checks::{self, CheckResultRow, CheckRunRow, NewCheckResult, NewCheckRun};
+use fold_store::reviews::checks::{
+    self, CheckResultRow, CheckRunRow, FlakyCheck, NewCheckResult, NewCheckRun, NewlyFlaky,
+};
 use fold_store::tasks::claims;
 use fold_store::workspaces::{self, WorkspaceRow, WorkspaceState};
-use fold_store::{SqliteConnection, Store, StoreError, WriteTx, counters, tasks};
+use fold_store::{SqliteConnection, Store, StoreError, WriteTx, counters, events, tasks};
 use serde_json::json;
 use tracing::Instrument as _;
 
 use super::proposals::{
-    Proposed, VersionInput, add_version_in_tx, no_task_workspace, open_in_tx, usable_workspace,
+    Proposed, VersionInput, add_version_in_tx, no_task_workspace, open_in_tx, same_workspace,
+    usable_workspace,
 };
 use super::{ReviewError, ReviewService};
 use crate::services::events::{EventBuffer, EventBus};
@@ -24,20 +29,34 @@ use crate::services::messages::send_from_fold_in_tx;
 use crate::services::tasks::{TaskError, closed_refusal, proposal_kind_refusal, task_not_found};
 use crate::services::workspaces::ProposalSnapshot;
 
+mod cancel;
 mod integration;
 pub mod memory;
 mod runner;
+mod setup;
 
-pub(crate) use integration::{Integrating, IntegrationChecks, PassedRun, fold_failed_refusal};
+pub use cancel::CancelTarget;
+pub(crate) use integration::{
+    Checked, DirectIntegrating, Integrating, IntegrationChecks, PassedRun,
+    direct_fold_failed_refusal, fold_failed_refusal,
+};
 pub(crate) use runner::HeldRequest;
+pub(super) use runner::{CancelRequest, CancelWatch};
 pub use runner::{
     CheckPermits, CheckRunner, CheckSettings, CommandResult, CommandSpec, LOG_LIMIT, MEMORY_TICK,
-    RunGate, RunLimits, commands, run_commands, run_commands_for, run_gated_commands,
+    RunGate, RunLimits, SlotTicket, commands, run_commands, run_commands_for, run_gated_commands,
     run_gated_commands_for,
 };
+pub use setup::SetupState;
 
 /// The most lines of a failed command's log a result message carries.
 const TAIL_LINES: usize = 30;
+
+/// The window of `list_flaky_checks` when the caller gives none.
+pub const FLAKY_DAYS_DEFAULT: u32 = 14;
+
+/// The longest window of `list_flaky_checks`.
+pub const FLAKY_DAYS_MAX: u32 = 365;
 
 /// The most characters of a failed command's log a result message carries.
 const TAIL_CHARS: usize = 3000;
@@ -48,10 +67,18 @@ pub struct CheckRunView {
     pub run: CheckRunRow,
     /// In run order; each log is empty unless the read asked for logs.
     pub results: Vec<CheckResultRow>,
+    /// The positions of the failed results that a later pass of the same check on the same tree made flaky.
+    pub flaky: Vec<u32>,
     /// Since when the running run holds its permit and waits for free memory before its commands start.
     pub waiting_for_memory: Option<Timestamp>,
     /// The check whose `max_parallel` the running run waits for before that check's command starts, and since when.
     pub waiting_for_check: Option<(String, Timestamp)>,
+    /// The run's place in the queue for a run place under `[runs] max_parallel_runs`, from 1 at the front; `None` when it does not wait for one.
+    pub waiting_for_run_slot: Option<usize>,
+    /// Since when a command of the running run waits for a slot of the machine's build gate.
+    pub waiting_for_build_slot: Option<Timestamp>,
+    /// The public name of the actor that cancelled the run, from its `checks.finished` event; `None` unless the run ended as `cancelled`.
+    pub cancelled_by: Option<String>,
 }
 
 /// What a request for checks started.
@@ -89,13 +116,13 @@ impl Verdict {
         }
     }
 
-    /// From the commands' results alone: a blocking command that a SIGKILL ended, then a blocking setup failure, then a blocking check failure, else a pass.
+    /// From the commands' results alone: a command that a signal fold did not send ended, then a command that found no build gate slot in time, then a blocking setup failure, then a blocking check failure, else a pass. A killed command or one without a slot fails the run even when it is not required, because no later command of the run started.
     pub(super) fn of(results: &[CommandResult]) -> Self {
-        if results
-            .iter()
-            .any(|result| result.killed && result.blocks())
-        {
+        if results.iter().any(|result| result.killed.is_some()) {
             return Self::failed(RunReason::Killed);
+        }
+        if results.iter().any(|result| result.no_build_slot) {
+            return Self::failed(RunReason::NoBuildSlot);
         }
         if results
             .iter()
@@ -117,6 +144,8 @@ pub(super) struct GateJob {
     pub checks_changed: bool,
     /// The reviewer's fix a `review_fix` run waits to make.
     pub fix: Option<FixJob>,
+    /// The `[runs] max_parallel_runs` of the checked tree's file.
+    pub max_parallel_runs: Option<std::num::NonZeroUsize>,
 }
 
 /// What a reviewer's fix needs at the end of its run, beyond the stored run.
@@ -149,15 +178,22 @@ impl ReviewService {
         let Some(job) = job else {
             return Ok(Started::NoChecks);
         };
+        let ticket = self.checks.slot_ticket(job.max_parallel_runs);
         let run = self
-            .start_proposal_run(actor, &workspace, tree, Purpose::Check, Waiting::default())
+            .start_proposal_run(
+                actor,
+                &workspace,
+                tree,
+                Purpose::Check,
+                (Waiting::default(), &ticket),
+            )
             .await?;
         let started = Started::Running {
             run: run.id,
             task,
             workspace: workspace.id,
         };
-        self.spawn_proposal_run(run, job, actor.clone());
+        self.spawn_proposal_run(run, job, actor.clone(), ticket);
         Ok(started)
     }
 
@@ -171,16 +207,31 @@ impl ReviewService {
         let row = checks::get_run(&mut *read, run)
             .await?
             .ok_or_else(|| run_not_found(run))?;
-        let results = checks::list_results(&mut *read, run, logs).await?;
+        let view = view_of(&mut read, &self.checks, row, logs).await?;
         read.commit().await.map_err(StoreError::from)?;
-        let waiting_for_memory = self.checks.waiting_for_memory(run);
-        let waiting_for_check = self.checks.waiting_for_check(run);
-        Ok(CheckRunView {
-            run: row,
-            results,
-            waiting_for_memory,
-            waiting_for_check,
-        })
+        Ok(view)
+    }
+
+    /// The checks with flaky failures in the runs of the last `days` days, the most flaky first, then by name. `days` is 1 to [`FLAKY_DAYS_MAX`]; a window that reaches before the clock's start counts every run.
+    pub async fn flaky_checks(&self, days: u32) -> Result<Vec<FlakyCheck>, ReviewError> {
+        if !(1..=FLAKY_DAYS_MAX).contains(&days) {
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                format!("days is 1 to {FLAKY_DAYS_MAX}"),
+            )
+            .with_details([("field", json!("days"))])
+            .with_hint(
+                "call list_flaky_checks again with days from 1 to 365, or leave it out for 14",
+            )
+            .into());
+        }
+        let window = Duration::from_secs(u64::from(days) * 86_400);
+        let since = self
+            .clock
+            .now()
+            .checked_sub(window)
+            .unwrap_or(Timestamp::EPOCH);
+        Ok(checks::flaky_checks(self.store.read(), since).await?)
     }
 
     /// The task workspace a worker runs checks in: the task is open and of a kind with a proposal, and the actor's worker owns its active workspace.
@@ -235,6 +286,7 @@ impl ReviewService {
             specs: runner::commands(&file, &plan),
             checks_changed,
             fix: None,
+            max_parallel_runs: file.max_parallel_runs,
         };
         Ok((Some(job), checks_changed))
     }
@@ -281,26 +333,27 @@ impl ReviewService {
         waiting: Waiting<'_>,
         job: GateJob,
     ) -> Result<Proposed, ReviewError> {
+        let ticket = self.checks.slot_ticket(job.max_parallel_runs);
         let run = self
-            .start_proposal_run(actor, snapped, tree, purpose, waiting)
+            .start_proposal_run(actor, snapped, tree, purpose, (waiting, &ticket))
             .await?;
         let checking = Proposed::Checking {
             run: run.id,
-            task: run.task,
+            task: run.task_run()?,
             workspace: snapped.id,
         };
-        self.spawn_proposal_run(run, job, actor.clone());
+        self.spawn_proposal_run(run, job, actor.clone(), ticket);
         Ok(checking)
     }
 
-    /// Writes the running run of `tree` in `snapped`, with `checks.started`, after the same refusals again on the writer: the task's active workspace is still `snapped` on the same base and owned by the actor's worker.
+    /// Writes the running run of `tree` in `snapped`, with `checks.started`, after the same refusals again on the writer: the task's active workspace is still `snapped` on the same base and owned by the actor's worker. `ticket` is the run's place under `[runs] max_parallel_runs`, which `checks.started` shows while the run waits for it and which is bound to the run once it is written.
     pub(super) async fn start_proposal_run(
         &self,
         actor: &Actor,
         snapped: &WorkspaceRow,
         tree: ObjectHash,
         purpose: Purpose,
-        waiting: Waiting<'_>,
+        (waiting, ticket): (Waiting<'_>, &SlotTicket),
     ) -> Result<CheckRunRow, ReviewError> {
         let task = snapped
             .task
@@ -308,16 +361,16 @@ impl ReviewService {
         let now = self.clock.now();
         let label = actor.event_actor();
         let mut buffer = EventBuffer::new();
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("checks_run_before_write");
         let run = self
             .store
             .write(async |tx| {
-                let live = workspaces::live_task_workspace(tx.conn(), task).await?;
-                let owner = live.as_ref().and_then(|row| row.worker.clone());
-                policy::can_run_checks(actor, owner.as_ref()).map_err(FoldError::from)?;
-                let live = live.ok_or(StoreError::Corrupt("workspaces.task_id"))?;
-                if live.id != snapped.id || live.base != snapped.base {
-                    return Err(changed_meanwhile(snapped.id));
-                }
+                let live = workspaces::live_task_workspace(tx.conn(), task)
+                    .await?
+                    .ok_or_else(|| no_task_workspace(task))?;
+                policy::can_run_checks(actor, live.worker.as_ref()).map_err(FoldError::from)?;
+                same_workspace(snapped, &live)?;
                 let new = NewProposalRun {
                     purpose,
                     task,
@@ -327,36 +380,54 @@ impl ReviewService {
                     tree,
                     actor: &label,
                     waiting,
+                    slot: ticket.position(),
                 };
                 insert_proposal_run(tx, &mut buffer, &new, now).await
             })
             .await?;
+        ticket.bind(run.id);
         self.bus.publish(buffer);
         self.workspaces.checks_changed().await;
         tracing::info!(run = %run.id, task = %task, workspace = %snapped.id, purpose = purpose.as_str(), "check run started");
         Ok(run)
     }
 
-    /// Runs the commands of `run` in the background and ends it.
-    pub(super) fn spawn_proposal_run(&self, run: CheckRunRow, job: GateJob, actor: Actor) {
+    /// Runs the commands of `run` in the background and ends it. A cancel reaches the run from here on, also while it waits for its place under `[runs] max_parallel_runs`, which it holds until it ends, or for the `[setup]` of its folder.
+    pub(super) fn spawn_proposal_run(
+        &self,
+        run: CheckRunRow,
+        job: GateJob,
+        actor: Actor,
+        ticket: SlotTicket,
+    ) {
         let service = self.clone();
+        let cancel = self.checks.watch_cancel(run.id);
         self.checks.spawn(async move {
             let id = run.id;
-            if let Err(error) = service.complete_proposal_run(run, job, actor).await {
+            if let Err(error) = service
+                .complete_proposal_run(run, job, actor, cancel, ticket)
+                .await
+            {
                 tracing::warn!(run = %id, code = error.log_code(), "a check run could not end; the next start of the daemon ends it as stopped");
             }
         });
     }
 
-    /// Takes a machine-wide permit, runs the commands in the workspace and snapshots it again. The run fails when the snapshot differs from the checked tree, or when the workspace was replaced, synced or restored meanwhile. A passed run of a proposal command then makes its version; a run whose command is refused by then, such as a claim that was taken over, ends as stopped with the refusal in its message.
+    /// Takes a machine-wide permit, runs the commands in the workspace and snapshots it again. The run fails when the snapshot differs from the checked tree, or when the workspace was replaced, synced or restored meanwhile. A scan of the live state that finds an edit of a tracked file meanwhile ends the run at once, without waiting for its commands, once a snapshot confirms it, and so does a cancel. A passed run of a proposal command then makes its version; a run whose command is refused by then, such as a claim that was taken over, ends as stopped with the refusal in its message.
     async fn complete_proposal_run(
         &self,
         run: CheckRunRow,
         job: GateJob,
         actor: Actor,
+        mut cancel: CancelWatch,
+        ticket: SlotTicket,
     ) -> Result<(), ReviewError> {
+        let current = checks::get_run(self.store.read(), run.id).await?;
+        if current.is_none_or(|row| row.state != RunState::Running) {
+            return Ok(());
+        }
         if run.purpose == Purpose::ReviewFix {
-            return self.complete_fix_run(run, job, actor).await;
+            return self.complete_fix_run(run, job, actor, cancel, ticket).await;
         }
         let workspace = run
             .workspace
@@ -364,22 +435,36 @@ impl ReviewService {
         let row = workspaces::get_workspace(self.store.read(), workspace)
             .await?
             .ok_or(StoreError::Corrupt("check_runs.workspace_id"))?;
-        let permit = self.checks.start_permit(run.id, &*self.clock).await;
-        let dir = self.workspaces.workspace_dir(&row);
-        let owner = self
-            .checks
-            .owner(run.worker.as_ref().map(WorkerName::agent));
-        let results = run_gated_commands_for(
-            Some(&self.checks.gate(run.id)),
-            &owner,
-            &dir,
-            job.specs.clone(),
-            self.checks.limits(),
-            &*self.clock,
-        )
-        .instrument(tracing::info_span!("check_run", run = %run.id))
-        .await;
-        drop(permit);
+        let edits = self.workspaces.watch_edits(workspace);
+        let commands = async {
+            ticket.ready().await;
+            self.checks.setup_finished(workspace).await;
+            let permit = self.checks.start_permit(run.id, &*self.clock).await;
+            let dir = self.workspaces.workspace_dir(&row);
+            let owner = self
+                .checks
+                .owner(run.worker.as_ref().map(WorkerName::agent));
+            let results = run_gated_commands_for(
+                Some(&self.checks.gate(run.id)),
+                &owner,
+                &dir,
+                job.specs.clone(),
+                self.checks.limits(),
+                &*self.clock,
+            )
+            .instrument(tracing::info_span!("check_run", run = %run.id))
+            .await;
+            drop(permit);
+            results
+        };
+        let results = match self
+            .until_first_edit(&run, edits, &mut cancel, commands)
+            .await?
+        {
+            Ran::Ended(results) => results,
+            Ran::Edited(path) => return self.end_edited_run(&run, &path).await,
+            Ran::Cancelled(request) => return self.end_on_cancel(&run, request).await,
+        };
         let (mut verdict, checked) = self.recheck_workspace(&run, &results).await?;
         let mut refused = None;
         if verdict.state == RunState::Passed
@@ -412,18 +497,113 @@ impl ReviewService {
             .await
     }
 
+    /// The results of `commands`, unless a cancel comes first, or a scan finds an edit first and a snapshot of the workspace then differs from the checked tree: the commands are dropped, which kills their process groups or ends their wait for a permit, and the cancel or the edited path is returned. An edit the snapshot does not confirm, such as a scan of a write made before the run's snapshot, and a workspace that could not be snapshotted or was synced or restored leave the commands running, so `recheck_workspace` at the end of the run decides them.
+    pub(super) async fn until_first_edit(
+        &self,
+        run: &CheckRunRow,
+        mut edits: Option<crate::live::EditWatch>,
+        cancel: &mut CancelWatch,
+        commands: impl Future<Output = Vec<CommandResult>>,
+    ) -> Result<Ran, ReviewError> {
+        let mut commands = std::pin::pin!(commands);
+        loop {
+            let path = tokio::select! {
+                results = &mut commands => return Ok(Ran::Ended(results)),
+                request = cancel.next() => return Ok(Ran::Cancelled(request)),
+                path = next_edit(&mut edits) => path,
+            };
+            let Some(path) = path else {
+                edits = None;
+                continue;
+            };
+            let (verdict, checked) = self.recheck_workspace(run, &[]).await?;
+            drop(checked);
+            if verdict.reason == Some(RunReason::FilesChanged) {
+                tracing::info!(run = %run.id, "an edit in the workspace stopped the check run");
+                return Ok(Ran::Edited(path));
+            }
+        }
+    }
+
+    /// The end of a run that an edit stopped as `files_changed`, with the changed path in `checks.finished`.
+    pub(super) async fn end_edited_run(
+        &self,
+        run: &CheckRunRow,
+        path: &str,
+    ) -> Result<(), ReviewError> {
+        let extra = json!({ "path": path });
+        self.end_cut_run(
+            run,
+            RunReason::FilesChanged,
+            &extra,
+            &edited_message(run, path),
+        )
+        .await
+    }
+
+    /// The end of a run that `by` cancelled, as `cancelled` with `by` in `checks.finished`; the commands were dropped before.
+    pub(super) async fn end_cancelled_run(
+        &self,
+        run: &CheckRunRow,
+        by: &EventActor,
+    ) -> Result<(), ReviewError> {
+        let extra = json!({ "by": by.as_str() });
+        self.end_cut_run(
+            run,
+            RunReason::Cancelled,
+            &extra,
+            &cancelled_message(run, by),
+        )
+        .await
+    }
+
+    /// [`ReviewService::end_cancelled_run`] of `request`, which hears once the run has ended, whether this end wrote it or not.
+    pub(super) async fn end_on_cancel(
+        &self,
+        run: &CheckRunRow,
+        request: CancelRequest,
+    ) -> Result<(), ReviewError> {
+        let ended = self.end_cancelled_run(run, &request.by).await;
+        let _ = request.ended.send(());
+        ended
+    }
+
+    /// One write transaction: the end of a run cut short before its commands ended, failed with `reason`, without results, with `extra` in `checks.finished`, and `body` to the requesting worker.
+    async fn end_cut_run(
+        &self,
+        run: &CheckRunRow,
+        reason: RunReason,
+        extra: &serde_json::Value,
+        body: &str,
+    ) -> Result<(), ReviewError> {
+        let verdict = Verdict::failed(reason);
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        let ended = self
+            .store
+            .write(async |tx| {
+                if !end_run_with_in_tx(tx, &mut buffer, run, &[], verdict, extra, now).await? {
+                    return Ok(false);
+                }
+                tell_requester(tx, &mut buffer, run, body, now).await?;
+                Ok::<_, ReviewError>(true)
+            })
+            .await?;
+        if ended {
+            self.bus.publish(buffer);
+            self.workspaces.checks_changed().await;
+            tracing::info!(run = %run.id, state = verdict.state.as_str(), reason = verdict.reason.map(RunReason::as_str), "check run ended");
+        }
+        Ok(())
+    }
+
     /// The verdict of a finished run once the workspace is snapshotted again, with that workspace and snapshot when the snapshot equals the checked tree.
     async fn recheck_workspace(
         &self,
         run: &CheckRunRow,
         results: &[CommandResult],
     ) -> Result<(Verdict, Option<(WorkspaceRow, ProposalSnapshot)>), ReviewError> {
-        let live = workspaces::live_task_workspace(self.store.read(), run.task).await?;
-        let Some(live) = live.filter(|live| {
-            Some(live.id) == run.workspace
-                && live.base == run.base
-                && live.state == WorkspaceState::Active
-        }) else {
+        let Some(live) = self.run_workspace(run).await? else {
             return Ok((Verdict::failed(RunReason::WorkspaceChanged), None));
         };
         let snapshot = match self.workspaces.snapshot_for_proposal(&live).await {
@@ -434,9 +614,26 @@ impl ReviewService {
             }
         };
         if snapshot.tree != run.tree {
-            return Ok((Verdict::failed(RunReason::FilesChanged), None));
+            drop(snapshot);
+            // The snapshot waits for the workspace lock, so a sync or restore that held it has committed its base by now; the files it wrote are no edit.
+            let reason = if self.run_workspace(run).await?.is_some() {
+                RunReason::FilesChanged
+            } else {
+                RunReason::WorkspaceChanged
+            };
+            return Ok((Verdict::failed(reason), None));
         }
         Ok((Verdict::of(results), Some((live, snapshot))))
+    }
+
+    /// The task's live workspace while it is still the run's: the same workspace, on the same base, active.
+    async fn run_workspace(&self, run: &CheckRunRow) -> Result<Option<WorkspaceRow>, ReviewError> {
+        let live = workspaces::live_task_workspace(self.store.read(), run.task_run()?).await?;
+        Ok(live.filter(|live| {
+            Some(live.id) == run.workspace
+                && live.base == run.base
+                && live.state == WorkspaceState::Active
+        }))
     }
 
     /// One write transaction: the passed run's results and end, the proposal or version it waited for exactly as the command makes it at once, and a message to the author. The snapshot is held until the commit, as a proposal command holds it.
@@ -484,14 +681,15 @@ impl ReviewService {
                             .as_deref()
                             .ok_or(StoreError::Corrupt("check_runs.title"))?;
                         (
-                            open_in_tx(tx, &mut buffer, run.task, title, &input).await?,
+                            open_in_tx(tx, &mut buffer, run.task_run()?, title, &input).await?,
                             1,
                         )
                     }
                 };
                 let body = format!(
                     "fold made {proposal} v{version} for {}: its checks passed ({}).",
-                    run.task, run.id
+                    run.subject(),
+                    run.id
                 );
                 tell_requester(tx, &mut buffer, run, &body, now).await?;
                 Ok::<_, ReviewError>(Some(proposal))
@@ -553,17 +751,82 @@ impl ReviewService {
         let runs = checks::runs_of_version(&mut *conn, task, proposal, version).await?;
         let mut views = Vec::with_capacity(runs.len());
         for run in runs {
-            let results = checks::list_results(&mut *conn, run.id, false).await?;
-            let waiting_for_memory = runner.waiting_for_memory(run.id);
-            let waiting_for_check = runner.waiting_for_check(run.id);
-            views.push(CheckRunView {
-                run,
-                results,
-                waiting_for_memory,
-                waiting_for_check,
-            });
+            views.push(view_of(&mut *conn, runner, run, false).await?);
         }
         Ok(views)
+    }
+}
+
+/// The view of the stored run `run` on `conn`, with the logs of its results when `logs` is true and what it waits for in `runner`.
+async fn view_of(
+    conn: &mut SqliteConnection,
+    runner: &CheckRunner,
+    run: CheckRunRow,
+    logs: bool,
+) -> Result<CheckRunView, ReviewError> {
+    let results = checks::list_results(&mut *conn, run.id, logs).await?;
+    let flaky = checks::flaky_positions(&mut *conn, run.id).await?;
+    let cancelled_by = cancelled_by(&mut *conn, &run).await?;
+    Ok(CheckRunView {
+        waiting_for_memory: runner.waiting_for_memory(run.id),
+        waiting_for_check: runner.waiting_for_check(run.id),
+        waiting_for_run_slot: runner.waiting_for_run_slot(run.id),
+        waiting_for_build_slot: runner.waiting_for_build_slot(run.id),
+        run,
+        results,
+        flaky,
+        cancelled_by,
+    })
+}
+
+/// The `by` of the `checks.finished` event of `run` when it ended as `cancelled`, read in pages of the task's `checks.finished` events, as the cancel stores no column for it.
+async fn cancelled_by(
+    conn: &mut SqliteConnection,
+    run: &CheckRunRow,
+) -> Result<Option<String>, ReviewError> {
+    if run.reason != Some(RunReason::Cancelled) {
+        return Ok(None);
+    }
+    let filter = EventFilter {
+        types: vec![types::CHECKS_FINISHED],
+        task: run.task,
+        proposal: None,
+    };
+    let id = run.id.to_string();
+    let mut after = 0;
+    loop {
+        let page = events::read_after(&mut *conn, after, &filter, events::MAX_PAGE).await?;
+        let finished = page
+            .iter()
+            .find(|event| event.data.get("run").and_then(serde_json::Value::as_str) == Some(&id));
+        if let Some(event) = finished {
+            return Ok(event
+                .data
+                .get("by")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned));
+        }
+        match page.last() {
+            Some(last) if page.len() == events::MAX_PAGE => after = last.seq,
+            _ => return Ok(None),
+        }
+    }
+}
+
+/// How the commands of a proposal-stage run ended.
+pub(super) enum Ran {
+    Ended(Vec<CommandResult>),
+    /// The edit of this path stopped the run before its commands ended.
+    Edited(String),
+    /// A cancel stopped the run before its commands ended.
+    Cancelled(CancelRequest),
+}
+
+/// The next edit path of `edits`; it never resolves without a watch.
+async fn next_edit(edits: &mut Option<crate::live::EditWatch>) -> Option<String> {
+    match edits {
+        Some(edits) => edits.next().await,
+        None => std::future::pending().await,
     }
 }
 
@@ -599,6 +862,8 @@ pub(super) struct NewProposalRun<'a> {
     pub tree: ObjectHash,
     pub actor: &'a EventActor,
     pub waiting: Waiting<'a>,
+    /// The place of the run in the queue for a run place when it is written, from 1 at the front; `None` when it holds one.
+    pub slot: Option<usize>,
 }
 
 /// Writes a running proposal-stage run with `checks.started` in the caller's write, and refuses a second one of the same workspace with `checks_running`, which the run's unique index also decides.
@@ -618,7 +883,7 @@ pub(super) async fn insert_proposal_run(
         id,
         stage: Stage::Proposal,
         purpose: new.purpose,
-        task: new.task,
+        task: Some(new.task),
         workspace: Some(workspace),
         worker_id: new.worker_id,
         proposal: new.waiting.proposal,
@@ -630,6 +895,7 @@ pub(super) async fn insert_proposal_run(
         evidence: new.waiting.evidence,
         intent: new.waiting.intent,
         batch: None,
+        changeset: None,
     };
     match checks::insert_run(tx, &row, now).await {
         Ok(()) => {}
@@ -648,16 +914,27 @@ pub(super) async fn insert_proposal_run(
     if let Some(proposal) = new.waiting.proposal {
         event = event.proposal(proposal);
     }
-    let event = event.data(json!({
+    let mut data = json!({
         "run": id.to_string(),
         "stage": Stage::Proposal.as_str(),
         "purpose": new.purpose.as_str(),
-    }))?;
+    });
+    if let Some(position) = new.slot {
+        data["waiting_for"] = json!(RUN_SLOT);
+        data["position"] = json!(position);
+    }
+    let event = event.data(data)?;
     buffer.append(tx, &event, now).await?;
     Ok(checks::get_run(tx.conn(), id)
         .await?
         .ok_or(StoreError::Corrupt("check_runs.number"))?)
 }
+
+/// What a run that waits for its place under `[runs] max_parallel_runs` shows as `waiting_for`.
+pub const RUN_SLOT: &str = "run_slot";
+
+/// What a run whose command waits for a slot of the machine's build gate shows as `waiting_for`.
+pub const BUILD_SLOT: &str = "build_slot";
 
 /// A passed run of a proposal command with what its version needs.
 struct Gated<'a> {
@@ -694,7 +971,8 @@ fn refused_message(run: &CheckRunRow, error: &ReviewError) -> String {
     };
     let mut text = format!(
         "The checks of {} ({}) passed, but {what}: {message}.",
-        run.task, run.id
+        run.subject(),
+        run.id
     );
     if !hint.is_empty() {
         text.push_str(&format!(" Next: {hint}."));
@@ -750,8 +1028,12 @@ pub(super) async fn end_run_with_in_tx(
         };
         checks::insert_result(tx, run.id, &new).await?;
     }
+    let newly_flaky = checks::newly_flaky(tx.conn(), run.id).await?;
     if !checks::finish_run(tx, run.id, verdict.state, verdict.reason, now).await? {
         return Ok(false);
+    }
+    for flaky in &newly_flaky {
+        append_flaky(tx, buffer, run, flaky, now).await?;
     }
     let renewal = claims::renew_for_run(tx, run.id, now).await?;
     crate::services::tasks::append_renewed::<ReviewError>(tx, buffer, &renewal, now).await?;
@@ -772,12 +1054,41 @@ pub(super) async fn end_run_with_in_tx(
         "reason": verdict.reason.map(RunReason::as_str),
         "version": run.version,
     });
+    if let Some(changeset) = run.changeset {
+        data["changeset"] = json!(changeset.to_string());
+    }
     if let (Some(data), Some(extra)) = (data.as_object_mut(), extra.as_object()) {
         data.extend(extra.clone());
     }
     let event = event.data(data)?;
     buffer.append(tx, &event, now).await?;
     Ok(true)
+}
+
+/// Appends `checks.flaky` for an earlier run whose failed checks the passes of `run` made flaky. The data holds run ids and check names only.
+async fn append_flaky(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    run: &CheckRunRow,
+    flaky: &NewlyFlaky,
+    now: Timestamp,
+) -> Result<(), ReviewError> {
+    let mut event = NewEvent::new(types::CHECKS_FLAKY, EventActor::fold())?
+        .task(run.task)
+        .revision(run.base);
+    if let Some(workspace) = run.workspace {
+        event = event.workspace(workspace);
+    }
+    if let Some(proposal) = run.proposal {
+        event = event.proposal(proposal);
+    }
+    let event = event.data(json!({
+        "run": flaky.run.to_string(),
+        "passed_run": run.id.to_string(),
+        "checks": flaky.checks,
+    }))?;
+    buffer.append(tx, &event, now).await?;
+    Ok(())
 }
 
 /// Sends `body` from fold to the worker that asked for the run, linked to its task and proposal.
@@ -796,7 +1107,15 @@ pub(super) async fn tell_requester(
         target: Target::Worker(worker.clone()),
         addressed_as: AddressedAs::Worker,
     };
-    send_from_fold_in_tx(tx, buffer, vec![to], (run.task, run.proposal), &body, now).await?;
+    send_from_fold_in_tx(
+        tx,
+        buffer,
+        vec![to],
+        (run.task_run()?, run.proposal),
+        &body,
+        now,
+    )
+    .await?;
     Ok(())
 }
 
@@ -806,7 +1125,7 @@ pub(super) fn result_message(
     results: &[CommandResult],
     verdict: Verdict,
 ) -> String {
-    let subject = format!("The checks of {} ({})", run.task, run.id);
+    let subject = format!("The checks of {} ({})", run.subject(), run.id);
     let again = again_tool(run.purpose);
     match verdict.reason {
         None => {
@@ -836,8 +1155,12 @@ pub(super) fn result_message(
             let what = match reason {
                 RunReason::SetupFailed => "the setup failed, so no check ran".to_owned(),
                 RunReason::Killed => format!(
-                    "{} killed: out of memory or by a signal, not a test failure; run the checks again when the machine has free memory",
-                    failed.join(", ")
+                    "{} killed: out of memory or by a signal, not a test failure, so no later check ran; run the checks again when the machine has free memory",
+                    killed_names(results).join(", ")
+                ),
+                RunReason::NoBuildSlot => format!(
+                    "{} found no free build slot: the machine has no free build slot, not a fault of the code, so no later check ran; run the checks again when the machine is less busy",
+                    no_slot_names(results).join(", ")
                 ),
                 _ => failed.join(", "),
             };
@@ -860,6 +1183,63 @@ pub(super) fn result_message(
             text
         }
     }
+}
+
+/// The name of each command that a signal fold did not send ended, with the signal.
+fn killed_names(results: &[CommandResult]) -> Vec<String> {
+    results
+        .iter()
+        .filter_map(|result| {
+            let signal = result.killed?;
+            let name = result.check.as_deref().unwrap_or("setup");
+            Some(format!("{name} (signal {signal})"))
+        })
+        .collect()
+}
+
+/// The commands that fold stopped because no build gate slot was free in time.
+fn no_slot_names(results: &[CommandResult]) -> Vec<&str> {
+    results
+        .iter()
+        .filter(|result| result.no_build_slot)
+        .map(|result| result.check.as_deref().unwrap_or("setup"))
+        .collect()
+}
+
+/// The result message of a run that `by` cancelled before its commands ended.
+fn cancelled_message(run: &CheckRunRow, by: &EventActor) -> String {
+    let mut text = format!(
+        "The checks of {} ({}) were cancelled by {}: fold stopped the running command and started no later check.",
+        run.subject(),
+        run.id,
+        by.as_str()
+    );
+    if let Some(gate) = gate_sentence(run) {
+        text.push(' ');
+        text.push_str(&gate);
+    } else {
+        text.push_str(&format!(
+            " Call {} again when you need a result.",
+            again_tool(run.purpose)
+        ));
+    }
+    text
+}
+
+/// The result message of a run that the edit of `path` stopped before its commands ended.
+fn edited_message(run: &CheckRunRow, path: &str) -> String {
+    let mut text = format!(
+        "The checks of {} ({}) failed: {path} changed during the run, so fold stopped the run at once. Do not edit the files of the workspace until checks.finished; when a check wrote the file, put what it writes in .gitignore or .foldignore.",
+        run.subject(),
+        run.id
+    );
+    if let Some(gate) = gate_sentence(run) {
+        text.push(' ');
+        text.push_str(&gate);
+    } else {
+        text.push_str(&format!(" Call {} again.", again_tool(run.purpose)));
+    }
+    text
 }
 
 /// What a failed run of a proposal command did not make, and how to ask again.
@@ -885,6 +1265,7 @@ fn again_tool(purpose: Purpose) -> &'static str {
         Purpose::CreateProposal => "create_proposal",
         Purpose::UpdateProposal => "update_proposal",
         Purpose::ReviewFix => "submit_review_fix",
+        Purpose::IntegrateDirect => "submit_main_change",
         Purpose::Check | Purpose::Integrate => "run_checks",
     }
 }
@@ -951,7 +1332,7 @@ pub async fn recover_check_runs(
                 let again = again_tool(run.purpose);
                 let body = format!(
                     "fold stopped while the checks of {} ran ({}), so they have no result. Call {again} again.",
-                    run.task, run.id
+                    run.subject(), run.id
                 );
                 tell_requester(tx, &mut buffer, &run, &body, now).await?;
                 Ok::<_, ReviewError>(true)
@@ -966,7 +1347,7 @@ pub async fn recover_check_runs(
     Ok(ended)
 }
 
-fn run_not_found(run: CheckRunId) -> ReviewError {
+pub(super) fn run_not_found(run: CheckRunId) -> ReviewError {
     FoldError::new(codes::CHECK_RUN_NOT_FOUND, format!("{run} does not exist"))
         .with_details([("run", json!(run.to_string()))])
         .with_hint("call get_proposal to see the check runs of a proposal")
@@ -983,19 +1364,6 @@ pub(super) fn checks_running(run: CheckRunId, workspace: WorkspaceId) -> ReviewE
         ("workspace", json!(workspace.to_string())),
     ])
     .with_hint("wait for fold's message with the result, then try again")
-    .into()
-}
-
-fn changed_meanwhile(workspace: WorkspaceId) -> ReviewError {
-    FoldError::new(
-        codes::INVALID_REQUEST,
-        format!("{workspace} changed while it was recorded"),
-    )
-    .with_details([
-        ("reason", json!("workspace_changed")),
-        ("workspace", json!(workspace.to_string())),
-    ])
-    .with_hint("call the command again")
     .into()
 }
 
@@ -1017,7 +1385,8 @@ mod tests {
             log: b"line 1\nline 2\nboom\n".to_vec(),
             log_bytes: 19,
             fault: false,
-            killed: false,
+            killed: None,
+            no_build_slot: false,
         }
     }
 
@@ -1026,7 +1395,7 @@ mod tests {
             id: CheckRunId::from_number(4).unwrap(),
             stage: Stage::Proposal,
             purpose: Purpose::Check,
-            task: TaskId::from_number(12).unwrap(),
+            task: TaskId::from_number(12),
             workspace: WorkspaceId::from_number(3),
             worker: None,
             proposal: None,
@@ -1042,6 +1411,7 @@ mod tests {
             created_at: Timestamp::from_millis(0).unwrap(),
             finished_at: None,
             batch: None,
+            changeset: None,
         }
     }
 
@@ -1063,7 +1433,7 @@ mod tests {
         );
         assert_eq!(Verdict::of(&[]), Verdict::passed());
         let killed = CommandResult {
-            killed: true,
+            killed: Some(9),
             ..result(Some("test"), Outcome::Failed, true)
         };
         let red = result(Some("lint"), Outcome::Failed, true);
@@ -1075,7 +1445,57 @@ mod tests {
             required: false,
             ..killed
         };
-        assert_eq!(Verdict::of(&[optional]), Verdict::passed());
+        assert_eq!(
+            Verdict::of(std::slice::from_ref(&optional)),
+            Verdict::failed(RunReason::Killed),
+            "no later command ran"
+        );
+        let text = result_message(&run(), &[optional], Verdict::failed(RunReason::Killed));
+        assert!(text.contains("test (signal 9) killed"), "{text}");
+    }
+
+    #[test]
+    fn a_command_without_a_build_slot_fails_the_run_with_no_build_slot() {
+        let waited = CommandResult {
+            required: false,
+            no_build_slot: true,
+            ..result(Some("test"), Outcome::TimedOut, true)
+        };
+        let red = result(Some("lint"), Outcome::Failed, true);
+        let verdict = Verdict::of(&[red, waited.clone()]);
+        assert_eq!(verdict, Verdict::failed(RunReason::NoBuildSlot));
+        let killed = CommandResult {
+            killed: Some(9),
+            ..result(Some("lint"), Outcome::Failed, true)
+        };
+        assert_eq!(
+            Verdict::of(&[killed, waited.clone()]),
+            Verdict::failed(RunReason::Killed)
+        );
+        let text = result_message(&run(), &[waited], verdict);
+        assert!(
+            text.contains("test found no free build slot: the machine has no free build slot, not a fault of the code"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_cancel_message_names_who_cancelled_and_how_to_ask_again() {
+        let by = EventActor::human(&fold_core::HumanName::parse("ana").unwrap());
+        let text = cancelled_message(&run(), &by);
+        assert!(
+            text.starts_with("The checks of T-12 (cr-4) were cancelled by human:ana"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("Call run_checks again when you need a result."),
+            "{text}"
+        );
+        let gated = CheckRunRow {
+            purpose: Purpose::CreateProposal,
+            ..run()
+        };
+        assert!(cancelled_message(&gated, &by).contains("call create_proposal again"));
     }
 
     #[test]

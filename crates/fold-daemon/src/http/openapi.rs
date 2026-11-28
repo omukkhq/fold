@@ -25,8 +25,10 @@ const CLIENT_HEADER_REQUIRED: &str =
     "`client_header_required`: a write over TCP lacks the `x-fold-client` header";
 const SESSION_REFUSED: &str = "`auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked";
 const WORKER_PEER_REFUSED: &str = "`worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs";
-/// Every route that takes a `Human` declares this code, which marks it for [`WORKER_PEER_REFUSED`].
+/// A route that requires a `Human` declares this code, which marks it for [`WORKER_PEER_REFUSED`].
 const HUMAN_NAME_REQUIRED: &str = "`human_name_required`";
+/// A route that takes an `Option<Human>` has no `human_name_required`, so it declares this extension instead, which marks it for [`WORKER_PEER_REFUSED`].
+pub const TAKES_HUMAN_EXTENSION: &str = "x-fold-takes-human";
 
 /// Declares the errors that no route states itself: those of the route layers, which answer before any handler (`host_not_allowed` on every operation, `client_header_required` on every write, the session errors on every operation of `guarded`), and `worker_peer_refused` of the `Human` extractor on every operation that takes a human.
 pub fn declare_layer_errors(doc: &mut OpenApi, guarded: &OpenApi) {
@@ -56,10 +58,15 @@ pub fn declare_layer_errors(doc: &mut OpenApi, guarded: &OpenApi) {
 }
 
 fn takes_human(operation: &Operation) -> bool {
-    matches!(
+    let requires_name = matches!(
         operation.responses.responses.get("401"),
         Some(RefOr::T(response)) if response.description.starts_with(HUMAN_NAME_REQUIRED)
-    )
+    );
+    requires_name
+        || operation
+            .extensions
+            .as_ref()
+            .is_some_and(|extensions| extensions.contains_key(TAKES_HUMAN_EXTENSION))
 }
 
 fn operations_mut(item: &mut PathItem) -> impl Iterator<Item = &mut Operation> {

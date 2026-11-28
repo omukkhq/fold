@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
-use fold_cli::claude_files::{self, SKILL_FILES, SKILL_TEXTS, role_skill_file};
+use fold_cli::claude_files::{
+    self, ON_DEMAND_FILES, ON_DEMAND_TEXTS, SKILL_FILES, SKILL_TEXTS, role_skill_file,
+};
 use fold_core::roles::Role;
 
 /// The rules every skill ends with.
@@ -42,6 +44,26 @@ fn role_skill(role: Role) -> &'static str {
     skill_text(role_skill_file(role))
 }
 
+/// The on-demand files that `text` names, by file name in backticks, each with its text.
+#[cfg(test)]
+fn named_on_demand(text: &str) -> Vec<(&'static str, &'static str)> {
+    ON_DEMAND_FILES
+        .into_iter()
+        .zip(ON_DEMAND_TEXTS)
+        .filter(|(path, _)| text.contains(&format!("`{}`", skill_name(path))))
+        .collect()
+}
+
+/// What a session of `role` reads: its skill and every on-demand file its skill names.
+#[cfg(test)]
+fn role_reading(role: Role) -> String {
+    let skill = role_skill(role);
+    std::iter::once(skill)
+        .chain(named_on_demand(skill).into_iter().map(|(_, text)| text))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The `fold` skill: the index of the role skills and the skill of a session opened by hand.
 #[cfg(test)]
 fn index() -> &'static str {
@@ -68,7 +90,7 @@ fn skill_identifiers() -> BTreeSet<String> {
         .collect()
 }
 
-const FOLD_TOOLS: [&str; 101] = [
+const FOLD_TOOLS: [&str; 105] = [
     "register_agent",
     "list_agents",
     "define_area",
@@ -109,6 +131,8 @@ const FOLD_TOOLS: [&str; 101] = [
     "send_back_task",
     "set_hold",
     "clear_hold",
+    "watch_tasks",
+    "unwatch_tasks",
     "get_repository_state",
     "get_revision",
     "compare_revisions",
@@ -158,6 +182,8 @@ const FOLD_TOOLS: [&str; 101] = [
     "submit_review_fix",
     "run_checks",
     "get_check_run",
+    "cancel_check_run",
+    "list_flaky_checks",
     "set_review_scope",
     "restart_worker",
     "mark_answered",
@@ -176,7 +202,7 @@ const FOLD_TOOLS: [&str; 101] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 189] = [
+const FOLD_ERROR_CODES: [&str; 194] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -333,6 +359,8 @@ const FOLD_ERROR_CODES: [&str; 189] = [
     "checks_file_invalid",
     "checks_running",
     "check_run_not_found",
+    "check_cancel_denied",
+    "check_run_ended",
     "worker_claim_denied",
     "main_area",
     "ask_not_open",
@@ -366,13 +394,16 @@ const FOLD_ERROR_CODES: [&str; 189] = [
     "account_exists",
     "account_not_found",
     "account_token_rejected",
+    "daemon_restarting",
+    "main_session_taken_over",
+    "invalid_permission_rule",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
 const PENDING_ERROR_CODES: [&str; 1] = ["too_large"];
 
 /// The `invalid_request` reasons that have a name.
-const INVALID_REQUEST_REASONS: [&str; 16] = [
+const INVALID_REQUEST_REASONS: [&str; 19] = [
     "self_dependency",
     "checklist_origin",
     "linked_item",
@@ -389,9 +420,13 @@ const INVALID_REQUEST_REASONS: [&str; 16] = [
     "two_areas",
     "main_approves",
     "batch_waiting",
+    "integration_run",
+    "branch_exists",
+    "folder_held",
 ];
 
-const NON_TOOL_NAMES: [&str; 78] = [
+const NON_TOOL_NAMES: [&str; 86] = [
+    "waits_for",
     "next_offset",
     "file_count",
     "human_review",
@@ -420,6 +455,8 @@ const NON_TOOL_NAMES: [&str; 78] = [
     "clear_instructions",
     "clear_model",
     "clear_mcp",
+    "deny_commands",
+    "clear_deny_commands",
     "no_proposal",
     "human_change",
     "new_files",
@@ -468,8 +505,13 @@ const NON_TOOL_NAMES: [&str; 78] = [
     "wait_for",
     "needs_person",
     "waiting_for",
+    "build_slot",
+    "no_build_slot",
     "max_parallel",
     "waiting_check",
+    "created_at",
+    "include_handoffs",
+    "out_of_handles",
 ];
 
 /// The sections of the index before the shared ones.
@@ -494,40 +536,20 @@ fn role_sections(role: Role) -> &'static [&'static str] {
     match role {
         Role::Main => &[
             "Orchestrating",
+            "On-demand files",
             "Identity",
             "Orchestrator",
             "Task template",
-            "Drafting requests",
-            "Task kinds",
-            "Worker agents",
-            "Building a task",
-            "Reviewing",
-            "Review batches",
-            "Review scope",
-            "Integration",
         ],
         Role::AreaLead => &[
             "Area lead",
+            "On-demand files",
             "Orchestrator",
             "Task template",
-            "Drafting requests",
-            "Task kinds",
-            "Worker agents",
         ],
-        Role::ReviewLead => &[
-            "Review lead",
-            "Review scope",
-            "Integration",
-            "Worker agents",
-        ],
-        Role::TaskWorker => &["Task worker", "Building a task", "Task kinds"],
-        Role::Reviewer => &[
-            "Reviewer",
-            "Review batches",
-            "Reviewing",
-            "Review scope",
-            "Integration",
-        ],
+        Role::ReviewLead => &["Review lead", "On-demand files", "Review scope"],
+        Role::TaskWorker => &["Task worker", "On-demand files", "Building a task"],
+        Role::Reviewer => &["Reviewer", "On-demand files", "Reviewing", "Review scope"],
     }
 }
 
@@ -987,7 +1009,18 @@ fn the_skill_index_names_every_skill_and_file() {
         );
         assert_eq!(std::path::Path::new(path).parent(), index_folder, "{path}");
     }
-    assert_eq!(SKILL_FILES.len(), Role::ALL.len() + 3);
+    for path in ON_DEMAND_FILES {
+        let name = skill_name(path);
+        assert!(
+            index().contains(&format!("- `{name}`, next to this file: ")),
+            "SKILL.md does not list `{name}`"
+        );
+        assert_eq!(std::path::Path::new(path).parent(), index_folder, "{path}");
+    }
+    assert_eq!(
+        SKILL_FILES.len(),
+        Role::ALL.len() + 3 + ON_DEMAND_FILES.len()
+    );
     let own = index()
         .strip_suffix(SHARED)
         .expect("the shared rules end the index");
@@ -1027,7 +1060,7 @@ fn each_role_reaches_every_step_of_its_role() {
     for role in Role::ALL {
         let named: BTreeSet<String> = backticked_identifiers(role.prompt())
             .into_iter()
-            .chain(backticked_identifiers(role_skill(role)))
+            .chain(backticked_identifiers(&role_reading(role)))
             .collect();
         for tool in role_steps(role) {
             assert!(FOLD_TOOLS.contains(tool), "{role}: `{tool}` is no tool");
@@ -1046,7 +1079,7 @@ fn each_role_reaches_every_step_of_its_role() {
     ] {
         assert!(worker.contains(kept), "{kept}");
     }
-    let reviewer = role_skill(Role::Reviewer);
+    let reviewer = role_reading(Role::Reviewer);
     for kept in [
         "`suggested_scope`",
         "`scope_rules`",
@@ -1077,8 +1110,9 @@ fn each_shared_rule_is_once_in_every_skill_that_needs_it() {
         assert_eq!(text.matches(requester).count(), 1);
     }
     for role in [Role::Main, Role::Reviewer] {
+        assert!(role_skill(role).contains("`BATCHES.md`"), "{role}");
         assert_eq!(
-            role_skill(role).matches("## Review batches\n").count(),
+            role_reading(role).matches("## Review batches\n").count(),
             1,
             "{role}"
         );
@@ -1137,8 +1171,95 @@ fn the_skill_uses_exactly_the_four_verdicts() {
     for role in [Role::Reviewer, Role::Main] {
         for verdict in ["comment", "request_changes", "approve", "reject"] {
             assert!(
-                role_skill(role).contains(&format!("`{verdict}`")),
+                role_reading(role).contains(&format!("`{verdict}`")),
                 "{role}: {verdict}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_approving_reviewer_keeps_its_claim_until_the_proposal_ends() {
+    for (role, rule) in [
+        (
+            Role::Reviewer,
+            "it keeps its claim and session until the proposal is integrated or closed",
+        ),
+        (
+            Role::Reviewer,
+            "fold resumes it there for a new version or a conflict",
+        ),
+        (
+            Role::ReviewLead,
+            "That reviewer keeps its claim and session until the proposal is integrated or closed",
+        ),
+        (
+            Role::ReviewLead,
+            "or when its session is gone, fold sends you a notice",
+        ),
+    ] {
+        assert!(role_skill(role).contains(rule), "{role}: {rule}");
+    }
+}
+
+/// A session loads its role skill whole on every start, so each one stays short: the rarer procedures are in the on-demand files.
+#[test]
+fn each_role_skill_stays_within_its_size() {
+    for role in Role::ALL {
+        let limit = if role == Role::Main { 40_000 } else { 27_000 };
+        let size = role_skill(role).len();
+        assert!(size <= limit, "{role}: {size} bytes, limit {limit}");
+    }
+}
+
+#[test]
+fn every_on_demand_file_is_named_by_a_role_skill_and_every_named_file_is_written() {
+    for (path, text) in ON_DEMAND_FILES.into_iter().zip(ON_DEMAND_TEXTS) {
+        assert!(SKILL_FILES.contains(&path), "{path}");
+        assert!(text.starts_with("# fold: "), "{path}");
+        assert_eq!(text.matches("\n# ").count(), 0, "{path}: one title");
+        assert!(
+            Role::ALL
+                .into_iter()
+                .any(|role| named_on_demand(role_skill(role))
+                    .iter()
+                    .any(|(named, _)| *named == path)),
+            "no role skill names {path}"
+        );
+    }
+    let written: BTreeSet<&str> = SKILL_FILES.into_iter().map(skill_name).collect();
+    for (name, text) in skill_files() {
+        for word in text.split('`') {
+            if word.ends_with(".md")
+                && word.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                && !word.contains('/')
+                && !["AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "SKILL.md"].contains(&word)
+            {
+                assert!(
+                    written.contains(word),
+                    "{name} names `{word}`, which fold does not write"
+                );
+            }
+            if word.starts_with(".claude/skills/fold") && word.ends_with(".md") {
+                assert!(
+                    SKILL_FILES.contains(&word),
+                    "{name} names `{word}`, which fold does not write"
+                );
+            }
+        }
+    }
+    for role in Role::ALL {
+        let skill = role_skill(role);
+        let section = skill
+            .split("\n## On-demand files\n")
+            .nth(1)
+            .and_then(|rest| rest.split("\n## ").next())
+            .unwrap_or_else(|| panic!("{role} has no On-demand files section"));
+        assert!(section.contains("`.claude/skills/fold/`"), "{role}");
+        for (path, _) in named_on_demand(skill) {
+            assert!(
+                section.contains(&format!("- `{}`: ", skill_name(path))),
+                "{role} names {path}, which its On-demand files list leaves out"
             );
         }
     }
@@ -1151,7 +1272,7 @@ fn the_skill_sends_missing_work_back_and_new_work_to_a_request() {
         "Describe new work outside the task, such as a feature the task did not ask for, with `create_request`; the proposal can still be approved.",
     ] {
         for role in [Role::Reviewer, Role::Main] {
-            assert!(role_skill(role).contains(rule), "{role}: {rule}");
+            assert!(role_reading(role).contains(rule), "{role}: {rule}");
         }
     }
 }
@@ -1334,7 +1455,7 @@ const REFERENCE_SECTIONS: [&str; 8] = [
 ];
 
 /// Backticked names of the reference that are neither tools, codes, config or checks keys nor run states, but the values and fields it explains.
-const REFERENCE_NAMES: [&str; 11] = [
+const REFERENCE_NAMES: [&str; 14] = [
     "session_days",
     "check_runs",
     "check_memory_gb",
@@ -1346,6 +1467,9 @@ const REFERENCE_NAMES: [&str; 11] = [
     "target_changed",
     "stash_changed",
     "needs_confirmation",
+    "held_by",
+    "not_shown",
+    "passed_run",
 ];
 
 /// Every key of `.fold/config.toml` as `(section, key)`, from the serialised form of a config that sets every optional key, so a new field of the config structs fails the reference test until the reference shows it. A section of named tables, such as `[remotes.<name>]`, is its name with a `.` after it.
@@ -1530,9 +1654,16 @@ fn the_reference_shows_every_config_key_in_its_example() {
 #[test]
 fn the_reference_names_every_checks_key_and_run_state() {
     let top = checks_keys("");
-    assert_eq!(top, ["setup", "check", "serial"]);
+    assert_eq!(top, ["setup", "check", "serial", "runs"]);
     assert!(REFERENCE.contains("`[setup]`") && REFERENCE.contains("`[[check]]`"));
     assert!(REFERENCE.contains("`[[serial]]`") && REFERENCE.contains("`paths`"));
+    // The keys of [runs] hold an underscore, which the backticked-name check of the reference would need on its list, so the reference names them without backticks.
+    for key in checks_keys("[runs]\n") {
+        assert!(
+            REFERENCE.contains(&format!("[runs] with {key}")),
+            "REFERENCE.md does not name the checks key {key} of [runs]"
+        );
+    }
     for key in checks_keys("[setup]\n")
         .into_iter()
         .chain(checks_keys("[[check]]\nname = \"a\"\nrun = \"b\"\n"))

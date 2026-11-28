@@ -156,6 +156,7 @@ struct RawArea {
     instructions: Option<String>,
     model: Option<String>,
     mcp: String,
+    deny_commands: String,
     created_by: String,
     created_at: i64,
 }
@@ -163,6 +164,8 @@ struct RawArea {
 fn area_row(raw: RawArea) -> Result<AreaRow, StoreError> {
     let mcp: Vec<String> =
         serde_json::from_str(&raw.mcp).map_err(|_| StoreError::Corrupt("area_mcp_servers"))?;
+    let deny: Vec<String> = serde_json::from_str(&raw.deny_commands)
+        .map_err(|_| StoreError::Corrupt("area_deny_commands"))?;
     Ok(AreaRow {
         id: raw.id,
         name: AreaName::parse(&raw.name).map_err(|_| StoreError::Corrupt("areas.name"))?,
@@ -176,6 +179,7 @@ fn area_row(raw: RawArea) -> Result<AreaRow, StoreError> {
             instructions: raw.instructions,
             model: raw.model,
             mcp: (!mcp.is_empty()).then_some(mcp),
+            deny_commands: (!deny.is_empty()).then_some(deny),
         },
         created_by: raw.created_by,
         created_at: time(raw.created_at, "areas.created_at")?,
@@ -229,6 +233,8 @@ pub async fn find_area(
                   a.instructions, a.model,
                   (SELECT json_group_array(m.name ORDER BY m.position) FROM area_mcp_servers m
                    WHERE m.area_id = a.id) AS "mcp!: String",
+                  (SELECT json_group_array(d.rule ORDER BY d.position) FROM area_deny_commands d
+                   WHERE d.area_id = a.id) AS "deny_commands!: String",
                   a.created_by, a.created_at
            FROM areas a JOIN labels l ON l.id = a.label_id LEFT JOIN agents g ON g.id = a.lead_agent_id
            WHERE a.name = ?"#,
@@ -247,6 +253,8 @@ pub async fn list_areas(executor: impl SqliteExecutor<'_>) -> Result<Vec<AreaRow
                   a.instructions, a.model,
                   (SELECT json_group_array(m.name ORDER BY m.position) FROM area_mcp_servers m
                    WHERE m.area_id = a.id) AS "mcp!: String",
+                  (SELECT json_group_array(d.rule ORDER BY d.position) FROM area_deny_commands d
+                   WHERE d.area_id = a.id) AS "deny_commands!: String",
                   a.created_by, a.created_at
            FROM areas a JOIN labels l ON l.id = a.label_id LEFT JOIN agents g ON g.id = a.lead_agent_id
            ORDER BY a.name"#
@@ -256,7 +264,7 @@ pub async fn list_areas(executor: impl SqliteExecutor<'_>) -> Result<Vec<AreaRow
     rows.into_iter().map(area_row).collect()
 }
 
-/// Replaces the area's profile: its instructions, its model and its MCP servers in their order.
+/// Replaces the area's profile: its instructions, its model, and its MCP servers and denied commands in their order.
 pub async fn set_area_profile(
     tx: &mut WriteTx,
     area_id: i64,
@@ -284,7 +292,44 @@ pub async fn set_area_profile(
         .execute(tx.conn())
         .await?;
     }
+    sqlx::query!("DELETE FROM area_deny_commands WHERE area_id = ?", area_id)
+        .execute(tx.conn())
+        .await?;
+    for (position, rule) in profile.deny_commands.iter().flatten().enumerate() {
+        let position = i64::try_from(position).unwrap_or(i64::MAX);
+        sqlx::query!(
+            "INSERT INTO area_deny_commands (area_id, position, rule) VALUES (?, ?, ?)",
+            area_id,
+            position,
+            rule
+        )
+        .execute(tx.conn())
+        .await?;
+    }
     Ok(())
+}
+
+/// The areas of the tasks of the proposals bound to the worker process, each once in name order, without `main`: the areas whose denied commands a reviewer gets.
+pub async fn areas_of_bound_proposals(
+    executor: impl SqliteExecutor<'_>,
+    worker_process_id: i64,
+) -> Result<Vec<AreaName>, StoreError> {
+    let names = sqlx::query_scalar!(
+        r#"SELECT DISTINCT a.name AS "name!: String"
+           FROM worker_proposals b
+           JOIN proposals p ON p.id = b.proposal_id
+           JOIN task_labels tl ON tl.task_id = p.task_id
+           JOIN areas a ON a.label_id = tl.label_id
+           WHERE b.worker_process_id = ? AND a.name <> 'main'
+           ORDER BY a.name"#,
+        worker_process_id
+    )
+    .fetch_all(executor)
+    .await?;
+    names
+        .iter()
+        .map(|name| AreaName::parse(name).map_err(|_| StoreError::Corrupt("areas.name")))
+        .collect()
 }
 
 /// Makes `agent_id` the area's lead. The `areas_lead_once` trigger refuses a second lead.
@@ -1494,7 +1539,7 @@ pub struct OwedStart {
     pub resume: fold_core::roles::OwedResume,
 }
 
-/// Every resume that fold owes a stopped or failed task worker or reviewer, one per worker, oldest first: the requested changes, conflicts and failed integration checks of [`pending_resumes`], the send-backs of `reports::owed_send_backs`, the failed proposal checks of `checks::owed_gate_runs` and the reviews of [`reviews_owed_to_ended_reviewers`], each dated by the time its work came after the worker last started. A worker owed several is dated by its oldest. Each comes with the running workers of its role in its area, so the limits can say whether it can take a place.
+/// Every resume that fold owes a stopped or failed task worker or reviewer, one per worker, oldest first: the requested changes, conflicts and failed integration checks of [`pending_resumes`], the send-backs of `reports::owed_send_backs`, the failed proposal checks of `checks::owed_gate_runs`, the reviews of [`reviews_owed_to_ended_reviewers`] and the conflicts, or lane failures of integration checks, of an open proposal whose newest version the reviewer approved and whose review claim it holds, while the latest verdict does not request changes and the reviewer's session is not gone, each dated by the time its work came after the worker last started. A worker owed several is dated by its oldest. Each comes with the running workers of its role in its area, so the limits can say whether it can take a place.
 pub async fn owed_starts(executor: impl SqliteExecutor<'_>) -> Result<Vec<OwedStart>, StoreError> {
     let rows = sqlx::query!(
         r#"WITH latest AS (
@@ -1573,6 +1618,28 @@ pub async fn owed_starts(executor: impl SqliteExecutor<'_>) -> Result<Vec<OwedSt
                JOIN workers k ON k.id = c.worker_id AND k.agent_id = w.agent_id
                WHERE w.role = 'reviewer' AND w.state IN ('stopped', 'failed')
                  AND (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) IS NULL
+               UNION ALL
+               SELECT w.id,
+                      COALESCE(
+                          (SELECT MIN(i.created_at) FROM integrations i
+                           WHERE i.version_id = l.version_id AND i.result = 'conflicted' AND i.created_at > w.started_at),
+                          (SELECT MIN(r.finished_at) FROM check_runs r
+                           WHERE r.version_id = l.version_id AND r.stage = 'integration' AND r.state = 'failed'
+                             AND r.finished_at > w.started_at)),
+                      t.number, p.number
+               FROM worker_processes w
+               JOIN worker_proposals b ON b.worker_process_id = w.id
+               JOIN proposals p ON p.id = b.proposal_id AND p.state = 'open' AND p.conflicted
+               JOIN tasks t ON t.id = p.task_id
+               JOIN latest l ON l.proposal_id = p.id
+               JOIN claims c ON c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL
+               JOIN workers k ON k.id = c.worker_id AND k.agent_id = w.agent_id
+               WHERE w.role = 'reviewer' AND w.state IN ('stopped', 'failed')
+                 AND w.failed_reason IS NOT 'session_lost'
+                 AND EXISTS (SELECT 1 FROM reviews r JOIN workers rw ON rw.id = r.reviewer_worker_id
+                             WHERE r.version_id = l.version_id AND r.verdict = 'approve'
+                               AND rw.agent_id = w.agent_id)
+                 AND COALESCE((SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id), '') <> 'request_changes'
            )
            SELECT g.name AS "agent!: String", w.role AS "role!: String", ar.name AS "area?: String",
                   (SELECT COUNT(*) FROM worker_processes y

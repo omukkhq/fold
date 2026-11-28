@@ -10,7 +10,7 @@ use fold_core::reviews::{
 use fold_core::text::shorten;
 use fold_core::{
     Actor, ChangesetId, CommentId, FoldError, HumanName, IdParseError, ProposalId, TaskId,
-    WorkerName, codes,
+    Timestamp, WorkerName, codes,
 };
 use fold_store::reviews::ProposalState;
 use fold_vcs::compare::Totals;
@@ -22,12 +22,13 @@ use serde_json::{Value, json};
 
 use super::FoldServer;
 use super::error::from_review;
-use super::parse;
 use super::workspaces::{file_diff_value, file_line};
+use super::{full_detail, parse};
 use crate::services::reviews::{
-    ChangeRange, CommentInput, CommentLocation, CommentView, DEFAULT_PROPOSAL_LIST, DirectChange,
-    DirectOutcome, FixOutcome, IntegrationOutcome, ProposalDetail, ProposalFilter, ProposalSummary,
-    ProposalView, Proposed, ReviewFix, ReviewService, direct_conflicted, integration_conflicted,
+    ChangeRange, CommentInput, CommentLocation, CommentView, ConflictedReason,
+    DEFAULT_PROPOSAL_LIST, DirectChange, DirectOutcome, FixOutcome, IntegrationOutcome,
+    ProposalDetail, ProposalFilter, ProposalSummary, ProposalView, Proposed, QueueStanding,
+    ReviewFix, ReviewService, WaitReason, direct_conflicted, integration_conflicted,
     scope_suggestion,
 };
 use crate::services::workspaces::StateComparison;
@@ -157,46 +158,12 @@ impl From<IntentInput> for ProposalIntent {
     }
 }
 
-/// The intent argument of `tool` decoded: a missing or `null` intent is `invalid_intent` with the reason `missing`, and one that does not have the form of [`IntentInput`] is `invalid_intent` with the reason `shape` and the path of the first value that does not fit, such as `intent.parts[0].files`. The path stops before the first key that is not one of the schema's field names, such as an unknown key, so it never holds the agent's text.
+/// The intent argument of `tool` decoded: a missing or `null` intent is `invalid_intent` with the reason `missing`, and one that does not have the form of [`IntentInput`] is `invalid_intent` with the reason `shape` and the path of the value that does not fit, such as `intent.parts[0].files`, the missing field or the unknown key, such as `intent.parts[0].why`, by [`super::shape_field`].
 fn intent_arg(intent: Option<Value>, tool: &str) -> Result<ProposalIntent, FoldError> {
     let intent = intent.ok_or_else(|| missing_intent(tool))?;
     serde_path_to_error::deserialize::<_, IntentInput>(intent)
         .map(ProposalIntent::from)
-        .map_err(|error| misshapen_intent(tool, &intent_field(error.path())))
-}
-
-/// The names of the fields of [`IntentInput`] and the types inside it.
-const INTENT_FIELDS: [&str; 15] = [
-    "summary",
-    "parts",
-    "contracts",
-    "decisions",
-    "not_changed",
-    "name",
-    "does",
-    "files",
-    "routes",
-    "database",
-    "rights",
-    "config",
-    "errors",
-    "events",
-    "commands",
-];
-
-fn intent_field(path: &serde_path_to_error::Path) -> String {
-    let mut field = "intent".to_owned();
-    for segment in path.iter() {
-        match segment {
-            serde_path_to_error::Segment::Seq { index } => field.push_str(&format!("[{index}]")),
-            serde_path_to_error::Segment::Map { key } if INTENT_FIELDS.contains(&key.as_str()) => {
-                field.push('.');
-                field.push_str(key);
-            }
-            _ => break,
-        }
-    }
-    field
+        .map_err(|error| misshapen_intent(tool, &super::shape_field("intent", &error)))
 }
 
 /// An intent as `get_proposal` gives it. The short form holds the summary and each part's name with its `file_count`; the full form adds what each part does, its files, and the contracts, decisions and not_changed the intent has. A section without entries is left out.
@@ -495,12 +462,12 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_PROPOSALS,
-            "List proposals with their task, author, whose turn it is, the review claim holder and the human review mark. A member of a serial lane of main's fold-checks.toml has lane: its name, its position (1 is the front, null before its first approval) and held, the reason \"lane <name>, position <n>\" while it waits behind the front.",
+            "List proposals with their task, author, whose turn it is, the review claim holder and the human review mark. A member of a serial lane of main's fold-checks.toml has lane: its name, its position (1 is the front, null before its first approval) and held, the reason \"lane <name>, position <n>\" while it waits behind the front. An open proposal whose latest verdict is an approval has queue (position from 1 in the order the automatic integration takes the turns, integrating_now, ahead: the proposal or review batch one place ahead, estimated_start in UTC milliseconds or null without integration run history, and batch when it integrates with a review batch) or waits_for (reason: automatic_off, config_invalid, main_checks_invalid, conflict, checks_failed, lane with lane and position, lane_refresh with lane, batch with batch, fold_failed_checks, next_version_run, prerequisites with prerequisites, human_review with reviewer, or not_approved).",
             schema_for_type::<ListProposalsInput>(),
         ),
         Tool::new(
             GET_PROPOSAL,
-            "Read one proposal: versions, the intent of the version (its summary of how the change works and the parts of the diff with their files; check every hunk against its part), the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related open proposals without a review, each with its proposal, and the related tasks that can still open proposals, strongest link first, with the create_review_plan or start_worker call that has one reviewer review them together), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, lane for a member of a serial lane of main's fold-checks.toml (name, position from 1 at the front in the order of first approval, null before one, and held, the reason \"lane <name>, position <n>\" while only the front may integrate), the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. The short form gives evidence_chars for the evidence, the intent's summary with each part's name and file_count, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the whole intent (what each part does, its files, contracts, decisions and not_changed), the task description and every whole body, such as before a review or when the task description matters.",
+            "Read one proposal: versions, the intent of the version (its summary of how the change works and the parts of the diff with their files; check every hunk against its part), the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related open proposals without a review, each with its proposal, and the related tasks that can still open proposals, strongest link first, with the create_review_plan or start_worker call that has one reviewer review them together), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report with its files, conflicted_reason while the proposal is flagged (kind merge_conflict, lane_refresh with lane, refresh, fixer and before_turn, or lane_checks_failed with lane, run and fixer; fixer: the reviewer that fixes it, null when the review lead got it; before_turn true when fold found the conflict by its test-merge after another integration moved main, before the proposal's own turn), lane for a member of a serial lane of main's fold-checks.toml (name, position from 1 at the front in the order of first approval, null before one, and held, the reason \"lane <name>, position <n>\" while only the front may integrate), the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. An open proposal whose latest verdict is an approval has queue (position from 1 in the order the automatic integration takes the turns, integrating_now, ahead: the proposal or review batch one place ahead, estimated_start in UTC milliseconds or null without integration run history, and batch when it integrates with a review batch) or waits_for (reason: automatic_off, config_invalid, main_checks_invalid, conflict, checks_failed, lane with lane and position, lane_refresh with lane, batch with batch, fold_failed_checks, next_version_run, prerequisites with prerequisites, human_review with reviewer, or not_approved). The short form gives evidence_chars for the evidence, the intent's summary with each part's name and file_count, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the whole intent (what each part does, its files, contracts, decisions and not_changed), the task description and every whole body, such as before a review or when the task description matters.",
             schema_for_type::<GetProposalInput>(),
         ),
         Tool::new(
@@ -530,7 +497,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CREATE_REVIEW_CHECKOUT,
-            "Get a copy of the current version of a proposal you hold the review claim of, to read, build and test it, and to fix what you find in the task's scope; submit_review_fix makes the fix the next version. When the version conflicted with main at integration, the copy holds it merged onto the current main, with conflict markers in each conflicted text file and main's side of each other conflict as <path>.fold-main: you fix the conflict there, not the author. The review lead never reviews and gets review_lead_delegates.",
+            "Get a copy of the current version of a proposal you hold the review claim of, to read, build and test it, and to fix what you find in the task's scope; submit_review_fix makes the fix the next version. When the version conflicted with main at integration, the copy holds it merged onto the current main, with conflict markers in each conflicted text file and main's side of each other conflict as <path>.fold-main: you fix the conflict there, not the author. setup running means fold runs the [setup] of fold-checks.toml in the new folder in the background and sends you a message from fold at its end (passed, or the end of the failed log); a check run of the folder waits for it. setup none means there is no setup to run. The review lead never reviews and gets review_lead_delegates.",
             schema_for_type::<ProposalIdInput>(),
         ),
         Tool::new(
@@ -545,7 +512,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             INTEGRATE_PROPOSAL,
-            "Integrate the current version of a proposal onto main; only the main agent, the review lead and its reviewers may. Refusals: stale_version, changes_requested, not_approved, human_approval_missing, prerequisites_not_done (the gates are not met), author_cannot_integrate (your agent wrote it), integrator_required, invalid_request with the reason lane_held (the proposal changes a path of a serial lane of main's fold-checks.toml and waits behind the front: lane members integrate one at a time in the order of their first approval; details give lane and position), and integration_conflicted (the version conflicts with main; details list the files and kinds; the reviewer that approved the version fixes it, or the review lead starts a reviewer for it, while the task stays in Review). When fold-checks.toml has integration checks, the result is queued: fold integrates the queued proposals one at a time in the order asked, after the integration checks pass on the merge with main; failed checks (result checks_failed when it ran at once) send the proposal back to its author, except for a member of a serial lane that another member moved since the version's base: that one goes to the reviewer that approved it, flagged like a conflict, with the note that the lane moved, and until a new version the call is refused with invalid_request and the reason checks_failed. While the author's update or a reviewer's fix runs the checks of the next version, the call is refused with update_checks_running. A second call while the version waits in the queue is refused with invalid_request and the reason integration_queued; get_proposal shows integration_queued. When fold itself cannot run the checks, it answers workspace_io with the reason fold_failed: nothing is sent back, and you integrate again once the fault is fixed. When fold-checks.toml on main itself is not valid, the integration stays queued until a revision of main fixes it. fold sends each result as a message.",
+            "Integrate the current version of a proposal onto main; only the main agent, the review lead and its reviewers may. Refusals: stale_version, changes_requested, not_approved, human_approval_missing, prerequisites_not_done (the gates are not met), author_cannot_integrate (your agent wrote it), integrator_required, invalid_request with the reason lane_held (the proposal changes a path of a serial lane of main's fold-checks.toml and waits behind the front: lane members integrate one at a time in the order of their first approval; details give lane and position), and integration_conflicted (the version conflicts with main; details list the files and kinds; the reviewer that approved the version fixes it, or the review lead starts a reviewer for it, while the task stays in Review; with no file, the version's serial lane moved and names a refresh, which that reviewer redoes). When fold-checks.toml has integration checks, the result is queued: fold integrates the queued proposals one at a time in the order asked, after the integration checks pass on the merge with main; failed checks (result checks_failed when it ran at once) send the proposal back to its author, except for a member of a serial lane that another member moved since the version's base: that one goes to the reviewer that approved it, flagged like a conflict, with the note that the lane moved, and until a new version the call is refused with invalid_request and the reason checks_failed. While the author's update or a reviewer's fix runs the checks of the next version, the call is refused with update_checks_running. A second call while the version waits in the queue is refused with invalid_request and the reason integration_queued; get_proposal shows integration_queued. When fold itself cannot run the checks, it answers workspace_io with the reason fold_failed: nothing is sent back, and you integrate again once the fault is fixed. When fold-checks.toml on main itself is not valid, the integration stays queued until a revision of main fixes it. fold sends each result as a message.",
             schema_for_type::<IntegrateProposalInput>(),
         ),
         Tool::new(
@@ -558,7 +525,7 @@ pub fn tools() -> Vec<Tool> {
     tools.extend(plans::tools());
     tools.push(Tool::new(
         SUBMIT_MAIN_CHANGE,
-        "Main agent only, and only after the user's explicit OK to the diff and summary you showed. Integrate the newest changeset of your main workspace onto main as one revision and one Git commit with your message, with no task, proposal or review; the main workspace then closes. integration_conflicted means main moved: details list the files; call sync_workspace, resolve them, call record_changes, show the user the new diff and submit again.",
+        "Main agent only, and only after the user's explicit OK to the diff and summary you showed. Integrate the newest changeset of your main workspace onto main as one revision and one Git commit with your message, with no task, proposal or review; the main workspace then closes. It waits for the integration that runs, then runs the project's integration checks on the merge with main, as for a proposal, so the call can take as long as those checks. result checks_failed means main did not move and the main workspace stays open: read the run with get_check_run (fold also sends you a message that names the changeset), fix the change there, call record_changes, show the user the new diff and submit again. integration_conflicted means main moved: details list the files; call sync_workspace, resolve them, call record_changes, show the user the new diff and submit again.",
         schema_for_type::<SubmitMainChangeInput>(),
     ));
     tools.push(Tool::new(
@@ -600,7 +567,6 @@ pub async fn call(
         GET_REVIEW_COMMENTS => get_review_comments(reviews, arguments).await?,
         INTEGRATE_PROPOSAL => integrate_proposal(reviews, &actor, arguments).await?,
         REQUIRE_HUMAN_REVIEW => require_human_review(reviews, &actor, arguments).await?,
-        SUBMIT_MAIN_CHANGE => submit_main_change(reviews, &actor, arguments).await?,
         SUBMIT_REVIEW_FIX => submit_review_fix(reviews, &actor, arguments).await?,
         _ => match batches::run(reviews, tool, &actor, arguments).await? {
             Some(value) => value,
@@ -661,6 +627,54 @@ pub(crate) fn lane_json(place: &LanePlace) -> Value {
     })
 }
 
+/// Sets `queue` or `waits_for` on an approved open proposal: its place in the automatic integration queue, or why the job does not take it.
+fn put_queue(value: &mut Value, standing: Option<&QueueStanding>) {
+    match standing {
+        Some(QueueStanding::Queued { place, batch }) => {
+            let mut queue = json!({
+                "position": place.position,
+                "integrating_now": place.integrating_now,
+                "ahead": place.ahead.map(|item| item.to_string()),
+                "estimated_start": place.estimated_start.map(Timestamp::as_millis),
+            });
+            if let Some(batch) = batch {
+                queue["batch"] = json!(batch.to_string());
+            }
+            value["queue"] = queue;
+        }
+        Some(QueueStanding::Waits(reason)) => {
+            let mut waits = json!({"reason": reason.as_str()});
+            match reason {
+                WaitReason::Lane { lane, position } => {
+                    waits["lane"] = json!(lane);
+                    waits["position"] = json!(position);
+                }
+                WaitReason::LaneRefresh { lane } => waits["lane"] = json!(lane),
+                WaitReason::Batch { batch } => waits["batch"] = json!(batch.to_string()),
+                WaitReason::Prerequisites { unfinished } => {
+                    waits["prerequisites"] = unfinished
+                        .iter()
+                        .map(|(task, status)| json!({"task": task.to_string(), "status": status.as_str()}))
+                        .collect();
+                }
+                WaitReason::HumanReview { reviewer } => {
+                    waits["reviewer"] = json!(reviewer.as_ref().map(HumanName::as_str));
+                }
+                WaitReason::AutomaticOff
+                | WaitReason::ConfigInvalid
+                | WaitReason::MainChecksInvalid
+                | WaitReason::Conflict
+                | WaitReason::ChecksFailed
+                | WaitReason::FoldFailedChecks
+                | WaitReason::NextVersionRun
+                | WaitReason::NotApproved => {}
+            }
+            value["waits_for"] = waits;
+        }
+        None => {}
+    }
+}
+
 fn summary_json(summary: &ProposalSummary) -> Value {
     json!({
         "id": summary.id,
@@ -699,6 +713,36 @@ fn proposed_json(proposed: Proposed) -> Value {
             "workspace": workspace,
             "checks": "running",
             "run": run,
+            "hint": checks::EDIT_HINT,
+        }),
+    }
+}
+
+/// Why the open proposal is flagged, with the reviewer that fixes it: null when the review lead got it to start a reviewer.
+fn conflicted_reason_json(reason: &ConflictedReason) -> Value {
+    match reason {
+        ConflictedReason::MergeConflict { fixer, before_turn } => json!({
+            "kind": "merge_conflict",
+            "fixer": fixer.as_ref().map(ToString::to_string),
+            "before_turn": before_turn,
+        }),
+        ConflictedReason::LaneRefresh {
+            lane,
+            refresh,
+            fixer,
+            before_turn,
+        } => json!({
+            "kind": "lane_refresh",
+            "lane": lane,
+            "refresh": refresh,
+            "fixer": fixer.as_ref().map(ToString::to_string),
+            "before_turn": before_turn,
+        }),
+        ConflictedReason::LaneChecksFailed { lane, run, fixer } => json!({
+            "kind": "lane_checks_failed",
+            "lane": lane,
+            "run": run.to_string(),
+            "fixer": fixer.as_ref().map(ToString::to_string),
         }),
     }
 }
@@ -831,6 +875,7 @@ fn view_json(view: &ProposalView, full: bool) -> Value {
         "gates": view.gates.iter().map(gate_json).collect::<Vec<_>>(),
         "human_review": mark_json(summary.human_review.as_ref()),
         "conflict": detail.conflict,
+        "conflicted_reason": view.conflicted_reason.as_ref().map(conflicted_reason_json),
         "checks": view.checks.iter().map(checks::run_json).collect::<Vec<_>>(),
         "checks_failed": summary.checks_failed,
         "integration_queued": summary.integration_queued,
@@ -881,6 +926,7 @@ fn view_json(view: &ProposalView, full: bool) -> Value {
     if let Some(place) = &view.lane {
         value["lane"] = lane_json(place);
     }
+    put_queue(&mut value, view.queue.as_ref());
     value["intent"] = selected
         .intent
         .as_ref()
@@ -995,7 +1041,7 @@ async fn list_proposals(
             })
         })
         .transpose()?;
-    let (rows, lanes) = reviews
+    let (rows, lanes, queue) = reviews
         .list_proposals_in_lanes(ProposalFilter {
             state,
             unclaimed: input.unclaimed,
@@ -1010,6 +1056,7 @@ async fn list_proposals(
             if let Some(place) = lanes.iter().find(|place| place.proposal == row.id) {
                 value["lane"] = lane_json(place);
             }
+            put_queue(&mut value, queue.standing(row.id));
             value
         })
         .collect();
@@ -1022,7 +1069,7 @@ async fn get_proposal(
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let input: GetProposalInput = parse(arguments)?;
-    let full = full_detail(input.detail.as_deref())?;
+    let full = full_detail(input.detail.as_deref(), "get_proposal", "the short form")?;
     let view = reviews
         .view_proposal(actor, proposal_id(&input.id)?, input.version)
         .await
@@ -1089,21 +1136,6 @@ async fn get_proposal_diff(
     value["since"] = json!(since.map(version));
     value["last_reviewed"] = json!(last.map(version));
     Ok(value)
-}
-
-/// Whether `detail` asks for the full form of `get_proposal`.
-fn full_detail(detail: Option<&str>) -> Result<bool, FoldError> {
-    match detail {
-        None => Ok(false),
-        Some("full") => Ok(true),
-        Some(_) => Err(
-            FoldError::new(codes::INVALID_REQUEST, "detail is full or left out")
-                .with_details([("field", json!("detail"))])
-                .with_hint(
-                    "call get_proposal with detail full, or leave detail out for the short form",
-                ),
-        ),
-    }
 }
 
 fn comparison_value(proposal: ProposalId, comparison: &StateComparison) -> Value {
@@ -1237,6 +1269,7 @@ async fn create_review_checkout(
         "workspace": checkout.workspace.id,
         "path": checkout.workspace.path,
         "version": version(checkout.version),
+        "setup": checkout.setup.as_str(),
     }))
 }
 
@@ -1373,6 +1406,22 @@ async fn integrate_proposal(
     }
 }
 
+/// `submit_main_change`, which waits for the integration checks inside the call: a cancelled call stops waiting, and once its turn is held the integration goes on and fold sends the main agent its result.
+pub async fn submit_main_change_tool(
+    server: &FoldServer,
+    arguments: &JsonObject,
+    context: &rmcp::service::RequestContext<rmcp::RoleServer>,
+) -> Result<Option<Value>, FoldError> {
+    let Some(reviews) = &server.reviews else {
+        return Ok(None);
+    };
+    let actor = server.actor().await?;
+    tokio::select! {
+        value = submit_main_change(reviews, &actor, arguments) => value.map(Some),
+        () = context.ct.cancelled() => Ok(Some(json!({"cancelled": true}))),
+    }
+}
+
 async fn submit_main_change(
     reviews: &ReviewService,
     actor: &Actor,
@@ -1398,6 +1447,11 @@ async fn submit_main_change(
             "revision": revision,
         })),
         DirectOutcome::Conflicted(conflicts) => Err(direct_conflicted(changeset, &conflicts)),
+        DirectOutcome::ChecksFailed { run } => Ok(json!({
+            "changeset": changeset,
+            "result": "checks_failed",
+            "run": run,
+        })),
     }
 }
 

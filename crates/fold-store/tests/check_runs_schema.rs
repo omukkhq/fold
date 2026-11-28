@@ -50,7 +50,7 @@ fn workspace_run(number: u32) -> NewCheckRun<'static> {
         id: run_id(number),
         stage: Stage::Proposal,
         purpose: Purpose::Check,
-        task: TaskId::from_number(1).unwrap(),
+        task: TaskId::from_number(1),
         workspace: WorkspaceId::from_number(1),
         worker_id: Some(1),
         proposal: None,
@@ -62,6 +62,7 @@ fn workspace_run(number: u32) -> NewCheckRun<'static> {
         evidence: None,
         intent: None,
         batch: None,
+        changeset: None,
     }
 }
 
@@ -441,4 +442,236 @@ async fn the_newest_proposal_run_end_of_each_open_workspace_starts_its_stall_win
     .await
     .unwrap();
     assert!(ends().await.is_empty(), "a closed workspace never stalls");
+}
+
+#[cfg(test)]
+async fn ran(store: &Store, new: &NewCheckRun<'_>, start: i64, end: i64, state: RunState) {
+    let reason = (state != RunState::Passed).then_some(RunReason::CheckFailed);
+    store
+        .write(async |tx| {
+            checks::insert_run(tx, new, at(start)).await?;
+            checks::finish_run(tx, new.id, state, reason, at(end)).await
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn the_recent_integration_durations_are_the_newest_passed_runs_first() {
+    let (_dir, store) = seeded().await;
+    ran(&store, &integration_run(1), 100, 400, RunState::Passed).await;
+    ran(&store, &integration_run(2), 500, 600, RunState::Failed).await;
+    ran(&store, &integration_run(3), 700, 900, RunState::Passed).await;
+    ran(&store, &workspace_run(4), 900, 5_000, RunState::Passed).await;
+    ran(&store, &integration_run(5), 1_000, 1_050, RunState::Passed).await;
+    insert(&store, &integration_run(6)).await.unwrap();
+
+    let all = checks::recent_integration_run_durations(store.read(), 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        all,
+        [50, 200, 300],
+        "newest first, without the failed, the proposal-stage and the running run"
+    );
+    let two = checks::recent_integration_run_durations(store.read(), 2)
+        .await
+        .unwrap();
+    assert_eq!(two, [50, 200]);
+    let none = checks::recent_integration_run_durations(store.read(), 0)
+        .await
+        .unwrap();
+    assert!(none.is_empty());
+}
+
+#[tokio::test]
+async fn a_run_that_ends_before_its_start_lasts_no_time() {
+    let (_dir, store) = seeded().await;
+    ran(&store, &integration_run(1), 900, 400, RunState::Passed).await;
+    let durations = checks::recent_integration_run_durations(store.read(), 10)
+        .await
+        .unwrap();
+    assert_eq!(durations, [0]);
+}
+
+/// Runs `number` on the tree of byte `tree`, created at `created`, with one result per entry; `None` is the setup.
+#[cfg(test)]
+async fn checked(
+    store: &Store,
+    number: u32,
+    tree: u8,
+    created: i64,
+    results: &[(Option<&'static str>, Outcome)],
+) -> Vec<checks::NewlyFlaky> {
+    let new = NewCheckRun {
+        tree: ObjectHash::from_bytes([tree; 32]),
+        ..workspace_run(number)
+    };
+    store
+        .write(async |tx| {
+            checks::insert_run(tx, &new, at(created)).await?;
+            for (position, (check, outcome)) in (0u32..).zip(results) {
+                checks::insert_result(tx, new.id, &result(position, *check, *outcome)).await?;
+            }
+            let newly = checks::newly_flaky(tx.conn(), new.id).await?;
+            checks::finish_run(
+                tx,
+                new.id,
+                RunState::Failed,
+                Some(RunReason::CheckFailed),
+                at(created + 1),
+            )
+            .await?;
+            Ok::<_, StoreError>(newly)
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_failure_that_passes_later_on_the_same_tree_is_flaky_once() {
+    let (_dir, store) = seeded().await;
+    let failed = [
+        (None, Outcome::Passed),
+        (Some("test"), Outcome::Failed),
+        (Some("lint"), Outcome::TimedOut),
+    ];
+    assert!(checked(&store, 1, 1, 10, &failed).await.is_empty());
+    let passed = [
+        (None, Outcome::Passed),
+        (Some("test"), Outcome::Passed),
+        (Some("lint"), Outcome::Passed),
+    ];
+    let newly = checked(&store, 2, 1, 20, &passed).await;
+    assert_eq!(
+        newly,
+        [checks::NewlyFlaky {
+            run: run_id(1),
+            checks: vec!["test".to_owned(), "lint".to_owned()]
+        }]
+    );
+    assert_eq!(
+        checks::flaky_positions(store.read(), run_id(1))
+            .await
+            .unwrap(),
+        [1, 2]
+    );
+    assert!(
+        checks::flaky_positions(store.read(), run_id(2))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        checked(&store, 3, 1, 30, &passed).await.is_empty(),
+        "a second pass reports no failure again"
+    );
+}
+
+#[tokio::test]
+async fn a_pass_on_another_tree_or_before_the_failure_marks_nothing() {
+    let (_dir, store) = seeded().await;
+    checked(&store, 1, 1, 10, &[(Some("test"), Outcome::Failed)]).await;
+    let other = checked(&store, 2, 2, 20, &[(Some("test"), Outcome::Passed)]).await;
+    assert!(other.is_empty(), "a pass on another tree");
+    checked(&store, 3, 2, 30, &[(Some("test"), Outcome::Failed)]).await;
+    assert!(
+        checks::flaky_positions(store.read(), run_id(3))
+            .await
+            .unwrap()
+            .is_empty(),
+        "a pass before a failure"
+    );
+    assert!(
+        checks::flaky_positions(store.read(), run_id(1))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_failed_setup_is_never_flaky() {
+    let (_dir, store) = seeded().await;
+    checked(
+        &store,
+        1,
+        1,
+        10,
+        &[(None, Outcome::Failed), (Some("test"), Outcome::NotRun)],
+    )
+    .await;
+    let newly = checked(
+        &store,
+        2,
+        1,
+        20,
+        &[(None, Outcome::Passed), (Some("test"), Outcome::Passed)],
+    )
+    .await;
+    assert!(newly.is_empty());
+    assert!(
+        checks::flaky_positions(store.read(), run_id(1))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn the_flaky_checks_are_counted_by_count_then_name_since_a_time() {
+    let (_dir, store) = seeded().await;
+    let fail = |name| [(Some(name), Outcome::Failed)];
+    let pass = |name| [(Some(name), Outcome::Passed)];
+    checked(&store, 1, 1, 10, &fail("old")).await;
+    checked(&store, 2, 1, 20, &pass("old")).await;
+    checked(
+        &store,
+        3,
+        2,
+        100,
+        &[(Some("b"), Outcome::Failed), (Some("a"), Outcome::Failed)],
+    )
+    .await;
+    checked(
+        &store,
+        4,
+        2,
+        110,
+        &[(Some("b"), Outcome::Passed), (Some("a"), Outcome::Passed)],
+    )
+    .await;
+    checked(&store, 5, 3, 120, &fail("b")).await;
+    checked(&store, 6, 3, 130, &fail("c")).await;
+    checked(
+        &store,
+        7,
+        3,
+        140,
+        &[(Some("b"), Outcome::Passed), (Some("c"), Outcome::Passed)],
+    )
+    .await;
+
+    let found = checks::flaky_checks(store.read(), at(100)).await.unwrap();
+    let flaky = |check: &str, count, runs: &[u32]| checks::FlakyCheck {
+        check: check.to_owned(),
+        count,
+        runs: runs.iter().map(|number| run_id(*number)).collect(),
+    };
+    assert_eq!(
+        found,
+        [
+            flaky("b", 2, &[3, 5]),
+            flaky("a", 1, &[3]),
+            flaky("c", 1, &[6])
+        ]
+    );
+    let all = checks::flaky_checks(store.read(), at(0)).await.unwrap();
+    assert_eq!(all.len(), 4, "the window starts at since");
+    assert!(
+        checks::flaky_checks(store.read(), at(1_000))
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

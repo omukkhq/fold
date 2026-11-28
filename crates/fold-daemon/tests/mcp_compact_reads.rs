@@ -631,9 +631,10 @@ async fn a_graph_task_leaves_out_its_empty_fields_unless_asked_for_the_full_form
         .await;
     let bare = &short["tasks"][0];
     assert_eq!(bare["id"], "T-1");
-    for field in ["labels", "needs", "holder"] {
+    for field in ["labels", "needs", "holder", "held_by"] {
         assert_eq!(bare.get(field), None, "{field}: {bare}");
     }
+    assert_eq!(full["tasks"][0]["held_by"], json!([]));
     assert_eq!(full["tasks"][0]["labels"], json!([]));
     assert_eq!(full["tasks"][0]["needs"], json!([]));
     assert_eq!(full["tasks"][0]["holder"], Value::Null);
@@ -641,10 +642,10 @@ async fn a_graph_task_leaves_out_its_empty_fields_unless_asked_for_the_full_form
     assert_eq!(held["needs"], json!(["T-1"]));
     assert_eq!(held["holder"], "backend");
     assert!(!held["labels"].as_array().unwrap().is_empty(), "{held}");
-    assert_eq!(
-        held, &full["tasks"][1],
-        "a task with every field keeps them"
-    );
+    let mut held_full = full["tasks"][1].clone();
+    assert_eq!(held_full["held_by"], json!([]));
+    held_full.as_object_mut().unwrap().remove("held_by");
+    assert_eq!(held, &held_full, "a task with every other field keeps them");
     assert_eq!(short["done_count"], full["done_count"]);
 
     let error = harness

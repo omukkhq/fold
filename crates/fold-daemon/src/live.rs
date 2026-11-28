@@ -170,7 +170,7 @@ pub struct LiveWorkspace {
     pub proposal: Option<ProposalId>,
     /// The worker's stall needs a person: fold told the worker's lead, or else the main agent, and one more `stall_minutes` passed without a fix, or no agent can act on it. `activity` says what fold saw.
     pub stalled: bool,
-    /// Whether the working files differ from the tree of the open proposal's newest version: false while every file is the same, true from the first file that differs. Null without an open proposal.
+    /// Whether the working files differ from the tree of the open proposal's newest version and, while that version is one a reviewer made in its review checkout, from the tree of the author's own newest version: false while every file is the same as one of them, true from the first file that differs. A reviewer's version leaves the author's workspace with the files it sent, which are no edit. Null without an open proposal.
     #[schema(required = true)]
     pub edits_after_version: Option<bool>,
     /// The check run that goes in the workspace: the worker's `run_checks` or the gate of its `create_proposal` or `update_proposal` in a task workspace, or a reviewer's `review_fix` in a review checkout. The worker waits for its result, so it is not stalled while the run goes, and the stall time counts from the run's end at the earliest. Null while no run goes.
@@ -352,8 +352,9 @@ impl LiveActivity {
 /// The agents fold told of a workspace's stall, and when; see [`LiveState::told`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Told {
-    /// The stall's reason and start, so a new stall of the same workspace is told again.
+    /// The stall's reason, as `worker.stalled` names it.
     pub reason: &'static str,
+    /// The stall's start. A stall of the same workspace that starts no later is the same stall; only new activity moves the start, and the later stall is told again.
     pub since: Timestamp,
     pub at: Timestamp,
     pub agents: Vec<AgentName>,
@@ -368,6 +369,7 @@ pub enum CheckPurpose {
     UpdateProposal,
     Integrate,
     ReviewFix,
+    IntegrateDirect,
 }
 
 impl From<Purpose> for CheckPurpose {
@@ -378,6 +380,7 @@ impl From<Purpose> for CheckPurpose {
             Purpose::UpdateProposal => Self::UpdateProposal,
             Purpose::Integrate => Self::Integrate,
             Purpose::ReviewFix => Self::ReviewFix,
+            Purpose::IntegrateDirect => Self::IntegrateDirect,
         }
     }
 }
@@ -611,6 +614,39 @@ struct Shared {
     told: Mutex<HashMap<WorkspaceId, Told>>,
     /// A stall decision ran since the daemon opened the project, so the stalled flags say what the stall rule decides; before it, they say nothing yet.
     stalls_decided: AtomicBool,
+    /// The check runs that stop at the first edit of a tracked file of their workspace.
+    edits: Arc<EditWatches>,
+}
+
+/// The senders of the runs that watch their workspace's edits, by workspace. A workspace has at most one running check run.
+type EditWatches = Mutex<HashMap<WorkspaceId, mpsc::Sender<String>>>;
+
+/// A check run's watch on the edits of its workspace: it receives the path of each scan that found a tracked file whose content changed, and stops watching when dropped.
+#[derive(Debug)]
+pub struct EditWatch {
+    workspace: WorkspaceId,
+    edits: Arc<EditWatches>,
+    sender: mpsc::Sender<String>,
+    receiver: mpsc::Receiver<String>,
+}
+
+impl EditWatch {
+    /// The path of the next scan that found an edit. A scan that finds one while an earlier one waits gives nothing more, so the run reads the newest state when it reads the files.
+    pub async fn next(&mut self) -> Option<String> {
+        self.receiver.recv().await
+    }
+}
+
+impl Drop for EditWatch {
+    fn drop(&mut self) {
+        let mut edits = lock(&self.edits);
+        if edits
+            .get(&self.workspace)
+            .is_some_and(|sender| sender.same_channel(&self.sender))
+        {
+            edits.remove(&self.workspace);
+        }
+    }
 }
 
 impl Drop for Shared {
@@ -939,6 +975,7 @@ impl LiveState {
                 opened_at,
                 told: Mutex::default(),
                 stalls_decided: AtomicBool::new(false),
+                edits: Arc::default(),
             }),
         }
     }
@@ -1194,11 +1231,8 @@ impl LiveState {
             None => row.proposal,
         };
         let version = match proposal {
-            Some(proposal) => reviews::list_versions(read, proposal)
-                .await?
-                .pop()
-                .map(|version| version.tree),
-            None => None,
+            Some(proposal) => compared_trees(reviews::list_versions(read, proposal).await?),
+            None => Vec::new(),
         };
         let root = shared.paths.root().join(&row.path);
         let last_activity = row.last_activity_at.unwrap_or(row.created_at);
@@ -1268,6 +1302,7 @@ impl LiveState {
             clock: Arc::clone(&shared.clock),
             config: shared.config,
             states: Arc::clone(&shared.states),
+            edits: Arc::clone(&shared.edits),
             paths: shared.paths.clone(),
             caps,
             seed,
@@ -1395,12 +1430,12 @@ impl LiveState {
         self.update(workspace, |view| view.worker = worker.to_string());
     }
 
-    /// Sets the open proposal after the commit of a proposal command, and has the pipeline compare the working files against `tree`, the tree of the proposal's newest version, in a full scan it starts without the caller waiting for it; `None` stops the comparison. Until that scan `edits_after_version` is null, so no state pairs the proposal with a comparison against another tree.
+    /// Sets the open proposal after the commit of a proposal command, and has the pipeline compare the working files against `trees`, the version trees of [`compared_trees`], in a full scan it starts without the caller waiting for it; no trees stop the comparison. Until that scan `edits_after_version` is null, so no state pairs the proposal with a comparison against other trees.
     pub async fn set_proposal(
         &self,
         workspace: WorkspaceId,
         proposal: Option<ProposalId>,
-        tree: Option<ObjectHash>,
+        trees: Vec<ObjectHash>,
     ) {
         self.update(workspace, |view| {
             view.proposal = proposal;
@@ -1409,7 +1444,7 @@ impl LiveState {
         self.watch_now(workspace).await;
         if let Some(sender) = self.shared.sender(workspace) {
             let (answer, _unread) = oneshot::channel();
-            let _ = sender.send(Command::Version { tree, answer }).await;
+            let _ = sender.send(Command::Version { trees, answer }).await;
         }
     }
 
@@ -1498,7 +1533,7 @@ impl LiveState {
         lock(&self.shared.told).get(&workspace).cloned()
     }
 
-    /// Records who was told of the stall of `workspace`, or forgets it with `None` once the stall ended. A workspace that left the live state keeps no record.
+    /// Records who was told of the stall of `workspace`, or forgets it with `None`. The record outlives the stall, so a quiet time between two verdicts of one stall never tells it again. A workspace that left the live state keeps no record.
     pub fn set_told(&self, workspace: WorkspaceId, told: Option<Told>) {
         let present = told.is_some() && self.get(workspace).is_some();
         let mut all = lock(&self.shared.told);
@@ -1530,6 +1565,18 @@ impl LiveState {
     /// Holds the project's turn for a stall decision until the guard drops.
     pub async fn stall_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.shared.stalls.lock().await
+    }
+
+    /// A watch on the edits of `workspace` from its next scan on, which replaces an earlier watch of it.
+    pub fn watch_edits(&self, workspace: WorkspaceId) -> EditWatch {
+        let (sender, receiver) = mpsc::channel(1);
+        lock(&self.shared.edits).insert(workspace, sender.clone());
+        EditWatch {
+            workspace,
+            edits: Arc::clone(&self.shared.edits),
+            sender,
+            receiver,
+        }
     }
 
     /// Sets the check run that goes in the workspace, as the stall check read it from the store. A run that goes clears the stalled flag at once; returns whether it cleared one.
@@ -1646,7 +1693,7 @@ enum Command {
         answer: Answer,
     },
     Version {
-        tree: Option<ObjectHash>,
+        trees: Vec<ObjectHash>,
         answer: Answer,
     },
     Tick,
@@ -1663,8 +1710,8 @@ struct Round {
     missing: bool,
     /// The newest base a sync or restore moved the workspace to.
     rebase: Option<(RevisionId, ObjectHash)>,
-    /// The newest version tree a proposal command gave; `Some(None)` stops the comparison.
-    version: Option<Option<ObjectHash>>,
+    /// The newest version trees a proposal command gave; `Some` of no trees stops the comparison.
+    version: Option<Vec<ObjectHash>>,
     answers: Vec<Answer>,
     stop: bool,
 }
@@ -1686,8 +1733,8 @@ impl Round {
                 self.full = true;
                 self.answers.push(answer);
             }
-            Command::Version { tree, answer } => {
-                self.version = Some(tree);
+            Command::Version { trees, answer } => {
+                self.version = Some(trees);
                 self.full = true;
                 self.answers.push(answer);
             }
@@ -1703,8 +1750,8 @@ struct Seed {
     workspace: WorkspaceId,
     root: PathBuf,
     base_tree: ObjectHash,
-    /// The tree of the open proposal's newest version.
-    version: Option<ObjectHash>,
+    /// The version trees of the open proposal, as [`compared_trees`] gives them.
+    version: Vec<ObjectHash>,
     max_file_bytes: u64,
     /// The base tree's paths, which the scanner and the watcher keep although an ignore rule matches them.
     tracked: Arc<TrackedSet>,
@@ -1718,6 +1765,7 @@ struct Pipeline {
     clock: Arc<dyn Clock>,
     config: LiveConfig,
     states: Arc<States>,
+    edits: Arc<EditWatches>,
     paths: ProjectPaths,
     caps: Capabilities,
     seed: Seed,
@@ -1728,7 +1776,7 @@ struct Pipeline {
     /// A base tree the open scanner has not loaded yet.
     rebased: Option<ObjectHash>,
     /// A version tree the open scanner has not loaded yet; `Some(None)` stops the comparison.
-    reversioned: Option<Option<ObjectHash>>,
+    reversioned: Option<Vec<ObjectHash>>,
     /// A proposal command gave a new version that the next applied scan has not seen yet.
     new_version: bool,
     /// The state before the first scan.
@@ -1753,8 +1801,8 @@ enum Scan {
 
 struct Scanned {
     files: Vec<FileChange>,
-    /// The `(path, content hash)` pairs differ from the previous scan's.
-    moved: bool,
+    /// The first path whose `(path, content hash)` pair differs from the previous scan's.
+    moved: Option<String>,
     warnings: Vec<Warning>,
     edits_after_version: Option<bool>,
 }
@@ -1799,10 +1847,10 @@ impl Pipeline {
             self.rebased = Some(tree);
             self.initial.base = base;
         }
-        if let Some(tree) = round.version {
-            self.seed.version = tree;
-            self.reversioned = Some(tree);
-            self.new_version = tree.is_some();
+        if let Some(trees) = round.version {
+            self.new_version = !trees.is_empty();
+            self.seed.version.clone_from(&trees);
+            self.reversioned = Some(trees);
         }
         let due = self
             .last_full
@@ -1843,6 +1891,11 @@ impl Pipeline {
         match scanned {
             Ok(Scan::Done(scanned)) => {
                 self.missing = false;
+                if let Some(path) = &scanned.moved
+                    && let Some(sender) = lock(&self.edits).get(&self.workspace)
+                {
+                    let _ = sender.try_send(path.clone());
+                }
                 Ok(self.apply(scanned))
             }
             Ok(Scan::Missing) => {
@@ -1880,8 +1933,8 @@ impl Pipeline {
                     if let Some(tree) = rebased {
                         scanner.rebase(&tree)?;
                     }
-                    if let Some(tree) = reversioned {
-                        scanner.set_version(tree.as_ref());
+                    if let Some(trees) = reversioned {
+                        scanner.set_version(&trees);
                     }
                     scanner
                 }
@@ -1911,7 +1964,7 @@ impl Pipeline {
 
     fn apply(&mut self, scanned: Scanned) -> Arc<WorkspaceLive> {
         let now = self.clock.now();
-        if scanned.moved {
+        if scanned.moved.is_some() {
             self.last_activity = now;
         }
         let mut tally = ChangeTally::default();
@@ -1941,7 +1994,7 @@ impl Pipeline {
             .activity
             .as_ref()
             .is_some_and(|activity| activity.state == ActivityState::Failed);
-        if (scanned.moved && !ended)
+        if (scanned.moved.is_some() && !ended)
             || stall::present_workspace(view.edits_after_version, turn) == WorkspaceFact::Sent
         {
             view.stalled = false;
@@ -2128,7 +2181,7 @@ impl Scanner {
         let objects = ObjectStore::open_existing(&paths.fold_dir()).map_err(FoldError::from)?;
         let base = vcs::load_flat(&objects, &seed.base_tree)?;
         seed.tracked.set(base.clone());
-        let version = Version::load(&objects, seed.version.as_ref());
+        let version = Version::load(&objects, &seed.version);
         let index = StatIndex::load(&paths.workspace_index(seed.workspace), caps);
         let boundary_dir = paths.index();
         fold_vcs::platform::create_dir_below(&paths.fold_dir(), &boundary_dir)
@@ -2159,8 +2212,8 @@ impl Scanner {
         Ok(())
     }
 
-    fn set_version(&mut self, tree: Option<&ObjectHash>) {
-        self.version = Version::load(&self.objects, tree);
+    fn set_version(&mut self, trees: &[ObjectHash]) {
+        self.version = Version::load(&self.objects, trees);
     }
 
     /// Scans `touched`, or the whole workspace when it is `None` or nothing was scanned yet, and compares the result to the base tree. A partial scan that fails is repeated as a full one.
@@ -2210,7 +2263,9 @@ impl Scanner {
         for path in refreshed.unstable {
             self.warnings.insert(path, WarningReason::Unstable);
         }
-        let moved = before.is_some_and(|before| !same_content(&before, &self.current));
+        let moved = before
+            .and_then(|before| first_difference(&before, &self.current))
+            .map(|path| String::from_utf8_lossy(&path).into_owned());
         self.scanned = true;
         let working = State::working(self.root.clone(), self.current.clone());
         let comparison = vcs::compare_cached(&self.objects, &self.base, &working, &mut self.cache)?;
@@ -2230,29 +2285,57 @@ impl Scanner {
     }
 }
 
-/// The tree of the open proposal's newest version, as the scanner compares the working files against it.
+/// The trees the working files of a task workspace are compared against: the tree of the open proposal's newest version, and, when a reviewer made that version in its review checkout (a review fix, a conflict fix or a lane refresh), the tree of the author's own newest version, which the author's workspace still holds until it syncs. A human edit is no such version: the author's files differ from it until the author syncs. Empty for no versions.
+pub(crate) fn compared_trees(mut versions: Vec<reviews::VersionRow>) -> Vec<ObjectHash> {
+    let Some(newest) = versions.pop() else {
+        return Vec::new();
+    };
+    let mut trees = vec![newest.tree];
+    if newest.fixed_in_checkout.is_some()
+        && let Some(own) = versions.into_iter().rev().find(is_authors)
+        && own.tree != newest.tree
+    {
+        trees.push(own.tree);
+    }
+    trees
+}
+
+/// The author sent the version from its task workspace: no reviewer made it in a review checkout and no human made it with the review edit.
+fn is_authors(version: &reviews::VersionRow) -> bool {
+    version.fixed_in_checkout.is_none()
+        && !crate::services::reviews::is_human_edit(&version.created_by)
+}
+
+/// The version trees of the open proposal, as the scanner compares the working files against them.
 #[derive(Debug)]
 enum Version {
     None,
-    Tree(FlatTree),
-    /// The tree could not be read, so every scan counts as an edit after the version.
+    Trees(Vec<FlatTree>),
+    /// No tree could be read, so every scan counts as an edit after the version.
     Unreadable,
 }
 
 impl Version {
-    fn load(objects: &ObjectStore, tree: Option<&ObjectHash>) -> Self {
-        let Some(tree) = tree else {
+    fn load(objects: &ObjectStore, trees: &[ObjectHash]) -> Self {
+        if trees.is_empty() {
             return Self::None;
-        };
-        match vcs::load_flat(objects, tree) {
-            Ok(flat) => Self::Tree(flat),
-            Err(error) => {
-                tracing::warn!(
-                    code = error.code(),
-                    "the version tree was not read; the working files count as edited"
-                );
-                Self::Unreadable
+        }
+        let mut flats = Vec::with_capacity(trees.len());
+        for tree in trees {
+            match vcs::load_flat(objects, tree) {
+                Ok(flat) => flats.push(flat),
+                Err(error) => {
+                    tracing::warn!(
+                        code = error.code(),
+                        "a version tree was not read; the working files never match it"
+                    );
+                }
             }
+        }
+        if flats.is_empty() {
+            Self::Unreadable
+        } else {
+            Self::Trees(flats)
         }
     }
 
@@ -2260,19 +2343,33 @@ impl Version {
     fn differs_from(&self, current: &FlatTree) -> Option<bool> {
         match self {
             Self::None => None,
-            Self::Tree(flat) => Some(flat != current),
+            Self::Trees(flats) => Some(flats.iter().all(|flat| flat != current)),
             Self::Unreadable => Some(true),
         }
     }
 }
 
-/// The same paths with the same content hashes; a kind change alone, such as a new executable bit, is not activity.
-fn same_content(before: &FlatTree, after: &FlatTree) -> bool {
-    before.len() == after.len()
-        && before
-            .iter()
-            .zip(after)
-            .all(|((a, a_entry), (b, b_entry))| a == b && a_entry.hash == b_entry.hash)
+/// The first path, in path order, that one tree has and the other has not, or that has another content hash; `None` for the same paths with the same content hashes. A kind change alone, such as a new executable bit, is not activity.
+fn first_difference(before: &FlatTree, after: &FlatTree) -> Option<Vec<u8>> {
+    let mut before = before.iter().peekable();
+    let mut after = after.iter().peekable();
+    loop {
+        match (before.peek(), after.peek()) {
+            (None, None) => return None,
+            (Some((path, _)), None) | (None, Some((path, _))) => return Some(path.to_vec()),
+            (Some((a, a_entry)), Some((b, b_entry))) => match a.cmp(b) {
+                std::cmp::Ordering::Less => return Some(a.to_vec()),
+                std::cmp::Ordering::Greater => return Some(b.to_vec()),
+                std::cmp::Ordering::Equal if a_entry.hash != b_entry.hash => {
+                    return Some(a.to_vec());
+                }
+                std::cmp::Ordering::Equal => {
+                    before.next();
+                    after.next();
+                }
+            },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2287,6 +2384,42 @@ mod tests {
 
     fn path(text: &str) -> RepoPath {
         RepoPath::parse(text.as_bytes()).unwrap()
+    }
+
+    fn flat(entries: &[(&str, u8, fold_core::tree::EntryKind)]) -> FlatTree {
+        entries
+            .iter()
+            .map(|(path, seed, kind)| {
+                let entry = fold_core::tree::FlatEntry {
+                    kind: *kind,
+                    hash: ObjectHash::from_bytes([*seed; 32]),
+                };
+                (path.as_bytes().to_vec(), entry)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_first_difference_is_the_first_path_in_order_that_moved() {
+        use fold_core::tree::EntryKind::{Executable, File};
+        let before = flat(&[("a", 1, File), ("c", 2, File), ("e", 3, File)]);
+        assert_eq!(first_difference(&before, &before), None);
+        let mode = flat(&[("a", 1, Executable), ("c", 2, File), ("e", 3, File)]);
+        assert_eq!(first_difference(&before, &mode), None);
+        let edited = flat(&[("a", 1, File), ("c", 9, File), ("e", 4, File)]);
+        assert_eq!(first_difference(&before, &edited), Some(b"c".to_vec()));
+        let added = flat(&[
+            ("a", 1, File),
+            ("b", 5, File),
+            ("c", 2, File),
+            ("e", 3, File),
+        ]);
+        assert_eq!(first_difference(&before, &added), Some(b"b".to_vec()));
+        let removed = flat(&[("a", 1, File), ("e", 3, File)]);
+        assert_eq!(first_difference(&before, &removed), Some(b"c".to_vec()));
+        let last = flat(&[("a", 1, File), ("c", 2, File)]);
+        assert_eq!(first_difference(&before, &last), Some(b"e".to_vec()));
+        assert_eq!(first_difference(&last, &before), Some(b"e".to_vec()));
     }
 
     #[test]

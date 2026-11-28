@@ -2,7 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource, INSTRUCTIONS};
+use fold_daemon::mcp::{FoldServer, FooterCounts, FooterPart, FooterSource, INSTRUCTIONS};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBus, EventService};
 use fold_daemon::services::messages::MessageService;
@@ -21,15 +21,11 @@ type Client = RunningService<RoleClient, ()>;
 struct Fixed(FooterPart, u64);
 
 impl FooterSource for Fixed {
-    fn part(&self) -> FooterPart {
-        self.0
-    }
-
     fn count<'a>(
         &'a self,
         _session: &'a SessionContext,
-    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
-        Box::pin(async move { self.1 })
+    ) -> Pin<Box<dyn Future<Output = FooterCounts> + Send + 'a>> {
+        Box::pin(async move { FooterCounts::default().with(self.0, self.1) })
     }
 }
 
@@ -344,6 +340,8 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
             "send_back_task",
             "set_hold",
             "clear_hold",
+            "watch_tasks",
+            "unwatch_tasks",
             "create_request",
             "list_requests",
             "get_request",

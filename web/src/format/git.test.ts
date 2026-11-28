@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { GitRemote, ProjectGit } from "../api/git";
-import { ADD_REMOTE_COMMAND, gitSummary, remoteLine, shortCommit } from "./git";
+import {
+  ADD_REMOTE_COMMAND,
+  gitSummary,
+  LOCAL_BRANCH_LABEL,
+  pushTarget,
+  remoteLine,
+  shortCommit,
+} from "./git";
 
 const remote = (extra: Partial<GitRemote> = {}): GitRemote => ({
   name: "origin",
@@ -21,7 +28,25 @@ describe("shortCommit", () => {
   });
 });
 
+describe("pushTarget", () => {
+  it("names the remote and the branch fold pushes to", () => {
+    expect(pushTarget({ name: "origin", branch: "dev" })).toBe(
+      "Pushes to origin/dev",
+    );
+  });
+});
+
 describe("remoteLine", () => {
+  it("labels the push target and flags a remote that is not pushed to after an integration", () => {
+    expect(remoteLine(remote({ branch: "dev" }))).toMatchObject({
+      target: "Pushes to origin/dev",
+      pushOff: false,
+    });
+    expect(
+      remoteLine(remote({ branch: "dev", push_on_integrate: false })),
+    ).toMatchObject({ target: "Pushes to origin/dev", pushOff: true });
+  });
+
   it("says a remote that never received a push has none yet", () => {
     expect(remoteLine(remote())).toMatchObject({
       tone: "idle",
@@ -77,6 +102,7 @@ describe("gitSummary", () => {
     expect(gitSummary(base)).toMatchObject({
       repository: "/home/ana/ledger",
       branch: "main",
+      branchLabel: LOCAL_BRANCH_LABEL,
       remotes: [],
       addRemote: ADD_REMOTE_COMMAND,
     });

@@ -31,7 +31,7 @@ pub const MCP_RETRY_TURN: &str = "fold resumed you after your fold MCP server fa
 pub const PAUSE_TURN: &str = "fold resumed you after a pause of every agent of the project. Your claims kept their leases. Check your inbox, your claims and your workspace, then continue your work.";
 
 impl Supervisor {
-    /// Queues, after a daemon start, every worker that was working or idle when the daemon stopped, and every worker that could not reach fold, in the project's [`ResumeGroups`](super::ResumeGroups), which run them again a group at a time across every project, owed work and leads first; [`ResumeGroups::run_due`](super::ResumeGroups::run_due) runs each group: `--resume` of its session, with a turn that tells a working one to go on and a turn that tells the other one that its fold connection failed. A lead hears in the same turn of the work that waits for it, and an idle lead with nothing waiting gets no turn. A worker whose fld binary was gone resumes only once the fld path names a file again. A start reads the rows once, so a worker that fails the same way again stays failed until the next start. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes, failed integration checks, send-backs, reviews of new versions that the worker limits held back, the conflicts of approved versions whose reviewer has not taken them, the messages of stopped workers and the work of the supervised main are then served, each in the groups before the rows and within the worker limits when its group comes; the start returns once each of these sweeps has queued its first resume or ended, and the turns that wait for the network, a usage limit or a working login are run again when due. A start in a paused project does none of this: the resume of the pause runs the workers again, those that could not reach fold among them.
+    /// Queues, after a daemon start, every worker that was working or idle when the daemon stopped, and every worker that could not reach fold, in the project's [`ResumeGroups`](super::ResumeGroups), which run them again a group at a time across every project, owed work and leads first; [`ResumeGroups::run_due`](super::ResumeGroups::run_due) runs each group: `--resume` of its session, with a turn that tells a working one to go on and a turn that tells the other one that its fold connection failed. A lead hears in the same turn of the work that waits for it, and an idle lead with nothing waiting stays without a process until work comes (see [`Supervisor::wake_dormant`]). A worker whose fld binary was gone resumes only once the fld path names a file again. A start reads the rows once, so a worker that fails the same way again stays failed until the next start. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes, failed integration checks, send-backs, reviews of new versions that the worker limits held back, the conflicts of approved versions whose reviewer has not taken them, the messages of stopped workers and the work of the supervised main are then served, each in the groups before the rows and within the worker limits when its group comes; the start returns once each of these sweeps has queued its first resume or ended, and the turns that wait for the network, a usage limit or a working login are run again when due. A start in a paused project does none of this: the resume of the pause runs the workers again, those that could not reach fold among them.
     pub async fn resume_after_restart(&self) -> Result<(), AgentError> {
         if self.is_paused().await? {
             self.inner.unreachable_owed.store(true, Ordering::SeqCst);
@@ -88,6 +88,15 @@ impl Supervisor {
         kept: &BTreeSet<AgentName>,
     ) -> Result<(), AgentError> {
         match row.state {
+            // A lead that was idle runs again only for the work that waits for it; until then it stays without a process. A turn that waits for the network, a usage limit or a working login is owed work.
+            WorkerState::Idle
+                if matches!(row.role, Role::AreaLead | Role::ReviewLead) && row.wait.is_none() =>
+            {
+                match self.lead_owed_turn(row, kept).await {
+                    Some(turn) => self.relaunch(row, Some(turn), None).await?,
+                    None => self.keep_dormant(&row.agent),
+                }
+            }
             WorkerState::Working | WorkerState::Idle => {
                 let turn = (row.state == WorkerState::Working).then(|| RESTART_TURN.to_owned());
                 let turn = self.with_catch_up(row, turn, kept).await;
@@ -107,7 +116,7 @@ impl Supervisor {
     }
 
     /// Runs a worker whose row kept its state without a process again in its own session with `--resume`, after a daemon start or a pause; a worker whose session is gone starts again in a new one, which also gets `lost` after its own note. A worker with an open question waits without a process until a human answers it.
-    async fn relaunch(
+    pub(super) async fn relaunch(
         &self,
         row: &WorkerProcessRow,
         turn: Option<String>,

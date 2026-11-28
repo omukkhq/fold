@@ -23,6 +23,9 @@ const SUMMARY_TITLE: usize = 100;
 /// The turn fold sends a lead whose context passed its role's `handoff_at`.
 pub const HANDOFF_REQUEST: &str = "fold: your context is large, so fold will start you again with a fresh context. Call write_handoff now with a short hand-off note for your next session: what you are doing, your open decisions and what comes next. Tasks, proposals, reviews and messages stay in fold, so do not copy them. Then end your turn.";
 
+/// The note the prompt hook adds once to a turn of the interactive main session, the user's own `fld claude` session, whose context passed the main role's `handoff_at`. fold never restarts that session and the main agent has no `write_handoff`, so the note goes to the agent's own inbox and the user clears the context. The supervised main gets [`HANDOFF_REQUEST`] instead, because fold starts it again from its note.
+pub const MAIN_HANDOFF_NOTE: &str = "fold: your context is large. Send yourself a hand-off note with send_message now: the approved scope, ids, decisions, checks and next steps. Tasks, proposals, reviews and messages stay in fold, so do not copy them. Then ask the user to run /clear, and in the new session read get_inbox and the fold state. fold does not restart this session.";
+
 /// The turn fold sends an area lead or the review lead whose session started under another fold: its role, skill and tool text came from an older fold, and a long session keeps the habits of that text whatever a reload note says, so it goes on in a fresh session instead.
 pub const UPGRADE_HANDOFF_REQUEST: &str = "fold: fold was updated, and your session holds the old role, skill and tool text, so fold will start you again in a fresh session. Call write_handoff now with a short hand-off note for your next session: what you are doing, your open decisions and what comes next. Tasks, proposals, reviews and messages stay in fold, so do not copy them. Then end your turn.";
 
@@ -226,6 +229,27 @@ mod tests {
             |text: &'static str| text.split_once("Call write_handoff").map(|(_, rest)| rest);
         assert_eq!(steps(UPGRADE_HANDOFF_REQUEST), steps(HANDOFF_REQUEST));
         assert!(steps(HANDOFF_REQUEST).is_some());
+    }
+
+    #[test]
+    fn the_main_note_asks_for_a_message_to_itself_and_a_clear_never_for_write_handoff() {
+        assert!(MAIN_HANDOFF_NOTE.contains("send_message"));
+        assert!(MAIN_HANDOFF_NOTE.contains("/clear"));
+        assert!(!MAIN_HANDOFF_NOTE.contains("write_handoff"));
+        assert!(!MAIN_HANDOFF_NOTE.contains("start you again"));
+    }
+
+    #[test]
+    fn no_worker_role_gets_the_main_note() {
+        for role in Role::ALL {
+            assert!(!role.prompt().contains(MAIN_HANDOFF_NOTE), "{role:?}");
+            assert!(
+                !role.with_own_text("").contains(MAIN_HANDOFF_NOTE),
+                "{role:?}"
+            );
+        }
+        assert_ne!(MAIN_HANDOFF_NOTE, HANDOFF_REQUEST);
+        assert!(HANDOFF_REQUEST.contains("write_handoff"));
     }
 
     #[test]

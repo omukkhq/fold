@@ -19,8 +19,8 @@ import type { ThreadView } from "@/api/messages";
 import type {
   ChangeRange,
   NewQuestion,
+  ListedProposal,
   ProposalDetail,
-  ProposalSummary,
   ReviewComment,
 } from "@/api/proposals";
 import type { Revision } from "@/api/repository";
@@ -311,8 +311,16 @@ function seed(): void {
   );
 }
 
-function summaries(slug: string): ProposalSummary[] {
-  return slug === "demo" ? [...proposals.values()].map((p) => p.summary) : [];
+function summaries(slug: string): ListedProposal[] {
+  return slug === "demo"
+    ? [...proposals.values()].map((p) => ({
+        ...p.summary,
+        lane: p.lane,
+        conflicted_reason: p.conflicted_reason,
+        queue: p.queue,
+        waits_for: p.waits_for,
+      }))
+    : [];
 }
 
 function routes(): void {
@@ -729,6 +737,62 @@ describe("Proposals list", () => {
     await waitFor(async () => {
       expect(rowIds(await table())).toEqual(["P-9", "P-6", "P-4", "P-3"]);
     });
+  });
+
+  it("shows an approved proposal's place in the integration queue or why it waits, and changes it when the stream moves the queue", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      queue: {
+        position: 2,
+        ahead: "P-12",
+        batch: null,
+        integrating_now: false,
+        estimated_start: Date.now() + 10 * 60_000 + 5000,
+      },
+    }));
+    update("P-3", (p) => ({
+      ...p,
+      waits_for: { reason: "human_review", reviewer: "tanim" },
+    }));
+    const { queryClient } = renderAt("/p/demo/proposals");
+    const rows = await table();
+    const row = (title: string) => {
+      const found = within(rows)
+        .getByRole("link", { name: title })
+        .closest("tr");
+      if (!found) throw new Error(`no row ${title}`);
+      return found;
+    };
+    expect(
+      within(row("Database schema for reports"))
+        .getByText(/^2nd in line · after P-12 · starts in about \d+ min$/)
+        .getAttribute("data-queue-wait"),
+    ).toBe("queue");
+    expect(
+      within(row("Login form styles"))
+        .getByText("Waits for human review · by tanim")
+        .getAttribute("data-queue-wait"),
+    ).toBe("person");
+    expect(row("Charts").querySelector("[data-queue-wait]")).toBeNull();
+    update("P-4", (p) => ({
+      ...p,
+      queue: {
+        position: 1,
+        ahead: null,
+        batch: null,
+        integrating_now: true,
+        estimated_start: null,
+      },
+    }));
+    deliver(queryClient, "integration.succeeded", {
+      proposal: "P-12",
+      task: "T-12",
+    });
+    expect(
+      await within(rows).findByText(
+        "Integrating now · the integration checks run",
+      ),
+    ).toBeTruthy();
   });
 
   it("shows the empty state for a project without proposals", async () => {
@@ -1281,6 +1345,88 @@ describe("Proposal detail", () => {
     );
   });
 
+  it("stops a running check run, stays pending until the stream reports the end, then hides Stop", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      checks: [checkRun(16, { state: "running", finished_at: null })],
+    }));
+    daemon.on("POST /api/v1/projects/:slug/check-runs/cancel", () =>
+      ok({ cancelled: ["cr-16"] }),
+    );
+    const { queryClient } = renderAt("/p/demo/proposals/P-4?tab=checks");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Stop cr-16" }));
+    await waitFor(() => {
+      expect(
+        writes("POST /api/v1/projects/demo/check-runs/cancel")[0]?.body,
+      ).toEqual({ run: "cr-16" });
+    });
+    const stop = await screen.findByRole("button", { name: "Stop cr-16" });
+    await waitFor(() => {
+      expect(stop.getAttribute("aria-busy")).toBe("true");
+    });
+    update("P-4", (p) => ({
+      ...p,
+      checks: [
+        checkRun(16, {
+          state: "failed",
+          reason: "cancelled",
+          stage: "proposal",
+        }),
+      ],
+    }));
+    deliver(queryClient, "checks.finished", {
+      proposal: "P-4",
+      task: "T-3",
+      data: { run: "cr-16", stage: "proposal", state: "failed" },
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Stop cr-16" })).toBeNull();
+    });
+    expect(
+      screen.getByText("fold stopped the run because someone cancelled it."),
+    ).toBeTruthy();
+  });
+
+  it("shows that a running run waits for a build slot", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      checks: [
+        checkRun(16, {
+          state: "running",
+          finished_at: null,
+          waiting_for_build_slot_since: 5,
+        }),
+      ],
+    }));
+    renderAt("/p/demo/proposals/P-4?tab=checks");
+    expect(
+      await screen.findByText("Waits for a free build slot on the machine."),
+    ).toBeTruthy();
+  });
+
+  it("shows the refusal code of a cancel and keeps Stop available", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      checks: [checkRun(16, { state: "running", finished_at: null })],
+    }));
+    daemon.on("POST /api/v1/projects/:slug/check-runs/cancel", () =>
+      refuse(409, "check_run_ended"),
+    );
+    renderAt("/p/demo/proposals/P-4?tab=checks");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Stop cr-16" }));
+    expect(
+      await screen.findByText("The run ended before the cancel reached it."),
+    ).toBeTruthy();
+    expect(screen.getByText("code: check_run_ended")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: "Stop cr-16" })
+        .getAttribute("aria-busy"),
+    ).toBeNull();
+  });
+
   it("disables Approve while a check of the current version runs, and enables it when the stream reports the end", async () => {
     update("P-4", (p) => ({
       ...p,
@@ -1743,6 +1889,52 @@ describe("Proposal detail", () => {
     expect(
       within(about).queryByText("Human review", { selector: "dt" }),
     ).toBeNull();
+  });
+
+  it("shows the queue place and the wait reason under the title, and the new place after the stream moves the queue", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      queue: {
+        position: 3,
+        ahead: "rb-1",
+        batch: null,
+        integrating_now: false,
+        estimated_start: null,
+      },
+    }));
+    const { queryClient } = renderAt("/p/demo/proposals/P-4");
+    const place = await screen.findByText(
+      byContent("3rd in line · after rb-1"),
+    );
+    expect(
+      place.closest("[data-queue-wait]")?.getAttribute("data-queue-wait"),
+    ).toBe("queue");
+    update("P-4", (p) => ({
+      ...p,
+      queue: null,
+      waits_for: { reason: "automatic_off" },
+    }));
+    deliver(queryClient, "integration.unqueued", { proposal: "P-12" });
+    expect(
+      await screen.findByText(
+        byContent("Automatic integration is off · a human integrates it"),
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(byContent(/in line/))).toBeNull();
+  });
+
+  it("shows a wait for a human in gold and leaves the line out of a proposal with neither field", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      waits_for: { reason: "human_review", reviewer: null },
+    }));
+    renderAt("/p/demo/proposals/P-4");
+    const wait = await screen.findByText(
+      byContent("Waits for human review · any human"),
+    );
+    expect(
+      wait.closest("[data-queue-wait]")?.getAttribute("data-queue-wait"),
+    ).toBe("person");
   });
 
   it("says when the project has no such proposal", async () => {
@@ -2411,6 +2603,7 @@ describe("Checks", () => {
     log_bytes: 8,
     log: "",
     truncated: false,
+    flaky: false,
   };
   function checkRun(
     id: string,

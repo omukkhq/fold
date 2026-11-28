@@ -177,11 +177,18 @@ describe("a lane check failure", () => {
     fixer: "reviewer",
   };
   const merge = { kind: "merge_conflict" as const, fixer: null };
+  const refresh = {
+    kind: "lane_refresh" as const,
+    lane: "migrations",
+    refresh: "redo the migration",
+    fixer: null,
+  };
   const list = [
     { ...summary("P-1", { conflicted: true }), conflicted_reason: merge },
     { ...summary("P-2", { conflicted: true }), conflicted_reason: failure },
     summary("P-3", { conflicted: true }),
     summary("P-4"),
+    { ...summary("P-5", { conflicted: true }), conflicted_reason: refresh },
   ];
 
   it("never counts as a merge conflict", () => {

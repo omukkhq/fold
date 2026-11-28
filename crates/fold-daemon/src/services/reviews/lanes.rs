@@ -8,6 +8,7 @@ use fold_store::{StoreError, workspaces};
 use serde_json::json;
 
 use super::conflicts::{ConflictedReason, conflicted_reason};
+use super::queue::IntegrationQueue;
 use super::{ProposalFilter, ProposalListing, ProposalSummary, ReviewError, ReviewService};
 
 impl ReviewService {
@@ -88,6 +89,30 @@ impl ReviewService {
         proposal: ProposalId,
         head_tree: ObjectHash,
     ) -> Result<Option<String>, ReviewError> {
+        Ok(self
+            .moved_lane_with_refresh(proposal, head_tree)
+            .await?
+            .map(|moved| moved.lane))
+    }
+
+    /// The lane main moved in since the version's base, as [`ReviewService::moved_lane`] finds it, when that lane names a `refresh`: the version goes to its approving reviewer to redo the step on the new main instead of starting its integration run.
+    pub(super) async fn refresh_due(
+        &self,
+        proposal: ProposalId,
+        head_tree: ObjectHash,
+    ) -> Result<Option<MovedLane>, ReviewError> {
+        Ok(self
+            .moved_lane_with_refresh(proposal, head_tree)
+            .await?
+            .filter(|moved| moved.refresh.is_some()))
+    }
+
+    /// [`ReviewService::moved_lane`] with the lane's `refresh` text.
+    pub(super) async fn moved_lane_with_refresh(
+        &self,
+        proposal: ProposalId,
+        head_tree: ObjectHash,
+    ) -> Result<Option<MovedLane>, ReviewError> {
         let Some(file) = self.main_lanes().await? else {
             return Ok(None);
         };
@@ -108,18 +133,33 @@ impl ReviewService {
         Ok(moved
             .iter()
             .any(|path| lane.matches(path))
-            .then(|| lane.name.clone()))
+            .then(|| MovedLane {
+                lane: lane.name.clone(),
+                refresh: lane.refresh.clone(),
+            }))
     }
 }
 
+/// A lane that main moved in since a version's base.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MovedLane {
+    pub lane: String,
+    /// The lane's `refresh` text: the step the approving reviewer redoes on the new main.
+    pub refresh: Option<String>,
+}
+
 impl ReviewService {
-    /// The proposals of `filter` with the place of each lane member among all open proposals.
+    /// The proposals of `filter` with the place of each lane member among all open proposals and the automatic integration queue.
     pub async fn list_proposals_in_lanes(
         &self,
         filter: ProposalFilter,
-    ) -> Result<(Vec<ProposalSummary>, Vec<LanePlace>), ReviewError> {
+    ) -> Result<(Vec<ProposalSummary>, Vec<LanePlace>, IntegrationQueue), ReviewError> {
         let proposals = self.list_proposals(filter).await?;
-        Ok((proposals, self.lane_places().await?))
+        Ok((
+            proposals,
+            self.lane_places().await?,
+            self.integration_queue().await?,
+        ))
     }
 
     /// [`ReviewService::list_proposals_for`] with the place of each lane member among all open proposals and the reason of each listed open proposal flagged `conflicted`.
@@ -143,10 +183,12 @@ impl ReviewService {
             }
         }
         read.commit().await.map_err(StoreError::from)?;
+        let queue = self.integration_queue().await?;
         Ok(LaneListing {
             listing,
             lanes,
             conflicted,
+            queue,
         })
     }
 
@@ -172,6 +214,8 @@ pub struct LaneListing {
     pub lanes: Vec<LanePlace>,
     /// The reason of each listed open proposal flagged `conflicted`.
     pub conflicted: Vec<(ProposalId, ConflictedReason)>,
+    /// The automatic integration queue of the whole project, listed or not.
+    pub queue: IntegrationQueue,
 }
 
 /// The refusal of an integration of a lane member behind the front: `invalid_request` with the reason `lane_held`, the lane and the position.

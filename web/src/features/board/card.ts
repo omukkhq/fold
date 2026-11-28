@@ -1,5 +1,6 @@
 import type { BoardCard, BoardProposal, CardProposalState } from "@/api/board";
 import { planWait, planWaitLabel } from "@/features/proposals/planWait";
+import { queueWait, type QueueWait } from "@/features/proposals/queueWait";
 import { projectPath } from "@/routes/paths";
 
 /**
@@ -80,16 +81,34 @@ export function reviewingText(
     : null;
 }
 
-/** An open proposal that a reviewer holds reads as being reviewed; else one that waits in a review plan reads as waiting for its batch, which holds only open proposals. */
-export function proposalText(proposal: BoardProposal): string {
+/** Where an approved proposal stands in the integration: its queue place or the reason it waits. Any other proposal gives null, since the daemon's wait reason of an unapproved one says only that it is not approved. */
+export function integrationWait(
+  proposal: BoardProposal,
+  now: number,
+): QueueWait | null {
+  return proposal.state === "approved" ? queueWait(proposal, now) : null;
+}
+
+/** An open proposal that a reviewer holds reads as being reviewed; else one that waits in a review plan reads as waiting for its batch, which holds only open proposals. An approved one names its queue place or wait reason, never `approved` alone, unless the daemon names neither. */
+export function proposalText(proposal: BoardProposal, now: number): string {
   const state =
     reviewingText(proposal) ??
+    integrationWait(proposal, now)?.title ??
     (proposal.review_plan !== null && proposal.state === "open"
       ? planWaitLabel(proposal.review_plan)
       : proposal.state === "integrated" && proposal.revision !== null
         ? `integrated as ${proposal.revision}`
         : PROPOSAL_TEXT[proposal.state]);
   return `${proposal.id} · ${state}`;
+}
+
+/** The line under the pill of an approved proposal: what follows its queue place or wait reason, such as the proposal ahead and the estimated start; null when there is nothing more to say. */
+export function integrationWaitDetail(
+  proposal: BoardProposal,
+  now: number,
+): string | null {
+  const detail = integrationWait(proposal, now)?.detail ?? "";
+  return detail === "" ? null : detail;
 }
 
 /** The line under the pill of a proposal that waits in a review plan: the awaited tasks and when the wait ends, or that the batch waits for its reviewer; null otherwise. */

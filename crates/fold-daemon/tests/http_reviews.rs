@@ -947,6 +947,45 @@ async fn a_conflicting_integration_answers_integration_conflicted() {
     assert_eq!(row["conflicted"], true, "{}", list.body);
 }
 
+#[tokio::test]
+async fn list_proposals_refuses_a_malformed_human_name() {
+    let fx = with_p1().await;
+    let request = Request::builder()
+        .header(CLIENT_HEADER, "test")
+        .header("x-fold-human", "not a name!")
+        .method(Method::GET)
+        .uri(format!("{BASE}/proposals"))
+        .body(Body::empty())
+        .unwrap();
+    let response = socket_router(fx.state.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"]["code"], "invalid_name", "{body}");
+}
+
+#[test]
+fn the_declared_errors_name_what_the_routes_return() {
+    let doc = serde_json::to_value(openapi()).unwrap();
+    let list = &doc["paths"]["/api/v1/projects/{slug}/proposals"]["get"]["responses"];
+    assert!(
+        list["400"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("invalid_name")
+    );
+    let checkouts = &doc["paths"]["/api/v1/projects/{slug}/reviews/checkouts"]["get"]["responses"];
+    assert!(
+        checkouts["503"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("project_unavailable")
+    );
+}
+
 #[test]
 fn the_openapi_document_declares_every_route_and_error_schema() {
     let doc = serde_json::to_value(openapi()).unwrap();
@@ -1092,6 +1131,93 @@ async fn a_check_run_is_read_with_its_logs_and_listed_on_its_proposal() {
     );
 }
 
+/// Starts the checks of T-1 for `author` with `run` as the only check, after a change of `src/lib.rs` to `content`, and returns the run.
+#[cfg(test)]
+async fn start_run(
+    fx: &Fixture,
+    author: &fold_core::Actor,
+    run: &str,
+    content: &str,
+) -> fold_core::CheckRunId {
+    fx.write(1, "src/lib.rs", content);
+    fx.write(
+        1,
+        "fold-checks.toml",
+        &format!("[[check]]\nname = \"unit\"\nrun = \"{run}\"\n"),
+    );
+    let started = fx.reviews().run_checks(author, t(1)).await.unwrap();
+    let fold_daemon::services::reviews::checks::Started::Running { run, .. } = started else {
+        panic!("expected a run");
+    };
+    run
+}
+
+/// The route's answer for `run` once the run has ended.
+#[cfg(test)]
+async fn ended_run(fx: &Fixture, run: fold_core::CheckRunId) -> Value {
+    fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
+        let answer = send(fx, Method::GET, &format!("/check-runs/{run}"), None, None).await;
+        if answer.status == StatusCode::OK && answer.body["state"] != "running" {
+            Ok(answer.body)
+        } else {
+            Err(answer.body)
+        }
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_check_run_names_who_cancelled_it_and_only_a_cancelled_run_does() {
+    let fx = Fixture::new().await;
+    let author = fx.agent("frontend").await;
+    fx.workspaces()
+        .create_workspace(&author, t(1))
+        .await
+        .unwrap();
+
+    let passed = start_run(&fx, &author, "true", "pub fn a() {}\n").await;
+    let passed = ended_run(&fx, passed).await;
+    assert_eq!(passed["state"], "passed", "{passed}");
+    assert!(passed["cancelled_by"].is_null(), "{passed}");
+
+    let failed = start_run(&fx, &author, "false", "pub fn b() {}\n").await;
+    let failed = ended_run(&fx, failed).await;
+    assert_eq!(
+        (&failed["state"], &failed["reason"]),
+        (&json!("failed"), &json!("check_failed")),
+        "{failed}"
+    );
+    assert!(failed["cancelled_by"].is_null(), "{failed}");
+
+    let by_agent = start_run(&fx, &author, "sleep 600", "pub fn c() {}\n").await;
+    let ended = fx
+        .reviews()
+        .cancel_check_runs(
+            &author,
+            fold_daemon::services::reviews::checks::CancelTarget::Run(by_agent),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ended, vec![by_agent]);
+    let by_agent = ended_run(&fx, by_agent).await;
+    assert_eq!(by_agent["reason"], "cancelled", "{by_agent}");
+    assert_eq!(by_agent["cancelled_by"], "frontend", "{by_agent}");
+
+    let by_human = start_run(&fx, &author, "sleep 600", "pub fn d() {}\n").await;
+    let cancel = send(
+        &fx,
+        Method::POST,
+        "/check-runs/cancel",
+        Some(json!({"run": by_human.to_string()})),
+        Some(TANIM),
+    )
+    .await;
+    assert_eq!(cancel.status, StatusCode::OK, "{}", cancel.body);
+    let by_human = ended_run(&fx, by_human).await;
+    assert_eq!(by_human["reason"], "cancelled", "{by_human}");
+    assert_eq!(by_human["cancelled_by"], "human:tanim", "{by_human}");
+}
+
 #[tokio::test]
 async fn approve_and_integrate_wait_while_an_update_runs_its_checks() {
     let fx = Fixture::new().await;
@@ -1214,4 +1340,240 @@ async fn approve_and_integrate_wait_while_a_reviewer_fix_runs_its_checks() {
     })
     .await;
     assert_eq!(detail.body["update_run"], Value::Null);
+}
+
+#[tokio::test]
+async fn an_approved_proposal_shows_its_queue_place_or_why_it_waits() {
+    let fx = with_p1().await;
+    let p1 = fold_core::ProposalId::from_number(1).unwrap();
+    let unreviewed = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
+    assert_eq!(unreviewed.body["queue"], Value::Null, "{}", unreviewed.body);
+    assert_eq!(unreviewed.body["waits_for"], Value::Null);
+
+    let review = fx.agent("review").await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
+    fx.reviews()
+        .submit_review(
+            &review,
+            p1,
+            1,
+            fold_core::reviews::Verdict::Approve,
+            "ok",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let place = json!({
+        "position": 1,
+        "integrating_now": false,
+        "ahead": null,
+        "estimated_start": null,
+        "batch": null,
+    });
+    let read = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
+    assert_eq!(read.status, StatusCode::OK, "{}", read.body);
+    assert_eq!(read.body["queue"], place);
+    assert_eq!(read.body["waits_for"], Value::Null);
+    let listed = send(&fx, Method::GET, "/proposals?state=open", None, None).await;
+    assert_eq!(listed.body["proposals"][0]["queue"], place);
+    assert_eq!(listed.body["proposals"][0]["waits_for"], Value::Null);
+
+    std::fs::write(
+        fx.project.paths().config(),
+        "[integration]\nautomatic = false\n",
+    )
+    .unwrap();
+    let read = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
+    assert_eq!(read.body["queue"], Value::Null);
+    assert_eq!(read.body["waits_for"], json!({"reason": "automatic_off"}));
+
+    fx.handle
+        .tasks
+        .add_dependency(&human(TANIM), t(1), t(2))
+        .await
+        .unwrap();
+    std::fs::write(fx.project.paths().config(), "").unwrap();
+    let listed = send(&fx, Method::GET, "/proposals?state=open", None, None).await;
+    assert_eq!(
+        listed.body["proposals"][0]["waits_for"],
+        json!({"reason": "prerequisites", "prerequisites": [{"task": "T-2", "status": "todo"}]})
+    );
+}
+
+/// Starts the checks of T-1 for `author` and waits until the run ended.
+#[cfg(test)]
+async fn ended_http_run(fx: &Fixture, author: &fold_core::Actor) -> String {
+    let started = fx.reviews().run_checks(author, t(1)).await.unwrap();
+    let fold_daemon::services::reviews::checks::Started::Running { run, .. } = started else {
+        panic!("expected a run");
+    };
+    fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
+        let answer = send(fx, Method::GET, &format!("/check-runs/{run}"), None, None).await;
+        if answer.body["state"] == "running" {
+            Err(answer.body)
+        } else {
+            Ok(())
+        }
+    })
+    .await;
+    run.to_string()
+}
+
+#[tokio::test]
+async fn the_flaky_checks_are_listed_with_their_runs_and_marked_on_the_run() {
+    let fx = Fixture::new().await;
+    let marks = tempfile::tempdir().unwrap();
+    let mark = marks.path().join("mark");
+    let author = fx.agent("frontend").await;
+    fx.workspaces()
+        .create_workspace(&author, t(1))
+        .await
+        .unwrap();
+    fx.write(
+        1,
+        "fold-checks.toml",
+        &format!(
+            "[[check]]\nname = \"unit\"\nrun = \"if [ -e '{0}' ]; then exit 0; fi; touch '{0}'; exit 1\"\n",
+            mark.display()
+        ),
+    );
+    let empty = send(&fx, Method::GET, "/checks/flaky", None, None).await;
+    assert_eq!(empty.status, StatusCode::OK, "{}", empty.body);
+    assert_eq!(empty.body, json!({"days": 14, "checks": []}));
+
+    let failed = ended_http_run(&fx, &author).await;
+    let passed = ended_http_run(&fx, &author).await;
+    let listed = send(&fx, Method::GET, "/checks/flaky?days=3", None, None).await;
+    assert_eq!(listed.status, StatusCode::OK, "{}", listed.body);
+    assert_eq!(
+        listed.body,
+        json!({"days": 3, "checks": [{"check": "unit", "count": 1, "runs": [failed]}]})
+    );
+    let run = send(
+        &fx,
+        Method::GET,
+        &format!("/check-runs/{failed}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(run.body["results"][0]["outcome"], "failed");
+    assert_eq!(run.body["results"][0]["flaky"], true);
+    let run = send(
+        &fx,
+        Method::GET,
+        &format!("/check-runs/{passed}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(run.body["results"][0]["flaky"], false);
+
+    let bad = send(&fx, Method::GET, "/checks/flaky?days=400", None, None).await;
+    assert_eq!(
+        (bad.status, bad.code()),
+        (StatusCode::BAD_REQUEST, "invalid_request")
+    );
+}
+
+/// The `proposal` of the board card of `task`.
+#[cfg(test)]
+fn board_proposal(board: &Value, task: &str) -> Value {
+    board["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|column| column["cards"].as_array().unwrap())
+        .find(|card| card["task"] == task)
+        .map(|card| card["proposal"].clone())
+        .unwrap()
+}
+
+/// Asserts that the board card of each task carries the `queue` and `waits_for` of its proposal's own read.
+#[cfg(test)]
+async fn assert_board_matches_reads(fx: &Fixture, board: &Value) {
+    for (task, proposal) in [("T-1", "P-1"), ("T-2", "P-2")] {
+        let card = board_proposal(board, task);
+        let read = send(
+            fx,
+            Method::GET,
+            &format!("/proposals/{proposal}"),
+            None,
+            Some(TANIM),
+        )
+        .await;
+        assert_eq!(card["queue"], read.body["queue"], "{proposal}");
+        assert_eq!(card["waits_for"], read.body["waits_for"], "{proposal}");
+    }
+}
+
+#[tokio::test]
+async fn the_board_shows_each_proposals_queue_place_or_why_it_waits() {
+    let fx = with_p1().await;
+    let backend = fx.agent("backend").await;
+    fx.workspaces()
+        .create_workspace(&backend, t(2))
+        .await
+        .unwrap();
+    fx.write(2, "src/export.rs", "pub fn export() {}\n");
+    fx.reviews()
+        .create_proposal_covering(&backend, t(2), "Add the export", Some("tests pass"))
+        .await
+        .unwrap()
+        .detail()
+        .unwrap();
+
+    let board = send(&fx, Method::GET, "/board", None, None).await;
+    assert_eq!(board.status, StatusCode::OK, "{}", board.body);
+    for task in ["T-1", "T-2"] {
+        let card = board_proposal(&board.body, task);
+        assert_eq!(card["queue"], Value::Null, "{task}");
+        assert_eq!(card["waits_for"], Value::Null, "{task}");
+    }
+    assert_board_matches_reads(&fx, &board.body).await;
+
+    let review = fx.agent("review").await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
+    for number in [2, 1] {
+        fx.reviews()
+            .submit_review(
+                &review,
+                fold_core::ProposalId::from_number(number).unwrap(),
+                1,
+                fold_core::reviews::Verdict::Approve,
+                "ok",
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        if number == 2 {
+            fx.handle
+                .tasks
+                .add_dependency(&human(TANIM), t(1), t(2))
+                .await
+                .unwrap();
+        }
+    }
+
+    let board = send(&fx, Method::GET, "/board", None, None).await;
+    assert_eq!(board.status, StatusCode::OK, "{}", board.body);
+    let p2 = board_proposal(&board.body, "T-2");
+    assert_eq!(
+        p2["queue"],
+        json!({
+            "position": 1,
+            "integrating_now": false,
+            "ahead": null,
+            "estimated_start": null,
+            "batch": null,
+        })
+    );
+    assert_eq!(p2["waits_for"], Value::Null);
+    let p1 = board_proposal(&board.body, "T-1");
+    assert_eq!(p1["queue"], Value::Null);
+    assert_eq!(
+        p1["waits_for"],
+        json!({"reason": "prerequisites", "prerequisites": [{"task": "T-2", "status": "review"}]})
+    );
+    assert_board_matches_reads(&fx, &board.body).await;
 }

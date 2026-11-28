@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM area_deny_commands WHERE area_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "0c06665e2938d7cacad1319db38eab45a27cd0dd1a9eb63ee3329f4f00090c4e"
+}

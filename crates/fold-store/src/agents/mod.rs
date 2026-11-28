@@ -46,12 +46,12 @@ pub use tool_schemas::{record_tool_schema_hashes, tool_schema_hashes};
 pub use turns::{CostSlot, CostTotals, cost_groups, cost_slots, cost_totals};
 pub use workers::{
     AreaRow, BoundWorker, NewWorkerProcess, ProcessEnd, TurnTotals, WorkerPark, WorkerProcessRow,
-    bind_proposal, bind_task, claims_held, clear_worker_pid, find_area, find_worker_process,
-    hold_worker, insert_area, insert_worker_process, label_id, list_areas, list_worker_processes,
-    mark_session_lost, mark_worker_working, proposals_without_verdict, record_exit, record_turn,
-    restart_worker_process, review_lead, reviewers_of_proposal, running_counts, set_area_lead,
-    set_area_profile, set_worker_context, set_worker_pid, set_worker_state, task_workers_of_task,
-    tasks_awaiting_proposal, worker_held,
+    areas_of_bound_proposals, bind_proposal, bind_task, claims_held, clear_worker_pid, find_area,
+    find_worker_process, hold_worker, insert_area, insert_worker_process, label_id, list_areas,
+    list_worker_processes, mark_session_lost, mark_worker_working, proposals_without_verdict,
+    record_exit, record_turn, restart_worker_process, review_lead, reviewers_of_proposal,
+    running_counts, set_area_lead, set_area_profile, set_worker_context, set_worker_pid,
+    set_worker_state, task_workers_of_task, tasks_awaiting_proposal, worker_held,
 };
 pub use workers::{EndedWorker, ended_short_lived_workers};
 pub use workers::{

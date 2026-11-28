@@ -97,6 +97,19 @@ pub async fn sweep_leases(
     Ok(marked)
 }
 
+/// Whether every unreleased claim of each holder, by worker row id, waits on others by [`fold_core::claims::ClaimWait::waits_on_others`]. The lease and the stall rule both read it, so a worker whose claim fold keeps never stalls for the same wait.
+pub(crate) async fn claims_wait_on_others(
+    conn: &mut SqliteConnection,
+) -> Result<HashMap<i64, bool>, StoreError> {
+    // A holder waits on others only while every claim it holds does.
+    let mut waits: HashMap<i64, bool> = HashMap::new();
+    for (worker, wait) in claims::claim_waits(conn).await? {
+        let all = waits.entry(worker).or_insert(true);
+        *all = *all && wait.waits_on_others();
+    }
+    Ok(waits)
+}
+
 /// What the lease reads of the claims' holders, by worker row id: their own check runs, and what they wait for from others.
 pub(crate) struct Holders {
     runs: HashMap<i64, HolderRuns>,
@@ -117,12 +130,7 @@ impl Holders {
             .filter(|(_, parker_runs)| *parker_runs)
             .map(|(worker, _)| worker)
             .collect();
-        // A holder waits on others only while every claim it holds does.
-        let mut waits: HashMap<i64, bool> = HashMap::new();
-        for (worker, wait) in claims::claim_waits(&mut *conn).await? {
-            let all = waits.entry(worker).or_insert(true);
-            *all = *all && wait.waits_on_others();
-        }
+        let waits = claims_wait_on_others(&mut *conn).await?;
         let turn_waits: HashSet<i64> = agents::turn_waiting_holders(&mut *conn)
             .await?
             .into_iter()

@@ -7,7 +7,7 @@ use fold_core::Timestamp;
 use hyper::Method;
 use serde_json::Value;
 
-use super::remote::{RemoteError, refusal, request_project};
+use super::remote::{RemoteError, git_chain, git_names, refusal, request_project};
 use crate::output::{self, Item};
 
 /// The most tracked files that ignore rules match the command lists; the rest are counted.
@@ -41,7 +41,10 @@ pub fn run_status(args: &StatusArgs, out: &mut impl Write) -> Result<(), RemoteE
         refusal(&response)?;
         vec![serde_json::to_string_pretty(&response.body).map_err(|_| RemoteError::Answer)?]
     } else {
-        status_lines(&response, &output::local_time)?
+        let remotes = git_names(args.project.as_deref())
+            .map(|(_, remotes)| remotes)
+            .unwrap_or_default();
+        status_lines(&response, &remotes, &output::local_time)?
     };
     for line in lines {
         output::line(out, &line)?;
@@ -65,9 +68,10 @@ fn paths(body: &Value) -> Result<Vec<String>, RemoteError> {
         .ok_or(RemoteError::Answer)
 }
 
-/// The lines `fld status` prints for the daemon's answer, or the error it carries: the folder against main, what `fld record` would record, each blocker with its next step, the stash, then a summary line. A folder with nothing to record or to show says so on one head line, with the Git branch below it while Git sync is on. Tracked files that ignore rules match are counted on the head item, and listed only when one of them has a change, since a project may keep such files tracked on purpose. Paths are escaped, since agents name files too.
+/// The lines `fld status` prints for the daemon's answer, or the error it carries: the folder against main, what `fld record` would record, each blocker with its next step, the stash, then a summary line. A folder with nothing to record or to show says so on one head line, with the chain from fold main through the local branch to the `remotes` below it while Git sync is on. Tracked files that ignore rules match are counted on the head item, and listed only when one of them has a change, since a project may keep such files tracked on purpose. Paths are escaped, since agents name files too.
 fn status_lines(
     response: &Response,
+    remotes: &[(String, String)],
     time: &dyn Fn(Timestamp) -> String,
 ) -> Result<Vec<String>, RemoteError> {
     refusal(response)?;
@@ -84,12 +88,9 @@ fn status_lines(
         .ok_or(RemoteError::Answer)?;
     let blockers = list(body, "blockers")?;
     let stash = list(body, "stash")?;
-    let synced = body["branch"].as_str().map(|branch| {
-        format!(
-            "Git: main is synced with the branch {}",
-            output::escape_control(branch)
-        )
-    });
+    let synced = body["branch"]
+        .as_str()
+        .map(|branch| format!("Git: {}", git_chain(Some(branch), remotes)));
     let ignored_changed = changes
         .iter()
         .filter_map(|change| change["path"].as_str())
@@ -258,11 +259,11 @@ fn status_lines(
         let counted = output::count(paths.len(), "path", "paths");
         let (head, short) = match kind {
             "head_moved" => (
-                "Git branch moved: the branch or HEAD shows a change fold did not make, so fold does not update the folder".to_owned(),
+                "Git branch moved: the local branch or HEAD shows a change fold did not make, so fold does not update the folder".to_owned(),
                 "Git branch moved",
             ),
             "commits_waiting" => (
-                "Git commits wait: the branch holds commits of yours that fold has not recorded yet".to_owned(),
+                "Git commits wait: the local branch holds commits of yours that fold has not recorded yet".to_owned(),
                 "Git commits wait",
             ),
             "unstash_open" => (
@@ -358,8 +359,10 @@ fn status_lines(
 /// Why the folder holds an older revision than main, by the kind of the blocker that keeps it there.
 fn behind_because(kind: &str) -> Result<&'static str, RemoteError> {
     Ok(match kind {
-        "head_moved" => "the Git branch or HEAD shows a change fold did not make",
-        "commits_waiting" => "the Git branch holds commits of yours that fold has not recorded yet",
+        "head_moved" => "the local Git branch or HEAD shows a change fold did not make",
+        "commits_waiting" => {
+            "the local Git branch holds commits of yours that fold has not recorded yet"
+        }
         "unstash_open" => "an unstash stopped part-way and waits to be finished",
         "unstash_conflicted" => "the conflict markers of `fld unstash` wait in the files",
         "human_change" => "your change conflicts with main and waits for the main agent",
@@ -416,7 +419,7 @@ mod tests {
     }
 
     fn lines(body: Value) -> Vec<String> {
-        status_lines(&Response { status: 200, body }, &utc).unwrap()
+        status_lines(&Response { status: 200, body }, &[], &utc).unwrap()
     }
 
     fn answer(fields: Value) -> Value {
@@ -449,7 +452,23 @@ mod tests {
             lines(answer(json!({"branch": "trunk"}))),
             [
                 "Nothing to record: the project folder is at main r12",
-                "  ↳ Git: main is synced with the branch trunk",
+                "  ↳ Git: fold main → local branch `trunk`",
+            ]
+        );
+        let remotes = [("origin".to_owned(), "dev".to_owned())];
+        assert_eq!(
+            status_lines(
+                &Response {
+                    status: 200,
+                    body: answer(json!({"branch": "trunk"})),
+                },
+                &remotes,
+                &utc,
+            )
+            .unwrap(),
+            [
+                "Nothing to record: the project folder is at main r12",
+                "  ↳ Git: fold main → local branch `trunk` → origin/`dev`",
             ]
         );
     }
@@ -471,7 +490,7 @@ mod tests {
             }))),
             [
                 "Project folder at main r12",
-                "  ↳ Git: main is synced with the branch main",
+                "  ↳ Git: fold main → local branch `main`",
                 "",
                 "To record: 6 files",
                 "  ↳ modified: a.txt",
@@ -662,12 +681,12 @@ mod tests {
             }))),
             [
                 "Project folder at main r12",
-                "  ↳ Git: main is synced with the branch main",
+                "  ↳ Git: fold main → local branch `main`",
                 "",
-                "Git branch moved: the branch or HEAD shows a change fold did not make, so fold does not update the folder",
+                "Git branch moved: the local branch or HEAD shows a change fold did not make, so fold does not update the folder",
                 "  ↳ Next: run `git switch main` in the project folder",
                 "",
-                "Git commits wait: the branch holds commits of yours that fold has not recorded yet",
+                "Git commits wait: the local branch holds commits of yours that fold has not recorded yet",
                 "  ↳ Next: fold records them on its next run",
                 "",
                 "Unstash stopped part-way: it writes 2 paths once it is finished",
@@ -686,7 +705,7 @@ mod tests {
             lines(answer(
                 json!({"folder": "r9", "at_main": false, "behind_because": "head_moved", "blockers": [{"kind": "head_moved", "paths": [], "next": "x"}]})
             ))[1],
-            "  ↳ Why: the Git branch or HEAD shows a change fold did not make"
+            "  ↳ Why: the local Git branch or HEAD shows a change fold did not make"
         );
     }
 
@@ -698,7 +717,7 @@ mod tests {
             )),
             [
                 "Nothing to record: the project folder is at main r12",
-                "  ↳ Git: main is synced with the branch main",
+                "  ↳ Git: fold main → local branch `main`",
                 "  ↳ 1 tracked file matches ignore rules; `fld status --json` lists them",
             ]
         );
@@ -753,6 +772,7 @@ mod tests {
                     status: 200,
                     body: answer(json!({"ignored_tracked": [7]})),
                 },
+                &[],
                 &utc,
             ),
             Err(RemoteError::Answer)
@@ -776,6 +796,7 @@ mod tests {
                     status: 200,
                     body: answer(fields),
                 },
+                &[],
                 &utc,
             )
         };
@@ -804,7 +825,7 @@ mod tests {
             body: json!({"error": {"code": "project_not_found", "message": "no project"}}),
         };
         assert!(matches!(
-            status_lines(&refused, &utc),
+            status_lines(&refused, &[], &utc),
             Err(RemoteError::Refused { code, .. }) if code == "project_not_found"
         ));
         assert_eq!(

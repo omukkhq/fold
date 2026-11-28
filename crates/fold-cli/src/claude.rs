@@ -34,6 +34,9 @@ pub struct ClaudeArgs {
     /// Unix socket of the daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
     #[arg(long, env = serve::SOCKET_ENV)]
     socket: Option<PathBuf>,
+    /// Keep the agent's live main sessions connected next to the new one; without it, the new session takes them over
+    #[arg(long)]
+    keep_others: bool,
     /// Arguments for claude itself, after `--`
     #[arg(last = true)]
     claude_args: Vec<OsString>,
@@ -185,7 +188,13 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
         if let Some(human) = human {
             let client = DaemonClient::new(config, Some(human));
             let path = format!("/api/v1/projects/{slug}/agents");
-            main_is_free(&client.request(Method::GET, &path, None).await?, &agent)?;
+            let agents = client.request(Method::GET, &path, None).await?;
+            main_is_free(&agents, &agent)?;
+            if !args.keep_others
+                && let Some(line) = takeover_line(&agents, &agent)
+            {
+                let _ = crate::output::line(&mut io::stdout(), &line);
+            }
         }
         Ok::<_, ClaudeError>((root, account))
     })?;
@@ -258,7 +267,7 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
     } else {
         OwnSetup::new(&agent, files.as_ref(), own_settings)
     };
-    let error = command(
+    let mut claude = command(
         Path::new("claude"),
         &root,
         &agent,
@@ -269,9 +278,14 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
         socket.as_deref(),
         Some(&own),
         account.as_ref(),
-    )
-    .exec();
-    Err(ClaudeError::Exec(error))
+    );
+    // Only on this command: the session's `fld mcp` reads it at every handshake, reconnects included. Without the flag a value inherited from an earlier session's shell goes, so the session takes over as the printed line says.
+    if args.keep_others {
+        claude.env(claude_files::KEEP_OTHERS_ENV, "1");
+    } else {
+        claude.env_remove(claude_files::KEEP_OTHERS_ENV);
+    }
+    Err(ClaudeError::Exec(claude.exec()))
 }
 
 /// Whether the user's own arguments for `claude` already choose the session. fold then adds no session argument of its own, which `claude` would refuse or take in place of the user's, and keeps its record as it is.
@@ -593,6 +607,25 @@ fn main_is_free(response: &Response, agent: &AgentName) -> Result<(), ClaudeErro
         }),
         _ => Ok(()),
     }
+}
+
+/// The line `fld claude` prints before it starts a session that takes over the live sessions of `agent` in the daemon's agent list `response`; `None` when the agent has none. The daemon closes them when the new session's adapter connects.
+fn takeover_line(response: &Response, agent: &AgentName) -> Option<String> {
+    let live = response.body["agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["name"] == agent.as_str())
+        .and_then(|row| row["sessions"].as_u64())
+        .filter(|count| *count > 0)?;
+    let (sessions, kept) = if live == 1 {
+        ("the live main session".to_owned(), "both")
+    } else {
+        (format!("the {live} live main sessions"), "all of them")
+    };
+    Some(format!(
+        "this session takes over {sessions} of {agent}, whose fold tools stop; to keep {kept} connected, run `fld claude --keep-others`"
+    ))
 }
 
 #[cfg(test)]
@@ -1141,6 +1174,18 @@ mod tests {
         assert_eq!(parsed.name, "lead");
         assert_eq!(parsed.claude_args, ["--model", "opus", "--name"]);
         assert!(parse(&["--model"]).is_err());
+        assert!(!parse(&[]).unwrap().args.keep_others);
+        let kept = parse(&["--keep-others", "--", "--keep-others"])
+            .unwrap()
+            .args;
+        assert!(kept.keep_others);
+        assert_eq!(kept.claude_args, ["--keep-others"]);
+        assert!(
+            parse_new(&["claude", "--keep-others"])
+                .unwrap()
+                .claude
+                .keep_others
+        );
     }
 
     #[test]
@@ -1328,6 +1373,36 @@ mod tests {
         let error = main_is_free(&bare, &agent).unwrap_err();
         assert_eq!(error.code(), Some(codes::INTERNAL_ERROR));
         assert_eq!(error.hint(), None);
+    }
+
+    #[test]
+    fn a_live_session_of_the_agent_gets_the_takeover_line() {
+        let agent = AgentName::parse("main").unwrap();
+        let agents = |sessions: u64| Response {
+            status: 200,
+            body: json!({"agents": [
+                {"name": "backend", "tags": ["review"], "sessions": 3},
+                {"name": "main", "tags": ["main"], "sessions": sessions},
+            ]}),
+        };
+        assert_eq!(takeover_line(&agents(0), &agent), None);
+        assert_eq!(
+            takeover_line(&agents(1), &agent).as_deref(),
+            Some(
+                "this session takes over the live main session of main, whose fold tools stop; to keep both connected, run `fld claude --keep-others`"
+            )
+        );
+        assert_eq!(
+            takeover_line(&agents(2), &agent).as_deref(),
+            Some(
+                "this session takes over the 2 live main sessions of main, whose fold tools stop; to keep all of them connected, run `fld claude --keep-others`"
+            )
+        );
+        let none = Response {
+            status: 200,
+            body: json!({"agents": []}),
+        };
+        assert_eq!(takeover_line(&none, &agent), None);
     }
 
     #[test]

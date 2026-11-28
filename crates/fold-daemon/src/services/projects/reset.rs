@@ -124,9 +124,9 @@ async fn run_reset(
     git: &Git,
     paths: Option<Vec<RepoPath>>,
 ) -> Result<ResetOutcome, ProjectError> {
-    let config = load_config(&handle.paths).await?;
     let _remote = handle.remote_lock.clone().lock_owned().await;
     let _folder = handle.folder_lock.clone().lock_owned().await;
+    let config = load_config(&handle.paths).await?;
     let unstash = follow_first(handle, git, &config).await?;
     reset_followed(handle, actor, git, &config, paths, unstash).await
 }
@@ -394,7 +394,7 @@ async fn drop_waiting_change(
     actor: &Actor,
     abandon: bool,
 ) -> Result<Option<DroppedChange>, ProjectError> {
-    let _serial = handle.integration.clone().lock_owned().await;
+    let _serial = handle.integration.lock().await;
     let waiting = {
         let mut conn = handle
             .store

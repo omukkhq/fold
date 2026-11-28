@@ -175,6 +175,8 @@ define_codes! {
     CHECKS_FILE_INVALID = "checks_file_invalid",
     CHECKS_RUNNING = "checks_running",
     CHECK_RUN_NOT_FOUND = "check_run_not_found",
+    CHECK_CANCEL_DENIED = "check_cancel_denied",
+    CHECK_RUN_ENDED = "check_run_ended",
     WORKER_CLAIM_DENIED = "worker_claim_denied",
     MAIN_AREA = "main_area",
     AGENT_SESSION_NOT_FOUND = "agent_session_not_found",
@@ -217,6 +219,9 @@ define_codes! {
     ACCOUNT_TOKEN_REJECTED = "account_token_rejected",
     DIRECTORY_OTHER_FILESYSTEM = "directory_other_filesystem",
     DATABASE_REPLACED = "database_replaced",
+    DAEMON_RESTARTING = "daemon_restarting",
+    MAIN_SESSION_TAKEN_OVER = "main_session_taken_over",
+    INVALID_PERMISSION_RULE = "invalid_permission_rule",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

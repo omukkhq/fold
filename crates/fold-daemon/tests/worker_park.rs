@@ -663,3 +663,108 @@ async fn the_parkers_go_ends_the_park_and_resumes_the_worker_in_its_session() {
     );
     assert_eq!(stalls(&harness).await, 0);
 }
+
+/// The task worker of `T-1` that proposed `P-1` with `files` and stopped, which `web-lead` parks to wait for its go.
+async fn parked_author(fake: &FakeClaude, files: &[(&str, &str)]) -> Harness {
+    let (mut harness, _work) = crate::worker_resume::proposed_by_a_task_worker(fake, files).await;
+    let parked = harness
+        .call(
+            "web-lead",
+            "stop_worker",
+            json!({"name": TASK_WORKER, "wait_for": WAIT_FOR}),
+        )
+        .await;
+    assert_eq!(parked["worker"]["parked"]["by"], "web-lead", "{parked}");
+    harness.disconnect(TASK_WORKER).await;
+    // The owed work counts only when it comes after the worker's start.
+    harness.project.clock().advance(STALL).unwrap();
+    harness
+}
+
+/// Asserts that the parked task worker had no turn since its proposal, also after a daemon start, whose sweeps serve every owed resume before it returns, then gives it the go and returns the go's turn.
+async fn go_turn(harness: &mut Harness, fake: &FakeClaude) -> String {
+    harness.restart().await;
+    harness.connect("web-lead").await;
+    let row = worker(harness, TASK_WORKER).await;
+    assert_eq!(row.state, WorkerState::Stopped, "no new turn while parked");
+    assert!(row.park.is_some(), "the park holds");
+    assert_eq!(runs_of(fake), 1, "nothing but the go resumes it");
+    harness
+        .send(
+            "web-lead",
+            &[TASK_WORKER],
+            "Go: the T-2 migration is in main",
+        )
+        .await;
+    until_runs(fake, TASK_WORKER, 2).await[1].stdin.join("\n")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_integration_checks_leave_the_parked_author_parked_until_the_go() {
+    let fake = FakeClaude::new("result");
+    let checks = "[[check]]\nname = \"e2e\"\nrun = \"exit 3\"\nstage = \"integration\"\n";
+    let mut harness = parked_author(
+        &fake,
+        &[("page.html", "<p>page</p>\n"), ("fold-checks.toml", checks)],
+    )
+    .await;
+    harness.approve("P-1").await;
+    for (path, body) in [
+        (
+            "reviews",
+            json!({"version": 1, "verdict": "approve", "body": "Looks right."}),
+        ),
+        ("integrate", json!({"expected_version": 1})),
+    ] {
+        let (status, answer) = harness
+            .http(
+                Method::POST,
+                &format!("/api/v1/projects/{SLUG}/proposals/P-1/{path}"),
+                Some(&body),
+                HUMAN,
+            )
+            .await;
+        assert!(status.is_success(), "{path}: {answer}");
+    }
+    let finished = eventually(WAIT, async || {
+        harness
+            .events()
+            .await
+            .into_iter()
+            .find(|event| event.kind == "checks.finished" && event.data["stage"] == "integration")
+            .map(|event| event.data)
+            .ok_or(())
+    })
+    .await;
+    assert_eq!(finished["state"], "failed", "{finished}");
+    eventually(WAIT, async || {
+        let view = harness
+            .call("review", "get_proposal", json!({"id": "P-1"}))
+            .await;
+        if view["checks_failed"] == true {
+            Ok(())
+        } else {
+            Err(view)
+        }
+    })
+    .await;
+
+    let turn = go_turn(&mut harness, &fake).await;
+    assert!(
+        turn.contains("P-1 v1 for T-1: its integration checks failed"),
+        "the go's turn names the failed run: {turn}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn requested_changes_leave_the_parked_author_parked_until_the_go() {
+    let fake = FakeClaude::new("result");
+    let mut harness = parked_author(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    crate::worker_resume::request_changes(&harness, "P-1", "Split the page.").await;
+
+    let turn = go_turn(&mut harness, &fake).await;
+    assert!(
+        turn.contains("P-1 v1 for T-1: changes requested") && turn.contains("Split the page."),
+        "the go's turn names the review: {turn}"
+    );
+}

@@ -32,11 +32,11 @@ pub struct RemoteArgs {
 
 #[derive(Subcommand, Debug)]
 enum RemoteCommand {
-    /// Add a remote Git repository that fld push and fld pull sync main with; a name that exists already is refused
+    /// Add a remote Git repository that fld push and fld pull sync fold main with, through the local Git branch; a name that exists already is refused
     Add(AddArgs),
     /// Delete a remote and the refs fetched from it
     Remove(RemoveArgs),
-    /// List the remotes: name, branch and URL; also what `fld remote` with no subcommand prints
+    /// List the remotes: name, remote branch and URL; also what `fld remote` with no subcommand prints
     List,
 }
 
@@ -46,7 +46,7 @@ struct AddArgs {
     name: String,
     /// The URL or path of the remote Git repository; your own Git credentials and configuration apply
     url: String,
-    /// The remote branch fold syncs main with; defaults to the branch the remote's HEAD names, or main when the remote has none, as a new empty repository does
+    /// The remote branch that fold main syncs with; defaults to the branch the remote's HEAD names, or the branch `main` when the remote has none, as a new empty repository does
     branch: Option<String>,
 }
 
@@ -187,16 +187,71 @@ fn add(
     let _lock = lock_config(&paths.config())?;
     let text = read_config(&paths.config())?;
     let edited = with_remote(&text, &args.name, &url, &branch)?;
+    let local = ProjectConfig::from_toml(&edited)?.git.branch;
     prepare_mirror(git, &mirror, &args.name, &url)?;
     write_config(&paths.config(), &edited)?;
-    output::line(
-        out,
-        &format!(
-            "remote {} added: fold syncs main with its branch {branch}",
-            args.name
-        ),
-    )?;
+    for line in added_lines(&args.name, &local, &branch) {
+        output::line(out, &line)?;
+    }
     Ok(())
+}
+
+/// What `fld remote add` prints: the chain from fold main to the new remote's branch, and one more line that names the rename when the remote branch has another name than the local branch.
+fn added_lines(name: &str, local: &str, branch: &str) -> Vec<String> {
+    let remote = [(name.to_owned(), branch.to_owned())];
+    let mut lines = vec![format!(
+        "remote {} added: {}",
+        output::escape_control(name),
+        git_chain(Some(local), &remote)
+    )];
+    if local != branch {
+        let branch = output::escape_control(branch);
+        lines.push(format!(
+            "the remote branch `{branch}` has another name than the local branch `{}`; `fld git branch {branch}` gives the local branch the same name",
+            output::escape_control(local)
+        ));
+    }
+    lines
+}
+
+/// The way fold main goes to Git, such as ``fold main → local branch `main` → origin/`dev` ``: fold main is fold's own line of revisions, each integration commits it to the local branch, and push and pull sync that with each remote's branch. Without a known local branch the chain leaves it out; several remotes are listed in the order given.
+pub(crate) fn git_chain(local: Option<&str>, remotes: &[(String, String)]) -> String {
+    let mut chain = String::from("fold main");
+    if let Some(local) = local {
+        chain.push_str(&format!(
+            " → local branch `{}`",
+            output::escape_control(local)
+        ));
+    }
+    let remotes: Vec<String> = remotes
+        .iter()
+        .map(|(name, branch)| remote_branch(name, branch))
+        .collect();
+    if !remotes.is_empty() {
+        chain.push_str(&format!(" → {}", remotes.join(", ")));
+    }
+    chain
+}
+
+/// A remote's branch as the chain names it, such as ``origin/`dev` ``.
+fn remote_branch(name: &str, branch: &str) -> String {
+    format!(
+        "{}/`{}`",
+        output::escape_control(name),
+        output::escape_control(branch)
+    )
+}
+
+/// The local branch and the remotes with their branches as `.fold/config.toml` of the project at or above `project` names them now, or `None` when the project or its config cannot be read, so a command that has its answer already still prints it.
+pub(crate) fn git_names(project: Option<&Path>) -> Option<(String, Vec<(String, String)>)> {
+    let paths = project_paths(project).ok()?;
+    let config = ProjectConfig::from_toml(&read_config(&paths.config()).ok()?).ok()?;
+    let remotes = config
+        .remotes
+        .iter()
+        .map(|(name, remote)| (name.clone(), remote.branch.clone()))
+        .collect();
+    Some((config.git.branch, remotes))
 }
 
 /// A project without `.git` is a plain folder whose Git sync is off, and a remote needs Git.
@@ -398,20 +453,27 @@ fn config_io(error: &io::Error) -> FoldError {
     )
 }
 
-/// Asks the daemon to push main to the named remote, or the only one, starting the daemon when none runs.
+/// Asks the daemon to push fold main to the named remote, or the only one, starting the daemon when none runs.
 pub fn run_push(args: &PushArgs, out: &mut impl Write) -> Result<(), RemoteError> {
     let response = post_project(args, "push")?;
-    output::line(out, &push_summary(response)?)?;
+    let local = local_branch(args.project.as_deref());
+    output::line(out, &push_summary(response, local.as_deref())?)?;
     Ok(())
 }
 
-/// Asks the daemon to bring the named remote's branch, or the only remote's, into main, starting the daemon when none runs.
+/// Asks the daemon to bring the named remote's branch, or the only remote's, into fold main, starting the daemon when none runs.
 pub fn run_pull(args: &PullArgs, out: &mut impl Write) -> Result<(), RemoteError> {
     let response = post_project(args, "pull")?;
-    for line in pull_summary(response)? {
+    let local = local_branch(args.project.as_deref());
+    for line in pull_summary(response, local.as_deref())? {
         output::line(out, &line)?;
     }
     Ok(())
+}
+
+/// The local branch the config names; push and pull answers name only the remote's branch.
+fn local_branch(project: Option<&Path>) -> Option<String> {
+    git_names(project).map(|(local, _)| local)
 }
 
 /// Sends `POST /api/v1/projects/<slug>/<action>[?remote=<name>]` over the socket as the human in the environment. Without a name the daemon takes the only remote, after it checks that Git sync is on.
@@ -487,13 +549,14 @@ pub(crate) fn refusal(response: &Response) -> Result<(), RemoteError> {
     })
 }
 
-/// The line `fld push` prints for the daemon's answer, or the error it carries.
-fn push_summary(response: Response) -> Result<String, RemoteError> {
+/// The line `fld push` prints for the daemon's answer, or the error it carries, ending in the chain from fold main through the `local` branch to the remote branch.
+fn push_summary(response: Response, local: Option<&str>) -> Result<String, RemoteError> {
     refusal(&response)?;
     let body = &response.body;
     let text = |key: &str| body[key].as_str();
     let remote = text("remote").ok_or(RemoteError::Answer)?;
-    let branch = format!("{remote}/{}", text("branch").ok_or(RemoteError::Answer)?);
+    let branch = text("branch").ok_or(RemoteError::Answer)?;
+    let chain = git_chain(local, &[(remote.to_owned(), branch.to_owned())]);
     let range = || match (text("first"), text("last")) {
         (Some(first), Some(last)) => Ok(output::revision_range(&first, &last)),
         _ => Err(RemoteError::Answer),
@@ -507,31 +570,33 @@ fn push_summary(response: Response) -> Result<String, RemoteError> {
     };
     match text("outcome") {
         Some("up_to_date") => Ok(match text("last") {
-            Some(last) => format!("{branch} is up to date: {last} is pushed"),
-            None => format!("{branch} is up to date"),
+            Some(last) => format!("up to date, {last} is pushed: {chain}"),
+            None => format!("up to date: {chain}"),
         }),
-        Some("pushed") => Ok(format!("pushed {} to {branch}: {}", range()?, commits()?)),
+        Some("pushed") => Ok(format!("pushed {}, {}: {chain}", range()?, commits()?)),
         _ => Err(RemoteError::Answer),
     }
 }
 
 /// The lines `fld pull` prints for the daemon's answer, or the error it carries: one line, and for a conflict one more per conflicted path.
-fn pull_summary(response: Response) -> Result<Vec<String>, RemoteError> {
+fn pull_summary(response: Response, local: Option<&str>) -> Result<Vec<String>, RemoteError> {
     refusal(&response)?;
     let body = &response.body;
     let text = |key: &str| body[key].as_str().ok_or(RemoteError::Answer);
-    let branch = format!("{}/{}", text("remote")?, text("branch")?);
+    let (remote, branch) = (text("remote")?, text("branch")?);
+    let chain = git_chain(local, &[(remote.to_owned(), branch.to_owned())]);
+    let tracking = remote_branch(remote, branch);
     let short = |commit: &str| commit.get(..7).unwrap_or(commit).to_owned();
     match text("outcome")? {
         "up_to_date" => Ok(vec![match body["remote_commit"].as_str() {
             Some(commit) => format!(
-                "main is up to date with {branch}: it holds {}",
+                "fold main is up to date, it holds {}: {chain}",
                 short(commit)
             ),
-            None => format!("the remote has no branch {branch}; nothing to pull"),
+            None => format!("the remote has no branch {tracking}; nothing to pull: {chain}"),
         }]),
         "integrated" => Ok(vec![format!(
-            "pulled {} from {branch} into main as {}",
+            "pulled {} into fold main as {}: {chain}",
             short(text("remote_commit")?),
             text("revision")?
         )]),
@@ -542,11 +607,11 @@ fn pull_summary(response: Response) -> Result<Vec<String>, RemoteError> {
             let paths = output::count(conflicted.len(), "path", "paths");
             let mut lines = vec![if body["created"].as_bool().ok_or(RemoteError::Answer)? {
                 format!(
-                    "{commit} from {branch} conflicts with main in {paths}; main did not move. {task} resolves it in its workspace: an agent claims {task}, resolves the markers and opens a proposal"
+                    "{commit} from {tracking} conflicts with fold main in {paths}; fold main did not move. {task} resolves it in its workspace: an agent claims {task}, resolves the markers and opens a proposal"
                 )
             } else {
                 format!(
-                    "{task} already resolves {commit} from {branch}; nothing was created ({paths} conflicted)"
+                    "{task} already resolves {commit} from {tracking}; nothing was created ({paths} conflicted)"
                 )
             }];
             for conflict in conflicted {
@@ -833,24 +898,53 @@ mod tests {
     }
 
     #[test]
+    fn the_chain_names_fold_main_the_local_branch_and_each_remote_branch() {
+        assert_eq!(git_chain(None, &[]), "fold main");
+        assert_eq!(
+            git_chain(Some("main"), &[]),
+            "fold main → local branch `main`"
+        );
+        let remotes = [
+            ("backup".to_owned(), "main".to_owned()),
+            ("origin".to_owned(), "dev".to_owned()),
+        ];
+        assert_eq!(
+            git_chain(Some("main"), &remotes),
+            "fold main → local branch `main` → backup/`main`, origin/`dev`"
+        );
+        assert_eq!(
+            git_chain(Some("a\u{1b}b"), &[]),
+            format!(
+                "fold main → local branch `{}`",
+                output::escape_control("a\u{1b}b")
+            )
+        );
+        assert_eq!(
+            added_lines("origin", "dev", "dev"),
+            ["remote origin added: fold main → local branch `dev` → origin/`dev`"]
+        );
+        assert_eq!(added_lines("origin", "main", "dev").len(), 2);
+    }
+
+    #[test]
     fn push_answers_read_as_one_line_or_the_error_they_carry() {
         let pushed = json!({"outcome": "pushed", "remote": "origin", "branch": "main", "first": "r1", "last": "r3", "commits": 3, "head": "a"});
         assert_eq!(
-            push_summary(reply(200, pushed)).unwrap(),
-            "pushed r1..r3 to origin/main: 3 commits"
+            push_summary(reply(200, pushed), Some("main")).unwrap(),
+            "pushed r1..r3, 3 commits: fold main → local branch `main` → origin/`main`"
         );
         let current = json!({"outcome": "up_to_date", "remote": "origin", "branch": "main", "last": "r3", "commits": 0});
         assert_eq!(
-            push_summary(reply(200, current)).unwrap(),
-            "origin/main is up to date: r3 is pushed"
+            push_summary(reply(200, current), Some("dev")).unwrap(),
+            "up to date, r3 is pushed: fold main → local branch `dev` → origin/`main`"
         );
         let empty = json!({"outcome": "up_to_date", "remote": "backup", "branch": "trunk", "last": null, "commits": 0});
         assert_eq!(
-            push_summary(reply(200, empty)).unwrap(),
-            "backup/trunk is up to date"
+            push_summary(reply(200, empty), None).unwrap(),
+            "up to date: fold main → backup/`trunk`"
         );
         let refused = json!({"error": {"code": "remote_ahead", "message": "m", "details": {"hint": "run fld pull"}}});
-        let error = push_summary(reply(409, refused)).unwrap_err();
+        let error = push_summary(reply(409, refused), None).unwrap_err();
         assert_eq!(error.code(), Some("remote_ahead"));
         assert_eq!(error.to_string(), "m (run fld pull)");
         for bad in [
@@ -869,31 +963,37 @@ mod tests {
                 json!({"outcome": "other", "remote": "origin", "branch": "main"}),
             ),
         ] {
-            assert!(push_summary(bad).is_err());
+            assert!(push_summary(bad, None).is_err());
         }
     }
 
     #[test]
     fn pull_answers_read_as_lines_or_the_error_they_carry() {
         let commit = "0123456789abcdef0123456789abcdef01234567";
-        let lines = |body| pull_summary(reply(200, body)).unwrap();
+        let lines = |body| pull_summary(reply(200, body), Some("main")).unwrap();
         assert_eq!(
             lines(
                 json!({"outcome": "up_to_date", "remote": "origin", "branch": "main", "remote_commit": commit})
             ),
-            ["main is up to date with origin/main: it holds 0123456"]
+            [
+                "fold main is up to date, it holds 0123456: fold main → local branch `main` → origin/`main`"
+            ]
         );
         assert_eq!(
             lines(
                 json!({"outcome": "up_to_date", "remote": "origin", "branch": "trunk", "remote_commit": null})
             ),
-            ["the remote has no branch origin/trunk; nothing to pull"]
+            [
+                "the remote has no branch origin/`trunk`; nothing to pull: fold main → local branch `main` → origin/`trunk`"
+            ]
         );
         assert_eq!(
             lines(
                 json!({"outcome": "integrated", "remote": "origin", "branch": "main", "remote_commit": commit, "revision": "r4"})
             ),
-            ["pulled 0123456 from origin/main into main as r4"]
+            [
+                "pulled 0123456 into fold main as r4: fold main → local branch `main` → origin/`main`"
+            ]
         );
         let conflicted = |created: bool| {
             json!({"outcome": "conflicted", "remote": "origin", "branch": "main", "remote_commit": commit, "task": "T-3", "workspace": "ws-2", "created": created,
@@ -902,16 +1002,16 @@ mod tests {
         assert_eq!(
             lines(conflicted(true)),
             [
-                "0123456 from origin/main conflicts with main in 1 path; main did not move. T-3 resolves it in its workspace: an agent claims T-3, resolves the markers and opens a proposal",
+                "0123456 from origin/`main` conflicts with fold main in 1 path; fold main did not move. T-3 resolves it in its workspace: an agent claims T-3, resolves the markers and opens a proposal",
                 "  a.txt (both_modified_text)"
             ]
         );
         assert_eq!(
             lines(conflicted(false))[0],
-            "T-3 already resolves 0123456 from origin/main; nothing was created (1 path conflicted)"
+            "T-3 already resolves 0123456 from origin/`main`; nothing was created (1 path conflicted)"
         );
         let refused = json!({"error": {"code": "remote_not_set", "message": "m"}});
-        let error = pull_summary(reply(409, refused)).unwrap_err();
+        let error = pull_summary(reply(409, refused), None).unwrap_err();
         assert_eq!(error.code(), Some("remote_not_set"));
         for bad in [
             json!({"outcome": "integrated", "remote": "origin", "branch": "main", "remote_commit": commit}),
@@ -922,7 +1022,7 @@ mod tests {
             json!({"outcome": "integrated", "branch": "main"}),
         ] {
             assert!(matches!(
-                pull_summary(reply(200, bad)),
+                pull_summary(reply(200, bad), None),
                 Err(RemoteError::Answer)
             ));
         }
@@ -1037,7 +1137,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             text(out),
-            "remote origin added: fold syncs main with its branch trunk\n"
+            "remote origin added: fold main → local branch `main` → origin/`trunk`\nthe remote branch `trunk` has another name than the local branch `main`; `fld git branch trunk` gives the local branch the same name\n"
         );
         let mut out = Vec::new();
         list(&paths, &mut out).unwrap();
@@ -1087,7 +1187,7 @@ mod tests {
             .unwrap();
             assert_eq!(
                 text(out),
-                format!("remote {name} added: fold syncs main with its branch main\n")
+                format!("remote {name} added: fold main → local branch `main` → {name}/`main`\n")
             );
             remove(&paths, name, &mut Vec::new()).unwrap();
         }

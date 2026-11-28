@@ -270,7 +270,7 @@ async fn a_batch_run_names_its_batch_and_shows_on_each_member_version() {
         id: CheckRunId::from_number(number).unwrap(),
         stage: Stage::Integration,
         purpose: Purpose::Integrate,
-        task: TaskId::from_number(2).unwrap(),
+        task: TaskId::from_number(2),
         workspace: None,
         worker_id: None,
         proposal: Some(p2),
@@ -282,6 +282,7 @@ async fn a_batch_run_names_its_batch_and_shows_on_each_member_version() {
         evidence: None,
         intent: None,
         batch,
+        changeset: None,
     };
     let batched = run(1, Some(rb(2)));
     store

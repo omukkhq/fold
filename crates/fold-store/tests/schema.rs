@@ -127,6 +127,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "agent_changes",
         "agent_tags",
         "agents",
+        "area_deny_commands",
         "area_mcp_servers",
         "areas",
         "changesets",

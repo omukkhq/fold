@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT MAX(finished_at - created_at, 0) AS \"duration!: i64\" FROM check_runs\n           WHERE stage = 'integration' AND state = 'passed' AND finished_at IS NOT NULL\n           ORDER BY finished_at DESC, id DESC\n           LIMIT ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "duration!: i64",
+        "ordinal": 0,
+        "type_info": "Null",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "145109b8f365ba294b8ac7c31f6fc01c432047e6e97fc7579a787b2130ea65bc"
+}

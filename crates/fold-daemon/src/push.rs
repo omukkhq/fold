@@ -12,14 +12,14 @@ use std::time::Duration;
 use fold_core::carry::MAX_CARRIED_LEN;
 use fold_core::events::types;
 use fold_core::push::{
-    MAX_NOTICE_LEN, MAX_REQUEST_NOTICE_LEN, Notice, PushContext, is_pushed, notice_for, request_of,
+    MAX_NOTICE_LEN, MAX_REQUEST_NOTICE_LEN, Notice, PushContext, is_pushed, needs_no_action,
+    notice_for, request_of,
 };
 use fold_core::requests::{Requester, deputy};
 use fold_core::{
-    AgentName, Clock, Event, FoldError, LiveEvent, MessageId, Tag, TaskId, TaskKind, TaskStatus,
+    AgentName, Clock, Event, FoldError, LiveEvent, MessageId, TaskId, TaskKind, TaskStatus,
     Timestamp, codes,
 };
-use fold_store::agents::AgentRow;
 use fold_store::reviews;
 use fold_store::tasks::{claims, requests};
 use fold_store::{Store, StoreError, agents, events, tasks};
@@ -44,6 +44,15 @@ pub const MAX_PENDING: usize = 16;
 pub const QUEUE_LEN: usize = 16;
 
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The longest a notice that needs no action waits in a main agent's digest before fold sends the digest by itself.
+pub const DIGEST_WAIT_MS: i64 = 15 * 60 * 1000;
+
+/// How often the delivery task looks at the clock for a digest that is due. It is short against [`DIGEST_WAIT_MS`], so a digest goes out at most this much late.
+pub const DIGEST_TICK: Duration = Duration::from_secs(30);
+
+/// The most notices one digest names; it counts the rest.
+pub const DIGEST_ITEMS: usize = 20;
 
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -150,6 +159,33 @@ struct Inner {
     files: OnceLock<TargetFiles>,
     /// Unset records no push time.
     recorder: OnceLock<Recorder>,
+    /// The notices that need no action and wait for each main agent's next post.
+    digests: Mutex<HashMap<AgentName, Digest>>,
+}
+
+/// The notices one main agent gets later: with its next notice that needs action, or alone once the oldest waited [`DIGEST_WAIT_MS`].
+struct Digest {
+    since: Timestamp,
+    items: Vec<String>,
+    /// The notices past [`DIGEST_ITEMS`], counted only.
+    more: usize,
+    /// The event of the newest notice, for the log line of a failed post.
+    seq: u64,
+}
+
+impl Digest {
+    /// One line: `fold digest, no action needed (3): ... | ... | ...`, each item a notice without its `fold: ` start.
+    fn text(&self) -> String {
+        let count = self.items.len() + self.more;
+        let mut text = format!(
+            "fold digest, no action needed ({count}): {}",
+            self.items.join(" | ")
+        );
+        if self.more > 0 {
+            text.push_str(&format!(" | and {} more", self.more));
+        }
+        text
+    }
 }
 
 /// Where a notice about a message that got through is recorded, as the recipients' `pushed_at`, and the bus that tells the web after the commit.
@@ -222,6 +258,7 @@ impl PushTargets {
                 turns: Mutex::new(HashMap::new()),
                 files: OnceLock::new(),
                 recorder: OnceLock::new(),
+                digests: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -426,11 +463,6 @@ impl PushTargets {
         }
     }
 
-    /// Whether the agent's notices go to a worker process's stdin.
-    pub fn has_stdin(&self, agent: &AgentName) -> bool {
-        lock(&self.inner.stdin).contains_key(agent)
-    }
-
     /// Drops every socket target of the agent and the notices waiting for them.
     pub fn clear(&self, agent: &AgentName) {
         let removed = lock(&self.inner.agents).remove(agent);
@@ -459,6 +491,47 @@ impl PushTargets {
             target.queue.close();
             self.drop_file(agent, &target.socket).await;
         }
+    }
+
+    /// Drops the agent's targets registered at or before `at`, except the socket `keep`, with their kept files, after each posts `farewell` as its last notice in place of the notices still waiting for it. A new main session that takes over passes the start of the session it replaces and its own inbox, so the old session learns why fold went quiet and only the new one gets notices from now on. Returns the sockets it dropped.
+    pub async fn retire_registered_by(
+        &self,
+        agent: &AgentName,
+        at: Timestamp,
+        keep: Option<&Path>,
+        farewell: &str,
+    ) -> Vec<PathBuf> {
+        if !postable(farewell, MAX_NOTICE_LEN) {
+            tracing::error!(agent = %agent, "session push refused a malformed farewell");
+            return Vec::new();
+        }
+        let mut removed: Vec<Target> = Vec::new();
+        {
+            let mut agents = lock(&self.inner.agents);
+            if let Some(targets) = agents.get_mut(agent) {
+                let (gone, kept) = std::mem::take(targets).into_iter().partition(|target| {
+                    target.registered_at <= at && Some(target.socket.as_path()) != keep
+                });
+                *targets = kept;
+                removed = gone;
+                if targets.is_empty() {
+                    agents.remove(agent);
+                }
+            }
+        }
+        let mut sockets = Vec::with_capacity(removed.len());
+        for target in removed {
+            target.queue.finish(Queued {
+                text: Arc::from(farewell),
+                seq: 0,
+                about: None,
+                head: None,
+                digest: None,
+            });
+            self.drop_file(agent, &target.socket).await;
+            sockets.push(target.socket);
+        }
+        sockets
     }
 
     /// Drops every socket target and every held inbox and leaves the kept files, for a daemon that stops or starts while the sessions may live on.
@@ -494,17 +567,22 @@ impl PushTargets {
     fn queue(&self, notices: &[Notice], seq: u64, about: Option<About>, longest: usize) {
         let agents = lock(&self.inner.agents);
         let stdin = lock(&self.inner.stdin);
+        let mut digests = lock(&self.inner.digests);
         for notice in notices {
             if !postable(&notice.text, longest) {
                 tracing::warn!(agent = %notice.agent, seq, "session push refused a malformed notice");
                 continue;
             }
+            let digest = digests
+                .remove(&notice.agent)
+                .map(|digest| Arc::from(digest.text()));
             if let Some(queue) = stdin.get(&notice.agent) {
                 queue.push(Queued {
                     text: Arc::from(notice.text.as_str()),
                     seq,
                     about,
                     head: notice.carrier_head().map(Arc::from),
+                    digest,
                 });
                 continue;
             }
@@ -518,8 +596,90 @@ impl PushTargets {
                     seq,
                     about,
                     head: notice.carrier_head().map(Arc::from),
+                    digest: digest.clone(),
                 });
             }
+        }
+    }
+
+    /// Keeps each notice for its agent's digest instead of posting it, for an agent that has a target now; a notice for an agent without one is dropped, as its post would be. `now` starts a new digest's wait.
+    fn hold_for_digest(&self, notices: &[Notice], seq: u64, now: Timestamp) {
+        let agents = lock(&self.inner.agents);
+        let stdin = lock(&self.inner.stdin);
+        let mut digests = lock(&self.inner.digests);
+        for notice in notices {
+            if !postable(&notice.text, MAX_NOTICE_LEN)
+                || !(stdin.contains_key(&notice.agent) || agents.contains_key(&notice.agent))
+            {
+                continue;
+            }
+            let digest = digests.entry(notice.agent.clone()).or_insert(Digest {
+                since: now,
+                items: Vec::new(),
+                more: 0,
+                seq,
+            });
+            digest.seq = seq;
+            if digest.items.len() < DIGEST_ITEMS {
+                let item = notice.text.strip_prefix("fold: ").unwrap_or(&notice.text);
+                digest.items.push(item.to_owned());
+            } else {
+                digest.more += 1;
+            }
+        }
+    }
+
+    /// How many notices wait in the agent's digest. A test hook: the integration tests wait on it, and the daemon never calls it.
+    #[doc(hidden)]
+    pub fn waiting_in_digest(&self, agent: &AgentName) -> usize {
+        lock(&self.inner.digests)
+            .get(agent)
+            .map_or(0, |digest| digest.items.len() + digest.more)
+    }
+
+    /// Posts each digest whose oldest notice waited [`DIGEST_WAIT_MS`] by `now`, alone, as one notice. Returns how many it posted.
+    pub fn send_due_digests(&self, now: Timestamp) -> usize {
+        let due: Vec<(AgentName, Digest)> = {
+            let mut digests = lock(&self.inner.digests);
+            let agents: Vec<AgentName> = digests
+                .iter()
+                .filter(|(_, digest)| now.as_millis() - digest.since.as_millis() >= DIGEST_WAIT_MS)
+                .map(|(agent, _)| agent.clone())
+                .collect();
+            agents
+                .into_iter()
+                .filter_map(|agent| digests.remove(&agent).map(|digest| (agent, digest)))
+                .collect()
+        };
+        let count = due.len();
+        for (agent, digest) in due {
+            self.queue_text(&agent, &digest.text(), digest.seq);
+        }
+        count
+    }
+
+    /// Queues `text` as it is for every target of `agent`.
+    fn queue_text(&self, agent: &AgentName, text: &str, seq: u64) {
+        if !postable(text, MAX_CARRIED_LEN) {
+            tracing::warn!(agent = %agent, seq, "session push refused a malformed digest");
+            return;
+        }
+        let queued = Queued {
+            text: Arc::from(text),
+            seq,
+            about: None,
+            head: None,
+            digest: None,
+        };
+        if let Some(queue) = lock(&self.inner.stdin).get(agent) {
+            queue.push(queued);
+            return;
+        }
+        for target in lock(&self.inner.agents)
+            .get(agent)
+            .map_or(&[][..], Vec::as_slice)
+        {
+            target.queue.push(queued.clone());
         }
     }
 
@@ -546,8 +706,33 @@ struct Prepared {
     messages: Vec<(MessageId, MessageId)>,
 }
 
-/// The text to post for `notice`. A notice whose next tool is `get_inbox` carries the messages that nothing has shown the agent's worker yet, read just before the post, so a notice posted after an earlier one has got through never carries the same message again. `None` skips a notice about a message that something has shown already, even when newer messages wait: each of those has its own notice behind this one. Without a store, or when the messages cannot be read, the notice keeps its call to `get_inbox`.
+/// The text to post for `notice`. A notice whose next tool is `get_inbox` carries the messages that nothing has shown the agent's worker yet, read just before the post, so a notice posted after an earlier one has got through never carries the same message again. `None` skips a notice about a message that something has shown already, even when newer messages wait: each of those has its own notice behind this one. Without a store, or when the messages cannot be read, the notice keeps its call to `get_inbox`. A digest that waited for the notice follows its text in the same post, or posts alone when the notice is skipped.
 async fn prepare(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued) -> Option<Prepared> {
+    let Some(mut prepared) = prepare_own(targets, agent, notice).await else {
+        return notice.digest.as_ref().map(|digest| Prepared {
+            text: Arc::clone(digest),
+            rows: Vec::new(),
+            read: Vec::new(),
+            messages: Vec::new(),
+        });
+    };
+    if let Some(digest) = &notice.digest {
+        let joined = format!("{} {digest}", prepared.text);
+        if postable(&joined, MAX_CARRIED_LEN) {
+            prepared.text = Arc::from(joined);
+        } else {
+            tracing::warn!(agent = %agent, seq = notice.seq, "session push dropped a digest that did not fit the post");
+        }
+    }
+    Some(prepared)
+}
+
+/// The text of the notice itself, without its digest.
+async fn prepare_own(
+    targets: &Weak<Inner>,
+    agent: &AgentName,
+    notice: &Queued,
+) -> Option<Prepared> {
     let about: Vec<(MessageId, MessageId)> = notice
         .about
         .iter()
@@ -692,6 +877,8 @@ struct Queued {
     about: Option<About>,
     /// For a notice whose next tool is `get_inbox`, its first sentence, which the post follows with the agent's new messages.
     head: Option<Arc<str>>,
+    /// The digest of the notices that waited for this post, which the post adds after the notice's own text.
+    digest: Option<Arc<str>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -712,6 +899,8 @@ struct Queue {
 struct QueueState {
     pending: VecDeque<Queued>,
     closed: bool,
+    /// The queue takes no new notice and ends once its pending ones are posted.
+    ending: bool,
 }
 
 impl Queue {
@@ -720,6 +909,7 @@ impl Queue {
             state: Mutex::new(QueueState {
                 pending,
                 closed: false,
+                ending: false,
             }),
             wake: Notify::new(),
             failing: AtomicBool::new(false),
@@ -744,7 +934,7 @@ impl Queue {
     fn push(&self, notice: Queued) {
         {
             let mut state = lock(&self.state);
-            if state.closed {
+            if state.closed || state.ending {
                 return;
             }
             if state.pending.len() == QUEUE_LEN {
@@ -764,7 +954,21 @@ impl Queue {
         self.wake.notify_one();
     }
 
-    /// The next notice, or `None` once the target is dropped.
+    /// Replaces the waiting notices with `last` and ends the queue once `last` is taken.
+    fn finish(&self, last: Queued) {
+        {
+            let mut state = lock(&self.state);
+            if state.closed || state.ending {
+                return;
+            }
+            state.pending.clear();
+            state.pending.push_back(last);
+            state.ending = true;
+        }
+        self.wake.notify_one();
+    }
+
+    /// The next notice, or `None` once the target is dropped or its last notice is taken.
     async fn next(&self) -> Option<Queued> {
         loop {
             {
@@ -774,6 +978,9 @@ impl Queue {
                 }
                 if let Some(notice) = state.pending.pop_front() {
                     return Some(notice);
+                }
+                if state.ending {
+                    return None;
                 }
             }
             self.wake.notified().await;
@@ -1076,7 +1283,7 @@ fn remove_target(dir: &Path, agent: &AgentName, socket: &Path) -> io::Result<()>
     }
 }
 
-/// Removes the `.<name>.<pid>.<n>.tmp` files of writes that stopped before their rename.
+/// Removes every entry of `dir` whose name starts with `.` and ends with `.tmp`, which covers the `.<name>.<pid>.<n>.tmp` files of private writes that stopped before their rename.
 pub(crate) fn remove_temporary(dir: &Path) -> io::Result<()> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -1100,25 +1307,38 @@ pub(crate) fn remove_temporary(dir: &Path) -> io::Result<()> {
 /// The project's push delivery.
 pub type PushTask = ProjectTask;
 
-/// Starts the delivery task of one project: it reads each event from the bus, which carries an event only after its commit, and queues the notices the event sends. Push is a hint: an event committed while no socket was registered is never replayed. The only writes come once a notice gets through: the recipients' `pushed_at` for a notice about a message, followed by a live `message.pushed`, and `delivered_at` on the rows of the messages it carried.
+/// Starts the delivery task of one project: it reads each event from the bus, which carries an event only after its commit, and queues the notices the event sends. Push is a hint: an event committed while no socket was registered is never replayed. The only writes come once a notice gets through: the recipients' `pushed_at` for a notice about a message, followed by a live `message.pushed`, `delivered_at` on the rows of the messages it carried, and the read marks of the messages it gives in full.
 pub fn run(store: Store, clock: Arc<dyn Clock>, bus: &EventBus, targets: PushTargets) -> PushTask {
-    targets.record_pushes_in(store.clone(), clock, bus.clone());
+    targets.record_pushes_in(store.clone(), clock.clone(), bus.clone());
     let receiver = bus.subscribe();
-    ProjectTask::spawn(deliver_events(store, receiver, bus.closing(), targets))
+    ProjectTask::spawn(deliver_events(
+        store,
+        clock,
+        receiver,
+        bus.closing(),
+        targets,
+    ))
 }
 
-/// It ends once the project's bus closes.
+/// It ends once the project's bus closes. A notice to a main agent that needs no action waits in the agent's digest ([`fold_core::push::needs_no_action`]); every [`DIGEST_TICK`] the digests that waited long enough by `clock` go out alone.
 async fn deliver_events(
     store: Store,
+    clock: Arc<dyn Clock>,
     mut receiver: tokio::sync::broadcast::Receiver<BusMessage>,
     mut closing: tokio::sync::watch::Receiver<bool>,
     targets: PushTargets,
 ) {
+    let mut ticks = tokio::time::interval(DIGEST_TICK);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let received = tokio::select! {
             biased;
             _ = closing.wait_for(|closed| *closed) => return,
             received = receiver.recv() => received,
+            _ = ticks.tick() => {
+                targets.send_due_digests(clock.now());
+                continue;
+            }
         };
         let event = match received {
             Ok(BusMessage::Durable(event)) => event,
@@ -1132,19 +1352,29 @@ async fn deliver_events(
         if !is_pushed(&event) || targets.is_empty() {
             continue;
         }
-        match push_input(&store, &event).await {
-            Ok((event, ctx)) => targets.queue(
-                &notice_for(&event, &ctx),
-                event.seq,
-                sent_message(&event),
-                longest_notice(&event),
-            ),
-            Err(error) => tracing::warn!(
-                seq = event.seq,
-                code = error.log_code(),
-                "session push could not load the event's context"
-            ),
-        }
+        let loaded = match push_input(&store, &event).await {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                tracing::warn!(
+                    seq = event.seq,
+                    code = error.log_code(),
+                    "session push could not load the event's context"
+                );
+                continue;
+            }
+        };
+        let (event, ctx) = loaded;
+        let notices = notice_for(&event, &ctx);
+        let (later, now): (Vec<Notice>, Vec<Notice>) = notices.into_iter().partition(|notice| {
+            ctx.main_agents.contains(&notice.agent) && needs_no_action(&event, notice)
+        });
+        targets.hold_for_digest(&later, event.seq, clock.now());
+        targets.queue(
+            &now,
+            event.seq,
+            sent_message(&event),
+            longest_notice(&event),
+        );
     }
 }
 
@@ -1233,7 +1463,7 @@ async fn human_act(store: &Store, event: &Event, ctx: &mut PushContext) -> Resul
         false
     };
     if acts && ctx.main_agents.is_empty() {
-        ctx.main_agents = tagged(store, Tag::is_main).await?;
+        ctx.main_agents = main_agents(store).await?;
     }
     Ok(())
 }
@@ -1291,7 +1521,7 @@ async fn loaded(store: &Store, event: &Event) -> Result<(PushContext, Option<Str
                 .find(|area| Some(&area.name) == request_area.as_ref())
                 .and_then(|area| area.lead.clone());
             ctx.area_leads = areas.into_iter().filter_map(|area| area.lead).collect();
-            ctx.main_agents = tagged(store, Tag::is_main).await?;
+            ctx.main_agents = main_agents(store).await?;
         }
         return Ok((ctx, body));
     }
@@ -1304,7 +1534,7 @@ async fn loaded(store: &Store, event: &Event) -> Result<(PushContext, Option<Str
         || kind == fold_core::events::types::INTEGRATION_HELD
         || kind == fold_core::events::types::FOLDER_AGENT_CHANGED
     {
-        ctx.main_agents = tagged(store, Tag::is_main).await?;
+        ctx.main_agents = main_agents(store).await?;
         return Ok((ctx, None));
     }
     if kind == types::WORKER_FAILED || kind == types::WORKER_STOPPED {
@@ -1318,7 +1548,7 @@ async fn loaded(store: &Store, event: &Event) -> Result<(PushContext, Option<Str
         };
         let reason = event.data.get("reason").and_then(serde_json::Value::as_str);
         if kind == types::WORKER_FAILED && reason.is_some_and(fold_core::roles::needs_restart) {
-            ctx.main_agents = tagged(store, Tag::is_main).await?;
+            ctx.main_agents = main_agents(store).await?;
             let mut conn = store.read().acquire().await?;
             ctx.starter = agents::find_worker_process(&mut conn, &agent)
                 .await?
@@ -1346,7 +1576,7 @@ async fn loaded(store: &Store, event: &Event) -> Result<(PushContext, Option<Str
             .and_then(serde_json::Value::as_str)
             .and_then(|agent| AgentName::parse(agent).ok());
         if let Some(agent) = agent {
-            ctx.main_agents = tagged(store, Tag::is_main).await?;
+            ctx.main_agents = main_agents(store).await?;
             let mut conn = store.read().acquire().await?;
             ctx.starter = agents::find_worker_process(&mut conn, &agent)
                 .await?
@@ -1497,7 +1727,7 @@ async fn route(
             ctx.areas.insert(area.name);
         }
     }
-    ctx.main_agents = tagged(store, Tag::is_main).await?;
+    ctx.main_agents = main_agents(store).await?;
     Ok(())
 }
 
@@ -1522,7 +1752,7 @@ async fn integrated_reviewer(
     Ok(fold_core::reviews::standing_agent_approval(&reviews))
 }
 
-/// The proposals that a reviewer which ended leaves without a verdict and without a resume that fold owes it, so nobody would give them to a reviewer; none while the project is paused, since the resume of the pause runs the reviewer again.
+/// The proposals that a reviewer which ended leaves without a verdict, without a resume that fold owes it and without an open ask of its own to the humans, so nobody would give them to a reviewer; none while the project is paused, since the resume of the pause runs the reviewer again.
 async fn unreviewed_of(
     store: &Store,
     agent: &AgentName,
@@ -1541,9 +1771,11 @@ async fn unreviewed_of(
             .filter(|review| review.agent == *agent)
             .map(|review| review.proposal)
             .collect();
+    // A reviewer that asked the humans about a proposal waits for their answer, which resumes it.
+    let asked = crate::services::messages::asked_proposals(store, agent).await?;
     Ok(held
         .into_iter()
-        .filter(|proposal| !owed.contains(proposal))
+        .filter(|proposal| !owed.contains(proposal) && !asked.contains(proposal))
         .collect())
 }
 
@@ -1572,31 +1804,19 @@ async fn review_leads(store: &Store) -> Result<std::collections::BTreeSet<AgentN
         .collect())
 }
 
-/// The agents with a tag `is_tag` accepts.
-async fn tagged(
-    store: &Store,
-    is_tag: fn(&Tag) -> bool,
-) -> Result<std::collections::BTreeSet<AgentName>, StoreError> {
-    let every = agents::list_agents(store.read()).await?;
-    tagged_among(store, &every, is_tag).await
-}
-
-/// The agents of `every` with a tag `is_tag` accepts.
-async fn tagged_among(
-    store: &Store,
-    every: &[AgentRow],
-    is_tag: fn(&Tag) -> bool,
-) -> Result<std::collections::BTreeSet<AgentName>, StoreError> {
-    let tagged: Vec<i64> = agents::all_tags(store.read())
+/// The agents with the main tag.
+async fn main_agents(store: &Store) -> Result<std::collections::BTreeSet<AgentName>, StoreError> {
+    let main: Vec<i64> = agents::all_tags(store.read())
         .await?
         .into_iter()
-        .filter(|(_, tag)| is_tag(tag))
+        .filter(|(_, tag)| tag.is_main())
         .map(|(agent, _)| agent)
         .collect();
-    Ok(every
-        .iter()
-        .filter(|agent| tagged.contains(&agent.id))
-        .map(|agent| agent.name.clone())
+    Ok(agents::list_agents(store.read())
+        .await?
+        .into_iter()
+        .filter(|agent| main.contains(&agent.id))
+        .map(|agent| agent.name)
         .collect())
 }
 
@@ -1669,6 +1889,29 @@ mod tests {
     }
 
     #[test]
+    fn holding_one_inbox_past_the_limit_drops_only_the_oldest() {
+        let targets = PushTargets::new();
+        let token = PushToken::parse("0123456789abcdef").unwrap();
+        let agent = |n: usize| AgentName::parse(&format!("agent-{n}")).unwrap();
+        let held = MAX_PENDING + 1;
+        for n in 0..held {
+            let at = Timestamp::from_millis(i64::try_from(1_000 + n).unwrap()).unwrap();
+            targets.hold(
+                &agent(n),
+                PathBuf::from(format!("/s/{n}")),
+                token.clone(),
+                at,
+            );
+        }
+        let pending = lock(&targets.inner.pending);
+        assert_eq!(pending.len(), MAX_PENDING);
+        assert!(!pending.contains_key(&agent(0)));
+        for n in 1..held {
+            assert!(pending.contains_key(&agent(n)), "agent-{n} was dropped");
+        }
+    }
+
+    #[test]
     fn a_full_queue_drops_its_oldest_notice() {
         let queue = Queue::default();
         for seq in 1..=20 {
@@ -1677,6 +1920,7 @@ mod tests {
                 seq,
                 about: None,
                 head: None,
+                digest: None,
             });
         }
         let seqs: Vec<u64> = lock(&queue.state)
@@ -1691,7 +1935,22 @@ mod tests {
             seq: 21,
             about: None,
             head: None,
+            digest: None,
         });
         assert!(lock(&queue.state).pending.is_empty());
+    }
+
+    #[test]
+    fn a_digest_names_its_first_notices_and_counts_the_rest() {
+        let digest = Digest {
+            since: Timestamp::from_millis(0).unwrap(),
+            items: vec!["one. Call a.".to_owned(), "two. Call b.".to_owned()],
+            more: 3,
+            seq: 1,
+        };
+        assert_eq!(
+            digest.text(),
+            "fold digest, no action needed (5): one. Call a. | two. Call b. | and 3 more"
+        );
     }
 }

@@ -5,7 +5,8 @@ use fold_core::object::ObjectHash;
 use fold_core::reviews::ProposalIntent;
 use fold_core::reviews::checks::{Outcome, Purpose, RunReason, RunState, Stage};
 use fold_core::{
-    CheckRunId, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId,
+    ChangesetId, CheckRunId, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkerName,
+    WorkspaceId,
 };
 use sqlx::SqliteExecutor;
 
@@ -19,7 +20,8 @@ pub struct NewCheckRun<'a> {
     pub id: CheckRunId,
     pub stage: Stage,
     pub purpose: Purpose,
-    pub task: TaskId,
+    /// `None` only for a direct change.
+    pub task: Option<TaskId>,
     pub workspace: Option<WorkspaceId>,
     /// The row id of the requesting worker.
     pub worker_id: Option<i64>,
@@ -35,6 +37,8 @@ pub struct NewCheckRun<'a> {
     pub intent: Option<&'a ProposalIntent>,
     /// The submitted review batch whose ready members an integration run checks together.
     pub batch: Option<ReviewBatchId>,
+    /// The changeset of the main workspace that a direct change's run checks.
+    pub changeset: Option<ChangesetId>,
 }
 
 /// One stored run with public ids only.
@@ -43,7 +47,8 @@ pub struct CheckRunRow {
     pub id: CheckRunId,
     pub stage: Stage,
     pub purpose: Purpose,
-    pub task: TaskId,
+    /// `None` only for a direct change.
+    pub task: Option<TaskId>,
     pub workspace: Option<WorkspaceId>,
     pub worker: Option<WorkerName>,
     pub proposal: Option<ProposalId>,
@@ -60,6 +65,26 @@ pub struct CheckRunRow {
     pub finished_at: Option<Timestamp>,
     /// The review batch whose members the integration run checked together.
     pub batch: Option<ReviewBatchId>,
+    /// The changeset of the main workspace that a direct change's run checked.
+    pub changeset: Option<ChangesetId>,
+}
+
+impl CheckRunRow {
+    /// The task of the run, for a caller that handles only the runs of a task: a direct change's run is `Invalid`.
+    pub fn task_run(&self) -> Result<TaskId, StoreError> {
+        self.task.ok_or(StoreError::Invalid(
+            "the run of a direct change has no task",
+        ))
+    }
+
+    /// The public id of what the run checks: its task, or the changeset of a direct change.
+    pub fn subject(&self) -> String {
+        match (self.task, self.changeset) {
+            (Some(task), _) => task.to_string(),
+            (None, Some(changeset)) => changeset.to_string(),
+            (None, None) => String::new(),
+        }
+    }
 }
 
 /// One command of a run as the runner reports it.
@@ -94,13 +119,15 @@ pub struct CheckResultRow {
 /// The name a setup result is stored under.
 const SETUP: &str = "setup";
 
-/// Inserts a running run in the caller's write. A second running run of the same workspace, or a second running integration run, fails on its unique index, so the database decides a race.
+/// Inserts a running run in the caller's write. A second running run of the same workspace, or a second running integration run, fails on its unique index, so the database decides a race. A named task, changeset or base revision that does not exist is refused, never stored as null.
 pub async fn insert_run(
     tx: &mut WriteTx,
     new: &NewCheckRun<'_>,
     now: Timestamp,
 ) -> Result<(), StoreError> {
-    let (number, task) = (new.id.to_db(), new.task.to_db());
+    let number = new.id.to_db();
+    let task = new.task.map(TaskId::to_db);
+    let changeset = new.changeset.map(ChangesetId::to_db);
     let workspace = new.workspace.map(WorkspaceId::to_db);
     let proposal = new.proposal.map(ProposalId::to_db);
     let version = new.version.map(i64::from);
@@ -111,16 +138,19 @@ pub async fn insert_run(
     let inserted = sqlx::query!(
         "INSERT INTO check_runs (number, stage, purpose, task_id, workspace_id, worker_id, proposal_id,
                                  version_id, base_revision_id, tree_hash, actor, title, evidence, created_at,
-                                 review_batch_id, intent)
-         SELECT ?1, ?2, ?3, t.id,
+                                 review_batch_id, intent, changeset_id)
+         SELECT ?1, ?2, ?3, (SELECT t.id FROM tasks t WHERE t.number = ?14),
                 (SELECT w.id FROM workspaces w WHERE w.number = ?4),
                 ?5,
                 (SELECT p.id FROM proposals p WHERE p.number = ?6),
                 (SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id
                  WHERE p.number = ?6 AND v.version = ?7),
                 r.id, ?9, ?10, ?11, ?12, ?13,
-                (SELECT b.id FROM review_batches b WHERE b.number = ?15), ?16
-         FROM tasks t, revisions r WHERE t.number = ?14 AND r.number = ?8",
+                (SELECT b.id FROM review_batches b WHERE b.number = ?15), ?16,
+                (SELECT s.id FROM changesets s WHERE s.number = ?17)
+         FROM revisions r WHERE r.number = ?8
+           AND (?14 IS NULL OR EXISTS (SELECT 1 FROM tasks t WHERE t.number = ?14))
+           AND (?17 IS NULL OR EXISTS (SELECT 1 FROM changesets s WHERE s.number = ?17))",
         number,
         stage,
         purpose,
@@ -136,7 +166,8 @@ pub async fn insert_run(
         now,
         task,
         batch,
-        intent
+        intent,
+        changeset
     )
     .execute(tx.conn())
     .await?
@@ -145,7 +176,7 @@ pub async fn insert_run(
         Ok(())
     } else {
         Err(StoreError::Invalid(
-            "the task or base revision does not exist",
+            "the task, changeset or base revision does not exist",
         ))
     }
 }
@@ -248,7 +279,7 @@ struct RawRun {
     number: i64,
     stage: String,
     purpose: String,
-    task: i64,
+    task: Option<i64>,
     workspace: Option<i64>,
     worker: Option<String>,
     proposal: Option<i64>,
@@ -264,6 +295,7 @@ struct RawRun {
     created_at: i64,
     finished_at: Option<i64>,
     batch: Option<i64>,
+    changeset: Option<i64>,
 }
 
 impl RawRun {
@@ -275,7 +307,12 @@ impl RawRun {
             stage: Stage::parse(&row.stage).ok_or(StoreError::Corrupt("check_runs.stage"))?,
             purpose: Purpose::parse(&row.purpose)
                 .ok_or(StoreError::Corrupt("check_runs.purpose"))?,
-            task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
+            task: row
+                .task
+                .map(|number| {
+                    TaskId::try_from_db(number).ok_or(StoreError::Corrupt("tasks.number"))
+                })
+                .transpose()?,
             workspace: row
                 .workspace
                 .map(|number| {
@@ -324,6 +361,12 @@ impl RawRun {
                         .ok_or(StoreError::Corrupt("review_batches.number"))
                 })
                 .transpose()?,
+            changeset: row
+                .changeset
+                .map(|number| {
+                    ChangesetId::try_from_db(number).ok_or(StoreError::Corrupt("changesets.number"))
+                })
+                .transpose()?,
         })
     }
 }
@@ -334,22 +377,24 @@ macro_rules! select_runs {
         sqlx::query_as!(
             RawRun,
             r#"SELECT c.number AS "number!: i64", c.stage, c.purpose,
-                      t.number AS "task!: i64",
+                      t.number AS "task?: i64",
                       w.number AS "workspace?: i64",
                       k.name AS "worker?: String",
                       p.number AS "proposal?: i64",
                       v.version AS "version?: i64",
                       r.number AS "base!: i64",
                       c.tree_hash, c.actor, c.title, c.evidence, c.intent, c.state, c.reason,
-                      c.created_at, c.finished_at, b.number AS "batch?: i64"
+                      c.created_at, c.finished_at, b.number AS "batch?: i64",
+                      s.number AS "changeset?: i64"
                FROM check_runs c
-               JOIN tasks t ON t.id = c.task_id
+               LEFT JOIN tasks t ON t.id = c.task_id
                JOIN revisions r ON r.id = c.base_revision_id
                LEFT JOIN workspaces w ON w.id = c.workspace_id
                LEFT JOIN workers k ON k.id = c.worker_id
                LEFT JOIN proposals p ON p.id = c.proposal_id
                LEFT JOIN proposal_versions v ON v.id = c.version_id
                LEFT JOIN review_batches b ON b.id = c.review_batch_id
+               LEFT JOIN changesets s ON s.id = c.changeset_id
                "# + $tail
             $(, $arg)*
         )
@@ -452,6 +497,18 @@ pub async fn runs_of_version(
     rows(raw)
 }
 
+/// The runs of a direct change's changeset, newest first.
+pub async fn runs_of_changeset(
+    executor: impl SqliteExecutor<'_>,
+    changeset: ChangesetId,
+) -> Result<Vec<CheckRunRow>, StoreError> {
+    let number = changeset.to_db();
+    let raw = select_runs!("WHERE s.number = ?1 ORDER BY c.id DESC", number)
+        .fetch_all(executor)
+        .await?;
+    rows(raw)
+}
+
 /// The newest integration run of the review batch's members together, if one started.
 pub async fn newest_batch_run(
     executor: impl SqliteExecutor<'_>,
@@ -462,6 +519,27 @@ pub async fn newest_batch_run(
         .fetch_all(executor)
         .await?;
     Ok(rows(raw)?.pop())
+}
+
+/// How long each of the newest `limit` passed integration runs took, in milliseconds, newest first. A clock that went back gives 0.
+pub async fn recent_integration_run_durations(
+    executor: impl SqliteExecutor<'_>,
+    limit: u32,
+) -> Result<Vec<u64>, StoreError> {
+    let limit = i64::from(limit);
+    let rows = sqlx::query_scalar!(
+        r#"SELECT MAX(finished_at - created_at, 0) AS "duration!: i64" FROM check_runs
+           WHERE stage = 'integration' AND state = 'passed' AND finished_at IS NOT NULL
+           ORDER BY finished_at DESC, id DESC
+           LIMIT ?1"#,
+        limit
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|duration| u64::try_from(duration).unwrap_or(0))
+        .collect())
 }
 
 /// The version row ids of the members a batch's run checked together.
@@ -602,6 +680,127 @@ pub async fn list_results(
             })
         })
         .collect()
+}
+
+/// The failed results that the flaky rule matches, joined to each later pass that makes them flaky, followed by the tail of each read.
+///
+/// The flaky rule: a result of kind `check` with outcome `failed` or `timed_out` is flaky when a later run (a higher `check_runs.number`) of the same `tree_hash` has a `passed` result of the same check name. A setup result is never flaky. The aliases are `s` and `c` for the failed result and its run, `l` and `lr` for the later pass and its run; a failed result has one row for each later pass.
+macro_rules! flaky_results {
+    ($select:literal, $tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query!(
+            $select
+                + " FROM check_results s
+                    JOIN check_runs c ON c.id = s.run_id
+                    JOIN check_runs lr ON lr.tree_hash = c.tree_hash AND lr.number > c.number
+                    JOIN check_results l ON l.run_id = lr.id AND l.kind = 'check'
+                         AND l.name = s.name AND l.outcome = 'passed'
+                    WHERE s.kind = 'check' AND s.outcome IN ('failed', 'timed_out') "
+                + $tail
+            $(, $arg)*
+        )
+    };
+}
+
+/// One earlier run whose failed results a run's passes made flaky.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewlyFlaky {
+    /// The earlier run that failed.
+    pub run: CheckRunId,
+    /// The checks of `run` that failed there and passed later, by name.
+    pub checks: Vec<String>,
+}
+
+/// One check that failed flakily in the window of [`flaky_checks`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlakyCheck {
+    pub check: String,
+    /// The number of its flaky failures.
+    pub count: u32,
+    /// The runs of those failures, oldest first.
+    pub runs: Vec<CheckRunId>,
+}
+
+/// The positions of the results of `run` that are flaky by the rule of [`flaky_results`], in run order.
+pub async fn flaky_positions(
+    executor: impl SqliteExecutor<'_>,
+    run: CheckRunId,
+) -> Result<Vec<u32>, StoreError> {
+    let number = run.to_db();
+    let raw = flaky_results!(
+        r#"SELECT DISTINCT s.position AS "position!: i64""#,
+        "AND c.number = ?1 ORDER BY s.position",
+        number
+    )
+    .fetch_all(executor)
+    .await?;
+    raw.into_iter()
+        .map(|row| count(row.position, "check_results.position"))
+        .collect()
+}
+
+/// The earlier failed results that the passes of `run` make flaky by the rule of [`flaky_results`], and that no pass of another run made flaky already, grouped by their run, oldest first. Called in the write that stores the results of `run`, so each flaky failure is reported once, also when runs end out of order.
+pub async fn newly_flaky(
+    executor: impl SqliteExecutor<'_>,
+    run: CheckRunId,
+) -> Result<Vec<NewlyFlaky>, StoreError> {
+    let number = run.to_db();
+    let raw = flaky_results!(
+        r#"SELECT c.number AS "run!: i64", s.name AS "name!: String""#,
+        "AND c.tree_hash = (SELECT x.tree_hash FROM check_runs x WHERE x.number = ?1)
+         GROUP BY s.id HAVING MIN(lr.number) = ?1 AND MAX(lr.number) = ?1
+         ORDER BY c.number, s.position",
+        number
+    )
+    .fetch_all(executor)
+    .await?;
+    let mut found: Vec<NewlyFlaky> = Vec::new();
+    for row in raw {
+        let run =
+            CheckRunId::try_from_db(row.run).ok_or(StoreError::Corrupt("check_runs.number"))?;
+        match found.last_mut() {
+            Some(last) if last.run == run => last.checks.push(row.name),
+            _ => found.push(NewlyFlaky {
+                run,
+                checks: vec![row.name],
+            }),
+        }
+    }
+    Ok(found)
+}
+
+/// The checks with flaky failures, by the rule of [`flaky_results`], in runs created at or after `since`: the most flaky failures first, then by name.
+pub async fn flaky_checks(
+    executor: impl SqliteExecutor<'_>,
+    since: Timestamp,
+) -> Result<Vec<FlakyCheck>, StoreError> {
+    let since = since.as_millis();
+    let raw = flaky_results!(
+        r#"SELECT DISTINCT s.id AS "id!: i64", s.name AS "name!: String", c.number AS "run!: i64""#,
+        "AND c.created_at >= ?1 ORDER BY s.name, c.number, s.id",
+        since
+    )
+    .fetch_all(executor)
+    .await?;
+    let mut found: Vec<FlakyCheck> = Vec::new();
+    for row in raw {
+        let run =
+            CheckRunId::try_from_db(row.run).ok_or(StoreError::Corrupt("check_runs.number"))?;
+        match found.last_mut() {
+            Some(last) if last.check == row.name => {
+                last.count = last.count.saturating_add(1);
+                if last.runs.last() != Some(&run) {
+                    last.runs.push(run);
+                }
+            }
+            _ => found.push(FlakyCheck {
+                check: row.name,
+                count: 1,
+                runs: vec![run],
+            }),
+        }
+    }
+    found.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.check.cmp(&b.check)));
+    Ok(found)
 }
 
 /// One integration that waits in a project's queue.

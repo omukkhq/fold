@@ -102,6 +102,14 @@ pub async fn folder_status(
     git: &Git,
 ) -> Result<FolderStatus, ProjectError> {
     let _folder = handle.folder_lock.clone().lock_owned().await;
+    folder_status_locked(handle, git).await
+}
+
+/// [`folder_status`] for a caller that holds the project's folder lock.
+pub(crate) async fn folder_status_locked(
+    handle: &ProjectHandle,
+    git: &Git,
+) -> Result<FolderStatus, ProjectError> {
     let read = read_folder(&handle.store, &handle.paths, git)
         .await?
         .ok_or(StoreError::Corrupt("refs.main"))?;
@@ -238,7 +246,11 @@ pub async fn folder_status(
         unstash_conflicted: read.stash_held.clone(),
         unstash_open: unstash_paths,
         head_moved: match &read.branch {
-            Some(BranchState::Moved(moved)) => Some(moved.hint(&read.branch_name)),
+            Some(BranchState::Moved(moved)) => Some(super::branch::moved_hint(
+                &read.branch_name,
+                moved,
+                read.branch_present,
+            )),
             _ => None,
         },
         commits_waiting: matches!(read.branch, Some(BranchState::Ahead { .. })),

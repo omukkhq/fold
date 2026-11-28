@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use axum::Json;
-use axum::extract::Path;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use fold_core::{
     CheckRunId, ChecklistItemId, ChecklistName, FoldError, IdParseError, LabelColor, LabelName,
@@ -17,8 +17,11 @@ use super::actor::Human;
 use super::error::{ApiError, ApiJson, ErrorEnvelope, fold};
 use super::events::{CheckpointSummary, DurableEventType, LiveCheckRun};
 use super::reviews::checks::{CheckPurpose, CheckStage};
-use super::reviews::{ReviewPlanWait, ReviewVerdict};
+use super::reviews::{
+    IntegrationQueuePlace, IntegrationWait, ReviewPlanWait, ReviewVerdict, queue_fields,
+};
 use crate::daemon::AppState;
+use crate::services::reviews::{IntegrationQueue, QueuedBoard};
 use crate::services::tasks::{self as service, ItemContent};
 
 pub mod requests;
@@ -289,6 +292,10 @@ pub struct BoardCard {
     /// The hold; null while the task is not on hold.
     #[schema(required = true)]
     pub hold: Option<HoldMark>,
+    /// The held tasks this task waits on, directly or through other open tasks, as public task ids sorted by number. Calculated on each read; left out when none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schema(required = false)]
+    pub held_by: Vec<String>,
     /// How many messages name the task.
     pub messages: u32,
     /// UTC milliseconds of the completion record; null until the task is Done.
@@ -301,7 +308,7 @@ pub struct BoardCard {
     /// The last tracked edit in the live workspace; null without a live workspace and before its first edit.
     #[schema(required = true)]
     pub activity: Option<BoardActivity>,
-    /// Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them.
+    /// Whether the files of the live workspace differ from the tree of the open proposal's newest version and, while a reviewer made that version in its review checkout, from the tree of the author's own newest version: false while every file is the same as one of them, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them.
     #[schema(required = true)]
     pub edits_after_version: Option<bool>,
     /// The check run in progress for the task: an integration run of its proposal on the merged tree, else a proposal-stage run in its workspace, whose worker waits for the result and is not stalled while it goes. Null while no run goes.
@@ -378,11 +385,20 @@ pub struct BoardProposal {
     /// The worker that holds the proposal's review claim, so the proposal is being reviewed; null while no reviewer holds it.
     #[schema(required = true, example = "review-2")]
     pub review_claim: Option<String>,
+    /// The place in the automatic integration queue of an approved open proposal that the job takes; null otherwise.
+    #[schema(required = true)]
+    pub queue: Option<IntegrationQueuePlace>,
+    /// Why the automatic integration does not take an approved open proposal; null for a queued one and for any proposal that is not approved and open.
+    #[schema(required = true)]
+    pub waits_for: Option<IntegrationWait>,
 }
 
-impl From<service::CardProposal> for BoardProposal {
-    fn from(proposal: service::CardProposal) -> Self {
+impl BoardProposal {
+    fn new(proposal: service::CardProposal, queue: &IntegrationQueue) -> Self {
+        let (place, waits_for) = queue_fields(queue.standing(proposal.id).cloned());
         Self {
+            queue: place,
+            waits_for,
             id: proposal.id.to_string(),
             state: proposal.standing.into(),
             version: proposal.version,
@@ -413,8 +429,8 @@ impl From<service::Activity> for BoardActivity {
     }
 }
 
-impl From<service::BoardCard> for BoardCard {
-    fn from(card: service::BoardCard) -> Self {
+impl BoardCard {
+    fn new(card: service::BoardCard, queue: &IntegrationQueue) -> Self {
         Self {
             task: card.id.to_string(),
             title: card.title.to_string(),
@@ -432,10 +448,13 @@ impl From<service::BoardCard> for BoardCard {
             workspace: card.workspace.map(|workspace| workspace.to_string()),
             human_review: card.human_review.map(HumanReviewMark::from),
             hold: card.hold.map(HoldMark::from),
+            held_by: ids(&card.held_by),
             messages: card.messages,
             completed_at: card.completed_at.map(|at| at.as_millis()),
             attention: attention(card.attention),
-            proposal: card.proposal.map(BoardProposal::from),
+            proposal: card
+                .proposal
+                .map(|proposal| BoardProposal::new(proposal, queue)),
             activity: card.activity.map(BoardActivity::from),
             edits_after_version: card.edits_after_version,
             check_run: card.check_run.map(CardCheckRun::from),
@@ -589,8 +608,12 @@ pub struct TaskView {
     /// The hold; null while the task is not on hold.
     #[schema(required = true)]
     pub hold: Option<HoldMark>,
+    /// The held tasks this task waits on, directly or through other open tasks, as public task ids sorted by number. Calculated on each read; left out when none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schema(required = false)]
+    pub held_by: Vec<String>,
     pub attention: Vec<AttentionItem>,
-    /// The rule of the status calculation that decided the status, with the ids it used.
+    /// The rule of the status calculation that decided the status, with the ids it used, and ", held through T-x" when `held_by` names a task.
     pub status_reason: String,
     /// The live task workspace; null without one.
     #[schema(required = true)]
@@ -598,7 +621,7 @@ pub struct TaskView {
     /// The last tracked edit in the live workspace; null without a live workspace and before its first edit.
     #[schema(required = true)]
     pub activity: Option<BoardActivity>,
-    /// Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them.
+    /// Whether the files of the live workspace differ from the tree of the open proposal's newest version and, while a reviewer made that version in its review checkout, from the tree of the author's own newest version: false while every file is the same as one of them, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them.
     #[schema(required = true)]
     pub edits_after_version: Option<bool>,
     /// The check run that goes in the live workspace; its worker waits for the result and is not stalled while it goes. Null while no run goes.
@@ -857,6 +880,7 @@ impl From<service::TaskDetail> for TaskView {
             attention: attention(detail.attention),
             human_review_set_at: detail.human_review_set_at.map(|at| at.as_millis()),
             hold: task.hold.map(HoldMark::from),
+            held_by: ids(&detail.held_by),
             status_reason: detail.status_reason,
             workspace_info: detail.workspace_info.map(|info| TaskWorkspaceInfo {
                 directory: info.directory,
@@ -1088,15 +1112,26 @@ fn label_names(names: &[String]) -> Result<Vec<LabelName>, ApiError> {
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
-pub async fn board(project: Project) -> Result<Json<BoardView>, ApiError> {
-    let board = project.0.tasks.board().await?;
+pub async fn board(
+    State(state): State<AppState>,
+    project: Project,
+) -> Result<Json<BoardView>, ApiError> {
+    let QueuedBoard { board, queue } = project
+        .0
+        .reviews(&state.registry)
+        .board_with_queue(&project.0.tasks)
+        .await?;
     Ok(Json(BoardView {
         columns: board
             .columns
             .into_iter()
             .map(|column| BoardColumn {
                 status: column.status.into(),
-                cards: column.cards.into_iter().map(BoardCard::from).collect(),
+                cards: column
+                    .cards
+                    .into_iter()
+                    .map(|card| BoardCard::new(card, &queue))
+                    .collect(),
                 total: column.total,
             })
             .collect(),

@@ -141,8 +141,12 @@ sqlx-check: sqlx-scratch ## Fail when the .sqlx query metadata is stale
 
 # macOS file systems ignore case, so an import of ./Card would find card.ts when it sits next to Card.tsx.
 check-web-sources: web-install
-	@dupes=$$(git ls-files web/src | sed -E 's/\.[^./]+$$//' | sort -u | sort -f | uniq -di); \
-		[ -z "$$dupes" ] || { echo "web/src has module names that differ only in case, which clash on macOS: $$dupes" >&2; exit 1; }
+	@[ -d web/src ] || { echo "web/src is missing, so its module names cannot be checked" >&2; exit 1; }; \
+		files=$$(find web/src -type f) || { echo "find could not list every file of web/src" >&2; exit 1; }; \
+		files=$$(printf '%s\n' "$$files" | LC_ALL=C sort) || exit 1; \
+		[ -n "$$files" ] || { echo "web/src lists no files, so its module names cannot be checked" >&2; exit 1; }; \
+		dupes=$$(printf '%s\n' "$$files" | awk '{ stem = $$0; sub(/\.[^.\/]+$$/, "", stem); key = tolower(stem); if (!((key SUBSEP stem) in seen)) { seen[key SUBSEP stem] = 1; stems[key]++ } all[key] = all[key] "\n  " $$0 } END { for (key in all) if (stems[key] > 1) printf "%s", all[key] }') || exit 1; \
+		[ -z "$$dupes" ] || { printf 'web/src has module names that differ only in case, which clash on macOS:%s\n' "$$dupes" >&2; exit 1; }
 	cd web && bun run typecheck
 	cd web && bun run lint
 	cd web && bun run format:check

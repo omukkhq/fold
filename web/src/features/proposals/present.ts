@@ -13,6 +13,8 @@ import type { WorkerList } from "@/api/workers";
 import {
   laneFailure,
   laneFailureLine,
+  laneRefresh,
+  laneRefreshLine,
   laneText,
   type WithLane,
 } from "./laneState";
@@ -124,6 +126,16 @@ export function reviewPill(p: WithLane, context: PillContext = {}): Pill {
     return {
       tone: "danger",
       icon: "checks",
+      text: segmentsText(segments),
+      segments,
+    };
+  }
+  const refresh = laneRefresh(context.reason ?? p.conflicted_reason);
+  if (p.conflicted && refresh !== null) {
+    const segments = laneRefreshLine(refresh);
+    return {
+      tone: "neutral",
+      icon: "waiting",
       text: segmentsText(segments),
       segments,
     };

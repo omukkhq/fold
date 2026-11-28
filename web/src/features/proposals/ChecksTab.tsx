@@ -14,9 +14,10 @@ import { Skeleton } from "@/components/states/Skeleton";
 import { IdText } from "@/components/text/IdText";
 import { CODE_BOX, textFlow } from "@/components/text/textFlow";
 import { cn } from "@/lib/cn";
+import { ActorText } from "@/people/ActorText";
 import { focusRing } from "@/lib/focus";
 import { runTime } from "./checkRunTime";
-import { outcomeText, reasonText, resultOf } from "./checkRuns";
+import { outcomeText, resultOf, runReasonLine, waitLine } from "./checkRuns";
 import {
   chosenStep,
   firstError,
@@ -26,6 +27,8 @@ import {
   type RunItem,
 } from "./runList";
 import { OUTCOME_ICONS, RUN_ICONS } from "./checkIcons";
+import { StopRunButton } from "./StopRunButton";
+import { showsStop } from "./stopRun";
 import { detailHref, type DetailSearch } from "./view";
 
 function CopyLog({ log }: { log: string }) {
@@ -47,6 +50,26 @@ function CopyLog({ log }: { log: string }) {
         </span>
       )}
     </span>
+  );
+}
+
+function RunWait({ run }: { run: CheckRun }) {
+  const line = waitLine(run);
+  if (line === null) return null;
+  return (
+    <p role="status" className="px-6 text-14 text-text-2">
+      {line}
+    </p>
+  );
+}
+
+function RunReason({ run }: { run: CheckRun }) {
+  const line = runReasonLine(run);
+  if (line === null) return null;
+  return (
+    <p className="px-6 text-14 text-text">
+      <ActorText segments={line} />
+    </p>
   );
 }
 
@@ -167,10 +190,19 @@ export interface ChecksTabProps {
   items: readonly RunItem[] | null;
   search: DetailSearch;
   now: number;
+  /** The signed-in human; null before the name prompt is answered. */
+  human: string | null;
 }
 
 /** Each run with its steps on one side, and the log of the chosen step across the rest of the width. */
-export function ChecksTab({ slug, id, items, search, now }: ChecksTabProps) {
+export function ChecksTab({
+  slug,
+  id,
+  items,
+  search,
+  now,
+  human,
+}: ChecksTabProps) {
   if (items === null) {
     return <Skeleton className="m-24" />;
   }
@@ -217,11 +249,11 @@ export function ChecksTab({ slug, id, items, search, now }: ChecksTabProps) {
                 {item.run.state === "running" ? <Chip>running</Chip> : null}
                 <RunTimeLabel run={item.run} now={now} />
               </div>
-              {item.run.reason === null ? null : (
-                <p className="px-6 text-14 text-text">
-                  {reasonText(item.run.reason)}
-                </p>
-              )}
+              <RunReason run={item.run} />
+              <RunWait run={item.run} />
+              {showsStop(item.run, human) ? (
+                <StopRunButton slug={slug} run={item.run.id} />
+              ) : null}
               <ul className="flex flex-col gap-2">
                 {item.run.results.map((result) => {
                   const step = OUTCOME_ICONS[result.outcome];

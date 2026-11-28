@@ -11,8 +11,10 @@ use serde_json::{Value, json};
 
 use super::error::from_workspace;
 use super::{FoldServer, parse};
+use crate::services::reviews::checks::SetupState;
 use crate::services::workspaces::{
-    RevisionSummary, StateRef, StateSummary, WorkspaceChanges, WorkspaceRef,
+    ChangesView, CheckoutChanges, RevisionSummary, StateRef, StateSummary, WorkspaceChanges,
+    WorkspaceRef,
 };
 
 pub const GET_REPOSITORY_STATE: &str = "get_repository_state";
@@ -77,7 +79,7 @@ pub struct GetWorkspaceInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct GetWorkspaceChangesInput {
-    /// The workspace, such as ws-9.
+    /// The workspace, such as ws-9: a task workspace, or a review checkout of your own.
     pub ws: String,
 }
 
@@ -170,7 +172,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             GET_REPOSITORY_STATE,
-            "Show the head of main, the path of the read-only main directory and the newest 10 revisions.",
+            "Show the head of main, the path of the read-only main directory, the newest 10 revisions and, while Git sync is on, `git`: the local Git branch that integrations are committed to and each remote with the remote branch main is pushed to. fold's own line is always main; the Git branch names can differ. git is null without Git sync or while .fold/config.toml cannot be read.",
             schema_for_type::<GetRepositoryStateInput>(),
         ),
         Tool::new(
@@ -185,7 +187,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CREATE_WORKSPACE,
-            "Create the task workspace for a task: a copy of main under .fold/ws/ where you make your changes. It claims the task for your worker, unless your worker holds the claim already, and moves it to In Progress; the claim follows the rules of claim_task, so a worker that fold started gets worker_claim_denied for a task its lead did not give it. A workspace left by a worker that released the task is adopted instead, with its files as they are, and adopted is true.",
+            "Create the task workspace for a task: a copy of main under .fold/ws/ where you make your changes. It claims the task for your worker, unless your worker holds the claim already, and moves it to In Progress; the claim follows the rules of claim_task, so a worker that fold started gets worker_claim_denied for a task its lead did not give it. A workspace left by a worker that released the task is adopted instead, with its files as they are, and adopted is true. setup running means fold runs the [setup] of fold-checks.toml in the new folder in the background and sends you a message from fold at its end (passed, or the end of the failed log); a check run of the folder waits for it. setup none means there is no setup to run.",
             schema_for_type::<CreateWorkspaceInput>(),
         ),
         Tool::new(
@@ -195,7 +197,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_WORKSPACE_CHANGES,
-            "Scan a workspace now and list its working changes against its base revision: a summary line, each changed file with its kind and line counts, the last activity time, the checkpoint count and the open proposal. These are unrecorded changes, not history.",
+            "Scan a workspace now and list its working changes against its base revision: a summary line, each changed file with its kind and line counts, the last activity time, the checkpoint count and the open proposal. These are unrecorded changes, not history. It also reads a review checkout of your own, against the checkout's base revision, with kind review_checkout and totals in place of the summary line; a checkout of another agent is workspace_not_found, as for an unknown id.",
             schema_for_type::<GetWorkspaceChangesInput>(),
         ),
         Tool::new(
@@ -322,6 +324,32 @@ fn changes_value(changes: &WorkspaceChanges) -> Value {
     value
 }
 
+fn checkout_changes_value(changes: &CheckoutChanges) -> Value {
+    let comparison = &changes.comparison;
+    let mut value = json!({
+        "workspace": changes.workspace.to_string(),
+        "kind": "review_checkout",
+        "base": changes.base.to_string(),
+        "files": comparison.files.iter().map(file_line).collect::<Vec<_>>(),
+        "totals": {
+            "files": comparison.totals.files,
+            "added": comparison.totals.added_lines,
+            "removed": comparison.totals.removed_lines,
+        },
+        "proposal": changes.proposal.map(|id| id.to_string()),
+    });
+    if !comparison.warnings.is_empty() {
+        value["unreadable"] = json!(
+            comparison
+                .warnings
+                .iter()
+                .map(|warning| warning.path.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+    value
+}
+
 fn state_line(state: &StateSummary) -> Value {
     let mut line = json!({ "id": state.label, "kind": state.kind.as_str() });
     if let Some(base) = state.base {
@@ -394,6 +422,14 @@ pub async fn get_repository_state(
         "head": state.head,
         "main_path": state.main_path.to_string_lossy(),
         "recent": state.recent.iter().map(revision_line).collect::<Vec<_>>(),
+        "git": state.git.as_ref().map(|git| json!({
+            "branch": git.branch,
+            "remotes": git.remotes.iter().map(|remote| json!({
+                "name": remote.name,
+                "branch": remote.branch,
+                "push_on_integrate": remote.push_on_integrate,
+            })).collect::<Vec<_>>(),
+        })),
     }))
 }
 
@@ -466,11 +502,15 @@ pub async fn call(
             let input: CreateWorkspaceInput = parse(arguments)?;
             let task = id::<TaskId>(&input.task, "task", "T-12")?;
             let actor = server.actor().await?;
-            let created = server
-                .workspaces
-                .create_workspace(&actor, task)
-                .await
-                .map_err(from_workspace)?;
+            let (created, setup) = match &server.reviews {
+                Some(reviews) => reviews.create_workspace(&actor, task).await,
+                None => server
+                    .workspaces
+                    .create_workspace(&actor, task)
+                    .await
+                    .map(|created| (created, SetupState::None)),
+            }
+            .map_err(from_workspace)?;
             let view = created.workspace;
             json!({
                 "workspace": view.id.to_string(),
@@ -478,6 +518,7 @@ pub async fn call(
                 "base": view.base.to_string(),
                 "task": view.task.map(|task| task.to_string()),
                 "adopted": created.adopted,
+                "setup": setup.as_str(),
             })
         }
         GET_WORKSPACE => {
@@ -526,12 +567,16 @@ pub async fn call(
         GET_WORKSPACE_CHANGES => {
             let input: GetWorkspaceChangesInput = parse(arguments)?;
             let workspace = id::<WorkspaceId>(&input.ws, "ws", "ws-9")?;
+            let actor = server.actor().await?;
             let changes = server
                 .workspaces
-                .changes(workspace)
+                .changes_for(&actor, workspace)
                 .await
                 .map_err(from_workspace)?;
-            changes_value(&changes)
+            match changes {
+                ChangesView::Live(changes) => changes_value(&changes),
+                ChangesView::Checkout(changes) => checkout_changes_value(&changes),
+            }
         }
         RECORD_CHECKPOINT => {
             let input: RecordCheckpointInput = parse(arguments)?;

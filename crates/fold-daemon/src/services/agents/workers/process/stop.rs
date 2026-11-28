@@ -23,36 +23,49 @@ const KILL_WAIT: Duration = Duration::from_secs(10);
 /// How often a stop looks at the clock while it waits for an exit.
 const STOP_POLL: Duration = Duration::from_millis(50);
 
+/// How long the stop of a finished worker waits for its turn to end before it stops the worker between two tool calls.
+const DONE_SETTLE: Duration = Duration::from_secs(30);
+
+/// How long the stop of a finished worker waits at most, for a tool call that never returns.
+const DONE_GRACE: Duration = Duration::from_secs(120);
+
+/// How often the stop of a finished worker reads its row while it waits for the turn to end.
+const DONE_POLL: Duration = Duration::from_millis(100);
+
 impl Supervisor {
-    /// Marks the agent's running worker `stopping`, then ends its process: the interrupt of a working turn and a closed stdin, then SIGINT, SIGTERM and SIGKILL, each after its timeout. It returns once the process has exited and its exit is recorded. A worker that is not running is left as it is; one whose row runs without a process here ends `stopped` at once.
+    /// Marks the agent's running worker `stopping`, then ends its process: the interrupt of a working turn and a closed stdin, then SIGINT, SIGTERM and SIGKILL, each after its timeout. It returns once the process has exited and its exit is recorded, with whether it stopped a running worker. A worker that is not running is left as it is; one whose row runs without a process here ends `stopped` at once.
     pub(in crate::services::agents::workers) async fn stop(
         &self,
         agent: &AgentName,
-    ) -> Result<(), AgentError> {
-        self.stop_when(agent, |_| true, false, None)
-            .await
-            .map(|_| ())
+    ) -> Result<bool, AgentError> {
+        self.stop_when(agent, |_| true, false, None).await
     }
 
-    /// [`Supervisor::stop`] that parks the worker for `park`: in the transaction that marks it `stopping`, or at once when it has ended already, the row records the agent that parked it and what it waits for, with `worker.parked`. The worker keeps its session and claims, and only the parking agent's message or a person's resumes it; another agent's message waits for that go.
+    /// [`Supervisor::stop`] that parks the worker for `park`: in the transaction that marks it `stopping`, or at once when it has ended already, the row records the agent that parked it and what it waits for, with `worker.parked`. The worker keeps its session and claims, and only the parking agent's message or a person's resumes it; another agent's message waits for that go. Returns whether it stopped a running worker.
     pub(in crate::services::agents::workers) async fn stop_and_park(
         &self,
         agent: &AgentName,
         park: &Park,
-    ) -> Result<(), AgentError> {
-        self.stop_when(agent, |_| true, false, Some(park))
-            .await
-            .map(|_| ())
+    ) -> Result<bool, AgentError> {
+        self.stop_when(agent, |_| true, false, Some(park)).await
     }
 
-    /// [`Supervisor::stop`] of the supervised main for a human, who wants it to stay stopped: the row is held in the transaction that marks it `stopping`, or at once when it has ended already, so no notice, message or catch-up starts it until a human starts it again.
+    /// [`Supervisor::stop_and_park`] of a worker that `still` holds for, read in the transaction that marks it `stopping`, so a row that changed since the caller read it is left running.
+    pub(in crate::services::agents::workers) async fn stop_and_park_when(
+        &self,
+        agent: &AgentName,
+        park: &Park,
+        still: impl Fn(&WorkerProcessRow) -> bool,
+    ) -> Result<bool, AgentError> {
+        self.stop_when(agent, still, false, Some(park)).await
+    }
+
+    /// [`Supervisor::stop`] of the supervised main for a human, who wants it to stay stopped: the row is held in the transaction that marks it `stopping`, or at once when it has ended already, so no notice, message or catch-up starts it until a human starts it again. Returns whether it stopped a running worker.
     pub(in crate::services::agents::workers) async fn stop_and_hold(
         &self,
         agent: &AgentName,
-    ) -> Result<(), AgentError> {
-        self.stop_when(agent, |_| true, true, None)
-            .await
-            .map(|_| ())
+    ) -> Result<bool, AgentError> {
+        self.stop_when(agent, |_| true, true, None).await
     }
 
     /// [`Supervisor::stop`] of a worker that `still` holds for, read in the transaction that marks it `stopping`; with `hold`, a supervised main is also held (see [`Supervisor::stop_and_hold`]); with `park`, the worker is parked (see [`Supervisor::stop_and_park`]). Returns whether it stopped the worker.
@@ -108,14 +121,123 @@ impl Supervisor {
         Ok(true)
     }
 
-    /// Stops `agent` in a task of its own, as a worker whose work is done.
+    /// Stops `agent` in a task of its own, as a worker whose work is done, once its turn has settled (see [`Supervisor::until_turn_settled`]).
+    ///
+    /// A worker that kept working meanwhile is stopped only while it is still done by the rule of [`Supervisor::stop_done_workers`] and no user turn waits in its stdin, since a requested change or a message can have given it work again. While the stop waits, the worker's `wait_for_events` returns at once.
+    ///
+    /// The worker is marked finishing before the task runs, so a handoff that the next event of the bus gives it, such as the conflict of the integration its approval started, sees the stop and waits for it (see [`Supervisor::until_stop_settled`]).
     pub(super) fn spawn_stop(&self, agent: AgentName) {
+        self.inner.finishing.send_modify(|set| {
+            set.insert(agent.clone());
+        });
         let supervisor = self.clone();
         tokio::spawn(async move {
-            if let Err(error) = supervisor.stop(&agent).await {
+            let stop = match supervisor.until_turn_settled(&agent).await {
+                Settled::AtOnce => true,
+                Settled::TurnEnded => supervisor.still_done(&agent, false).await,
+                Settled::InTurn => supervisor.still_done(&agent, true).await,
+            };
+            if stop && let Err(error) = supervisor.stop(&agent).await {
                 tracing::warn!(%agent, code = code_of(&error), "could not stop a finished worker");
             }
+            supervisor.inner.finishing.send_modify(|set| {
+                set.remove(&agent);
+            });
         });
+    }
+
+    /// Whether fold waits to stop `agent` as a finished worker, or stops it now.
+    pub(super) async fn is_stopping(&self, agent: &AgentName) -> Result<bool, StoreError> {
+        if self.inner.finishing.borrow().contains(agent) {
+            return Ok(true);
+        }
+        let mut conn = self.inner.store.read().acquire().await?;
+        Ok(agents::find_worker_process(&mut conn, agent)
+            .await?
+            .is_some_and(|row| row.state == WorkerState::Stopping))
+    }
+
+    /// Waits until fold neither waits to stop `agent` as a finished worker nor stops it, at most as long as the wait for its turn and the steps of a stop take; false when that time passed first.
+    pub(super) async fn until_stop_settled(&self, agent: &AgentName) -> bool {
+        let timeouts = *lock(&self.inner.timeouts);
+        let most = DONE_GRACE + timeouts.interrupt + timeouts.sigint + timeouts.sigterm + KILL_WAIT;
+        let settled = async {
+            loop {
+                match self.is_stopping(agent).await {
+                    Ok(false) => return true,
+                    Ok(true) => tokio::time::sleep(DONE_POLL).await,
+                    Err(error) => {
+                        tracing::warn!(%agent, code = error.log_code(), "could not read whether a worker stops");
+                        return false;
+                    }
+                }
+            }
+        };
+        tokio::time::timeout(most, settled).await.unwrap_or(false)
+    }
+
+    /// Whether `agent` is still a finished worker after the wait for its turn: done by the rule of [`Supervisor::stop_done_workers`], with no user turn waiting in its stdin besides the turn it is `in_turn`.
+    async fn still_done(&self, agent: &AgentName, in_turn: bool) -> bool {
+        let queued = lock(&self.inner.running)
+            .get(agent)
+            .is_some_and(|run| run.open_turns.load(Ordering::SeqCst) > u64::from(in_turn));
+        if queued {
+            return false;
+        }
+        match self.done_among(Some(agent)).await {
+            Ok(done) => done.contains(agent),
+            Err(error) => {
+                tracing::warn!(%agent, code = error.code().unwrap_or(codes::INTERNAL_ERROR), "could not check whether a worker is still done");
+                false
+            }
+        }
+    }
+
+    /// Waits until a finished worker's turn ends, so the call that finished its work, such as `create_proposal` or `submit_review`, returns its result into the session: an interrupt during the call would end it as a rejected tool use, which the resumed session starts with. After [`DONE_SETTLE`] it also ends once no tool call of the worker is open, and after [`DONE_GRACE`] in any case, for a call that never returns. The limits are read from the project's clock; a row that cannot be read ends the wait. Returns how the wait ended.
+    async fn until_turn_settled(&self, agent: &AgentName) -> Settled {
+        let started = self.inner.clock.now();
+        let settle = started.checked_add(DONE_SETTLE);
+        let grace = started.checked_add(DONE_GRACE);
+        let mut waited = false;
+        loop {
+            let working = async {
+                let mut conn = self
+                    .inner
+                    .store
+                    .read()
+                    .acquire()
+                    .await
+                    .map_err(StoreError::from)?;
+                Ok::<_, StoreError>(
+                    agents::find_worker_process(&mut conn, agent)
+                        .await?
+                        .is_some_and(|row| row.state == WorkerState::Working),
+                )
+            }
+            .await
+            .unwrap_or(false);
+            if !working {
+                return if waited {
+                    Settled::TurnEnded
+                } else {
+                    Settled::AtOnce
+                };
+            }
+            let now = self.inner.clock.now();
+            if grace.is_none_or(|grace| now >= grace) {
+                return Settled::InTurn;
+            }
+            let between_calls = self
+                .inner
+                .streams
+                .facts(agent)
+                .is_none_or(|facts| facts.open_call.is_none());
+            if between_calls && settle.is_none_or(|settle| now >= settle) {
+                return Settled::InTurn;
+            }
+            waited = true;
+            tokio::time::sleep(DONE_POLL).await;
+        }
     }
 
     /// Ends a `stopping` row that has no process here. A process that a racing launch started and ended itself may have recorded the stop already, so a row that has left `stopping` is left as it is.
@@ -443,71 +565,9 @@ impl Supervisor {
         Ok(stopped)
     }
 
+    /// Stops each running short-lived worker whose work is done by the stored state; see [`Supervisor::done_among`].
     pub(super) async fn stop_done_workers(&self) {
-        let rows = async {
-            let read = self.inner.store.read();
-            let mut conn = read.acquire().await.map_err(StoreError::from)?;
-            let rows: Vec<WorkerProcessRow> = agents::list_running_worker_processes(&mut conn)
-                .await?
-                .into_iter()
-                .filter(|row| matches!(row.state, WorkerState::Working | WorkerState::Idle))
-                .collect();
-            let mut with_done_task = HashSet::new();
-            for row in rows
-                .iter()
-                .filter(|row| row.role == fold_core::Role::TaskWorker)
-            {
-                for task in &row.tasks {
-                    let done = fold_store::tasks::fetch(&mut conn, *task)
-                        .await?
-                        .is_some_and(|task| task.status == fold_core::TaskStatus::Done);
-                    if done {
-                        with_done_task.insert(row.id);
-                    }
-                }
-            }
-            drop(conn);
-            let of_role = |role| -> Vec<i64> {
-                rows.iter()
-                    .filter(|row| row.role == role)
-                    .map(|row| row.id)
-                    .collect()
-            };
-            let task_workers = of_role(fold_core::Role::TaskWorker);
-            let waiting = agents::tasks_awaiting_proposal(read, &task_workers).await?;
-            let held = agents::claims_held(read, &task_workers).await?;
-            let missing =
-                agents::proposals_without_verdict(read, &of_role(fold_core::Role::Reviewer))
-                    .await?;
-            let mut conn = read.acquire().await.map_err(StoreError::from)?;
-            let batches = held_open_batches(&mut conn).await?;
-            drop(conn);
-            let holds_batch =
-                |agent: &AgentName| batches.iter().any(|batch| batch.holder.belongs_to(agent));
-            Ok::<_, StoreError>(
-                rows.into_iter()
-                    .filter(|row| {
-                        let open = match row.role {
-                            // As the events decide it: a task worker whose task is Done stops once it holds no claim, and one without a Done task once no bound task awaits its work.
-                            fold_core::Role::TaskWorker if with_done_task.contains(&row.id) => {
-                                held.get(&row.id)
-                            }
-                            fold_core::Role::TaskWorker => waiting.get(&row.id),
-                            // A reviewer that holds an open batch with a member left is told so by the event that would stop it; here it only keeps running.
-                            fold_core::Role::Reviewer if holds_batch(&row.agent) => None,
-                            fold_core::Role::Reviewer => missing.get(&row.id),
-                            fold_core::Role::AreaLead
-                            | fold_core::Role::ReviewLead
-                            | fold_core::Role::Main => None,
-                        };
-                        open == Some(&0)
-                    })
-                    .map(|row| row.agent)
-                    .collect::<Vec<_>>(),
-            )
-        }
-        .await;
-        match rows {
+        match self.done_among(None).await {
             Ok(done) => {
                 for agent in done {
                     self.spawn_stop(agent);
@@ -519,6 +579,80 @@ impl Supervisor {
             ),
         }
     }
+
+    /// The working or idle short-lived workers, of every agent or of `only`, whose work is done by the stored state, as the events of [`Supervisor::done_workers`] decide it.
+    async fn done_among(&self, only: Option<&AgentName>) -> Result<Vec<AgentName>, StoreError> {
+        let read = self.inner.store.read();
+        let mut conn = read.acquire().await.map_err(StoreError::from)?;
+        let rows: Vec<WorkerProcessRow> = agents::list_running_worker_processes(&mut conn)
+            .await?
+            .into_iter()
+            .filter(|row| matches!(row.state, WorkerState::Working | WorkerState::Idle))
+            .filter(|row| only.is_none_or(|agent| row.agent == *agent))
+            .collect();
+        let mut with_done_task = HashSet::new();
+        for row in rows
+            .iter()
+            .filter(|row| row.role == fold_core::Role::TaskWorker)
+        {
+            for task in &row.tasks {
+                let done = fold_store::tasks::fetch(&mut conn, *task)
+                    .await?
+                    .is_some_and(|task| task.status == fold_core::TaskStatus::Done);
+                if done {
+                    with_done_task.insert(row.id);
+                }
+            }
+        }
+        drop(conn);
+        let of_role = |role| -> Vec<i64> {
+            rows.iter()
+                .filter(|row| row.role == role)
+                .map(|row| row.id)
+                .collect()
+        };
+        let task_workers = of_role(fold_core::Role::TaskWorker);
+        let waiting = agents::tasks_awaiting_proposal(read, &task_workers).await?;
+        let held = agents::claims_held(read, &task_workers).await?;
+        let missing =
+            agents::proposals_without_verdict(read, &of_role(fold_core::Role::Reviewer)).await?;
+        let mut conn = read.acquire().await.map_err(StoreError::from)?;
+        let batches = held_open_batches(&mut conn).await?;
+        drop(conn);
+        let holds_batch =
+            |agent: &AgentName| batches.iter().any(|batch| batch.holder.belongs_to(agent));
+        Ok(rows
+            .into_iter()
+            .filter(|row| {
+                let open = match row.role {
+                    // As the events decide it: a task worker whose task is Done stops once it holds no claim, and one without a Done task once no bound task awaits its work.
+                    fold_core::Role::TaskWorker if with_done_task.contains(&row.id) => {
+                        held.get(&row.id)
+                    }
+                    fold_core::Role::TaskWorker => waiting.get(&row.id),
+                    // A reviewer that holds an open batch with a member left is told so by the event that would stop it; here it only keeps running.
+                    fold_core::Role::Reviewer if holds_batch(&row.agent) => None,
+                    fold_core::Role::Reviewer => missing.get(&row.id),
+                    fold_core::Role::AreaLead
+                    | fold_core::Role::ReviewLead
+                    | fold_core::Role::Main => None,
+                };
+                open == Some(&0)
+            })
+            .map(|row| row.agent)
+            .collect::<Vec<_>>())
+    }
+}
+
+/// How the wait of [`Supervisor::until_turn_settled`] ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Settled {
+    /// The worker was not working when the wait began.
+    AtOnce,
+    /// The worker's turn ended while fold waited.
+    TurnEnded,
+    /// A limit passed while the worker's turn still ran.
+    InTurn,
 }
 
 /// What an event finished: the workers to stop, and the open batches whose holders are done but for them.

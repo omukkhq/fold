@@ -27,15 +27,17 @@ use fold_store::{StoreError, WriteTx, agents, counters, tasks, workspaces};
 use fold_vcs::integrate::MergeOutcome;
 use serde_json::json;
 
-use super::batch_integration::BatchIntegration;
+use super::batch_integration::{BatchHolds, BatchIntegration};
 use super::checks::{
-    HeldRequest, Integrating, IntegrationChecks, PassedRun, Verdict as RunVerdict, end_run_in_tx,
-    fold_failed_refusal, next_version_run,
+    Checked, DirectIntegrating, HeldRequest, Integrating, IntegrationChecks, PassedRun,
+    Verdict as RunVerdict, direct_fold_failed_refusal, end_run_in_tx, fold_failed_refusal,
+    next_version_run,
 };
 use super::conflicts::FoundConflict;
 use super::lanes::lane_held_refusal;
 use super::notify;
 use super::proposals::{Retirement, proposal_not_found, retire_proposal};
+use super::turns::TurnKind;
 use super::verdicts::update_refusal;
 use super::views::integration_conflicted;
 use super::{ReviewError, ReviewService};
@@ -140,6 +142,10 @@ pub enum DirectOutcome {
     },
     /// In path order. No row and no event was written, and the main workspace stays open.
     Conflicted(Vec<Conflict>),
+    /// The integration checks of the merged tree failed: nothing was published, the main workspace stays open, and fold sent the main agent a message that names the changeset.
+    ChecksFailed {
+        run: CheckRunId,
+    },
 }
 
 impl Integrated {
@@ -253,6 +259,30 @@ pub(super) enum Subject {
         workspace: WorkspaceId,
         message: String,
     },
+}
+
+/// One turn of the automatic integration job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AutomaticTurn {
+    /// A submitted review batch whose ready members integrate together.
+    Batch(ReviewBatchId),
+    /// A ready proposal on its own, at its current version.
+    Proposal { proposal: ProposalId, version: u32 },
+}
+
+/// Why the automatic integration job skips an approved open proposal, in the order it checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AutomaticSkip {
+    Conflicted,
+    ChecksFailed,
+    /// A review batch holds it back, or it is a lane member behind the front.
+    Held,
+    /// fold failed to run its integration checks on this version and main.
+    FoldFailed,
+    NextVersionRun,
+    /// The proposal has no integration facts.
+    Missing,
+    Gate(GateRefusal),
 }
 
 /// The first refusal of the gates on `facts`, as `can_integrate` decides it.
@@ -561,7 +591,7 @@ impl ReviewService {
         )
     }
 
-    /// Integrates a change of the project folder by the named human whose change it is: what `fld record` read from the folder, or a Git commit the human made there. There is no proposal, task or review, so only the merge decides, and no check runs: the integration checks run only when a proposal integrates. A clean merge moves main and records a `record` integration with the human change and `human_change.recorded`; a conflicting one writes nothing and returns the conflicts to the caller.
+    /// Integrates a change of the project folder by the named human whose change it is: what `fld record` read from the folder, or a Git commit the human made there. There is no proposal, task or review, so only the merge decides, and no check runs: the integration checks run only when a proposal or a direct change integrates. A clean merge moves main and records a `record` integration with the human change and `human_change.recorded`; a conflicting one writes nothing and returns the conflicts to the caller.
     pub async fn integrate_record(
         &self,
         actor: &Actor,
@@ -579,22 +609,38 @@ impl ReviewService {
         )
     }
 
-    /// Integrates a direct change of the main agent: the newest changeset of its main workspace, with the Git commit message it wrote. The user approved the change in the main agent's conversation, so no review gate and no check runs (the integration checks run only when a proposal integrates); `policy::can_change_main_directly` admits the main agent only, and the main workspace must be active and owned by its worker. A clean merge moves main by compare-and-swap, records a `direct` integration with the changeset and the message, and archives the main workspace, in one transaction. A conflicting merge writes nothing and returns the conflicts: the main agent syncs the workspace, records again and submits the new changeset.
+    /// Integrates a direct change of the main agent: the newest changeset of its main workspace, with the Git commit message it wrote. The user approved the change in the main agent's conversation, so no review gate and no proposal checks run, and it takes first place in the integration queue: it waits only for the integration that runs and the direct changes submitted before it; `policy::can_change_main_directly` admits the main agent only, and the main workspace must be active and owned by its worker. Under the integration mutex the merged tree runs its integration checks, as a proposal's does, stored as a run of purpose `integrate_direct` with the changeset. A clean merge whose checks pass moves main by compare-and-swap, records a `direct` integration with the changeset and the message, and archives the main workspace, in one transaction. A conflicting merge writes nothing and returns the conflicts, and failed checks return their run: in both cases the main workspace stays open, and the main agent fixes or syncs it, records again and submits the new changeset. The integration runs in a task of its own, so a caller that stops waiting never leaves a check run without its end.
     pub async fn integrate_direct(
         &self,
         actor: &Actor,
         change: DirectChange,
     ) -> Result<DirectOutcome, ReviewError> {
-        Ok(
-            match self
-                .integrate(actor, IntegrationRequest::Direct(&change))
-                .await?
-            {
-                Integrated::Succeeded(revision) => DirectOutcome::Succeeded { revision },
-                Integrated::Conflicted(conflicts) => DirectOutcome::Conflicted(conflicts),
-                Integrated::ChecksFailed(_) | Integrated::Held => return Err(not_a_proposal()),
-            },
-        )
+        // Waiting for the turn ends with the call, so a cancelled call gives up its place; once the turn is held, the integration and its checks finish in a task of their own.
+        let turn = self.integration.lock_as(TurnKind::First).await;
+        let service = self.clone();
+        let actor = actor.clone();
+        let (answer, answered) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let integrated = service
+                .integrate_locked(&actor, IntegrationRequest::Direct(&change))
+                .await;
+            drop(turn);
+            if let Err(done) = answer.send(integrated) {
+                service.tell_direct_result(&actor, &change, &done).await;
+            }
+        });
+        let integrated = answered.await.map_err(|_| {
+            ReviewError::from(FoldError::new(
+                codes::INTERNAL_ERROR,
+                "the integration of the direct change stopped",
+            ))
+        })??;
+        Ok(match integrated {
+            Integrated::Succeeded(revision) => DirectOutcome::Succeeded { revision },
+            Integrated::Conflicted(conflicts) => DirectOutcome::Conflicted(conflicts),
+            Integrated::ChecksFailed(run) => DirectOutcome::ChecksFailed { run },
+            Integrated::Held => return Err(not_a_proposal()),
+        })
     }
 
     /// Integrates, as fold, every open proposal whose current version is ready: an agent that decides reviews or a human approved it, the latest verdict asks for no changes, a marked task has a human approval the mark accepts, and every prerequisite is Done. Each integration is the same procedure a deciding agent runs. A submitted review batch whose members all have their final state takes its turn first, its ready members together; the members a batch holds back, while it is open or waits for a member, are left to it. A member of a lane behind its front waits, so the members of a lane integrate one at a time in the order of their first approval, each on the main its predecessor made. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag, and one whose update or reviewer's fix runs the checks of its next version waits for that run to end. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
@@ -604,25 +650,27 @@ impl ReviewService {
         let mut turned = HashSet::new();
         loop {
             let holds = self.batch_holds().await?;
-            if let Some(&batch) = holds.ready.iter().find(|batch| !turned.contains(*batch)) {
-                turned.insert(batch);
-                match self.integrate_batch_automatically(batch).await {
-                    Ok(turn) => done.extend(
-                        turn.into_iter()
-                            .flat_map(BatchIntegration::into_members)
-                            .map(|member| AutomaticIntegration {
-                                proposal: member.proposal,
-                                outcome: member.outcome,
-                            }),
-                    ),
-                    Err(error) => {
-                        tracing::warn!(batch = %batch, code = error.log_code(), "the automatic integration of a review batch failed; the next trigger tries again");
+            let (turns, _) = self.automatic_turns(&holds, &passed, &turned, true).await?;
+            let (proposal, version) = match turns.first() {
+                Some(&AutomaticTurn::Batch(batch)) => {
+                    turned.insert(batch);
+                    match self.integrate_batch_automatically(batch).await {
+                        Ok(turn) => done.extend(
+                            turn.into_iter()
+                                .flat_map(BatchIntegration::into_members)
+                                .map(|member| AutomaticIntegration {
+                                    proposal: member.proposal,
+                                    outcome: member.outcome,
+                                }),
+                        ),
+                        Err(error) => {
+                            tracing::warn!(batch = %batch, code = error.log_code(), "the automatic integration of a review batch failed; the next trigger tries again");
+                        }
                     }
+                    continue;
                 }
-                continue;
-            }
-            let Some((proposal, version)) = self.next_ready(&passed, &holds.held).await? else {
-                break;
+                Some(&AutomaticTurn::Proposal { proposal, version }) => (proposal, version),
+                None => break,
             };
             passed.insert(proposal);
             let request = IntegrationRequest::Proposal {
@@ -646,65 +694,125 @@ impl ReviewService {
         Ok(done)
     }
 
-    /// The lowest-numbered open proposal outside `passed` and outside `held`, the members a review batch holds back to integrate together and the members of a lane behind its front, that is not flagged with a conflict or failed integration checks, whose integration checks fold did not fail to run on this version and main, and that passes every gate for the automatic caller, with its current version.
-    async fn next_ready(
+    /// The turns of the automatic integration in the order the job takes them: the ready review batches of `holds` outside `turned`, in number order, then the ready proposals outside `passed` in number order, with the standing of every approved open proposal that [`ReviewService::automatic_standings`] gives. With `first_only` it stops at the first turn, which is the one the job takes next, and a ready batch first reads no standings.
+    pub(super) async fn automatic_turns(
+        &self,
+        holds: &BatchHolds,
+        passed: &HashSet<ProposalId>,
+        turned: &HashSet<ReviewBatchId>,
+        first_only: bool,
+    ) -> Result<
+        (
+            Vec<AutomaticTurn>,
+            Vec<(ProposalId, Result<u32, AutomaticSkip>)>,
+        ),
+        ReviewError,
+    > {
+        let mut turns: Vec<AutomaticTurn> = holds
+            .ready
+            .iter()
+            .filter(|batch| !turned.contains(*batch))
+            .map(|&batch| AutomaticTurn::Batch(batch))
+            .collect();
+        if first_only && !turns.is_empty() {
+            turns.truncate(1);
+            return Ok((turns, Vec::new()));
+        }
+        let standings = self
+            .automatic_standings(passed, &holds.held, first_only)
+            .await?;
+        turns.extend(standings.iter().filter_map(|(proposal, standing)| {
+            standing
+                .as_ref()
+                .ok()
+                .map(|&version| AutomaticTurn::Proposal {
+                    proposal: *proposal,
+                    version,
+                })
+        }));
+        Ok((turns, standings))
+    }
+
+    /// The rule of the automatic integration for single proposals: each open proposal outside `passed` whose latest verdict on its current version is an approval, in number order, with its current version when it is ready, or the first reason the job skips it: flagged with a conflict or failed integration checks, held in `held`, the members a review batch holds back to integrate together and the members of a lane behind its front, fold's own failure to run its integration checks on this version and main, the checks of its next version running, or a gate the automatic caller does not pass. With `first_only` it stops at the first ready proposal, which is the one the job takes next.
+    pub(super) async fn automatic_standings(
         &self,
         passed: &HashSet<ProposalId>,
         held: &HashSet<ProposalId>,
-    ) -> Result<Option<(ProposalId, u32)>, ReviewError> {
+        first_only: bool,
+    ) -> Result<Vec<(ProposalId, Result<u32, AutomaticSkip>)>, ReviewError> {
         let head = workspaces::head(self.store.read())
             .await?
             .ok_or(StoreError::Corrupt("refs.main"))?
             .number;
         let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
         let open = reviews::list_proposals(&mut *read, Some(ProposalState::Open), None).await?;
-        let mut ready = None;
+        let mut standings = Vec::new();
         for row in open {
             // No version passes the automatic gates without an approval as its latest verdict, so only those proposals read their gate facts.
-            if row.conflicted
-                || row.checks_failed
-                || passed.contains(&row.id)
-                || held.contains(&row.id)
-                || row.latest_verdict != Some(Verdict::Approve)
-            {
+            if passed.contains(&row.id) || row.latest_verdict != Some(Verdict::Approve) {
                 continue;
             }
-            // fold's own failure to run the integration checks is not retried on the same version and main: only a caller's integrate, or an automatic run after main moved, tries again.
-            let newest = checks::runs_of_version(&mut *read, row.task, row.id, row.current_version)
-                .await?
-                .into_iter()
-                .find(|run| run.stage == Stage::Integration);
-            if newest
-                .is_some_and(|run| run.reason == Some(RunReason::FoldFailed) && run.base == head)
-            {
-                continue;
-            }
-            // An approval from before an update or a reviewer's fix started the checks of the next version waits for that run: integrating the older version would end it as workspace_changed.
-            if next_version_run(&mut read, row.task, row.id)
-                .await?
-                .is_some()
-            {
-                continue;
-            }
-            let Some(facts) = reviews::integration_facts(&mut read, row.id).await? else {
-                continue;
-            };
-            if decide(&facts, &CallerFacts::Automatic, None).is_ok() {
-                ready = Some((row.id, facts.target.version));
+            let standing = self.automatic_standing(&mut read, &row, head, held).await?;
+            let ready = standing.is_ok();
+            standings.push((row.id, standing));
+            if ready && first_only {
                 break;
             }
         }
         read.commit().await.map_err(StoreError::from)?;
-        Ok(ready)
+        Ok(standings)
     }
 
-    /// The one procedure behind every kind. The project's integration mutex is held throughout, so two integrations never run at the same time.
+    async fn automatic_standing(
+        &self,
+        read: &mut fold_store::SqliteConnection,
+        row: &reviews::ProposalRow,
+        head: RevisionId,
+        held: &HashSet<ProposalId>,
+    ) -> Result<Result<u32, AutomaticSkip>, ReviewError> {
+        if row.conflicted {
+            return Ok(Err(AutomaticSkip::Conflicted));
+        }
+        if row.checks_failed {
+            return Ok(Err(AutomaticSkip::ChecksFailed));
+        }
+        if held.contains(&row.id) {
+            return Ok(Err(AutomaticSkip::Held));
+        }
+        // fold's own failure to run the integration checks is not retried on the same version and main: only a caller's integrate, or an automatic run after main moved, tries again.
+        let newest = checks::runs_of_version(&mut *read, row.task, row.id, row.current_version)
+            .await?
+            .into_iter()
+            .find(|run| run.stage == Stage::Integration);
+        if newest.is_some_and(|run| run.reason == Some(RunReason::FoldFailed) && run.base == head) {
+            return Ok(Err(AutomaticSkip::FoldFailed));
+        }
+        // An approval from before an update or a reviewer's fix started the checks of the next version waits for that run: integrating the older version would end it as workspace_changed.
+        if next_version_run(read, row.task, row.id).await?.is_some() {
+            return Ok(Err(AutomaticSkip::NextVersionRun));
+        }
+        let Some(facts) = reviews::integration_facts(read, row.id).await? else {
+            return Ok(Err(AutomaticSkip::Missing));
+        };
+        Ok(match decide(&facts, &CallerFacts::Automatic, None) {
+            Ok(()) => Ok(facts.target.version),
+            Err(refusal) => Err(AutomaticSkip::Gate(refusal)),
+        })
+    }
+
+    /// The one procedure behind every kind. The project's integration mutex is held throughout, so two integrations never run at the same time; a direct change takes first place in its queue.
     async fn integrate(
         &self,
         actor: &Actor,
         request: IntegrationRequest<'_>,
     ) -> Result<Integrated, ReviewError> {
-        let _serial = self.integration.lock().await;
+        let kind = match request {
+            IntegrationRequest::Direct(_) => TurnKind::First,
+            IntegrationRequest::Proposal { .. }
+            | IntegrationRequest::Pull(_)
+            | IntegrationRequest::Record(_) => TurnKind::Queued,
+        };
+        let _serial = self.integration.lock_as(kind).await;
         self.integrate_locked(actor, request).await
     }
 
@@ -790,6 +898,7 @@ impl ReviewService {
                         conflicts: &conflicts,
                         expected_version,
                         automatic,
+                        before_turn: false,
                     };
                     #[cfg(feature = "failpoints")]
                     fail::fail_point!("integration_before_conflict_record");
@@ -804,9 +913,32 @@ impl ReviewService {
             proposal,
             task,
             version,
+            expected_version,
+            automatic,
             ..
         } = plan.subject
         {
+            // A lane that moved and names a refresh sends the version to its reviewer before any integration run.
+            let found = FoundConflict {
+                proposal,
+                task,
+                version,
+                main: head.number,
+                trees: ReportTrees {
+                    base: plan.base_tree,
+                    main: head.tree_hash,
+                    version: plan.other_tree,
+                },
+                conflicts: &[],
+                expected_version,
+                automatic,
+                before_turn: false,
+            };
+            match self.record_refresh_if_due(actor, found).await? {
+                None => {}
+                Some(true) => return Ok(Integrated::Conflicted(Vec::new())),
+                Some(false) => return Err(Step::Retry),
+            }
             let at = Integrating {
                 proposal,
                 task,
@@ -817,12 +949,40 @@ impl ReviewService {
                 batch: None,
                 members: &[],
             };
-            match self.integration_checks(actor, at, carried).await? {
+            match self
+                .integration_checks(actor, Checked::Proposal(at), carried)
+                .await?
+            {
                 IntegrationChecks::None => {}
                 IntegrationChecks::Passed => {}
                 IntegrationChecks::Failed(run) => return Ok(Integrated::ChecksFailed(run)),
                 IntegrationChecks::FoldFailed(run) => {
                     return Err(Step::Failed(fold_failed_refusal(at, run).into()));
+                }
+                IntegrationChecks::Held => return Ok(Integrated::Held),
+            }
+        }
+        if let Subject::Direct {
+            changeset,
+            workspace,
+            ..
+        } = plan.subject
+        {
+            let at = DirectIntegrating {
+                changeset,
+                workspace,
+                head: head.number,
+                head_tree: head.tree_hash,
+                merged: tree,
+            };
+            match self
+                .integration_checks(actor, Checked::Direct(at), carried)
+                .await?
+            {
+                IntegrationChecks::None | IntegrationChecks::Passed => {}
+                IntegrationChecks::Failed(run) => return Ok(Integrated::ChecksFailed(run)),
+                IntegrationChecks::FoldFailed(run) => {
+                    return Err(Step::Failed(direct_fold_failed_refusal(at, run).into()));
                 }
                 IntegrationChecks::Held => return Ok(Integrated::Held),
             }
@@ -914,6 +1074,7 @@ impl ReviewService {
                 tracing::info!(changeset = %changeset, revision = %next, integration = %integration, "direct change integrated");
             }
         }
+        self.find_queue_conflicts_later(next);
         Ok(Integrated::Succeeded(next))
     }
 
@@ -1182,6 +1343,55 @@ fn is_commit_id(commit: &str) -> bool {
 }
 
 impl ReviewService {
+    /// Tells the main agent's worker what its direct change did when the call that submitted it ended before the answer: a failed run told it already.
+    async fn tell_direct_result(
+        &self,
+        actor: &Actor,
+        change: &DirectChange,
+        done: &Result<Integrated, ReviewError>,
+    ) {
+        let Actor::Agent(agent) = actor else {
+            return;
+        };
+        let text = match done {
+            Err(error) => format!(
+                "The direct change {} did not integrate after your call to submit_main_change ended ({}): main did not move. Read your main workspace with get_workspace, record again if it changed, and call submit_main_change again.",
+                change.changeset,
+                error.log_code()
+            ),
+            Ok(Integrated::Succeeded(revision)) => format!(
+                "The direct change {} integrated as {revision} after your call to submit_main_change ended.",
+                change.changeset
+            ),
+            Ok(Integrated::Conflicted(conflicts)) => format!(
+                "The direct change {} conflicts with main in {} files after your call to submit_main_change ended: call sync_workspace, resolve them, call record_changes and submit again.",
+                change.changeset,
+                conflicts.len()
+            ),
+            Ok(Integrated::ChecksFailed(_) | Integrated::Held) => return,
+        };
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        let sent = self
+            .store
+            .write(async |tx| {
+                let body = MessageBody::parse(&text)?;
+                let recipients = vec![Recipient {
+                    target: Target::Worker(agent.worker.clone()),
+                    addressed_as: AddressedAs::Worker,
+                }];
+                send_from_fold_in_tx(tx, &mut buffer, recipients, (None, None), &body, now).await?;
+                Ok::<_, ReviewError>(())
+            })
+            .await;
+        match sent {
+            Ok(()) => self.bus.publish(buffer),
+            Err(error) => {
+                tracing::warn!(changeset = %change.changeset, code = error.log_code(), "the result of a direct change could not be sent to the main agent");
+            }
+        }
+    }
+
     /// Step 2 of a direct change: the main agent, its own active main workspace and that workspace's newest changeset, which must change something. The merge base is the tree of the changeset's base revision.
     async fn direct_plan(&self, actor: &Actor, change: &DirectChange) -> Result<Plan, Step> {
         main_agent(&self.store, actor)
@@ -1578,6 +1788,19 @@ impl Commit<'_> {
                 message,
             } => {
                 self.recheck_direct(tx, *changeset, *workspace).await?;
+                if let Some(passed) = self.checks
+                    && !end_run_in_tx(
+                        tx,
+                        buffer,
+                        &passed.run,
+                        &passed.results,
+                        RunVerdict::passed(),
+                        self.now,
+                    )
+                    .await?
+                {
+                    return Err(Step::Retry);
+                }
                 let subject = IntegrationSubject::Direct {
                     changeset: *changeset,
                     message: message.as_str(),

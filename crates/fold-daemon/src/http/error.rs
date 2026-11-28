@@ -75,7 +75,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::INVALID_LAST_EVENT_ID
         | codes::INVALID_PUSH_TARGET
         | codes::INVALID_EVENT_FILTER
-        | codes::INVALID_DRAFT => Some(StatusCode::BAD_REQUEST),
+        | codes::INVALID_DRAFT
+        | codes::INVALID_PERMISSION_RULE => Some(StatusCode::BAD_REQUEST),
         codes::HUMAN_NAME_REQUIRED
         | codes::AUTH_REQUIRED
         | codes::INVALID_TOKEN
@@ -159,6 +160,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::TASK_ON_HOLD
         | codes::TASK_NEEDS_HUMAN => Some(StatusCode::CONFLICT),
         codes::CHECK_RUN_NOT_FOUND => Some(StatusCode::NOT_FOUND),
+        codes::CHECK_RUN_ENDED => Some(StatusCode::CONFLICT),
+        codes::CHECK_CANCEL_DENIED => Some(StatusCode::FORBIDDEN),
         codes::CHECKS_FILE_INVALID => Some(StatusCode::UNPROCESSABLE_ENTITY),
         codes::CHECKS_RUNNING | codes::PROJECT_WORKERS_RUNNING | codes::UPDATE_CHECKS_RUNNING => {
             Some(StatusCode::CONFLICT)
@@ -325,6 +328,8 @@ mod tests {
         for (code, status) in [
             (codes::NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::CHECK_RUN_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::CHECK_RUN_ENDED, StatusCode::CONFLICT),
+            (codes::CHECK_CANCEL_DENIED, StatusCode::FORBIDDEN),
             (codes::NOTIFY_TARGET_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::NOTIFY_SEND_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::INVALID_NOTIFY_TARGET, StatusCode::BAD_REQUEST),
@@ -344,6 +349,7 @@ mod tests {
             (codes::PROJECT_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::WEB_NOT_BUILT, StatusCode::NOT_FOUND),
             (codes::INVALID_REQUEST, StatusCode::BAD_REQUEST),
+            (codes::INVALID_PERMISSION_RULE, StatusCode::BAD_REQUEST),
             (codes::REVISION_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::WORKSPACE_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::PATH_NOT_IN_COMPARISON, StatusCode::NOT_FOUND),

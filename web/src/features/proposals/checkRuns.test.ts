@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { CheckResult, CheckRun } from "@/api/proposals";
-import { proposalSummary } from "@/test/proposals";
+import { checkRun, proposalSummary } from "@/test/proposals";
 import {
   checksFailedNote,
   outcomeText,
   queuedNote,
   reasonText,
   resultOf,
+  runReasonLine,
+  waitLine,
 } from "./checkRuns";
 
 function result(fields: Partial<CheckResult> = {}): CheckResult {
@@ -20,6 +22,7 @@ function result(fields: Partial<CheckResult> = {}): CheckResult {
     log_bytes: 9,
     log: "all good\n",
     truncated: false,
+    flaky: false,
     ...fields,
   };
 }
@@ -78,6 +81,8 @@ describe("reasonText", () => {
       "superseded",
       "fold_failed",
       "killed",
+      "no_build_slot",
+      "cancelled",
     ] as const) {
       expect(reasonText(reason)).not.toBe("");
     }
@@ -123,6 +128,64 @@ describe("queuedNote and checksFailedNote", () => {
       checksFailedNote(
         proposalSummary("P-3", { checks_failed: true, state: "closed" }),
       ),
+    ).toBeNull();
+  });
+});
+
+describe("runReasonLine", () => {
+  function run(fields: Partial<CheckRun>): CheckRun {
+    return checkRun(1, { reason: null, cancelled_by: null, ...fields });
+  }
+
+  it("names who cancelled a cancelled run", () => {
+    expect(
+      runReasonLine(run({ reason: "cancelled", cancelled_by: "human:ana" })),
+    ).toEqual(["Cancelled by ", { actor: "human:ana" }]);
+    expect(
+      runReasonLine(run({ reason: "cancelled", cancelled_by: "daemon-lead" })),
+    ).toEqual(["Cancelled by ", { actor: "daemon-lead" }]);
+  });
+
+  it("shows only the reason text for a cancelled run without a name", () => {
+    expect(runReasonLine(run({ reason: "cancelled" }))).toEqual([
+      reasonText("cancelled"),
+    ]);
+    expect(
+      runReasonLine(run({ reason: "cancelled", cancelled_by: undefined })),
+    ).toEqual([reasonText("cancelled")]);
+  });
+
+  it("ignores a name on a run with another reason", () => {
+    expect(
+      runReasonLine(run({ reason: "killed", cancelled_by: "human:ana" })),
+    ).toEqual([reasonText("killed")]);
+  });
+
+  it("gives nothing for a run with no reason", () => {
+    expect(runReasonLine(run({}))).toBeNull();
+  });
+});
+
+describe("waitLine", () => {
+  it("names the build slot wait of a running run", () => {
+    expect(
+      waitLine(run({ state: "running", waiting_for_build_slot_since: 5 })),
+    ).toBe("Waits for a free build slot on the machine.");
+  });
+
+  it("is null while the run does not wait for a slot", () => {
+    expect(waitLine(run({ state: "running" }))).toBeNull();
+    expect(
+      waitLine(run({ state: "running", waiting_for_build_slot_since: null })),
+    ).toBeNull();
+    expect(
+      waitLine(run({ state: "running", waiting_for_memory_since: 5 })),
+    ).toBeNull();
+  });
+
+  it("is null once the run ended", () => {
+    expect(
+      waitLine(run({ state: "passed", waiting_for_build_slot_since: 5 })),
     ).toBeNull();
   });
 });

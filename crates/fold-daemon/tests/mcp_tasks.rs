@@ -8,7 +8,7 @@ use crate::common::roles::{give_claim, give_role};
 use fold_core::events::types;
 use fold_core::tasks::{PlanRef, PlannedReview, PlannedTask};
 use fold_core::{Actor, AgentName, HumanName, Role, Tag, TaskId, TaskStatus};
-use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
+use fold_daemon::mcp::{FoldServer, FooterCounts, FooterPart, FooterSource};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBus, EventService};
 use fold_daemon::services::messages::MessageService;
@@ -32,15 +32,11 @@ type Client = RunningService<RoleClient, ()>;
 struct One;
 
 impl FooterSource for One {
-    fn part(&self) -> FooterPart {
-        FooterPart::Unread
-    }
-
     fn count<'a>(
         &'a self,
         _session: &'a SessionContext,
-    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
-        Box::pin(async { 1 })
+    ) -> Pin<Box<dyn Future<Output = FooterCounts> + Send + 'a>> {
+        Box::pin(async move { FooterCounts::default().with(FooterPart::Unread, 1) })
     }
 }
 
@@ -84,7 +80,7 @@ impl Fixture {
             self.bus.clone(),
             Arc::new(self.project.clock().clone()),
             workspaces.clone(),
-            Arc::new(tokio::sync::Mutex::new(())),
+            Arc::default(),
         )
         .with_registry(self.project.registry().clone());
         let server = FoldServer::new(
@@ -327,7 +323,7 @@ async fn every_task_tool_succeeds_and_ends_with_the_footer() {
     let full = ok(&client, "get_task_graph", json!({"detail": "full"})).await;
     assert_eq!(
         full["tasks"][0],
-        json!({"id": "T-1", "title": "Schema v2", "status": "todo", "blocked": false, "kind": "proposal", "labels": [], "needs": [], "holder": "frontend"})
+        json!({"id": "T-1", "title": "Schema v2", "status": "todo", "blocked": false, "kind": "proposal", "labels": [], "needs": [], "holder": "frontend", "held_by": []})
     );
     assert_eq!(graph["tasks"][1]["needs"], json!(["T-1", "T-3"]));
     let ready = ok(&client, "get_ready_tasks", json!({})).await;
@@ -360,6 +356,15 @@ async fn every_task_tool_succeeds_and_ends_with_the_footer() {
         .map(|task| task["id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, ["T-1", "T-2"]);
+
+    assert_eq!(
+        ok(&client, "watch_tasks", json!({"tasks": ["T-1", "T-2"]})).await,
+        json!({"watching": ["T-1", "T-2"], "done": []})
+    );
+    assert_eq!(
+        ok(&client, "unwatch_tasks", json!({})).await,
+        json!({"watching": []})
+    );
 }
 
 #[tokio::test]
@@ -540,7 +545,7 @@ async fn bad_input_is_refused_with_a_code() {
 #[test]
 fn every_task_tool_input_field_has_a_description() {
     let tools = fold_daemon::mcp::tasks::tools();
-    assert_eq!(tools.len(), 23);
+    assert_eq!(tools.len(), 25);
     for tool in &tools {
         assert!(tool.description.is_some(), "{}", tool.name);
         let properties = tool

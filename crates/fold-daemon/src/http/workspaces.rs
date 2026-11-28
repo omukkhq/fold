@@ -20,8 +20,8 @@ use super::{Project, SocketOnly};
 use crate::daemon::AppState;
 use crate::live::WatchMode;
 use crate::services::workspaces::{
-    RepositoryState, RevisionDetail, RevisionOrigin, RevisionPage, RevisionSummary, SharedFileKind,
-    WorkspaceChanges, WorkspaceEntry, WorkspaceService,
+    RepositoryGit, RepositoryState, RevisionDetail, RevisionOrigin, RevisionPage, RevisionSummary,
+    SharedFileKind, WorkspaceChanges, WorkspaceEntry, WorkspaceService,
 };
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -66,6 +66,46 @@ pub struct RepositoryView {
     pub folder: Option<RevisionId>,
     /// The newest 10 revisions, newest first.
     pub recent: Vec<RevisionView>,
+    /// The Git branch and remotes while Git sync is on; null while it is off or while `.fold/config.toml` cannot be read. Always sent.
+    pub git: Option<RepositoryGitView>,
+}
+
+/// Git's names, which differ from fold's: fold's line of integrated revisions is always `main`, while the local branch and each remote branch have their own names.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RepositoryGitView {
+    /// The `[git] branch` of `.fold/config.toml`: the local branch of the project folder's repository that every integration is committed to and that the folder has checked out. It is the configured name, not a read of `HEAD`.
+    #[schema(example = "main")]
+    pub branch: String,
+    /// The remotes of `.fold/config.toml`, ordered by name.
+    pub remotes: Vec<RepositoryRemoteView>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RepositoryRemoteView {
+    #[schema(example = "origin")]
+    pub name: String,
+    /// The branch of the remote that main is pushed to and pulled from.
+    #[schema(example = "dev")]
+    pub branch: String,
+    /// Whether fold pushes to this remote after each integration.
+    pub push_on_integrate: bool,
+}
+
+impl From<RepositoryGit> for RepositoryGitView {
+    fn from(git: RepositoryGit) -> Self {
+        Self {
+            branch: git.branch,
+            remotes: git
+                .remotes
+                .into_iter()
+                .map(|remote| RepositoryRemoteView {
+                    name: remote.name,
+                    branch: remote.branch,
+                    push_on_integrate: remote.push_on_integrate,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
@@ -145,6 +185,7 @@ impl From<RepositoryState> for RepositoryView {
             main_path: state.main_path.to_string_lossy().into_owned(),
             folder: state.folder,
             recent: state.recent.into_iter().map(RevisionView::from).collect(),
+            git: state.git.map(RepositoryGitView::from),
         }
     }
 }

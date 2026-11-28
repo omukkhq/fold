@@ -164,3 +164,49 @@ async fn a_create_stopped_after_the_rename_leaves_no_row() {
     assert_eq!(task.status, TaskStatus::InProgress);
     scenario.teardown();
 }
+
+/// The failpoint makes a placement fail as if the process had no file handle left (`EMFILE`). One such failure is retried and the create succeeds; a second one gives `workspace_io` with the reason `out_of_handles` and a hint, and leaves the task without a workspace.
+#[tokio::test]
+async fn a_create_out_of_file_handles_retries_once() {
+    const OUT_OF_HANDLES: &str = "workspace_place_out_of_handles";
+    let scenario = fail::FailScenario::setup();
+    let project = TestProject::new().await;
+    let worker = seed(&project).await;
+    let services = services(&project);
+
+    fail::cfg(OUT_OF_HANDLES, "return").unwrap();
+    let error = services
+        .workspaces
+        .create_workspace(&worker, t(1))
+        .await
+        .unwrap_err();
+    fail::remove(OUT_OF_HANDLES);
+    let WorkspaceError::Fold(fold) = &error else {
+        panic!("expected workspace_io, got {error:?}");
+    };
+    assert_eq!(fold.code(), "workspace_io");
+    let details = fold.details().unwrap();
+    assert_eq!(details["reason"], "out_of_handles");
+    assert_eq!(details["attempts"], 2);
+    assert!(
+        fold.hint()
+            .is_some_and(|hint| hint.contains("file handles"))
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspaces")
+        .fetch_one(project.store().read())
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+
+    fail::cfg(OUT_OF_HANDLES, "1*return").unwrap();
+    let view = services
+        .workspaces
+        .create_workspace(&worker, t(1))
+        .await
+        .unwrap()
+        .workspace;
+    fail::remove(OUT_OF_HANDLES);
+    assert_eq!(view.path, ".fold/ws/t-1");
+    assert!(project.paths().root().join(".fold/ws/t-1/a.txt").is_file());
+    scenario.teardown();
+}

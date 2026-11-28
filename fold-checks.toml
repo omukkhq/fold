@@ -31,6 +31,13 @@ stage = ["proposal", "integration"]
 timeout = "20m"
 
 [[check]]
+name = "scripts"
+run = 'found=0; for t in scripts/*_test.py; do [ -f "$t" ] || continue; found=1; python3 -I "$t" || exit 1; done; [ "$found" = 1 ] || { echo "no scripts/*_test.py found" >&2; exit 1; }'
+files = '^scripts/|^fold-checks\.toml$'
+stage = ["proposal", "integration"]
+timeout = "5m"
+
+[[check]]
 name = "rust-full"
 run = "scripts/build-gate.sh make clippy test"
 files = '^crates/|\.rs$|(^|/)Cargo\.(toml|lock)$|^\.sqlx/|^\.cargo/|^\.config/|^rust-toolchain\.toml$|^clippy\.toml$|^Makefile$|^fold-checks\.toml$|^scripts/build-gate\.sh$'

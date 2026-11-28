@@ -1,4 +1,5 @@
 import type { BoardCard } from "@/api/board";
+import { heldThroughText } from "./chip";
 import { COLUMNS } from "./columns";
 import { attentionMark } from "./attention";
 import { liveFilesText, type ActivityLine } from "./activityLine";
@@ -8,6 +9,7 @@ import {
   planWaitText,
   proposalLook,
   proposalText,
+  integrationWaitDetail,
   type ProposalLook,
 } from "./card";
 
@@ -87,6 +89,10 @@ export function cardDetails(
   if (card.hold !== null) {
     rows.push(proseRow("On hold", card.hold.reason, "reason"));
   }
+  const held = heldThroughText(card);
+  if (held !== null && card.status !== "done") {
+    rows.push({ kind: "text", name: "Held through", text: held });
+  }
   if (card.blocked_by.length > 0) {
     rows.push({
       kind: "text",
@@ -105,10 +111,12 @@ export function cardDetails(
     rows.push({
       kind: "proposal",
       name: "Proposal",
-      text: proposalText(card.proposal),
+      text: proposalText(card.proposal, now),
       look: proposalLook(card.proposal),
     });
-    const wait = planWaitText(card.proposal, now);
+    const wait =
+      planWaitText(card.proposal, now) ??
+      integrationWaitDetail(card.proposal, now);
     if (wait !== null) {
       notes.push(wait);
     }

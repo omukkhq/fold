@@ -6,8 +6,9 @@ use fold_core::reviews::checks::{
     CHECKS_FILE, ChecksFile, Outcome, Purpose, RunReason, RunState, Stage, runs_any,
 };
 use fold_core::{
-    Actor, AddressedAs, CheckRunId, EventActor, FoldError, IdKind, MessageBody, NewEvent,
-    ProposalId, Recipient, ReviewBatchId, RevisionId, Target, TaskId, WorkerName, codes,
+    Actor, AddressedAs, ChangesetId, CheckRunId, EventActor, FoldError, IdKind, MessageBody,
+    NewEvent, ProposalId, Recipient, ReviewBatchId, RevisionId, Target, TaskId, WorkerName,
+    WorkspaceId, codes,
 };
 use fold_store::reviews::checks::{self, CheckRunRow, NewCheckRun};
 use fold_store::reviews::{self};
@@ -15,19 +16,13 @@ use fold_store::{StoreError, WriteTx, counters};
 use serde_json::json;
 
 use super::runner::{self, CommandResult};
-use super::{Verdict, end_run_in_tx, end_run_with_in_tx, log_tail};
+use super::{TAIL_CHARS, TAIL_LINES, Verdict, end_run_in_tx, end_run_with_in_tx, log_tail};
 use crate::services::events::EventBuffer;
 use crate::services::messages::send_from_fold_in_tx;
 use crate::services::reviews::conflicts::{Fixer, Handoff, conflict_fixer, handoff_notice_in_tx};
 use crate::services::reviews::lanes::lane_moved_note;
 use crate::services::reviews::{ReviewError, ReviewService};
 use crate::services::tasks::recompute;
-
-/// The most lines of a failed integration check's log a result message carries.
-const TAIL_LINES: usize = 30;
-
-/// The most characters of a failed integration check's log a result message carries.
-const TAIL_CHARS: usize = 3000;
 
 /// A passed integration run whose end waits for the integration's own transaction, so a revision never exists without it and a stop before that leaves the run without an end.
 #[derive(Debug, Clone)]
@@ -42,12 +37,64 @@ pub(crate) enum IntegrationChecks {
     /// The merged tree's checks file has no integration check that runs for the change.
     None,
     Passed,
-    /// The run failed and the proposal went back to its author, or for a member of a lane that moved since its version's base, to the reviewer that approved it.
+    /// The run failed and the proposal went back to its author, or for a member of a lane that moved since its version's base, to the reviewer that approved it; a direct change stays in the main workspace and fold tells the main agent.
     Failed(CheckRunId),
     /// fold itself could not run the checks: the run stopped as `fold_failed`, and the proposal keeps its version, its approvals and its place with the reviewer.
     FoldFailed(CheckRunId),
     /// The checks file of main itself is not valid, so the fault is not the proposal's: no run starts, nothing is sent back, and the integration waits until main's file is fixed.
     Held,
+}
+
+/// The direct change of the main agent an attempt integrates, as the checks need it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DirectIntegrating {
+    pub changeset: ChangesetId,
+    /// The main workspace of the changeset, which stays open when the checks fail.
+    pub workspace: WorkspaceId,
+    pub head: RevisionId,
+    pub head_tree: ObjectHash,
+    pub merged: ObjectHash,
+}
+
+/// What the integration checks of an attempt check: a proposal version or a batch, or a direct change.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Checked<'a> {
+    Proposal(Integrating<'a>),
+    Direct(DirectIntegrating),
+}
+
+impl Checked<'_> {
+    fn head(&self) -> RevisionId {
+        match self {
+            Checked::Proposal(at) => at.head,
+            Checked::Direct(at) => at.head,
+        }
+    }
+
+    fn head_tree(&self) -> ObjectHash {
+        match self {
+            Checked::Proposal(at) => at.head_tree,
+            Checked::Direct(at) => at.head_tree,
+        }
+    }
+
+    fn merged(&self) -> ObjectHash {
+        match self {
+            Checked::Proposal(at) => at.merged,
+            Checked::Direct(at) => at.merged,
+        }
+    }
+
+    /// Whether `run` is a run of this same change on the same main and merged tree.
+    fn ran(&self, run: &CheckRunRow) -> bool {
+        let same = match self {
+            Checked::Proposal(at) => {
+                run.proposal == Some(at.proposal) && run.version == Some(at.version)
+            }
+            Checked::Direct(at) => run.changeset == Some(at.changeset),
+        };
+        same && run.base == self.head() && run.tree == self.merged()
+    }
 }
 
 /// The proposal version an attempt integrates, as the checks need it.
@@ -67,16 +114,16 @@ pub(crate) struct Integrating<'a> {
 }
 
 impl ReviewService {
-    /// Runs the integration checks of the merged tree `merged` in fold's check directory, under the integration mutex the caller holds, so main cannot move meanwhile. The checks that run are the integration-stage checks of the merged tree's own `fold-checks.toml` whose `files` pattern matches a path the merge changes on main. A passed run of an earlier attempt on the same version, head and tree is reused from `carried`; one on another state ends as `superseded`. A passed run is left in `carried` for the caller's transaction to end; a failed one ends here, with the proposal sent back to its author, or given to its reviewer when it is a member of a lane that moved since its version's base.
+    /// Runs the integration checks of the merged tree in fold's check directory, under the integration mutex the caller holds, so main cannot move meanwhile. The checks that run are the integration-stage checks of the merged tree's own `fold-checks.toml` whose `files` pattern matches a path the merge changes on main. A passed run of an earlier attempt on the same change, head and tree is reused from `carried`; one on another state ends as `superseded`. A passed run is left in `carried` for the caller's transaction to end; a failed one ends here, with the proposal sent back to its author, or given to its reviewer when it is a member of a lane that moved since its version's base, and for a direct change with a message to the main agent. A direct change is never held for main's invalid checks file: the main agent waits for its answer, so its run fails on the merged tree's file instead.
     pub(crate) async fn integration_checks(
         &self,
         actor: &Actor,
-        at: Integrating<'_>,
+        at: Checked<'_>,
         carried: &mut Option<PassedRun>,
     ) -> Result<IntegrationChecks, ReviewError> {
         let input = self
             .workspaces
-            .checks_input(at.head_tree, at.merged)
+            .checks_input(at.head_tree(), at.merged())
             .await?;
         let Some(text) = input.file else {
             self.end_carried(carried).await?;
@@ -86,8 +133,10 @@ impl ReviewService {
             Ok(file) => file,
             Err(error) => {
                 self.end_carried(carried).await?;
-                if let Some(problem) = self.main_checks_problem(at.head_tree).await? {
-                    self.hold_for_main(at.head, &problem).await?;
+                if let Checked::Proposal(proposal) = at
+                    && let Some(problem) = self.main_checks_problem(proposal.head_tree).await?
+                {
+                    self.hold_for_main(proposal.head, &problem).await?;
                     return Ok(IntegrationChecks::Held);
                 }
                 let run = self.start_integration_run(actor, at).await?;
@@ -101,15 +150,12 @@ impl ReviewService {
                     log_bytes: message.len() as u64,
                     log: message,
                     fault: false,
-                    killed: false,
+                    killed: None,
+                    no_build_slot: false,
                 };
                 let verdict = Verdict::failed(RunReason::ChecksFileInvalid);
-                if at.batch.is_some() {
-                    self.end_run_alone(&run, &[invalid], verdict).await?;
-                } else {
-                    self.send_back_for_checks(actor, at, &run, &[invalid], verdict)
-                        .await?;
-                }
+                self.end_failed(actor, at, &run, &[invalid], verdict)
+                    .await?;
                 return Ok(IntegrationChecks::Failed(run.id));
             }
         };
@@ -118,21 +164,16 @@ impl ReviewService {
             self.end_carried(carried).await?;
             return Ok(IntegrationChecks::None);
         }
-        if let Some(passed) = carried.as_ref() {
-            let run = &passed.run;
-            if run.proposal == Some(at.proposal)
-                && run.version == Some(at.version)
-                && run.base == at.head
-                && run.tree == at.merged
-            {
-                return Ok(IntegrationChecks::Passed);
-            }
+        if carried.as_ref().is_some_and(|passed| at.ran(&passed.run)) {
+            return Ok(IntegrationChecks::Passed);
         }
         self.end_carried(carried).await?;
         let run = self.start_integration_run(actor, at).await?;
         let specs = runner::commands(&file, &plan);
         let lock = self.checks.check_dir();
         let held = lock.lock().await;
+        // An integration holds the integration mutex, so it counts against `[runs] max_parallel_runs` but never waits for a place.
+        let slot = self.checks.slot_ticket(None);
         let permit = self.checks.start_permit(run.id, &*self.clock).await;
         let fault = Verdict {
             state: RunState::Stopped,
@@ -140,7 +181,7 @@ impl ReviewService {
         };
         let (results, verdict) = match self
             .workspaces
-            .check_dir_to(at.merged, self.checks.dir_work().await)
+            .check_dir_to(at.merged(), self.checks.dir_work().await)
             .await
         {
             Ok(dir) => {
@@ -159,7 +200,7 @@ impl ReviewService {
                 } else {
                     match self
                         .workspaces
-                        .check_dir_holds(at.merged, self.checks.dir_work().await)
+                        .check_dir_holds(at.merged(), self.checks.dir_work().await)
                         .await
                     {
                         Ok(true) => Verdict::of(&results),
@@ -178,6 +219,7 @@ impl ReviewService {
             }
         };
         drop(permit);
+        drop(slot);
         drop(held);
         if verdict == fault {
             self.end_run_alone(&run, &results, verdict).await?;
@@ -187,13 +229,69 @@ impl ReviewService {
             *carried = Some(PassedRun { run, results });
             return Ok(IntegrationChecks::Passed);
         }
-        if at.batch.is_some() {
-            self.end_run_alone(&run, &results, verdict).await?;
-        } else {
-            self.send_back_for_checks(actor, at, &run, &results, verdict)
-                .await?;
-        }
+        self.end_failed(actor, at, &run, &results, verdict).await?;
         Ok(IntegrationChecks::Failed(run.id))
+    }
+
+    /// Ends a failed run: a batch's alone, as its caller integrates the members one at a time; a proposal's with its send-back; a direct change's with a message to the main agent.
+    async fn end_failed(
+        &self,
+        actor: &Actor,
+        at: Checked<'_>,
+        run: &CheckRunRow,
+        results: &[CommandResult],
+        verdict: Verdict,
+    ) -> Result<(), ReviewError> {
+        match at {
+            Checked::Proposal(at) if at.batch.is_some() => {
+                self.end_run_alone(run, results, verdict).await
+            }
+            Checked::Proposal(at) => {
+                self.send_back_for_checks(actor, at, run, results, verdict)
+                    .await
+            }
+            Checked::Direct(at) => {
+                self.direct_checks_failed(actor, at, run, results, verdict)
+                    .await
+            }
+        }
+    }
+
+    /// One write transaction: the failed run's results and end, and a message from fold to the main agent's worker that names the changeset. Nothing is published to main and the main workspace stays open, so the main agent fixes the change there, records it again and submits the new changeset.
+    async fn direct_checks_failed(
+        &self,
+        actor: &Actor,
+        at: DirectIntegrating,
+        run: &CheckRunRow,
+        results: &[CommandResult],
+        verdict: Verdict,
+    ) -> Result<(), ReviewError> {
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        let ended = self
+            .store
+            .write(async |tx| {
+                if !end_run_in_tx(tx, &mut buffer, run, results, verdict, now).await? {
+                    return Ok(false);
+                }
+                if let Actor::Agent(agent) = actor {
+                    let body =
+                        MessageBody::parse(direct_failed_message(at, run, results, verdict))?;
+                    let recipients = vec![Recipient {
+                        target: Target::Worker(agent.worker.clone()),
+                        addressed_as: AddressedAs::Worker,
+                    }];
+                    send_from_fold_in_tx(tx, &mut buffer, recipients, (None, None), &body, now)
+                        .await?;
+                }
+                Ok::<_, ReviewError>(true)
+            })
+            .await?;
+        if ended {
+            self.bus.publish(buffer);
+            tracing::info!(run = %run.id, changeset = %at.changeset, reason = verdict.reason.map(RunReason::as_str), "integration checks of a direct change failed; main did not move");
+        }
+        Ok(())
     }
 
     /// The problem of main's own checks file in the tree `head_tree`, as its parse states it with the file and the line; `None` when main has no checks file or a valid one.
@@ -283,10 +381,28 @@ impl ReviewService {
     async fn start_integration_run(
         &self,
         actor: &Actor,
-        at: Integrating<'_>,
+        at: Checked<'_>,
     ) -> Result<CheckRunRow, ReviewError> {
         let now = self.clock.now();
         let label = actor.event_actor();
+        let (purpose, task, proposal, version, batch, changeset) = match at {
+            Checked::Proposal(at) => (
+                Purpose::Integrate,
+                Some(at.task),
+                Some(at.proposal),
+                Some(at.version),
+                at.batch,
+                None,
+            ),
+            Checked::Direct(at) => (
+                Purpose::IntegrateDirect,
+                None,
+                None,
+                None,
+                None,
+                Some(at.changeset),
+            ),
+        };
         let mut buffer = EventBuffer::new();
         let run = self
             .store
@@ -297,38 +413,48 @@ impl ReviewService {
                 let new = NewCheckRun {
                     id,
                     stage: Stage::Integration,
-                    purpose: Purpose::Integrate,
-                    task: at.task,
+                    purpose,
+                    task,
                     workspace: None,
                     worker_id: None,
-                    proposal: Some(at.proposal),
-                    version: Some(at.version),
-                    base: at.head,
-                    tree: at.merged,
+                    proposal,
+                    version,
+                    base: at.head(),
+                    tree: at.merged(),
                     actor: label.as_str(),
                     title: None,
                     evidence: None,
                     intent: None,
-                    batch: at.batch,
+                    batch,
+                    changeset,
                 };
                 checks::insert_run(tx, &new, now).await?;
-                if at.batch.is_some() {
+                if let Checked::Proposal(at) = at
+                    && at.batch.is_some()
+                {
                     checks::insert_run_members(tx, id, at.members).await?;
                 }
                 let mut data = json!({
                     "run": id.to_string(),
                     "stage": Stage::Integration.as_str(),
-                    "purpose": Purpose::Integrate.as_str(),
-                    "version": at.version,
+                    "purpose": purpose.as_str(),
+                    "version": version,
                 });
-                if let Some(batch) = at.batch {
+                if let Some(batch) = batch {
                     data["batch"] = json!(batch.to_string());
                 }
-                let event = NewEvent::new(fold_core::events::types::CHECKS_STARTED, label.clone())?
-                    .task(at.task)
-                    .proposal(at.proposal)
-                    .revision(at.head)
-                    .data(data)?;
+                let mut event =
+                    NewEvent::new(fold_core::events::types::CHECKS_STARTED, label.clone())?
+                        .task(task)
+                        .revision(at.head());
+                if let Some(proposal) = proposal {
+                    event = event.proposal(proposal);
+                }
+                if let Checked::Direct(at) = at {
+                    data["changeset"] = json!(at.changeset.to_string());
+                    event = event.workspace(at.workspace);
+                }
+                let event = event.data(data)?;
                 buffer.append(tx, &event, now).await?;
                 checks::get_run(tx.conn(), id)
                     .await?
@@ -337,7 +463,7 @@ impl ReviewService {
             })
             .await?;
         self.bus.publish(buffer);
-        tracing::info!(run = %run.id, proposal = %at.proposal, version = at.version, "integration check run started");
+        tracing::info!(run = %run.id, subject = %run.subject(), "integration check run started");
         Ok(run)
     }
 
@@ -514,6 +640,23 @@ pub(crate) fn fold_failed_refusal(at: Integrating<'_>, run: CheckRunId) -> FoldE
     .with_hint("the fault is fold's, not the proposal's: integrate again once it is fixed; the daemon log names its code")
 }
 
+/// [`fold_failed_refusal`] for a direct change: nothing was published and the main workspace stays open.
+pub(crate) fn direct_fold_failed_refusal(at: DirectIntegrating, run: CheckRunId) -> FoldError {
+    FoldError::new(
+        codes::WORKSPACE_IO,
+        format!(
+            "fold could not run the integration checks of the direct change {} ({run}) on its merge with main {}, so it did not integrate it",
+            at.changeset, at.head
+        ),
+    )
+    .with_details([
+        ("reason", json!(RunReason::FoldFailed.as_str())),
+        ("changeset", json!(at.changeset.to_string())),
+        ("run", json!(run.to_string())),
+    ])
+    .with_hint("the fault is fold's, not the change's: call submit_main_change again once it is fixed; the daemon log names its code")
+}
+
 /// Sends `body` from fold to each worker of `to`, linked to the task and proposal.
 async fn tell(
     tx: &mut WriteTx,
@@ -554,7 +697,17 @@ fn send_back_message(
         "The integration checks of {} v{} ({}) failed on its merge with main {}",
         at.proposal, at.version, run.id, at.head
     );
-    let what = match verdict.reason {
+    let mut text = format!(
+        "{subject}: {}. fold did not integrate it, and the proposal is back with its author: fix the work in the task workspace, sync it with main, and call update_proposal.",
+        failure_text(results, verdict)
+    );
+    push_log_and_run(&mut text, run, results);
+    text
+}
+
+/// What failed in a run, in a few words.
+fn failure_text(results: &[CommandResult], verdict: Verdict) -> String {
+    match verdict.reason {
         Some(RunReason::FilesChanged) => {
             "a check changed tracked files of the merged tree; put what it writes in .gitignore"
                 .to_owned()
@@ -565,6 +718,10 @@ fn send_back_message(
         }
         Some(RunReason::Killed) => {
             "a check was killed: out of memory or by a signal, not a failure of the change"
+                .to_owned()
+        }
+        Some(RunReason::NoBuildSlot) => {
+            "a check found no free build slot on the machine in time, not a failure of the change"
                 .to_owned()
         }
         _ => results
@@ -579,10 +736,11 @@ fn send_back_message(
             })
             .collect::<Vec<_>>()
             .join(", "),
-    };
-    let mut text = format!(
-        "{subject}: {what}. fold did not integrate it, and the proposal is back with its author: fix the work in the task workspace, sync it with main, and call update_proposal."
-    );
+    }
+}
+
+/// Appends the end of the first failed log and the run to read for every result.
+fn push_log_and_run(text: &mut String, run: &CheckRunRow, results: &[CommandResult]) {
     if let Some(first) = results.iter().find(|result| result.blocks()) {
         let name = first.check.as_deref().unwrap_or("setup");
         text.push_str(&format!(
@@ -594,6 +752,24 @@ fn send_back_message(
         "\n\nCall get_check_run with {} for every result.",
         run.id
     ));
+}
+
+/// The message to the main agent of failed integration checks of its direct change: the same facts as [`send_back_message`], and what to do in the main workspace.
+fn direct_failed_message(
+    at: DirectIntegrating,
+    run: &CheckRunRow,
+    results: &[CommandResult],
+    verdict: Verdict,
+) -> String {
+    let mut text = format!(
+        "The integration checks of the direct change {} ({}) failed on its merge with main {}: {}. fold did not integrate it, and {} stays open: fix the change there, call record_changes and submit_main_change with the new changeset.",
+        at.changeset,
+        run.id,
+        at.head,
+        failure_text(results, verdict),
+        at.workspace
+    );
+    push_log_and_run(&mut text, run, results);
     text
 }
 
@@ -637,7 +813,7 @@ mod tests {
             id: CheckRunId::from_number(9).unwrap(),
             stage: Stage::Integration,
             purpose: Purpose::Integrate,
-            task: at.task,
+            task: Some(at.task),
             workspace: None,
             worker: None,
             proposal: Some(at.proposal),
@@ -653,6 +829,7 @@ mod tests {
             created_at: Timestamp::from_millis(0).unwrap(),
             finished_at: None,
             batch: None,
+            changeset: None,
         };
         let results = [CommandResult {
             check: Some("e2e".to_owned()),
@@ -663,7 +840,8 @@ mod tests {
             log: b"step 1\nboom\n".to_vec(),
             log_bytes: 12,
             fault: false,
-            killed: false,
+            killed: None,
+            no_build_slot: false,
         }];
         let text = send_back_message(at, &run, &results, Verdict::failed(RunReason::CheckFailed));
         assert!(text.starts_with(
@@ -673,6 +851,8 @@ mod tests {
         assert!(text.contains("The end of the log of e2e:\nstep 1\nboom"));
         let changed = send_back_message(at, &run, &[], Verdict::failed(RunReason::FilesChanged));
         assert!(changed.contains("changed tracked files"));
+        let no_slot = send_back_message(at, &run, &[], Verdict::failed(RunReason::NoBuildSlot));
+        assert!(no_slot.contains("found no free build slot on the machine in time"));
         let lane = lane_send_back_message(
             at,
             &run,

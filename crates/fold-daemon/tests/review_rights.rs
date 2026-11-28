@@ -4,9 +4,9 @@ use fold_core::reviews::Verdict;
 use fold_core::roles::Role;
 use fold_core::{
     Actor, AgentName, AreaName, EventFilter, LabelColor, LabelName, ProposalId, Tag,
-    TaskDescription, TaskTitle, codes,
+    TaskDescription, TaskId, TaskTitle, codes,
 };
-use fold_daemon::services::reviews::{BatchVerdict, ReviewError, ReviewFix};
+use fold_daemon::services::reviews::{BatchVerdict, IntegrationOutcome, ReviewError, ReviewFix};
 use fold_daemon::services::tasks::{CreateTask, TaskError, TaskPatch};
 use fold_store::{StoreError, events};
 
@@ -363,12 +363,17 @@ async fn a_batch_verdict_that_decides_follows_the_role() {
     }
 }
 
+/// The refusals change nothing, so they share `P-1` of one scene; each role that ends up holding a review claim gets a proposal of its own.
 #[tokio::test]
 async fn only_the_main_agent_claims_a_review_and_the_author_is_refused_first() {
+    let fx = scene().await;
     for who in EVERYONE {
-        let fx = scene().await;
+        let proposal = match who {
+            Who::ReviewLead | Who::MainAgent | Who::Reviewer => fresh_proposal(&fx).await,
+            _ => p(1),
+        };
         let acting = actor(&fx, who).await;
-        let claimed = fx.reviews().claim_review(&acting, p(1)).await;
+        let claimed = fx.reviews().claim_review(&acting, proposal).await;
         match who {
             Who::ReviewLead => {
                 let ReviewError::Fold(error) = claimed.unwrap_err() else {
@@ -377,9 +382,14 @@ async fn only_the_main_agent_claims_a_review_and_the_author_is_refused_first() {
                 assert_eq!(error.code(), codes::REVIEW_LEAD_DELEGATES);
                 assert!(error.hint().unwrap().contains("start_worker"));
                 // A claim the review lead holds still never lets it check out or fix.
-                give_review_claim(&fx.handle.store, "review-lead", p(1), fx.handle.clock.now())
-                    .await;
-                let checkout = fx.reviews().create_review_checkout(&acting, p(1)).await;
+                give_review_claim(
+                    &fx.handle.store,
+                    "review-lead",
+                    proposal,
+                    fx.handle.clock.now(),
+                )
+                .await;
+                let checkout = fx.reviews().create_review_checkout(&acting, proposal).await;
                 assert_eq!(
                     review_code(checkout.unwrap_err()),
                     codes::REVIEW_LEAD_DELEGATES
@@ -390,7 +400,7 @@ async fn only_the_main_agent_claims_a_review_and_the_author_is_refused_first() {
                 }];
                 let fixed = fx
                     .reviews()
-                    .submit_review_fix_covering(&acting, p(1), 1, &fixes, "cargo test: ok")
+                    .submit_review_fix_covering(&acting, proposal, 1, &fixes, "cargo test: ok")
                     .await;
                 assert_eq!(
                     review_code(fixed.unwrap_err()),
@@ -404,7 +414,7 @@ async fn only_the_main_agent_claims_a_review_and_the_author_is_refused_first() {
                     "{who:?}"
                 );
                 fx.reviews()
-                    .create_review_checkout(&acting, p(1))
+                    .create_review_checkout(&acting, proposal)
                     .await
                     .unwrap();
             }
@@ -414,10 +424,15 @@ async fn only_the_main_agent_claims_a_review_and_the_author_is_refused_first() {
                 };
                 assert_eq!(error.code(), codes::WORKER_CLAIM_DENIED);
                 assert!(error.hint().unwrap().contains("lead"));
-                give_review_claim(&fx.handle.store, "reviewer-1", p(1), fx.handle.clock.now())
-                    .await;
+                give_review_claim(
+                    &fx.handle.store,
+                    "reviewer-1",
+                    proposal,
+                    fx.handle.clock.now(),
+                )
+                .await;
                 fx.reviews()
-                    .create_review_checkout(&acting, p(1))
+                    .create_review_checkout(&acting, proposal)
                     .await
                     .unwrap();
             }
@@ -437,7 +452,7 @@ async fn only_the_main_agent_claims_a_review_and_the_author_is_refused_first() {
                 };
                 assert_eq!(error.code(), codes::INTEGRATOR_REQUIRED, "{who:?}");
                 assert!(error.hint().unwrap().contains("review lead"), "{who:?}");
-                let checkout = fx.reviews().create_review_checkout(&acting, p(1)).await;
+                let checkout = fx.reviews().create_review_checkout(&acting, proposal).await;
                 assert_eq!(
                     review_code(checkout.unwrap_err()),
                     codes::REVIEW_CLAIM_REQUIRED,
@@ -468,7 +483,7 @@ async fn second_proposal(fx: &Fixture) {
 }
 
 #[cfg(test)]
-/// A new task of the author's area with the author's open proposal on it, which is the newest proposal.
+/// A new task of the author's area with the author's open proposal on it, which is the newest proposal. Its content names the task, so it still changes main after another proposal integrated.
 async fn fresh_proposal(fx: &Fixture) -> ProposalId {
     let task = fx
         .handle
@@ -484,7 +499,8 @@ async fn fresh_proposal(fx: &Fixture) -> ProposalId {
         .await
         .unwrap();
     let author = actor(fx, Who::Author).await;
-    fx.proposal(&author, task.id.number(), "pub fn z() {}\n")
+    let number = task.id.number();
+    fx.proposal(&author, number, &format!("pub fn z{number}() {{}}\n"))
         .await;
     let newest: i64 = sqlx::query_scalar("SELECT MAX(number) FROM proposals")
         .fetch_one(fx.handle.store.read())
@@ -493,20 +509,28 @@ async fn fresh_proposal(fx: &Fixture) -> ProposalId {
     p(u32::try_from(newest).unwrap())
 }
 
+/// Each role integrates an approved proposal of its own in one scene, made from main as it is after the integrations before it.
 #[tokio::test]
 async fn integration_follows_the_role() {
+    let fx = scene().await;
+    let reviewer = actor(&fx, Who::Reviewer).await;
     for who in EVERYONE {
-        let fx = scene().await;
-        let reviewer = actor(&fx, Who::Reviewer).await;
+        let proposal = fresh_proposal(&fx).await;
         fx.reviews()
-            .submit_review(&reviewer, p(1), 1, Verdict::Approve, "good", Vec::new())
+            .submit_review(&reviewer, proposal, 1, Verdict::Approve, "good", Vec::new())
             .await
             .unwrap();
         let acting = actor(&fx, who).await;
-        let result = fx.reviews().integrate_proposal(&acting, p(1), None).await;
+        let result = fx
+            .reviews()
+            .integrate_proposal(&acting, proposal, None)
+            .await;
         match who {
             _ if who.integrates() => {
-                result.unwrap();
+                assert!(
+                    matches!(result.unwrap(), IntegrationOutcome::Succeeded { .. }),
+                    "{who:?}"
+                );
             }
             Who::Author => {
                 assert_eq!(
@@ -564,7 +588,7 @@ async fn a_stored_approval_of_the_review_lead_still_counts() {
 }
 
 #[cfg(test)]
-/// Who removes `T-2` while `web-worker` holds it: the holder's agent, its area lead and a human.
+/// Who removes a task that `web-worker` holds: the holder's agent, its area lead and a human.
 const REMOVERS: [(&str, bool); 8] = [
     ("web-worker", true),
     ("web-lead", true),
@@ -585,28 +609,52 @@ async fn remover(fx: &Fixture, name: &str) -> Actor {
 }
 
 #[cfg(test)]
-/// `holder` holds the claim on `T-2`: given by its lead when fold started it as a task worker or reviewer, else claimed by itself.
-async fn held_by(fx: &Fixture, holder: &str) {
+/// `holder` holds the claim on `task`: given by its lead when fold started it as a task worker or reviewer, else claimed by itself.
+async fn held_by(fx: &Fixture, holder: &str, task: TaskId) {
     let actor = agent_actor(fx, holder).await;
-    match fx.handle.tasks.claim_task(&actor, t(2)).await {
+    match fx.handle.tasks.claim_task(&actor, task).await {
         Ok(_) => {}
         Err(TaskError::Fold(error)) if error.code() == codes::WORKER_CLAIM_DENIED => {
-            give_claim(&fx.handle.store, holder, t(2), fx.handle.clock.now()).await;
+            give_claim(&fx.handle.store, holder, task, fx.handle.clock.now()).await;
         }
-        Err(error) => panic!("{holder} cannot hold T-2: {error:?}"),
+        Err(error) => panic!("{holder} cannot hold {task}: {error:?}"),
     }
 }
 
+#[cfg(test)]
+/// A new task in the area of `T-2` that `web-worker` holds, for a remover that takes it away.
+async fn fresh_held_task(fx: &Fixture) -> TaskId {
+    let task = fx
+        .handle
+        .tasks
+        .create_task(
+            &human("tanim"),
+            CreateTask {
+                title: TaskTitle::parse("export").unwrap(),
+                description: TaskDescription::new("what to build"),
+                labels: crate::common::roles::work_labels_of("backend"),
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+    held_by(fx, "web-worker", task).await;
+    task
+}
+
+/// The refusals change nothing, so they share `T-2` of one scene; each remover that may archive gets a held task of its own.
 #[tokio::test]
 async fn a_held_task_is_archived_only_by_its_holder_its_lead_or_a_human() {
+    let fx = scene().await;
+    held_by(&fx, "web-worker", t(2)).await;
     for (name, allowed) in REMOVERS {
-        let fx = scene().await;
-        held_by(&fx, "web-worker").await;
         let acting = remover(&fx, name).await;
-        let result = fx.handle.tasks.archive_task(&acting, t(2)).await;
         if allowed {
+            let task = fresh_held_task(&fx).await;
+            let result = fx.handle.tasks.archive_task(&acting, task).await;
             assert!(result.unwrap().archived_at.is_some(), "{name}");
         } else {
+            let result = fx.handle.tasks.archive_task(&acting, t(2)).await;
             assert_eq!(
                 task_code(result.unwrap_err()),
                 codes::NOT_CLAIM_HOLDER,
@@ -621,16 +669,19 @@ async fn a_held_task_is_archived_only_by_its_holder_its_lead_or_a_human() {
     }
 }
 
+/// The refusals change nothing, so they share `T-2` of one scene; each remover that may delete gets a held task of its own.
 #[tokio::test]
 async fn a_held_task_is_deleted_only_by_its_holder_its_lead_or_a_human() {
+    let fx = scene().await;
+    held_by(&fx, "web-worker", t(2)).await;
     for (name, allowed) in REMOVERS {
-        let fx = scene().await;
-        held_by(&fx, "web-worker").await;
         let acting = remover(&fx, name).await;
-        let result = fx.handle.tasks.delete_task(&acting, t(2)).await;
         if allowed {
-            result.unwrap();
+            let task = fresh_held_task(&fx).await;
+            fx.handle.tasks.delete_task(&acting, task).await.unwrap();
+            assert!(fx.handle.tasks.get(task).await.is_err(), "{name}");
         } else {
+            let result = fx.handle.tasks.delete_task(&acting, t(2)).await;
             assert_eq!(
                 task_code(result.unwrap_err()),
                 codes::NOT_CLAIM_HOLDER,
@@ -644,7 +695,7 @@ async fn a_held_task_is_deleted_only_by_its_holder_its_lead_or_a_human() {
 #[tokio::test]
 async fn the_review_lead_removes_a_task_its_reviewer_holds() {
     let fx = scene().await;
-    held_by(&fx, "reviewer-1").await;
+    held_by(&fx, "reviewer-1", t(2)).await;
     let area_lead = agent_actor(&fx, "web-lead").await;
     let error = fx
         .handle
@@ -675,7 +726,7 @@ async fn a_task_nobody_holds_is_removed_by_any_agent() {
 #[tokio::test]
 async fn deleting_a_held_task_releases_its_claim_with_an_event() {
     let fx = scene().await;
-    held_by(&fx, "web-worker").await;
+    held_by(&fx, "web-worker", t(2)).await;
     let lead = agent_actor(&fx, "web-lead").await;
     fx.handle.tasks.delete_task(&lead, t(2)).await.unwrap();
     let released: Vec<_> =

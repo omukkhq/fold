@@ -32,10 +32,12 @@ pub(super) struct FoundConflict<'a> {
     /// The version the caller asked to integrate, and whether the daemon integrates on its own: the gates read both again.
     pub expected_version: Option<u32>,
     pub automatic: bool,
+    /// fold test-merged the version after another integration moved main, before the version's own turn.
+    pub before_turn: bool,
 }
 
 impl ReviewService {
-    /// Step 4 of the integration procedure, under the integration mutex. One write transaction records the `conflicted` integration with its report and `integration.conflicted`, whose `lane` names the lane of a member that main moved in since the version's base, sets the proposal's conflict flag and recalculates the task, which stays in Review while the proposal stays open. The conflict goes to the reviewer agent that approved the version and still holds its review claim: the event names it as `fixer`, and the worker supervisor gives it the conflict report. Without one, because a human or an agent that is not a reviewer approved the version or the reviewer lost its claim, the same transaction sends the review lead a message from `fold` to start a reviewer for the conflict. The author gets no conflict notice. Nothing is published: no revision, no move of main, no completion. False, with nothing written, when main moved, the proposal left that version or the gates refuse the caller, so the procedure starts again and its gate step reports why.
+    /// Step 4 of the integration procedure, under the integration mutex, and the record of a conflict that the test-merge after another integration found before the version's turn, whose event has `before_turn` true. One write transaction records the `conflicted` integration with its report and `integration.conflicted`, whose `lane` names the lane of a member that main moved in since the version's base, sets the proposal's conflict flag and recalculates the task, which stays in Review while the proposal stays open. The conflict goes to the reviewer agent that approved the version and still holds its review claim: the event names it as `fixer`, and the worker supervisor gives it the conflict report. Without one, because a human or an agent that is not a reviewer approved the version or the reviewer lost its claim, the same transaction sends the review lead a message from `fold` to start a reviewer for the conflict. The author gets no conflict notice. Nothing is published: no revision, no move of main, no completion. False, with nothing written, when main moved, the proposal left that version or the gates refuse the caller, so the procedure starts again and its gate step reports why. True with nothing written when a conflict of the version on the same main is already recorded.
     pub(super) async fn record_conflict(
         &self,
         actor: &Actor,
@@ -50,8 +52,11 @@ impl ReviewService {
             conflicts,
             expected_version,
             automatic,
+            before_turn,
         } = found;
-        let lane = self.moved_lane(proposal, trees.main).await?;
+        let moved = self.moved_lane_with_refresh(proposal, trees.main).await?;
+        let lane = moved.as_ref().map(|moved| moved.lane.clone());
+        let refresh = moved.and_then(|moved| moved.refresh);
         let label = actor.event_actor();
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
@@ -73,9 +78,18 @@ impl ReviewService {
                 };
                 let standing = agents::standing_of(tx.conn(), actor).await?;
                 let caller = caller_facts(actor, standing, automatic)?;
-                if decide(&facts, &caller, expected_version).is_err()
-                    || !reviews::mark_conflicted(tx, proposal, now).await?
+                if decide(&facts, &caller, expected_version).is_err() {
+                    return Ok(None);
+                }
+                // The test-merge after an integration and the version's own turn can find the same conflict on the same main: the first record stands for both.
+                if row.conflicted
+                    && reviews::conflict_report(tx.conn(), proposal, version)
+                        .await?
+                        .is_some_and(|report| report.main_revision == main)
                 {
+                    return Ok(Some(None));
+                }
+                if !reviews::mark_conflicted(tx, proposal, now).await? {
                     return Ok(None);
                 }
                 let base_revision = reviews::list_versions(tx.conn(), proposal)
@@ -118,10 +132,12 @@ impl ReviewService {
                         "files": report.files.len(),
                         "fixer": fixer_name,
                         "lane": lane,
+                        "refresh": refresh,
+                        "before_turn": before_turn,
                     }))?;
                 buffer.append(tx, &event, now).await?;
                 if let Fixer::ReviewLead(why) = &fixer {
-                    let handoff = Handoff::Conflict(&report);
+                    let handoff = Handoff::of_conflict(&report, refresh.as_deref());
                     handoff_notice_in_tx(
                         tx,
                         &mut buffer,
@@ -134,15 +150,39 @@ impl ReviewService {
                     .await?;
                 }
                 buffer.extend(recompute(tx, &[task], now).await?.events);
-                Ok::<_, ReviewError>(Some((integration, report.files.len())))
+                Ok::<_, ReviewError>(Some(Some((integration, report.files.len()))))
             })
             .await?;
-        let Some((integration, files)) = recorded else {
+        let Some(recorded) = recorded else {
             return Ok(false);
         };
-        self.bus.publish(buffer);
-        tracing::info!(proposal = %proposal, version, revision = %main, integration = %integration, files, "proposal conflicts with main");
+        if let Some((integration, files)) = recorded {
+            self.bus.publish(buffer);
+            if files == 0 {
+                tracing::info!(proposal = %proposal, version, revision = %main, integration = %integration, before_turn, "the proposal's lane moved; it went to its reviewer for the lane's refresh");
+            } else {
+                tracing::info!(proposal = %proposal, version, revision = %main, integration = %integration, files, before_turn, "proposal conflicts with main");
+            }
+        }
         Ok(true)
+    }
+}
+
+impl ReviewService {
+    /// The refresh of a version whose merge onto main was clean, `found` with no conflicts: when its lane moved since the version's base and names a `refresh`, [`ReviewService::record_conflict`] records it with an empty report and the lane's text, so it goes to its approving reviewer the way a conflict does and no integration run starts. `None` when no refresh is due; otherwise what the record returned.
+    pub(super) async fn record_refresh_if_due(
+        &self,
+        actor: &Actor,
+        found: FoundConflict<'_>,
+    ) -> Result<Option<bool>, ReviewError> {
+        if self
+            .refresh_due(found.proposal, found.trees.main)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        Ok(Some(self.record_conflict(actor, found).await?))
     }
 }
 
@@ -249,6 +289,11 @@ fn fix_steps(report: &ConflictReport) -> String {
 /// What a reviewer fixes on the current main: a conflict, or the integration checks a lane member failed on its merge with main after the lane moved.
 pub(crate) enum Handoff<'a> {
     Conflict(&'a ConflictReport),
+    /// The version's lane moved and names a `refresh`: the reviewer redoes that step on the new main. `report` holds the conflicting files, none when the merge itself was clean.
+    Refresh {
+        report: &'a ConflictReport,
+        refresh: &'a str,
+    },
     LaneChecks {
         proposal: ProposalId,
         version: u32,
@@ -257,10 +302,20 @@ pub(crate) enum Handoff<'a> {
     },
 }
 
-impl Handoff<'_> {
+impl<'a> Handoff<'a> {
+    /// The handoff of a recorded conflict report, with the refresh of the lane that moved when it names one.
+    pub(crate) fn of_conflict(report: &'a ConflictReport, refresh: Option<&'a str>) -> Self {
+        match refresh {
+            Some(refresh) => Handoff::Refresh { report, refresh },
+            None => Handoff::Conflict(report),
+        }
+    }
+
     fn version(&self) -> (ProposalId, u32) {
         match self {
-            Handoff::Conflict(report) => (report.proposal, report.version),
+            Handoff::Conflict(report) | Handoff::Refresh { report, .. } => {
+                (report.proposal, report.version)
+            }
             Handoff::LaneChecks {
                 proposal, version, ..
             } => (*proposal, *version),
@@ -274,6 +329,14 @@ impl Handoff<'_> {
                 "conflicts with main at {} and was not integrated",
                 report.main_revision
             ),
+            Handoff::Refresh { report, .. } if report.files.is_empty() => format!(
+                "needs its lane's refresh on main at {} and was not integrated",
+                report.main_revision
+            ),
+            Handoff::Refresh { report, .. } => format!(
+                "conflicts with main at {} and needs its lane's refresh, so it was not integrated",
+                report.main_revision
+            ),
             Handoff::LaneChecks { run, main, .. } => format!(
                 "failed its integration checks ({run}) on its merge with main {main} and was not integrated"
             ),
@@ -284,6 +347,13 @@ impl Handoff<'_> {
     fn facts(&self) -> String {
         match self {
             Handoff::Conflict(report) => conflict_paths(report),
+            Handoff::Refresh { report, refresh } if report.files.is_empty() => {
+                format!("The lane asks for a refresh: {refresh}")
+            }
+            Handoff::Refresh { report, refresh } => format!(
+                "The lane asks for a refresh: {refresh}\n{}",
+                conflict_paths(report)
+            ),
             Handoff::LaneChecks { run, .. } => {
                 format!("Call get_check_run with {run} for the failed checks and their logs.")
             }
@@ -293,6 +363,16 @@ impl Handoff<'_> {
     fn steps(&self) -> String {
         match self {
             Handoff::Conflict(report) => fix_steps(report),
+            Handoff::Refresh { report, .. } if report.files.is_empty() => {
+                let (proposal, version) = (report.proposal, report.version);
+                format!(
+                    "Call create_review_checkout for {proposal}: the checkout holds v{version} merged onto the current main. Do the lane's refresh there, run the checks, send the fix with submit_review_fix, then approve the new version with submit_review, and fold integrates it in its turn in the lane. When the refresh needs the author's decision, call submit_review with the verdict request_changes instead."
+                )
+            }
+            Handoff::Refresh { report, .. } => format!(
+                "{} Do the lane's refresh in the same fix.",
+                fix_steps(report)
+            ),
             Handoff::LaneChecks {
                 proposal, version, ..
             } => format!(
@@ -304,6 +384,8 @@ impl Handoff<'_> {
     fn noun(&self) -> &'static str {
         match self {
             Handoff::Conflict(_) => "conflict",
+            Handoff::Refresh { report, .. } if report.files.is_empty() => "refresh",
+            Handoff::Refresh { .. } => "conflict",
             Handoff::LaneChecks { .. } => "failure",
         }
     }
@@ -468,6 +550,97 @@ mod tests {
     }
 
     #[test]
+    fn a_refresh_turn_names_the_lane_text_with_or_without_conflicting_files() {
+        let task = TaskId::from_number(7).unwrap();
+        let clean = report(&[]);
+        let turn = reviewer_turn(
+            &Handoff::of_conflict(&clean, Some("redo it")),
+            task,
+            Some("m"),
+        );
+        for wanted in [
+            "P-2 v3 for T-7, which you approved, needs its lane's refresh on main at r4 and was not integrated. Lane m moved",
+            "You fix the refresh, not the author",
+            "The lane asks for a refresh: redo it",
+            "Do the lane's refresh there",
+            "submit_review_fix",
+        ] {
+            assert!(turn.contains(wanted), "{wanted}: {turn}");
+        }
+        assert!(!turn.contains("Conflicting paths"), "{turn}");
+        let both = report(&["a.rs"]);
+        let turn = reviewer_turn(
+            &Handoff::of_conflict(&both, Some("redo it")),
+            task,
+            Some("m"),
+        );
+        for wanted in [
+            "conflicts with main at r4 and needs its lane's refresh",
+            "You fix the conflict, not the author",
+            "The lane asks for a refresh: redo it\nConflicting paths (1): a.rs.",
+            "Do the lane's refresh in the same fix.",
+        ] {
+            assert!(turn.contains(wanted), "{wanted}: {turn}");
+        }
+        let lead = review_lead_notice(
+            &Handoff::of_conflict(&clean, Some("redo it")),
+            task,
+            &NoReviewer::ClaimGone,
+            Some("m"),
+        );
+        assert!(
+            lead.contains("so the refresh waits for a reviewer"),
+            "{lead}"
+        );
+        assert!(matches!(
+            Handoff::of_conflict(&clean, None),
+            Handoff::Conflict(_)
+        ));
+    }
+
+    #[test]
+    fn a_conflicted_event_with_a_refresh_and_no_file_reads_as_a_lane_refresh() {
+        let event = |data: Value| Event {
+            seq: 1,
+            event_type: types::INTEGRATION_CONFLICTED,
+            actor: fold_core::EventActor::fold(),
+            task: None,
+            proposal: ProposalId::from_number(2),
+            workspace: None,
+            revision: None,
+            data,
+            created_at: fold_core::Timestamp::from_millis(0).unwrap(),
+        };
+        let refresh = event(
+            json!({"version": 3, "fixer": "reviewer-2", "lane": "m", "refresh": "redo it", "files": 0, "before_turn": true}),
+        );
+        assert_eq!(
+            handoff_reason(&refresh, 3),
+            Some(ConflictedReason::LaneRefresh {
+                lane: "m".to_owned(),
+                refresh: "redo it".to_owned(),
+                fixer: Some(AgentName::parse("reviewer-2").unwrap()),
+                before_turn: true,
+            })
+        );
+        let with_files = event(
+            json!({"version": 3, "fixer": null, "lane": "m", "refresh": "redo it", "files": 1}),
+        );
+        assert_eq!(
+            handoff_reason(&with_files, 3),
+            Some(ConflictedReason::MergeConflict {
+                fixer: None,
+                before_turn: false
+            })
+        );
+        let plain = event(json!({"version": 3, "lane": "m", "refresh": null, "files": 0}));
+        assert!(matches!(
+            handoff_reason(&plain, 3),
+            Some(ConflictedReason::MergeConflict { .. })
+        ));
+    }
+
+    #[test]
     fn the_reviewer_turn_says_who_fixes_the_conflict_and_how() {
         let task = TaskId::from_number(7).unwrap();
         let turn = reviewer_turn(&Handoff::Conflict(&report(&["a.rs"])), task, None);
@@ -544,6 +717,18 @@ pub enum ConflictedReason {
     MergeConflict {
         /// The reviewer that fixes it; `None` when the review lead got the conflict.
         fixer: Option<AgentName>,
+        /// fold found the conflict by its test-merge after another integration moved main, before the version's own turn.
+        before_turn: bool,
+    },
+    /// The version's lane moved since its base and names a `refresh`, and the merge with main was clean: the reviewer redoes the lane's step on the new main.
+    LaneRefresh {
+        lane: String,
+        /// The lane's `refresh` text.
+        refresh: String,
+        /// The reviewer that redoes it; `None` when the review lead got the refresh.
+        fixer: Option<AgentName>,
+        /// fold found it by its test-merge after another integration moved main, before the version's own turn.
+        before_turn: bool,
     },
     /// The integration checks failed on the merge with main after another member of the lane integrated.
     LaneChecksFailed {
@@ -565,7 +750,22 @@ fn handoff_reason(event: &Event, version: u32) -> Option<ConflictedReason> {
         .and_then(Value::as_str)
         .and_then(|name| AgentName::parse(name).ok());
     if event.event_type == types::INTEGRATION_CONFLICTED {
-        return Some(ConflictedReason::MergeConflict { fixer });
+        let before_turn = data
+            .get("before_turn")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let refresh = data.get("refresh").and_then(Value::as_str);
+        let lane = data.get("lane").and_then(Value::as_str);
+        let files = data.get("files").and_then(Value::as_u64);
+        if let (Some(refresh), Some(lane), Some(0)) = (refresh, lane, files) {
+            return Some(ConflictedReason::LaneRefresh {
+                lane: lane.to_owned(),
+                refresh: refresh.to_owned(),
+                fixer,
+                before_turn,
+            });
+        }
+        return Some(ConflictedReason::MergeConflict { fixer, before_turn });
     }
     if event.event_type != types::CHECKS_FINISHED {
         return None;

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -23,7 +23,9 @@ use questions::Waiter;
 use watch::watch_done;
 
 mod account;
+mod asking;
 mod conflict;
+mod dormant;
 mod fresh;
 mod gate;
 mod groups;
@@ -246,6 +248,12 @@ struct Inner {
     windows: Mutex<HashMap<String, u64>>,
     /// The groups in which a daemon start runs the project's workers again, shared with every project of the daemon.
     groups: Mutex<ResumeGroups>,
+    /// The finished workers whose stop waits for their turn to end; a `wait_for_events` of one of them returns at once.
+    finishing: tokio::sync::watch::Sender<BTreeSet<AgentName>>,
+    /// The conflicts, by proposal and version, that fold gives their reviewer now, so a second event that gives the same one while the first waits for the reviewer's stop leaves it to the first.
+    giving_conflicts: Mutex<HashSet<(fold_core::ProposalId, u32)>>,
+    /// The leads that a daemon start left without a process because no work waited for them; their rows stay `idle`, and the first work that comes runs them.
+    dormant: Mutex<HashSet<AgentName>>,
 }
 
 impl Drop for Inner {
@@ -319,6 +327,9 @@ impl Supervisor {
                 owed: Mutex::default(),
                 windows: Mutex::default(),
                 groups: Mutex::default(),
+                finishing: tokio::sync::watch::Sender::new(BTreeSet::new()),
+                giving_conflicts: Mutex::default(),
+                dormant: Mutex::default(),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();
@@ -380,6 +391,14 @@ impl Supervisor {
     /// The tool calls of the project's workers that can write files, as their output tells them.
     pub fn tool_windows(&self) -> Arc<ToolWindows> {
         self.inner.tool_windows.clone()
+    }
+
+    /// Returns once fold waits to stop `agent` as a finished worker, until its turn ends; it never returns for a worker fold does not stop so.
+    pub async fn until_finishing(&self, agent: &AgentName) {
+        let mut finishing = self.inner.finishing.subscribe();
+        if finishing.wait_for(|set| set.contains(agent)).await.is_err() {
+            std::future::pending::<()>().await;
+        }
     }
 
     /// The output of the project's running worker processes, as the stall rule reads it.

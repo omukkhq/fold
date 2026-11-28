@@ -15,6 +15,9 @@ pub const CHECKS_FILE: &str = "fold-checks.toml";
 /// How long one setup or check command may run before fold stops its process group.
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
+/// How long one command may wait for a slot of the machine's build gate before fold stops it and fails the run as `no_build_slot`, so a full machine is never reported as a slow check: 2 hours unless `[runs] build_slot_wait` says otherwise. The wait counts in no check's timeout.
+pub const BUILD_SLOT_WAIT: Duration = Duration::from_secs(2 * 60 * 60);
+
 /// The most checks one file may name.
 pub const MAX_CHECKS: usize = 64;
 
@@ -32,6 +35,8 @@ pub const MAX_LANES: usize = 16;
 /// The most globs one lane may list.
 pub const MAX_LANE_GLOBS: usize = 64;
 const MAX_GLOB_CHARS: usize = 500;
+/// The longest `refresh` text of a lane, in characters.
+pub const MAX_REFRESH_CHARS: usize = 1000;
 
 define_names!(
     /// When a check runs: before fold makes a proposal version, or on the merged tree before an integration reaches main.
@@ -43,7 +48,7 @@ define_names!(
 );
 
 define_names!(
-    /// What asked for a run: a worker's `run_checks`, the gate of `create_proposal`, `update_proposal` or a reviewer's `submit_review_fix`, or an integration.
+    /// What asked for a run: a worker's `run_checks`, the gate of `create_proposal`, `update_proposal` or a reviewer's `submit_review_fix`, the integration of a proposal, or the integration of the main agent's direct change.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum Purpose {
         Check = "check",
@@ -51,6 +56,8 @@ define_names!(
         UpdateProposal = "update_proposal",
         Integrate = "integrate",
         ReviewFix = "review_fix",
+        /// The integration checks of a direct change from `submit_main_change`: the run checks one changeset of the main workspace and belongs to no task, proposal or version.
+        IntegrateDirect = "integrate_direct",
     }
 );
 
@@ -87,8 +94,12 @@ define_names!(
         Superseded = "superseded",
         /// fold itself could not run the checks, such as when its check directory could not take the tree or a command could not start: the run says nothing of the change, and the integration can be asked again once the fault is fixed.
         FoldFailed = "fold_failed",
-        /// A SIGKILL that fold did not send ended a required command, as the kernel's OOM killer does when the machine runs out of memory: the run says nothing of the change.
+        /// A signal that fold did not send ended a command, as the kernel's OOM killer does when the machine runs out of memory: no later command of the run starts, and the run says nothing of the change.
         Killed = "killed",
+        /// A command waited for a slot of the machine's build gate longer than `[runs] build_slot_wait`: no later command of the run starts, and the run says nothing of the change.
+        NoBuildSlot = "no_build_slot",
+        /// A worker, a lead, the main agent or a human cancelled the run: fold ended its running command's process group and started no later command.
+        Cancelled = "cancelled",
     }
 );
 
@@ -130,6 +141,8 @@ pub struct Lane {
     pub name: String,
     /// The globs as the file writes them, in file order.
     pub paths: Vec<String>,
+    /// `refresh`: the one-line step the approving reviewer redoes on the new main, as the file writes it. When main changed a path of the lane since a member's version base, the daemon starts no integration run for that member: it hands the version to its approving reviewer the way it hands a conflict, with this text, and the reviewer's fix version runs its checks on the new main. `None` keeps the lane's plain order.
+    pub refresh: Option<String>,
     matcher: Regex,
 }
 
@@ -147,6 +160,10 @@ pub struct ChecksFile {
     pub checks: Vec<Check>,
     /// The `[[serial]]` lanes in file order.
     pub lanes: Vec<Lane>,
+    /// `[runs] max_parallel_runs`: the most check runs of the project that run their commands at the same time; `None` is no limit.
+    pub max_parallel_runs: Option<NonZeroUsize>,
+    /// `[runs] build_slot_wait`: how long one command may wait for a build gate slot; `None` is [`BUILD_SLOT_WAIT`].
+    pub build_slot_wait: Option<Duration>,
 }
 
 /// A check of one stage with whether it runs for the changed paths.
@@ -165,6 +182,14 @@ struct RawFile {
     check: Vec<RawCheck>,
     #[serde(default)]
     serial: Vec<RawLane>,
+    runs: Option<RawRuns>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRuns {
+    max_parallel_runs: Option<toml::Spanned<toml::Value>>,
+    build_slot_wait: Option<toml::Spanned<toml::Value>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -172,6 +197,7 @@ struct RawFile {
 struct RawLane {
     name: String,
     paths: Vec<String>,
+    refresh: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -251,12 +277,7 @@ impl ChecksFile {
             let max_parallel = check
                 .max_parallel
                 .map(|value| {
-                    value
-                        .get_ref()
-                        .as_integer()
-                        .and_then(|number| usize::try_from(number).ok())
-                        .and_then(NonZeroUsize::new)
-                        .ok_or_else(|| {
+                    whole_number(value.get_ref()).ok_or_else(|| {
                             invalid(format!(
                                 "line {}: {at} ({name}) max_parallel is a whole number of 1 or more, such as 1",
                                 line_of(text, value.span().start)
@@ -275,10 +296,35 @@ impl ChecksFile {
             });
         }
         let lanes = parse_lanes(raw.serial)?;
+        let (max_parallel_runs, build_slot_wait) = raw.runs.map_or((None, None), |runs| {
+            (runs.max_parallel_runs, runs.build_slot_wait)
+        });
+        let max_parallel_runs = max_parallel_runs
+            .map(|value| {
+                whole_number(value.get_ref()).ok_or_else(|| {
+                    invalid(format!(
+                        "line {}: [runs] max_parallel_runs is a whole number of 1 or more, such as 2",
+                        line_of(text, value.span().start)
+                    ))
+                })
+            })
+            .transpose()?;
+        let build_slot_wait = build_slot_wait
+            .map(|value| {
+                value.get_ref().as_str().and_then(parse_timeout).ok_or_else(|| {
+                    invalid(format!(
+                        "line {}: [runs] build_slot_wait is a whole number and s, m or h, such as \"90m\" or \"3h\", from 1s to {MAX_TIMEOUT_HOURS}h",
+                        line_of(text, value.span().start)
+                    ))
+                })
+            })
+            .transpose()?;
         Ok(ChecksFile {
             setup,
             checks,
             lanes,
+            max_parallel_runs,
+            build_slot_wait,
         })
     }
 
@@ -310,6 +356,14 @@ impl ChecksFile {
             .iter()
             .any(|check| check.stages.contains(&stage))
     }
+}
+
+/// A TOML integer of 1 or more.
+fn whole_number(value: &toml::Value) -> Option<NonZeroUsize> {
+    value
+        .as_integer()
+        .and_then(|number| usize::try_from(number).ok())
+        .and_then(NonZeroUsize::new)
 }
 
 /// Whether a plan runs anything. A plan with only skipped checks needs no run.
@@ -446,13 +500,35 @@ fn parse_lanes(raw: Vec<RawLane>) -> Result<Vec<Lane>, FoldError> {
             .size_limit(MAX_PATTERN_BYTES)
             .build()
             .map_err(|_| invalid(format!("{at} are too large to match")))?;
+        let refresh = lane
+            .refresh
+            .map(|text| check_refresh(text, &name, index))
+            .transpose()?;
         lanes.push(Lane {
             name,
             paths: lane.paths,
+            refresh,
             matcher,
         });
     }
     Ok(lanes)
+}
+
+/// A lane's `refresh` text: one line of 1 to [`MAX_REFRESH_CHARS`] characters that is not blank and holds no control character, kept as written.
+fn check_refresh(text: String, name: &str, index: usize) -> Result<String, FoldError> {
+    let at = format!("serial {} ({name}) refresh", index + 1);
+    let count = text.chars().count();
+    if count == 0 || count > MAX_REFRESH_CHARS || text.trim().is_empty() {
+        return Err(invalid(format!(
+            "{at} must have 1 to {MAX_REFRESH_CHARS} characters and not be blank"
+        )));
+    }
+    if text.chars().any(char::is_control) {
+        return Err(invalid(format!(
+            "{at} must be one line without control characters"
+        )));
+    }
+    Ok(text)
 }
 
 /// The regular expression of one glob, unanchored. A glob is a relative path of 1 to [`MAX_GLOB_CHARS`] characters: no leading `/`, no empty, `.` or `..` segment, and `**` only as a whole segment.
@@ -722,6 +798,45 @@ stage = "integration"
     }
 
     #[test]
+    fn max_parallel_runs_is_a_whole_number_of_one_or_more_under_runs() {
+        let check = "[[check]]\nname = \"t\"\nrun = \"y\"\n";
+        assert_eq!(ChecksFile::parse(check).unwrap().max_parallel_runs, None);
+        let empty = ChecksFile::parse(&format!("[runs]\n{check}")).unwrap();
+        assert_eq!(empty.max_parallel_runs, None);
+        let limited =
+            ChecksFile::parse(&format!("[runs]\nmax_parallel_runs = 2\n{check}")).unwrap();
+        assert_eq!(limited.max_parallel_runs, NonZeroUsize::new(2));
+        for bad in ["0", "-1", "\"2\"", "1.5", "true"] {
+            let message = refusal(&format!("[runs]\nmax_parallel_runs = {bad}\n{check}"));
+            assert!(
+                message.contains("line 2: [runs] max_parallel_runs is a whole number"),
+                "{bad}: {message}"
+            );
+        }
+        let unknown = refusal(&format!("[runs]\nmax_parallel = 2\n{check}"));
+        assert!(unknown.contains("line 2"), "{unknown}");
+    }
+
+    #[test]
+    fn build_slot_wait_is_a_duration_under_runs() {
+        let check = "[[check]]\nname = \"t\"\nrun = \"y\"\n";
+        assert_eq!(ChecksFile::parse(check).unwrap().build_slot_wait, None);
+        let empty = ChecksFile::parse(&format!("[runs]\n{check}")).unwrap();
+        assert_eq!(empty.build_slot_wait, None);
+        let set = ChecksFile::parse(&format!("[runs]\nbuild_slot_wait = \"3h\"\n{check}")).unwrap();
+        assert_eq!(set.build_slot_wait, Some(Duration::from_secs(3 * 3600)));
+        assert_eq!(set.max_parallel_runs, None);
+        for bad in ["\"0s\"", "\"two hours\"", "\"25h\"", "7200", "true"] {
+            let message = refusal(&format!("[runs]\nbuild_slot_wait = {bad}\n{check}"));
+            assert!(
+                message.contains("line 2: [runs] build_slot_wait is a whole number and s, m or h"),
+                "{bad}: {message}"
+            );
+        }
+        assert!(BUILD_SLOT_WAIT > CHECK_TIMEOUT);
+    }
+
+    #[test]
     fn too_many_checks_are_refused() {
         let text: String = (0..=MAX_CHECKS)
             .map(|n| format!("[[check]]\nname = \"c{n}\"\nrun = \"true\"\n"))
@@ -920,6 +1035,38 @@ paths = ["Cargo.lock", "web/bun.lock", "crates/fold-store/migrations/project/*.s
             Some("migrations".to_owned()),
             "a path of two lanes goes to the first lane in file order"
         );
+    }
+
+    #[test]
+    fn a_lane_refresh_is_one_line_kept_as_written() {
+        let with = |text: &str| format!("{}refresh = {text:?}\n", lane(r#"["m/**"]"#));
+        let file =
+            ChecksFile::parse(&with(" regenerate the migration on the current head ")).unwrap();
+        assert_eq!(
+            file.lanes[0].refresh.as_deref(),
+            Some(" regenerate the migration on the current head ")
+        );
+        assert_eq!(
+            ChecksFile::parse(&lane(r#"["m/**"]"#)).unwrap().lanes[0].refresh,
+            None
+        );
+        let longest = "é".repeat(MAX_REFRESH_CHARS);
+        let file = ChecksFile::parse(&with(&longest)).unwrap();
+        assert_eq!(file.lanes[0].refresh.as_deref(), Some(longest.as_str()));
+        for text in ["", "   ", &"a".repeat(MAX_REFRESH_CHARS + 1)] {
+            assert!(
+                refusal(&with(text))
+                    .contains("serial 1 (m) refresh must have 1 to 1000 characters"),
+                "{text:?}"
+            );
+        }
+        for text in ["redo\nit", "redo\tit"] {
+            assert!(
+                refusal(&with(text))
+                    .contains("refresh must be one line without control characters"),
+                "{text:?}"
+            );
+        }
     }
 
     #[test]

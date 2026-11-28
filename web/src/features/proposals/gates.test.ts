@@ -379,6 +379,28 @@ describe("waitingSummary of a conflicted proposal", () => {
     expect(text).toContain("fold sent the report to");
   });
 
+  it("names the lane's refresh and who redoes it", () => {
+    const text =
+      waitingSummary(
+        proposal(
+          { conflicted: true },
+          {
+            conflicted_reason: {
+              kind: "lane_refresh",
+              lane: "migrations",
+              refresh: "redo the migration",
+              fixer: "reviewer",
+            },
+          },
+        ),
+      ) ?? "";
+    expect(text).toContain(
+      "Lane migrations asks for a refresh: redo the migration",
+    );
+    expect(text).toContain("@reviewer redoes it on the new main");
+    expect(text).not.toContain("fold sent the report");
+  });
+
   it("names the lane and the fixer for a lane check failure", () => {
     const text =
       waitingSummary(

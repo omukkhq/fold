@@ -59,6 +59,7 @@ async fn move_main(fx: &Fixture, files: &[(&str, &[u8])]) {
     };
     let outcome = fx.reviews.integrate_pull(&human(), pull).await.unwrap();
     assert!(matches!(outcome, PullOutcome::Succeeded { .. }));
+    fx.checks.wait_idle().await;
 }
 
 /// `review` is a reviewer and acts with it.
@@ -83,17 +84,17 @@ async fn approve(fx: &Fixture, actor: &Actor) {
         .unwrap();
 }
 
-/// `P-1` approved by the reviewer `review`, which holds its review claim, with main moved to `r2` so that its `src/lib.rs` conflicts. Returns the reviewer.
+/// `P-1` approved by the reviewer `review`, which holds its review claim, with main moved to `r2` so that its `src/lib.rs` conflicts. main moves, and its test-merge of the queue ends, before the approval, so the integration the test calls is the one that finds the conflict.
 async fn conflicting(fx: &Fixture) -> Actor {
     fx.proposal().await;
     let review = reviewer(fx).await;
     claim_for_review(fx).await;
-    approve(fx, &review).await;
     move_main(
         fx,
         &[("src/lib.rs", MAIN_LIB.as_bytes()), ("README.md", README)],
     )
     .await;
+    approve(fx, &review).await;
     review
 }
 
@@ -249,6 +250,8 @@ async fn conflict_writes_one_integrations_row_with_the_report() {
             "files": 1,
             "fixer": "review",
             "lane": null,
+            "refresh": null,
+            "before_turn": false,
         })
     );
     assert!(
@@ -595,4 +598,75 @@ async fn changes_requested_before_the_conflict_is_recorded_record_nothing() {
     );
     assert_eq!(fx.count("SELECT COUNT(*) FROM messages").await, 0);
     assert_eq!(detail(&fx, None).await.conflict, None);
+}
+
+/// `P-1` is approved before main moves, so the test-merge of the queue after the move finds its conflict before its turn and records it as fold, with `before_turn`; the integration a caller then asks for answers with the same conflict and records nothing more.
+#[tokio::test]
+async fn a_conflict_found_before_the_turn_is_recorded_once() {
+    let fx = Fixture::new().await;
+    fx.proposal().await;
+    let review = reviewer(&fx).await;
+    claim_for_review(&fx).await;
+    approve(&fx, &review).await;
+    let seq = fx.last_seq().await;
+    move_main(
+        &fx,
+        &[("src/lib.rs", MAIN_LIB.as_bytes()), ("README.md", README)],
+    )
+    .await;
+
+    let conflicted = || async {
+        fx.events_after(seq)
+            .await
+            .into_iter()
+            .filter(|event| event.event_type == types::INTEGRATION_CONFLICTED)
+            .collect::<Vec<_>>()
+    };
+    let found = conflicted().await;
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].data["before_turn"], true);
+    assert_eq!(found[0].data["fixer"], "review");
+    assert_eq!(found[0].data["main_revision"], "r2");
+    let summary = detail(&fx, None).await;
+    assert!(summary.summary.conflicted);
+    let report = summary.conflict.unwrap();
+    let hunk = &report.files[0].hunks[0];
+    assert_eq!(hunk.main.lines, [MAIN_LIB]);
+    assert_eq!(hunk.version.lines, ["pub fn y() {}\n"]);
+
+    let conflicts = integrate_conflicted(&fx, &review).await;
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(
+        conflicted().await.len(),
+        1,
+        "the integration records nothing more"
+    );
+    assert_eq!(
+        fx.count("SELECT COUNT(*) FROM integrations WHERE result = 'conflicted'")
+            .await,
+        1
+    );
+}
+
+/// A test-merge asked for onto a main that moved on records nothing; onto the current main it finds the approved version's conflict.
+#[tokio::test]
+async fn the_test_merge_onto_a_stale_main_records_nothing() {
+    let fx = Fixture::new().await;
+    let review = conflicting(&fx).await;
+    let seq = fx.last_seq().await;
+
+    let stale = fx.reviews.find_queue_conflicts(r(1)).await.unwrap();
+    assert!(stale.is_empty());
+    assert!(fx.events_after(seq).await.is_empty());
+    assert!(!detail(&fx, None).await.summary.conflicted);
+
+    let found = fx.reviews.find_queue_conflicts(r(2)).await.unwrap();
+    assert_eq!(found, [p(1)]);
+    assert_eq!(
+        names(&fx.events_after(seq).await),
+        [types::INTEGRATION_CONFLICTED.as_str()]
+    );
+    let again = fx.reviews.find_queue_conflicts(r(2)).await.unwrap();
+    assert!(again.is_empty(), "a flagged proposal left the queue");
+    drop(review);
 }

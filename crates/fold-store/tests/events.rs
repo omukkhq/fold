@@ -483,6 +483,55 @@ async fn count_concerning_counts_what_concerns_holds_and_stops_at_its_cap() {
     );
 }
 
+#[tokio::test]
+async fn count_concerning_leaves_lifecycle_events_out() {
+    let project = TestProject::new().await;
+    let agent = AgentName::parse("fe").unwrap();
+    let mut facts = AgentEventFacts::new(agent.clone());
+    facts.claimed.insert(task(1));
+    facts.authored.insert(proposal(3));
+    let mut batch: Vec<NewEvent> = fold_core::LIFECYCLE
+        .iter()
+        .map(|name| by(EventType::parse(name).unwrap(), "be").task(task(1)))
+        .collect();
+    batch.push(by(types::SESSION_STARTED, "be").proposal(proposal(3)));
+    batch.push(by(types::MAIN_ADVANCED, "fold"));
+    batch.push(by(types::TASK_UPDATED, "be").task(task(1)));
+    batch.push(by(types::CLAIM_RELEASED, "be").task(task(1)));
+    batch.push(by(types::REVIEW_SUBMITTED, "be").proposal(proposal(3)));
+    append_all(&project, batch).await;
+    let stored = events::after(project.store().read(), 0, 1000)
+        .await
+        .unwrap();
+    let tasks = BTreeSet::from([task(1)]);
+    let proposals = BTreeSet::from([proposal(3)]);
+    let lifecycle_types = [types::SESSION_STARTED, types::CLAIM_ACQUIRED];
+    let count = async |wanted: &[EventType]| {
+        events::count_concerning(
+            project.store().read(),
+            0,
+            &agent,
+            &tasks,
+            &proposals,
+            wanted,
+            1000,
+        )
+        .await
+        .unwrap()
+    };
+    let expected = stored
+        .iter()
+        .filter(|event| concerns(event, &facts))
+        .count() as u64;
+    assert_eq!(expected, 4);
+    assert_eq!(count(&[types::MAIN_ADVANCED]).await, expected);
+    assert_eq!(
+        count(&[types::MAIN_ADVANCED, lifecycle_types[0], lifecycle_types[1]]).await,
+        expected,
+        "a lifecycle type named in `types` is still left out"
+    );
+}
+
 #[cfg(test)]
 fn reach(agent_id: i64) -> events::Reach<'static> {
     events::Reach {

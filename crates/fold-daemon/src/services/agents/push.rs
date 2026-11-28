@@ -7,7 +7,7 @@ use super::{AgentError, AgentService, SessionContext};
 use crate::push::{PushReach, PushToken, check_socket};
 
 impl AgentService {
-    /// Stores the Claude Code inbox socket of a session of `agent`, as the session-start hook reports it, so the daemon can post notices into that session. The socket path changes at every session start. The socket and token are also kept in the daemon's own file of the agent, outside the project folder, for a restarted daemon; nothing is written to the database or the event log, and the token is never formatted. An agent the project does not know yet is refused with `agent_not_registered`, and its inbox waits in memory until a session's adapter registers the agent.
+    /// Stores the Claude Code inbox socket of a session of `agent`, as the session-start hook reports it, so the daemon can post notices into that session. Claude Code names the socket after its own process, so the path stays the same across `/clear` and compactions and changes with each new Claude Code process. The socket and token are also kept in the daemon's own file of the agent, outside the project folder, for a restarted daemon; nothing is written to the database or the event log, and the token is never formatted. An agent the project does not know yet is refused with `agent_not_registered`, and its inbox waits in memory until a session's adapter registers the agent. The inbox of a main session that a newer session took over is refused with `main_session_taken_over` and registers nothing.
     pub async fn register_push_target(
         &self,
         agent: &AgentName,
@@ -15,6 +15,7 @@ impl AgentService {
         token: &str,
     ) -> Result<(), AgentError> {
         check_socket(&socket)?;
+        self.refuse_taken_over_inbox(agent, &socket)?;
         let token = PushToken::parse(token)?;
         let now = self.clock.now();
         if agents::find_agent(self.store.read(), agent)

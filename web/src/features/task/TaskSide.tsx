@@ -55,6 +55,7 @@ import {
   resolvedText,
 } from "./leadCheck";
 import { inMainArea, mainReviewNote } from "./areas";
+import { heldTasks } from "./held";
 import { holdControls, holdView } from "./humanTask";
 import { useAreas } from "./LabelFields";
 import { LabelsSide } from "./LabelsSide";
@@ -847,6 +848,31 @@ function EdgeRow({
   );
 }
 
+/** The held tasks this task waits on, apart from its own manual hold, each a link to the task. */
+function HeldThrough({ slug, task }: { slug: string; task: TaskDetail }) {
+  const filters = useRouterState({ select: (s) => s.location.searchStr });
+  const held = heldTasks(task);
+  if (held.length === 0 || task.status === "done") {
+    return null;
+  }
+  return (
+    <SideGroup title="Held through">
+      <ul aria-label="Held through" className="flex flex-col gap-4">
+        {held.map((id) => (
+          <li key={id} data-held-through={id}>
+            <HrefLink
+              href={taskPath(slug, id, filters)}
+              className={cn("rounded-s hover:underline", focusRing)}
+            >
+              <Id className="text-text-2">{id}</Id>
+            </HrefLink>
+          </li>
+        ))}
+      </ul>
+    </SideGroup>
+  );
+}
+
 /** The prerequisites and the dependents that exist, and the form that adds a prerequisite. */
 function Dependencies({
   slug,
@@ -941,6 +967,7 @@ function Links({
         editing={holding}
         onEditing={setHolding}
       />
+      <HeldThrough slug={slug} task={task} />
       <Dependencies
         slug={slug}
         task={task}

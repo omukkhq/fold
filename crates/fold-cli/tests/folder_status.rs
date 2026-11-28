@@ -287,7 +287,7 @@ fn with_git_sync_fld_status_shows_the_branch_a_path_held_by_main_and_a_moved_hea
         sandbox.status(&project),
         [
             "Nothing to record: the project folder is at main r1",
-            "  ↳ Git: main is synced with the branch main",
+            "  ↳ Git: fold main → local branch `main` → origin/`main`",
         ]
     );
 
@@ -313,7 +313,7 @@ fn with_git_sync_fld_status_shows_the_branch_a_path_held_by_main_and_a_moved_hea
         [
             "Project folder at r1, behind main r2",
             "  ↳ Why: paths main changed hold changes of yours that no revision records",
-            "  ↳ Git: main is synced with the branch main",
+            "  ↳ Git: fold main → local branch `main` → origin/`main`",
             "",
             "To record: 2 files",
             "  ↳ modified: a.txt, held by main",
@@ -339,7 +339,7 @@ fn with_git_sync_fld_status_shows_the_branch_a_path_held_by_main_and_a_moved_hea
         lines,
         [
             "Nothing to record: the project folder is at main r2",
-            "  ↳ Git: main is synced with the branch main",
+            "  ↳ Git: fold main → local branch `main` → origin/`main`",
         ]
     );
 
@@ -348,9 +348,9 @@ fn with_git_sync_fld_status_shows_the_branch_a_path_held_by_main_and_a_moved_hea
         sandbox.status(&project),
         [
             "Project folder at main r2",
-            "  ↳ Git: main is synced with the branch main",
+            "  ↳ Git: fold main → local branch `main` → origin/`main`",
             "",
-            "Git branch moved: the branch or HEAD shows a change fold did not make, so fold does not update the folder",
+            "Git branch moved: the local branch or HEAD shows a change fold did not make, so fold does not update the folder",
             "  ↳ Next: run `git switch main` in the project folder",
             "",
             "nothing to record · Git branch moved",
@@ -361,9 +361,28 @@ fn with_git_sync_fld_status_shows_the_branch_a_path_held_by_main_and_a_moved_hea
         sandbox.status(&project),
         [
             "Nothing to record: the project folder is at main r2",
-            "  ↳ Git: main is synced with the branch main",
+            "  ↳ Git: fold main → local branch `main` → origin/`main`",
         ]
     );
+
+    assert_eq!(
+        sandbox.run(&project, &["git", "branch", "dev"]),
+        "renamed the local branch `main` to `dev`: the next integration commits fold main to `dev`\n"
+    );
+    assert_eq!(git(&project, &["branch", "--show-current"]), "dev\n");
+    assert_eq!(
+        sandbox.status(&project),
+        [
+            "Nothing to record: the project folder is at main r2",
+            "  ↳ Git: fold main → local branch `dev` → origin/`main`",
+        ]
+    );
+    assert_eq!(
+        sandbox.run(&project, &["git", "branch", "dev"]),
+        "the local branch is `dev` already; nothing changed\n"
+    );
+    let refused = sandbox.output(&project, &["git", "branch", "side"]);
+    assert!(!refused.status.success(), "{refused:?}");
 }
 
 #[test]
@@ -415,7 +434,7 @@ fn fld_untrack_stops_tracking_a_file_the_rules_match_and_leaves_it_on_disk() {
         sandbox.status(&project),
         [
             "Project folder at main r2",
-            "  ↳ Git: main is synced with the branch main",
+            "  ↳ Git: fold main → local branch `main`",
             "  ↳ Workers cannot see 1 ignored path: secret.env. `fld share <path>` shares one with them, read-only",
             "",
             "To record: 1 file",

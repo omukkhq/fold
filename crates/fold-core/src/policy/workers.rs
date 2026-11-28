@@ -238,6 +238,24 @@ pub fn can_check_task(starter: &Starter, task_areas: &[AreaName]) -> Result<(), 
     }
 }
 
+/// A check run holds a machine-wide permit and its commands write into a workspace, so whoever asked for it, or plans its task, stops it: the worker that asked for the run (`own_run`), the lead of an area whose label the task carries, the main agent or a named human. `task_areas` are the areas whose label the run's task carries.
+pub fn can_cancel_check_run(
+    starter: &Starter,
+    own_run: bool,
+    task_areas: &[AreaName],
+) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::Human | Starter::MainAgent => Ok(()),
+        _ if own_run => Ok(()),
+        Starter::AreaLead(own) if task_areas.contains(own) => Ok(()),
+        _ => Err(PolicyDenied {
+            code: codes::CHECK_CANCEL_DENIED,
+            message: "only the worker that asked for the run, the lead of its task's area, the main agent or a human cancels a check run",
+            hint: "call get_check_run to see the run's task, and ask the lead of its area",
+        }),
+    }
+}
+
 /// A hold keeps every agent off a task until a person says the work can start, so whoever plans the work sets it or changes its reason: a named human, the main agent, or the lead of an area whose label the task carries. `task_areas` are the areas whose label the task carries.
 pub fn can_set_hold(starter: &Starter, task_areas: &[AreaName]) -> Result<(), PolicyDenied> {
     match starter {
@@ -348,6 +366,34 @@ mod tests {
 
     fn area(name: &str) -> AreaName {
         AreaName::parse(name).unwrap()
+    }
+
+    #[test]
+    fn the_runs_worker_its_area_lead_the_main_agent_and_a_human_cancel_a_check_run() {
+        let areas = [area("daemon")];
+        for (starter, own_run) in [
+            (Starter::Human, false),
+            (Starter::MainAgent, false),
+            (Starter::AreaLead(area("daemon")), false),
+            (Starter::ShortLived, true),
+            (Starter::Unsupervised, true),
+        ] {
+            assert!(
+                can_cancel_check_run(&starter, own_run, &areas).is_ok(),
+                "{starter:?}"
+            );
+        }
+        for starter in [
+            Starter::ShortLived,
+            Starter::AreaLead(area("web")),
+            Starter::ReviewLead,
+            Starter::Unsupervised,
+            Starter::System,
+        ] {
+            let refused = can_cancel_check_run(&starter, false, &areas).unwrap_err();
+            assert_eq!(refused.code(), codes::CHECK_CANCEL_DENIED, "{starter:?}");
+        }
+        assert!(can_cancel_check_run(&Starter::AreaLead(area("daemon")), false, &[]).is_err());
     }
 
     #[test]

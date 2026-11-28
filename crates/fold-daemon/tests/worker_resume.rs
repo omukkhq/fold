@@ -1204,6 +1204,11 @@ async fn red_proposal_checks_resume_a_stopped_task_worker_with_the_failed_check(
             ),
         ),
     ]);
+    // A stop cancels the runs that run at that time, so the worker stops before its session starts the run.
+    harness
+        .call("web-lead", "stop_worker", json!({"name": TASK_WORKER}))
+        .await;
+    until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
     let created = harness
         .call(
             TASK_WORKER,
@@ -1212,10 +1217,6 @@ async fn red_proposal_checks_resume_a_stopped_task_worker_with_the_failed_check(
         )
         .await;
     assert_eq!(created["checks"], "running", "{created}");
-    harness
-        .call("web-lead", "stop_worker", json!({"name": TASK_WORKER}))
-        .await;
-    until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
     std::fs::write(&gate, "").unwrap();
 
     let runs = until_runs(&fake, TASK_WORKER, 2).await;

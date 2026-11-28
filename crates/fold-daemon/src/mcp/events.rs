@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 
 use super::error::{from_agent, from_events, from_message};
 use super::parse;
-use super::{FoldServer, FooterPart, FooterSource};
+use super::{FoldServer, FooterCounts, FooterPart, FooterSource, footer};
 use crate::services::agents::{AgentService, SessionContext};
 use crate::services::events::{
     EventPage, EventQuery, EventService, WaitQuery, WaitStep, cap_for_cache,
@@ -28,7 +28,7 @@ pub struct GetEventsInput {
     /// Return events after this seq and leave your cursor where it is. Leave it out to read after your cursor and move the cursor to the last event returned.
     #[serde(default)]
     pub after: Option<u64>,
-    /// Only these exact event types, such as task.created or claim.acquired. Leave it out for every type.
+    /// Only these exact event types, such as task.created or claim.acquired. Leave it out for every type. An undeclared type is invalid_event_filter with the nearest type and the 5 closest declared types in details.
     #[serde(default)]
     pub types: Vec<String>,
     /// Only events about this task, such as T-12.
@@ -45,7 +45,7 @@ pub struct GetEventsInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct WaitForEventsInput {
-    /// Wake only for these exact event types, such as proposal.integrated; a worker.stalled or claim.stale named here wakes you only for the workers fold tells you of. Leave it out to wake for every type. A new message to you ends the wait whatever this says, and so does a worker.stalled or claim.stale that fold tells you, and, for the main agent and an area lead, a request that waits for a drafter.
+    /// Wake only for these exact event types, such as proposal.integrated; a worker.stalled or claim.stale named here wakes you only for the workers fold tells you of. Leave it out to wake for every type; an undeclared type is invalid_event_filter with the nearest type and the 5 closest declared types in details. A new message to you ends the wait whatever this says, and so does a worker.stalled or claim.stale that fold tells you, and, for the main agent and an area lead, a request that waits for a drafter.
     #[serde(default)]
     pub types: Vec<String>,
     /// Wake only for events about this task, such as T-12.
@@ -219,10 +219,20 @@ pub async fn wait_for_events(
         .await
         .map_err(from_events)?;
     let progress = context.meta.get_progress_token();
+    let agent = worker.name.agent();
+    let work_done = server.agents.until_work_done(&agent);
+    tokio::pin!(work_done);
     loop {
         let step = tokio::select! {
             step = waiter.next() => step.map_err(from_events)?,
             () = context.ct.cancelled() => return Ok(json!({"cancelled": true})),
+            // fold stops a finished worker once its turn ends, so the wait returns rather than hold the turn open.
+            () = &mut work_done => {
+                return Ok(json!({
+                    "work_done": true,
+                    "hint": "your work is done and fold stops you once this turn ends: end your turn",
+                }));
+            }
         };
         match step {
             WaitStep::Events(page) => {
@@ -288,15 +298,11 @@ impl NewEventsFooter {
 }
 
 impl FooterSource for NewEventsFooter {
-    fn part(&self) -> FooterPart {
-        FooterPart::NewEvents
-    }
-
     fn count<'a>(
         &'a self,
         session: &'a SessionContext,
-    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
-        Box::pin(async move {
+    ) -> Pin<Box<dyn Future<Output = FooterCounts> + Send + 'a>> {
+        footer::single(FooterPart::NewEvents, async move {
             let Some(agent) = session.agent.as_ref() else {
                 return 0;
             };

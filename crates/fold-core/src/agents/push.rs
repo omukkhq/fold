@@ -79,6 +79,8 @@ pub struct Notice {
     pub agent: AgentName,
     pub text: String,
     pub next_tool: &'static str,
+    /// Set by the rule that builds the notice, never read back from `text`: the notice reports something that needs no action from the agent. See [`needs_no_action`].
+    pub needs_no_action: bool,
 }
 
 impl Notice {
@@ -160,11 +162,16 @@ pub fn notice_for(event: &Event, ctx: &PushContext) -> Vec<Notice> {
         Some(rules) => rules,
         None => rule(event, ctx).into_iter().collect(),
     };
-    let rules = rules.into_iter().chain(human_act_rule(event, ctx));
+    let settles =
+        event.event_type == types::PROJECT_PAUSED || event.event_type == types::PROJECT_RESUMED;
+    let rules = rules
+        .into_iter()
+        .map(|rule| (rule, settles))
+        .chain(human_act_rule(event, ctx).map(|rule| (rule, true)));
     let own = event.actor.agent();
     let mut seen = BTreeSet::new();
     let mut notices = Vec::new();
-    for (agents, text, next_tool) in rules {
+    for ((agents, text, next_tool), needs_no_action) in rules {
         notices.extend(
             agents
                 .into_iter()
@@ -173,10 +180,20 @@ pub fn notice_for(event: &Event, ctx: &PushContext) -> Vec<Notice> {
                     agent,
                     text: format!("fold: {text}. Call {next_tool}."),
                     next_tool,
+                    needs_no_action,
                 }),
         );
     }
     notices
+}
+
+/// Whether a notice to a main agent needs no action, so it waits in the agent's digest: a human's act on an item that waited for the user outside the main agent's session, and a pause or resume of the agents. A notice that carries messages never does: the messages need an answer, and its post records them.
+pub fn needs_no_action(event: &Event, notice: &Notice) -> bool {
+    if notice.carrier_head().is_some() {
+        return false;
+    }
+    let kind = event.event_type;
+    kind == types::PROJECT_PAUSED || kind == types::PROJECT_RESUMED || notice.needs_no_action
 }
 
 /// A human who acts on an item that waits for them, outside the main agent's session, ends that item; the main agent hears of it so it stops telling the user that the item waits. A human's act in the main agent's session has the main agent as its actor and sends nothing, and so does a human's act on their own items: a reply that answers no agent's ask, the close of a request with no draft that waits, the review of a proposal without the human review mark and the completion of any task but a human task.
@@ -676,6 +693,9 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
         ));
     }
     if kind == types::PROJECT_PAUSED {
+        if event.actor.is_human() {
+            return None;
+        }
         return Some((
             ctx.main_agents.iter().cloned().collect(),
             "the agents are paused: every worker is stopped; start no work until a resume; pass include_stopped true to see the stopped workers"
@@ -2127,10 +2147,10 @@ mod tests {
     }
 
     #[test]
-    fn a_pause_and_a_resume_reach_the_main_agent_but_not_the_one_who_acted() {
+    fn a_pause_by_an_agent_and_a_resume_reach_the_main_agent_but_not_the_one_who_acted() {
         let mut ctx = ctx();
-        ctx.main_agents = [name("main")].into_iter().collect();
-        let paused = event(types::PROJECT_PAUSED, "human:rafeed");
+        ctx.main_agents = [name("main"), name("second")].into_iter().collect();
+        let paused = event(types::PROJECT_PAUSED, "second");
         assert!(is_pushed(&paused));
         assert_eq!(
             sent(&notice_for(&paused, &ctx)),
@@ -2143,13 +2163,27 @@ mod tests {
         let resumed = event(types::PROJECT_RESUMED, "human:rafeed");
         assert_eq!(
             sent(&notice_for(&resumed, &ctx)),
-            vec![row(
-                "main",
-                "fold: the agents are resumed: the paused workers run again. Call list_workers.",
-                "list_workers"
-            )]
+            vec![
+                row(
+                    "main",
+                    "fold: the agents are resumed: the paused workers run again. Call list_workers.",
+                    "list_workers"
+                ),
+                row(
+                    "second",
+                    "fold: the agents are resumed: the paused workers run again. Call list_workers.",
+                    "list_workers"
+                )
+            ]
         );
-        assert!(notice_for(&event(types::PROJECT_PAUSED, "main"), &ctx).is_empty());
+    }
+
+    #[test]
+    fn a_pause_by_a_human_gives_no_notice() {
+        let mut ctx = ctx();
+        ctx.main_agents = [name("main")].into_iter().collect();
+        let paused = event(types::PROJECT_PAUSED, "human:rafeed");
+        assert!(notice_for(&paused, &ctx).is_empty());
     }
 
     #[test]
@@ -3613,5 +3647,93 @@ mod tests {
             let notices = notice_for(&act, &ctx);
             assert!(notices[0].text.len() <= MAX_NOTICE_LEN, "{kind:?}");
         }
+    }
+
+    fn human_answer_notice() -> (Event, Notice) {
+        let ctx = PushContext {
+            answered_asks: vec![ask(30)],
+            ..main_ctx()
+        };
+        let event = with_data(
+            event(types::MESSAGE_SENT, "human:ana"),
+            json!({"message": "m-31", "reply_to": "m-30"}),
+        );
+        let notice = notice_for(&event, &ctx).remove(0);
+        (event, notice)
+    }
+
+    #[test]
+    fn a_human_act_notice_needs_no_action() {
+        let (answer, notice) = human_answer_notice();
+        assert!(notice.needs_no_action);
+        assert!(needs_no_action(&answer, &notice));
+        let ctx = main_ctx();
+        for (kind, data) in [
+            (types::MESSAGE_ASK_CLOSED, json!({"message": "m-30"})),
+            (types::REQUEST_APPROVED, json!({"request": "RQ-4"})),
+        ] {
+            let act = with_data(event(kind, "human:ana"), data);
+            let notice = notice_for(&act, &ctx).remove(0);
+            assert!(needs_no_action(&act, &notice), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_pause_and_a_resume_need_no_action() {
+        let mut ctx = ctx();
+        ctx.main_agents = [name("main")].into_iter().collect();
+        for kind in [types::PROJECT_PAUSED, types::PROJECT_RESUMED] {
+            let event = event(kind, "second");
+            let notice = notice_for(&event, &ctx).remove(0);
+            assert!(notice.needs_no_action, "{kind:?}");
+            assert!(needs_no_action(&event, &notice), "{kind:?}");
+            let unmarked = Notice {
+                needs_no_action: false,
+                ..notice
+            };
+            assert!(needs_no_action(&event, &unmarked), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_notice_that_carries_messages_never_needs_no_action() {
+        let event = with_data(
+            event(types::MESSAGE_SENT, "human:ana"),
+            json!({"message": "m-4", "recipients": ["backend"]}),
+        );
+        let mut notice = notice_for(&event, &ctx()).remove(0);
+        assert!(notice.carrier_head().is_some());
+        assert!(!notice.needs_no_action);
+        assert!(!needs_no_action(&event, &notice));
+        notice.needs_no_action = true;
+        assert!(!needs_no_action(&event, &notice));
+    }
+
+    #[test]
+    fn any_other_notice_needs_action() {
+        let event = event(types::PROPOSAL_OPENED, "backend");
+        let notices = notice_for(&event, &ctx());
+        assert!(!notices.is_empty());
+        for notice in notices {
+            assert!(!notice.needs_no_action);
+            assert!(!needs_no_action(&event, &notice));
+        }
+    }
+
+    #[test]
+    fn the_mark_comes_from_the_rule_and_not_from_the_text() {
+        let (answer, notice) = human_answer_notice();
+        let reworded = Notice {
+            text: act_text("human:ana", "answered m-30")
+                .replace("outside your session", "elsewhere"),
+            ..notice.clone()
+        };
+        assert!(needs_no_action(&answer, &reworded));
+        let unmarked = Notice {
+            needs_no_action: false,
+            ..notice
+        };
+        assert!(!needs_no_action(&answer, &unmarked));
+        assert!(unmarked.text.contains("it does not wait for the user now"));
     }
 }

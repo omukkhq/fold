@@ -376,6 +376,7 @@ async fn two_sessions_of_one_agent_never_both_carry_one_message() {
             agent: name("frontend"),
             text: closing.to_owned(),
             next_tool: "integrate_proposal",
+            needs_no_action: false,
         }],
         0,
     );

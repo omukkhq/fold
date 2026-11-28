@@ -30,6 +30,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(show, remove))
         .routes(routes!(restore))
         .routes(routes!(show_git, enable_git))
+        .routes(routes!(rename_git_branch))
         .routes(routes!(collect_garbage))
         .routes(routes!(push))
         .routes(routes!(pull))
@@ -2153,5 +2154,60 @@ pub async fn enable_git(
         gitignore: enabled.gitignore.map(|revision| revision.to_string()),
         commit: enabled.commit.map(|commit| commit.to_string()),
         remotes: enabled.remotes,
+    }))
+}
+
+/// The new name of the project's local Git branch.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RenameGitBranch {
+    /// The branch name, as `git check-ref-format --branch` accepts it, such as `dev`.
+    #[schema(example = "dev")]
+    pub to: String,
+}
+
+/// What renaming the project's Git branch did.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GitBranchRenamedView {
+    /// The `[git] branch` before the call.
+    #[schema(example = "main")]
+    pub from: String,
+    /// The `[git] branch` now, which the project folder has checked out.
+    #[schema(example = "dev")]
+    pub to: String,
+    /// False when the branch had the name already and nothing changed.
+    pub changed: bool,
+}
+
+/// Renames the local Git branch of the project folder's repository and the `[git] branch` of `.fold/config.toml` together, as `fld git branch <name>` asks, so the next integration commits to the new name. The commits, the working tree, the index, the remotes and the remote branches stay as they are. A call after a rename that stopped between its two steps finishes it. Socket only; the human comes from `x-fold-human`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/git/branch",
+    operation_id = "rename_git_branch",
+    params(("slug" = String, Path, description = "The project slug")),
+    request_body = RenameGitBranch,
+    responses(
+        (status = 200, description = "The branch has the new name, or had it already", body = GitBranchRenamedView),
+        (status = 400, description = "The body or the branch name is not valid, or the rename is refused with `invalid_request` and `details.reason`: `git_sync_off`, `legacy_remote` (`[git] remote` names the remote), `branch_exists` (the new branch exists), `head_moved` (the folder is not on the project's branch) or `folder_held` (a Git operation waits half-done, or `fld status` lists a blocker)", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 403, description = "`human_required`: only a human renames the branch", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 409, description = "The config or the sync map is invalid", body = ErrorEnvelope),
+        (status = 502, description = "A Git command failed", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open, or git is not on PATH", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn rename_git_branch(
+    _socket: SocketOnly,
+    human: Human,
+    Project(handle): Project,
+    ApiJson(body): ApiJson<RenameGitBranch>,
+) -> Result<Json<GitBranchRenamedView>, ApiError> {
+    let renamed =
+        projects::rename_branch(&handle, &human.actor(), &Git::default(), &body.to).await?;
+    Ok(Json(GitBranchRenamedView {
+        from: renamed.from,
+        to: renamed.to,
+        changed: renamed.changed,
     }))
 }

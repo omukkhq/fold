@@ -33,6 +33,7 @@ use crate::services::events::EventBuffer;
 use crate::services::tasks::{recompute, task_in_main_area, worker_row};
 use crate::services::workspaces::{
     ArchiveReason, CARRY_CACHE_ENTRIES, WorkspaceError, WorkspaceRef, WorkspaceView, archive_in_tx,
+    is_out_of_handles_error,
 };
 
 /// Makes a batch of the open proposals `rows` for `worker` inside the caller's write and takes the review claim of each, by the rules of `create_review_batch` after its policy check: a proposal whose task has the human review mark is refused, members are in dependency order, a claim another worker holds refuses the batch, a stale one is taken over, and a proposal in another open batch is `already_in_batch`.
@@ -1499,6 +1500,7 @@ fn unnamed_batch_comment(index: usize) -> ReviewError {
 /// `checkout_failed` with the code of what stopped the merge or the write. A refusal that is not about the objects or files keeps its own code.
 fn checkout_failed(batch: ReviewBatchId, error: WorkspaceError) -> ReviewError {
     match error {
+        WorkspaceError::Fold(cause) if is_out_of_handles_error(&cause) => cause.into(),
         WorkspaceError::Fold(cause) => FoldError::new(
             codes::CHECKOUT_FAILED,
             format!("the checkout of {batch} could not be written"),

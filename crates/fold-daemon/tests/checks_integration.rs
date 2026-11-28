@@ -723,8 +723,11 @@ fn main_actor(worker: &fold_store::agents::WorkerRow) -> fold_core::Actor {
     })
 }
 
-/// The main agent `actor` writes `fold-checks.toml` with `text` straight onto main, as a direct change, which runs no checks.
+/// The main agent `actor` prepares `fold-checks.toml` with `text` in its main workspace, and a human records the changeset's tree straight onto main, which runs no checks, so even a file that is not valid lands. The main workspace is then abandoned.
 async fn checks_file_on_main(fx: &Fixture, actor: &fold_core::Actor, text: &str) {
+    use fold_daemon::services::reviews::{
+        HumanRecord, PullOutcome, RecordAuthor, RecordIntegration,
+    };
     let opened = fx.workspaces.open_main_workspace(actor).await.unwrap();
     let dir = fx.project.paths().root().join(&opened.workspace.path);
     std::fs::write(dir.join("fold-checks.toml"), text).unwrap();
@@ -733,21 +736,37 @@ async fn checks_file_on_main(fx: &Fixture, actor: &fold_core::Actor, text: &str)
         .record_changes(actor, opened.workspace.id, "the checks")
         .await
         .unwrap();
+    let store = fx.project.store();
+    let changeset = fold_store::workspaces::get_changeset(store.read(), changes.changeset)
+        .await
+        .unwrap()
+        .unwrap();
+    let base_tree = fold_store::workspaces::get_by_number(store.read(), changeset.base_revision)
+        .await
+        .unwrap()
+        .tree_hash;
     let outcome = fx
         .reviews
-        .integrate_direct(
-            actor,
-            fold_daemon::services::reviews::DirectChange {
-                changeset: changes.changeset,
-                message: "Change the checks".to_owned(),
+        .integrate_record(
+            &human(),
+            RecordIntegration {
+                commit: None,
+                base_tree,
+                tree: changeset.tree,
+                by: RecordAuthor::Human(HumanRecord {
+                    human: fold_core::HumanName::parse("tanim").unwrap(),
+                    data: serde_json::json!({}),
+                }),
+                title: None,
             },
         )
         .await
         .unwrap();
-    assert!(matches!(
-        outcome,
-        fold_daemon::services::reviews::DirectOutcome::Succeeded { .. }
-    ));
+    assert!(matches!(outcome, PullOutcome::Succeeded { .. }));
+    fx.workspaces
+        .abandon_workspace(actor, opened.workspace.id, "recorded by the human")
+        .await
+        .unwrap();
 }
 
 async fn held_items(fx: &Fixture) -> Vec<fold_daemon::services::agents::NeedsYouItem> {

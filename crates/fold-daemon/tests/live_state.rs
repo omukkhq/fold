@@ -978,9 +978,9 @@ async fn proposals_and_checkpoints_update_the_state_after_their_commit() {
     let (id, _) = fx.create(&fx.frontend, 1).await;
     let mut bus = fx.bus.subscribe();
     let proposal: ProposalId = "P-3".parse().unwrap();
-    fx.live.set_proposal(id, Some(proposal), None).await;
+    fx.live.set_proposal(id, Some(proposal), Vec::new()).await;
     assert_eq!(fx.live.get(id).unwrap().view.proposal, Some(proposal));
-    fx.live.set_proposal(id, Some(proposal), None).await;
+    fx.live.set_proposal(id, Some(proposal), Vec::new()).await;
     assert_eq!(drain_live(&mut bus, id).len(), 1);
 
     let objects = ObjectStore::open(&fx.project.paths().fold_dir()).unwrap();
@@ -1023,7 +1023,7 @@ async fn proposals_and_checkpoints_update_the_state_after_their_commit() {
     assert_eq!(drain_live(&mut bus, id).len(), 1);
     // A detached workspace ignores later updates.
     fx.live.detach(id).await;
-    fx.live.set_proposal(id, None, None).await;
+    fx.live.set_proposal(id, None, Vec::new()).await;
     assert!(fx.live.get(id).is_none());
 
     // Attaching again reads the stored checkpoints, which the store has not pruned, and attaching twice only rescans.

@@ -54,7 +54,7 @@ async fn footer(h: &Harness) -> String {
         .unwrap_or_default()
 }
 
-/// Acceptance 51, the main agent reads what waits for the user: two agents ask the humans and a task waits for a person. The main agent's `get_needs_you` lists the same items as the web app's Needs you, each with its id, agent, age and one line, and its footer counts them; another agent is refused. A human answers one ask in the web app, and fold tells the main agent, whose list and count drop that ask.
+/// Acceptance 51, the main agent reads what waits for the user: two agents ask the humans and a task waits for a person. The main agent's `get_needs_you` lists the same items as the web app's Needs you, each with its id, agent, age and one line, and its footer counts them; another agent is refused. A human answers one ask in the web app, and fold tells the main agent in its digest of notices that need no action, and its list and count drop that ask.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acceptance_51_the_main_agent_lists_what_waits_for_the_user_and_hears_a_human_answer() {
     let h = Harness::start_without_leads().await;
@@ -107,12 +107,16 @@ async fn acceptance_51_the_main_agent_lists_what_waits_for_the_user_and_hears_a_
         .unwrap();
     assert_eq!(task["kind"], "human_task");
     assert_eq!(task["line"], "Sign in to the registry");
-    assert!(footer(&h).await.ends_with("3 wait for the user"));
+    assert!(
+        footer(&h)
+            .await
+            .ends_with("2 questions for the user · 1 wait for the user")
+    );
 
     let refused = h.refused("backend", "get_needs_you", json!({})).await;
     assert_eq!(refused["code"], "main_agent_required");
     assert!(
-        !footer_of(&h, "backend").await.contains("wait for the user"),
+        !footer_of(&h, "backend").await.contains("for the user"),
         "only the main agent's footer counts the items"
     );
 
@@ -128,8 +132,25 @@ async fn acceptance_51_the_main_agent_lists_what_waits_for_the_user_and_hears_a_
     assert_eq!(status, StatusCode::CREATED, "{reply}");
     let reply = reply["id"].as_str().unwrap().to_owned();
     let expected = format!(
-        "fold: human:{HUMAN} answered {color} in {reply} outside your session; it does not wait for the user now. Call get_thread."
+        "fold digest, no action needed (1): human:{HUMAN} answered {color} in {reply} outside your session; it does not wait for the user now. Call get_thread."
     );
+    // The notice needs no action, so it waits in the main agent's digest until fifteen minutes pass.
+    let main = fold_core::AgentName::parse(MAIN).unwrap();
+    eventually(WAIT, async || {
+        match h.handle.push.waiting_in_digest(&main) {
+            1 => Ok(()),
+            waiting => Err(waiting),
+        }
+    })
+    .await;
+    let due = h
+        .project
+        .clock()
+        .advance(std::time::Duration::from_millis(
+            u64::try_from(fold_daemon::push::DIGEST_WAIT_MS).unwrap(),
+        ))
+        .unwrap();
+    h.handle.push.send_due_digests(due);
     let notice = tokio::time::timeout(WAIT, async {
         loop {
             let post = inbox.next().await;
@@ -145,7 +166,11 @@ async fn acceptance_51_the_main_agent_lists_what_waits_for_the_user_and_hears_a_
     let after = tool_items(&h.call(MAIN, "get_needs_you", json!({})).await);
     assert_eq!(after, web_items(&h).await);
     assert_eq!(after.len(), 2, "{after:?}");
-    assert!(footer(&h).await.ends_with("2 wait for the user"));
+    assert!(
+        footer(&h)
+            .await
+            .ends_with("1 questions for the user · 1 wait for the user")
+    );
 }
 
 async fn footer_of(h: &Harness, agent: &str) -> String {
@@ -156,4 +181,56 @@ async fn footer_of(h: &Harness, agent: &str) -> String {
         .and_then(|content| content.as_text())
         .map(|text| text.text.clone())
         .unwrap_or_default()
+}
+
+/// Acceptance 51, a held task and an open question: the human task the main agent put on hold shows once, as its hold, though it is also a ready human task; the question comes first in `get_needs_you` although the hold is older, and the footer counts the question and the hold apart, the question first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn acceptance_51_a_held_task_and_an_open_question_are_counted_apart_with_the_question_first()
+{
+    let h = Harness::start_without_leads().await;
+    h.make_main(MAIN).await;
+    let created = h
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Sign in to the registry", "kind": "human", "description": "How to do it:\n1. Sign in."}),
+        )
+        .await;
+    let held = created["id"].as_str().unwrap().to_owned();
+    h.call(
+        MAIN,
+        "set_hold",
+        json!({"id": held, "reason": "Wait until the registry account exists"}),
+    )
+    .await;
+    let asked = h
+        .send_with(
+            "backend",
+            json!({"to": ["humans"], "body": "Which colour for the chart?", "choices": ["Red", "Blue"]}),
+        )
+        .await;
+
+    let listed = eventually(WAIT, async || {
+        let listed = tool_items(&h.call(MAIN, "get_needs_you", json!({})).await);
+        if listed.len() >= 2 {
+            Ok(listed)
+        } else {
+            Err(listed)
+        }
+    })
+    .await;
+    assert_eq!(
+        listed,
+        [
+            ("question".to_owned(), Some(asked)),
+            ("blocker".to_owned(), Some(held)),
+        ],
+        "the question first, and one row for the held human task"
+    );
+    let line = footer(&h).await;
+    assert!(
+        line.ends_with("1 questions for the user · 1 held"),
+        "{line}"
+    );
+    assert!(!line.contains("wait for the user"), "{line}");
 }

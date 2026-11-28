@@ -838,6 +838,22 @@ describe("invalidation rules", () => {
     }
   });
 
+  it("refreshes the earlier failed run and the proposal pages when a pass marks its checks flaky", () => {
+    invalidated = [];
+    applyEvent(
+      client,
+      slug,
+      ev("checks.flaky", {
+        task: "T-2",
+        proposal: "P-4",
+        data: { run: "cr-3", passed_run: "cr-5", checks: ["unit"] },
+      }),
+    );
+    expect(hit(keys.checkRun(slug, "cr-3"))).toBe(true);
+    expect(hit(keys.proposal(slug, "P-4"))).toBe(true);
+    expect(hit(keys.proposals(slug))).toBe(true);
+  });
+
   it("refreshes the workers, their questions and the needs-you list for worker events", () => {
     applyEvent(client, slug, ev("worker.permission_asked"));
     for (const key of [
@@ -992,11 +1008,32 @@ describe("invalidation rules", () => {
     expect(hit(keys.reviewBatches(slug))).toBe(true);
     expect(hit(keys.workers(slug))).toBe(true);
     expect(hit(keys.proposal(slug, "P-3"))).toBe(true);
-    expect(hit(keys.board(slug))).toBe(false);
     for (const type of ["review.submitted", "proposal.version_added"]) {
       invalidated = [];
       applyEvent(client, slug, ev(type));
       expect(hit(keys.reviewBatches(slug)), type).toBe(true);
+    }
+  });
+
+  it("refreshes the board with the proposal pages for each event that moves the integration queue", () => {
+    const events: [string, Parameters<typeof ev>[1]][] = [
+      ["proposal.version_added", { proposal: "P-3" }],
+      ["proposal.human_edited", { proposal: "P-3" }],
+      ["proposal.review_again_requested", { proposal: "P-3" }],
+      ["proposal.reviewer_fixed", { proposal: "P-3" }],
+      ["proposal.closed", { proposal: "P-3" }],
+      ["proposal.integrated", { proposal: "P-3" }],
+      ["review.submitted", { proposal: "P-3" }],
+      ["review.batch_created", { proposal: "P-3" }],
+      ["review.batch_ready", {}],
+      ["integration.queued", { proposal: "P-3" }],
+      ["integration.queued", { data: { batch: "rb-3" } }],
+    ];
+    for (const [type, over] of events) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, over));
+      expect(hit(keys.board(slug)), type).toBe(true);
+      expect(hit(keys.proposalPages(slug)), type).toBe(true);
     }
   });
 
@@ -1039,6 +1076,23 @@ describe("invalidation rules", () => {
       expect(hit(keys.task(slug, "T-3")), type).toBe(true);
       expect(hit(keys.board(slug)), type).toBe(true);
     }
+  });
+
+  it("refreshes every task read and the board when a hold or a dependency changes, since dependents show held_by", () => {
+    for (const type of [
+      "task.hold_set",
+      "task.hold_cleared",
+      "dependency.added",
+      "dependency.removed",
+    ]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, { task: "T-3" }));
+      expect(hit(keys.board(slug)), type).toBe(true);
+      expect(refreshes(keys.task(slug, "T-9")), type).toBe(true);
+    }
+    invalidated = [];
+    applyEvent(client, slug, ev("checklist.item_done", { task: "T-3" }));
+    expect(refreshes(keys.task(slug, "T-9"))).toBe(false);
   });
 
   it("refreshes only the activity list for an event of an unknown type", () => {

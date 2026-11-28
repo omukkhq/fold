@@ -759,7 +759,7 @@ pub(super) async fn mark_checks_change(
 }
 
 /// A version a human wrote is a human edit: only a human edit names a human as its author.
-pub(super) fn is_human_edit(created_by: &str) -> bool {
+pub(crate) fn is_human_edit(created_by: &str) -> bool {
     EventActor::parse(created_by).is_ok_and(|author| author.is_human())
 }
 
@@ -933,7 +933,10 @@ pub(super) fn no_task_workspace(task: TaskId) -> ReviewError {
 }
 
 /// The snapshot was taken of `snapped`; the transaction refuses to record it when the task's workspace was replaced or synced to another base meanwhile.
-fn same_workspace(snapped: &WorkspaceRow, live: &WorkspaceRow) -> Result<(), ReviewError> {
+pub(super) fn same_workspace(
+    snapped: &WorkspaceRow,
+    live: &WorkspaceRow,
+) -> Result<(), ReviewError> {
     if snapped.id == live.id && snapped.base == live.base {
         return Ok(());
     }

@@ -18,8 +18,8 @@ use fold_store::{StoreError, WriteTx};
 use serde_json::json;
 
 use super::checks::{
-    FixJob, GateDecision, GateJob, NewProposalRun, Verdict, Waiting, end_run_in_tx,
-    insert_proposal_run, is_refusal, run_gated_commands_for, tell_requester,
+    CancelWatch, FixJob, GateDecision, GateJob, NewProposalRun, Ran, SlotTicket, Verdict, Waiting,
+    end_run_in_tx, insert_proposal_run, is_refusal, run_gated_commands_for, tell_requester,
 };
 use super::human_edits::{busy, current_version, idle_checks};
 use super::proposals::{ProposalDetail, mark_checks_change, require_open, usable_workspace};
@@ -214,6 +214,7 @@ impl ReviewService {
         let now = self.clock.now();
         let label = actor.event_actor();
         let mut buffer = EventBuffer::new();
+        let ticket = self.checks.slot_ticket(job.max_parallel_runs);
         let run = self
             .store
             .write(async |tx| {
@@ -245,19 +246,21 @@ impl ReviewService {
                         evidence: Some(evidence),
                         intent: Some(intent),
                     },
+                    slot: ticket.position(),
                 };
                 insert_proposal_run(tx, &mut buffer, &new, now).await
             })
             .await?;
+        ticket.bind(run.id);
         self.bus.publish(buffer);
         self.workspaces.checks_changed().await;
         tracing::info!(run = %run.id, proposal = %proposal, checkout = %checkout.id, "check run of a review fix started");
         let checking = FixOutcome::Checking {
             run: run.id,
-            task: run.task,
+            task: run.task_run()?,
             checkout: checkout.id,
         };
-        self.spawn_proposal_run(run, job, actor.clone());
+        self.spawn_proposal_run(run, job, actor.clone(), ticket);
         Ok(checking)
     }
 
@@ -267,6 +270,8 @@ impl ReviewService {
         run: CheckRunRow,
         job: GateJob,
         actor: Actor,
+        mut cancel: CancelWatch,
+        ticket: SlotTicket,
     ) -> Result<(), ReviewError> {
         let fix = job.fix.ok_or(StoreError::Corrupt("check_runs.purpose"))?;
         let proposal = run
@@ -275,24 +280,39 @@ impl ReviewService {
         let checkout = workspaces::get_workspace(self.store.read(), fix.checkout)
             .await?
             .ok_or(StoreError::Corrupt("check_runs.workspace_id"))?;
-        let permit = self.checks.start_permit(run.id, &*self.clock).await;
-        let dir = self.workspaces.workspace_dir(&checkout);
-        let owner = self
-            .checks
-            .owner(run.worker.as_ref().map(fold_core::WorkerName::agent));
-        let results = run_gated_commands_for(
-            Some(&self.checks.gate(run.id)),
-            &owner,
-            &dir,
-            job.specs.clone(),
-            self.checks.limits(),
-            &*self.clock,
-        )
-        .instrument(tracing::info_span!("check_run", run = %run.id))
-        .await;
-        drop(permit);
+        let commands = async {
+            ticket.ready().await;
+            if let Some(workspace) = run.workspace {
+                self.checks.setup_finished(workspace).await;
+            }
+            let permit = self.checks.start_permit(run.id, &*self.clock).await;
+            let dir = self.workspaces.workspace_dir(&checkout);
+            let owner = self
+                .checks
+                .owner(run.worker.as_ref().map(fold_core::WorkerName::agent));
+            let results = run_gated_commands_for(
+                Some(&self.checks.gate(run.id)),
+                &owner,
+                &dir,
+                job.specs.clone(),
+                self.checks.limits(),
+                &*self.clock,
+            )
+            .instrument(tracing::info_span!("check_run", run = %run.id))
+            .await;
+            drop(permit);
+            results
+        };
+        let results = match self
+            .until_first_edit(&run, None, &mut cancel, commands)
+            .await?
+        {
+            Ran::Ended(results) => results,
+            Ran::Edited(path) => return self.end_edited_run(&run, &path).await,
+            Ran::Cancelled(request) => return self.end_on_cancel(&run, request).await,
+        };
         let mut verdict = Verdict::of(&results);
-        let live = workspaces::live_task_workspace(self.store.read(), run.task).await?;
+        let live = workspaces::live_task_workspace(self.store.read(), run.task_run()?).await?;
         let snapshot = match live {
             Some(live) => {
                 let current = current_version(
@@ -355,7 +375,9 @@ impl ReviewService {
                 let made = fix_in_tx(tx, &mut buffer, &input).await?;
                 let body = format!(
                     "fold made {proposal} v{} for {}: the checks of your fix passed ({}).",
-                    made.version, run.task, run.id
+                    made.version,
+                    run.subject(),
+                    run.id
                 );
                 tell_requester(tx, &mut buffer, &run, &body, now).await?;
                 Ok::<_, ReviewError>(Some(made))

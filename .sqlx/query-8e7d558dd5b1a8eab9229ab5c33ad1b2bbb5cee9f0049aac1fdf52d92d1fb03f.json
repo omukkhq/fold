@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO area_deny_commands (area_id, position, rule) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "8e7d558dd5b1a8eab9229ab5c33ad1b2bbb5cee9f0049aac1fdf52d92d1fb03f"
+}

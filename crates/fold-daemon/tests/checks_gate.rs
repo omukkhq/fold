@@ -354,6 +354,15 @@ async fn a_green_run_whose_proposal_was_refused_is_reused() {
     assert_eq!(view.run.state, RunState::Stopped);
     assert_eq!(view.run.reason, Some(RunReason::Refused));
     assert_eq!(proposals(&fx).await, 0);
+    let message = last_fold_message(&fx).await;
+    assert!(
+        message.contains("passed, but fold made no proposal: only the worker that holds the implementation claim can open a proposal."),
+        "{message}"
+    );
+    assert!(
+        message.ends_with(" Next: call claim_task and create_workspace, then create_proposal."),
+        "{message}"
+    );
 
     fx.tasks.claim_task(&author, t(1)).await.unwrap();
     let made = fx

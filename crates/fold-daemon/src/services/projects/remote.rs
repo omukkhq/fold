@@ -146,10 +146,11 @@ async fn run(
     remote: Option<&str>,
 ) -> Result<PushOutcome, ProjectError> {
     super::require_git_sync(&handle.store, "fld push").await?;
+    let remote_guard = handle.remote_lock.clone().lock_owned().await;
+    // Read under the remote lock, which a rename of the branch holds while it rewrites the config.
     let config = load_config(&handle.paths).await?;
     let (name, remote) = select_remote(&config, remote)?;
     let (url, branch, local) = (remote.url, remote.branch, config.git.branch);
-    let remote_guard = handle.remote_lock.clone().lock_owned().await;
     let mirror = handle.paths.git_dir();
     // Both locks move into each blocking step and come back out, so a task stopped by a shutdown never releases them while Git still runs.
     let (held, map, fetched) = {

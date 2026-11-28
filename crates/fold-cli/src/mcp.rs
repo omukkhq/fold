@@ -2,10 +2,12 @@ use std::io;
 use std::path::PathBuf;
 
 use clap::Args;
-use fold_cli::claude_files::{AGENT_ENV, AGENT_TAGS_ENV};
-use fold_cli::daemon_client::{self, ClientConfig, ClientError, HandshakeError};
+use fold_cli::claude_files::{AGENT_ENV, AGENT_TAGS_ENV, KEEP_OTHERS_ENV};
+use fold_cli::daemon_client::{self, ClientConfig, ClientError, HandshakeError, HelloLine};
+use fold_cli::mcp_relay::{self, ReconnectPolicy, RelayError};
+use fold_core::MAIN_TAG;
 use fold_daemon::mcp::OutsideProject;
-use fold_daemon::mcp::handshake::{Hello, PROTOCOL_VERSION, SessionInbox};
+use fold_daemon::mcp::handshake::{Hello, HelloOptions, PROTOCOL_VERSION, SessionInbox};
 use thiserror::Error;
 
 use crate::init::project_root_at_or_above;
@@ -30,13 +32,11 @@ pub enum McpError {
     Client(#[from] ClientError),
     #[error(transparent)]
     Handshake(#[from] HandshakeError),
-    #[error("the connection to the daemon failed: {0}")]
-    Copy(io::Error),
-    #[error("the daemon closed the session; start a new session to reconnect")]
-    DaemonClosed,
+    #[error(transparent)]
+    Relay(#[from] RelayError),
 }
 
-/// Connects this session to the daemon and copies MCP bytes between stdio and the socket until either side closes. One process is one session. A session in a folder outside every fold project gets [`OutsideProject`] instead, without a daemon: the user's Claude Code configuration starts `fld mcp` in every folder, and there it serves no tools and writes nothing to stderr.
+/// Connects this session to the daemon and carries MCP between stdio and the socket until Claude Code closes stdin. One process is one session: when the daemon closes the connection, the adapter reconnects as the same agent and keeps stdio open, and it exits only when the reconnect gives up. A session in a folder outside every fold project gets [`OutsideProject`] instead, without a daemon: the user's Claude Code configuration starts `fld mcp` in every folder, and there it serves no tools and writes nothing to stderr.
 pub fn run(args: &McpArgs) -> Result<(), McpError> {
     let cwd = std::env::current_dir()
         .and_then(|dir| dir.canonicalize())
@@ -64,6 +64,14 @@ pub fn run(args: &McpArgs) -> Result<(), McpError> {
             std::env::var_os(MESSAGING_SOCKET_ENV),
             std::env::var(MESSAGING_TOKEN_ENV).ok(),
         ),
+    };
+    let keep_others = keeps_others(&hello.tags, std::env::var_os(KEEP_OTHERS_ENV));
+    let hello = HelloLine {
+        hello,
+        options: HelloOptions {
+            keep_others,
+            reconnect: false,
+        },
     };
     let runtime = serve::current_thread_runtime().map_err(McpError::Runtime)?;
     let outcome = runtime.block_on(session(&config, &hello));
@@ -100,64 +108,30 @@ fn agent_tags(value: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-async fn session(config: &ClientConfig, hello: &Hello) -> Result<(), McpError> {
+/// `FOLD_KEEP_OTHERS`, which `fld claude --keep-others` sets to `1` on the main session: only `1`, and only with the `main` tag, keeps the agent's other live sessions, so a worker that inherits the variable from a daemon started inside such a session never sends it.
+fn keeps_others(tags: &[String], value: Option<std::ffi::OsString>) -> bool {
+    tags.iter().any(|tag| tag == MAIN_TAG) && value.is_some_and(|value| value == "1")
+}
+
+async fn session(config: &ClientConfig, hello: &HelloLine) -> Result<(), McpError> {
     let stream = daemon_client::connect(config).await?;
-    let (mut read, mut write) = daemon_client::handshake(stream, hello).await?;
-
-    // These copies carry protocol bytes, never user output.
-    let mut stdin = tokio::io::stdin();
-    let mut stdout = tokio::io::stdout();
-    tokio::select! {
-        copied = tokio::io::copy(&mut stdin, &mut write) => session_ended(copied),
-        copied = tokio::io::copy(&mut read, &mut stdout) => Err(daemon_ended(copied)),
-    }
-}
-
-/// The session ends cleanly when Claude Code closes stdin. A write that fails because the daemon went away is the daemon closing the session.
-fn session_ended(copied: io::Result<u64>) -> Result<(), McpError> {
-    match copied {
-        Ok(_) => Ok(()),
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
-            ) =>
-        {
-            Err(McpError::DaemonClosed)
-        }
-        Err(error) => Err(McpError::Copy(error)),
-    }
-}
-
-/// The daemon's side ends with its end of stream, or with the error that stopped the copy.
-fn daemon_ended(copied: io::Result<u64>) -> McpError {
-    match copied {
-        Ok(_) => McpError::DaemonClosed,
-        Err(error) => McpError::Copy(error),
-    }
+    let connection = daemon_client::handshake(stream, hello).await?;
+    // The relay carries protocol bytes, never user output.
+    mcp_relay::relay(
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+        connection,
+        &ClientConfig::running(config.socket.clone()),
+        hello,
+        &ReconnectPolicy::default(),
+    )
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_copy_error_is_reported_as_itself() {
-        assert!(session_ended(Ok(3)).is_ok());
-        let gone = io::Error::from(io::ErrorKind::BrokenPipe);
-        assert!(matches!(
-            session_ended(Err(gone)),
-            Err(McpError::DaemonClosed)
-        ));
-        let other = io::Error::from(io::ErrorKind::PermissionDenied);
-        assert!(matches!(session_ended(Err(other)), Err(McpError::Copy(_))));
-        assert!(matches!(daemon_ended(Ok(0)), McpError::DaemonClosed));
-        let error = daemon_ended(Err(io::Error::other("stdout closed")));
-        assert_eq!(
-            error.to_string(),
-            "the connection to the daemon failed: stdout closed"
-        );
-    }
 
     #[test]
     fn the_inbox_needs_both_messaging_values() {
@@ -176,6 +150,39 @@ mod tests {
         assert_eq!(session_inbox(socket(), Some(String::new())), None);
         let shown = format!("{:?}", session_inbox(socket(), token()));
         assert!(!shown.contains("0123456789abcdef"), "{shown}");
+    }
+
+    #[test]
+    fn keep_others_is_1_on_a_main_session_and_goes_beside_the_hello() {
+        let main = ["main".to_owned()];
+        assert!(!keeps_others(&main, None));
+        assert!(!keeps_others(&main, Some("".into())));
+        assert!(!keeps_others(&main, Some("0".into())));
+        assert!(!keeps_others(&main, Some("true".into())));
+        assert!(keeps_others(&main, Some("1".into())));
+        assert!(!keeps_others(&[], Some("1".into())));
+        assert!(!keeps_others(&["review".to_owned()], Some("1".into())));
+        let hello = Hello {
+            fold: PROTOCOL_VERSION,
+            cwd: PathBuf::from("/src/app"),
+            pid: 7,
+            agent: Some("main".to_owned()),
+            tags: vec!["main".to_owned()],
+            inbox: None,
+        };
+        let plain = serde_json::to_vec(&HelloLine::from(hello.clone())).unwrap();
+        assert!(!String::from_utf8_lossy(&plain).contains("keep_others"));
+        let kept = HelloLine {
+            hello: hello.clone(),
+            options: HelloOptions {
+                keep_others: true,
+                reconnect: false,
+            },
+        };
+        let line = serde_json::to_vec(&kept).unwrap();
+        let (parsed, options) = fold_daemon::mcp::handshake::parse_line(&line).unwrap();
+        assert_eq!(parsed, hello);
+        assert!(options.keep_others);
     }
 
     #[test]

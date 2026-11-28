@@ -175,6 +175,9 @@ pub struct AreaEntry {
     /// The MCP servers the area's lead and task workers load; null when the role's servers apply.
     #[schema(required = true, example = json!(["fold", "pencil"]))]
     pub mcp: Option<Vec<String>>,
+    /// The Claude Code Bash rules the area's workers and the reviewers of its proposals get as `permissions.deny`, after the project's; null for none.
+    #[schema(required = true, example = json!(["Bash(psql:*)"]))]
+    pub deny_commands: Option<Vec<String>>,
 }
 
 /// The kinds of worker fold runs.
@@ -455,6 +458,7 @@ impl From<AreaRow> for AreaEntry {
             instructions: area.profile.instructions,
             model: area.profile.model,
             mcp: area.profile.mcp,
+            deny_commands: area.profile.deny_commands,
         }
     }
 }
@@ -493,6 +497,9 @@ pub struct DefineAreaBody {
     /// The MCP servers of the area's lead and task workers, by name; leave it out for the role's servers.
     #[serde(default)]
     pub mcp: Option<Vec<String>>,
+    /// Claude Code Bash rules, such as `Bash(psql:*)`, that the area's workers may never run; leave it out for none.
+    #[serde(default)]
+    pub deny_commands: Option<Vec<String>>,
 }
 
 /// A change of an area's profile; a field left out and not cleared stays as it is.
@@ -504,6 +511,9 @@ pub struct UpdateAreaBody {
     pub model: Option<String>,
     #[serde(default)]
     pub mcp: Option<Vec<String>>,
+    /// The new denied commands; they replace the old list.
+    #[serde(default)]
+    pub deny_commands: Option<Vec<String>>,
     /// True removes the instructions.
     #[serde(default)]
     pub clear_instructions: bool,
@@ -513,6 +523,9 @@ pub struct UpdateAreaBody {
     /// True gives the area's workers the role's MCP servers again.
     #[serde(default)]
     pub clear_mcp: bool,
+    /// True removes the area's denied commands.
+    #[serde(default)]
+    pub clear_deny_commands: bool,
 }
 
 /// The areas and every worker of the project.
@@ -720,7 +733,7 @@ pub async fn restart_worker(
     request_body = DefineAreaBody,
     responses(
         (status = 201, description = "The new area", body = AreaEntry),
-        (status = 400, description = "`invalid_request` (also with `details.reason` `two_areas` when the label shares a task with another area's label, named in `details.tasks`), `invalid_name` or `invalid_label_name`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request` (also with `details.reason` `two_areas` when the label shares a task with another area's label, named in `details.tasks`), `invalid_name`, `invalid_label_name` or `invalid_permission_rule`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`label_not_found` or `project_not_found`", body = ErrorEnvelope),
         (status = 409, description = "`area_exists`", body = ErrorEnvelope),
@@ -739,6 +752,7 @@ pub async fn define_area(
         body.instructions,
         body.model,
         body.mcp,
+        body.deny_commands,
     ))?;
     let area = project
         .0
@@ -760,7 +774,7 @@ pub async fn define_area(
     request_body = UpdateAreaBody,
     responses(
         (status = 200, description = "The area after the change", body = AreaEntry),
-        (status = 400, description = "`invalid_request` or `invalid_name`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request`, `invalid_name` or `invalid_permission_rule`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 403, description = "`main_area`: the area main has no profile", body = ErrorEnvelope),
         (status = 404, description = "`area_not_found` or `project_not_found`", body = ErrorEnvelope),
@@ -779,9 +793,11 @@ pub async fn update_area(
         instructions: body.instructions,
         model: body.model,
         mcp: body.mcp,
+        deny_commands: body.deny_commands,
         clear_instructions: body.clear_instructions,
         clear_model: body.clear_model,
         clear_mcp: body.clear_mcp,
+        clear_deny_commands: body.clear_deny_commands,
     }))?;
     let area = project
         .0

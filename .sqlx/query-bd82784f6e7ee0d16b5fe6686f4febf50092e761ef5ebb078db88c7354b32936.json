@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT s.position AS \"position!: i64\" FROM check_results s\n                    JOIN check_runs c ON c.id = s.run_id\n                    JOIN check_runs lr ON lr.tree_hash = c.tree_hash AND lr.number > c.number\n                    JOIN check_results l ON l.run_id = lr.id AND l.kind = 'check'\n                         AND l.name = s.name AND l.outcome = 'passed'\n                    WHERE s.kind = 'check' AND s.outcome IN ('failed', 'timed_out') AND c.number = ?1 ORDER BY s.position",
+  "describe": {
+    "columns": [
+      {
+        "name": "position!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "check_results",
+            "name": "position"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bd82784f6e7ee0d16b5fe6686f4febf50092e761ef5ebb078db88c7354b32936"
+}

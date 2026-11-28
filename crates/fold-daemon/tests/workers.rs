@@ -107,6 +107,58 @@ async fn stored_events(harness: &Harness) -> Vec<(String, Value)> {
         .collect()
 }
 
+/// `git rev-parse --show-toplevel` in `dir` with exactly `env`.
+fn toplevel(
+    dir: &std::path::Path,
+    env: &std::collections::BTreeMap<String, String>,
+) -> std::process::Output {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .env_clear()
+        .envs(env)
+        .output()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn git_in_a_workspace_with_a_workers_environment_never_reaches_the_project_repository() {
+    let mut fake = FakeClaude::new("result");
+    for name in ["GIT_DIR", "GIT_WORK_TREE"] {
+        fake.launcher
+            .env
+            .push((name.to_owned(), "/srv/inherited".to_owned()));
+    }
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    let root = std::path::Path::new(harness.root()).to_owned();
+    let run = until_runs(&fake, &lead, 1, 2).await.remove(0);
+    assert_eq!(
+        run.env["GIT_CEILING_DIRECTORIES"],
+        root.join(".fold").to_string_lossy()
+    );
+    assert!(!run.env.contains_key("GIT_DIR") && !run.env.contains_key("GIT_WORK_TREE"));
+
+    let init = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&root)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .status()
+        .unwrap();
+    assert!(init.success());
+    let workspace = root.join(".fold/ws/t-1");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let mut open = run.env.clone();
+    open.remove("GIT_CEILING_DIRECTORIES");
+    assert!(toplevel(&workspace, &open).status.success());
+    let confined = toplevel(&workspace, &run.env);
+    assert!(!confined.status.success());
+    assert!(String::from_utf8_lossy(&confined.stderr).contains("not a git repository"));
+}
+
 #[tokio::test]
 async fn an_area_lead_starts_task_workers_only_for_tasks_of_its_own_area() {
     let fake = FakeClaude::new("result");
@@ -299,6 +351,105 @@ async fn a_task_worker_stops_once_its_task_has_an_open_proposal() {
     assert_eq!(stopped_event.1["agent"], "web-worker");
     assert_eq!(stopped_event.1["exit_code"], 0);
     assert!(!harness.handle.workers.is_running(&name("web-worker")));
+}
+
+/// A task worker `web-worker` of `T-1` whose first turn runs one tool call that waits until the file `gate` exists or its process has ended, started by `web-lead`, with its call open and its workspace of `T-1` ready.
+async fn a_worker_inside_a_call(
+    gate: &std::path::Path,
+) -> (FakeClaude, Harness, crate::common::acceptance::Work) {
+    let fake = FakeClaude::new("bash_call").running_tool_scripts();
+    fake.set_tool_script(&format!(
+        "[ \"$FOLD_AGENT\" = web-worker ] || exit 0\nparent=$PPID\nwhile [ ! -e '{}' ] && kill -0 \"$parent\" 2>/dev/null; do sleep 0.05; done\n",
+        gate.display()
+    ));
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    let streams = harness.handle.workers.worker_streams();
+    eventually(WAIT, async || {
+        match streams
+            .facts(&name("web-worker"))
+            .and_then(|facts| facts.open_call)
+        {
+            Some(_) => Ok(()),
+            None => Err(()),
+        }
+    })
+    .await;
+    harness.connect("web-worker").await;
+    let work = harness.start_work("web-worker", "T-1").await;
+    std::fs::write(work.dir.join("page.html"), "<p>page</p>\n").unwrap();
+    (fake, harness, work)
+}
+
+#[tokio::test]
+async fn a_task_worker_whose_proposal_ends_its_work_gets_the_calls_result_before_its_stop() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let gate = dir.path().join("gate");
+    let (fake, harness, work) = a_worker_inside_a_call(&gate).await;
+    harness.propose("web-worker", &work, "Draw the page").await;
+    assert_eq!(
+        worker(&harness, "web-worker").await.state,
+        WorkerState::Working,
+        "the stop waits while the call is open"
+    );
+    std::fs::write(&gate, "").unwrap();
+    let stopped = until_state(&harness, "web-worker", WorkerState::Stopped).await;
+    assert_eq!(stopped.exit_code, Some(0));
+    assert_eq!(stopped.turns, 1, "the turn ended with its result");
+    assert_eq!(stopped.last_error, None);
+    let run = fake.runs_of("web-worker").pop().unwrap();
+    assert!(
+        run.stdin.iter().all(|line| !line.contains("\"interrupt\"")),
+        "no interrupt ended the call: {:?}",
+        run.stdin
+    );
+}
+
+#[tokio::test]
+async fn a_finished_workers_wait_for_events_returns_at_once_so_its_turn_can_end() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let (_fake, harness, work) = a_worker_inside_a_call(&dir.path().join("gate")).await;
+    harness.propose("web-worker", &work, "Draw the page").await;
+    harness
+        .call("web-worker", "get_events", json!({"limit": 500}))
+        .await;
+    let waited = tokio::time::timeout(
+        WAIT,
+        harness.call("web-worker", "wait_for_events", json!({"timeout_s": 1500})),
+    )
+    .await
+    .expect("the wait of a finished worker returns before its timeout");
+    assert_eq!(waited["work_done"], true, "{waited}");
+}
+
+#[tokio::test]
+async fn a_finished_worker_whose_call_never_returns_is_stopped_after_the_grace_limit() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let (_fake, harness, work) = a_worker_inside_a_call(&dir.path().join("gate")).await;
+    let clock = harness.project.clock().clone();
+    let proposed = clock.now();
+    harness.propose("web-worker", &work, "Draw the page").await;
+    let stopped = eventually(WAIT, async || {
+        let row = worker(&harness, "web-worker").await;
+        if row.state == WorkerState::Stopped {
+            Ok(row)
+        } else {
+            clock.advance(Duration::from_secs(5)).unwrap();
+            Err(row.state)
+        }
+    })
+    .await;
+    let waited = stopped.stopped_at.unwrap().as_millis() - proposed.as_millis();
+    assert!(waited >= 120_000, "stopped after {waited} ms");
 }
 
 #[tokio::test]
@@ -924,7 +1075,7 @@ async fn a_human_defines_areas_and_starts_and_stops_leads_over_http() {
     assert_eq!(status, StatusCode::CREATED, "{area}");
     assert_eq!(
         area,
-        json!({"name": "web", "label": "ui", "lead": null, "instructions": null, "model": null, "mcp": null})
+        json!({"name": "web", "label": "ui", "lead": null, "instructions": null, "model": null, "mcp": null, "deny_commands": null})
     );
     let (status, again) = harness
         .socket(
@@ -2853,14 +3004,157 @@ async fn an_idle_lead_gets_a_turn_at_a_daemon_start_only_when_ready_tasks_wait_f
     until_state(&harness, "web-worker", WorkerState::Idle).await;
     harness.stop().await;
     harness.start_again().await;
+    until_dormant(&harness, &lead).await;
     let row = worker(&harness, &lead).await;
     assert_eq!(
         (row.state, row.turns),
         (WorkerState::Idle, 2),
-        "nothing waits for the lead, so it gets no turn"
+        "nothing waits for the lead, so it stays without a process"
     );
-    let runs = until_runs(&fake, &lead, 3, 1).await;
-    assert!(user_turns(&runs[2]).is_empty(), "{:?}", runs[2].stdin);
+    assert_eq!(fake.runs_of(&lead).len(), 2);
+}
+
+/// Waits until the daemon start keeps `agent` without a process, as a lead that no work waits for.
+async fn until_dormant(harness: &Harness, agent: &str) {
+    let agent = name(agent);
+    eventually(WAIT, async || {
+        if harness.handle.workers.is_dormant(&agent) {
+            Ok(())
+        } else {
+            Err(())
+        }
+    })
+    .await;
+    assert!(!harness.handle.workers.is_running(&agent));
+}
+
+#[tokio::test]
+async fn a_daemon_start_runs_no_lead_of_an_empty_graph_and_a_ready_task_starts_its_lead() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    for (area, label) in [("web", "ui"), ("api", "server")] {
+        harness
+            .call(
+                MAIN,
+                "create_label",
+                json!({"name": label, "color": "sage"}),
+            )
+            .await;
+        harness
+            .call(MAIN, "define_area", json!({"name": area, "label": label}))
+            .await;
+    }
+    let web = start_lead(&mut harness, "web").await;
+    let api = start_lead(&mut harness, "api").await;
+    until_state(&harness, &web, WorkerState::Idle).await;
+    until_state(&harness, &api, WorkerState::Idle).await;
+
+    harness.stop().await;
+    harness.start_again().await;
+    until_dormant(&harness, &web).await;
+    until_dormant(&harness, &api).await;
+    assert_eq!(fake.runs_of(&web).len(), 1);
+    assert_eq!(fake.runs_of(&api).len(), 1);
+    // Past the stall time, a lead without a process is no stalled worker.
+    harness
+        .project
+        .clock()
+        .advance(Duration::from_secs(10 * 60))
+        .unwrap();
+    fold_daemon::services::workspaces::check_stalls(&harness.handle, harness.project.now())
+        .await
+        .unwrap();
+    assert!(
+        stored_events(&harness)
+            .await
+            .iter()
+            .all(|(kind, _)| kind != "worker.stalled"),
+    );
+
+    harness.connect(MAIN).await;
+    harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Draw the page", "labels": ["ui"]}),
+        )
+        .await;
+    let runs = until_runs(&fake, &web, 2, 2).await;
+    assert!(runs[1].flag("--resume").is_some(), "{:?}", runs[1].args);
+    let turns = user_turns(&runs[1]);
+    assert!(
+        turns[0].contains("These tasks of area web are ready and wait for a task worker: T-1."),
+        "{}",
+        turns[0]
+    );
+    until_state(&harness, &web, WorkerState::Idle).await;
+    assert!(!harness.handle.workers.is_dormant(&name(&web)));
+    assert!(
+        harness.handle.workers.is_dormant(&name(&api)),
+        "no work came for api"
+    );
+    assert_eq!(fake.runs_of(&api).len(), 1);
+}
+
+#[tokio::test]
+async fn a_notice_to_a_dormant_lead_starts_it_with_the_notice() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    for (area, label) in [("web", "ui"), ("api", "server")] {
+        harness
+            .call(
+                MAIN,
+                "create_label",
+                json!({"name": label, "color": "sage"}),
+            )
+            .await;
+        harness
+            .call(MAIN, "define_area", json!({"name": area, "label": label}))
+            .await;
+    }
+    let web = start_lead(&mut harness, "web").await;
+    let api = start_lead(&mut harness, "api").await;
+    until_state(&harness, &web, WorkerState::Idle).await;
+    until_state(&harness, &api, WorkerState::Idle).await;
+    harness.stop().await;
+    harness.start_again().await;
+    until_dormant(&harness, &web).await;
+    until_dormant(&harness, &api).await;
+
+    // A stall of a worker of web's is no work that the stored state shows the lead; only its notice does.
+    let stalled = fold_core::events::NewEvent::new(
+        fold_core::events::types::WORKER_STALLED,
+        fold_core::EventActor::parse("fold").unwrap(),
+    )
+    .unwrap()
+    .task(fold_core::TaskId::from_number(1).unwrap())
+    .data(json!({"agent": "web-worker", "reason": "silent", "call": null, "minutes": 5, "told": [web]}))
+    .unwrap();
+    let mut buffer = fold_daemon::services::events::EventBuffer::new();
+    let now = harness.project.now();
+    harness
+        .project
+        .store()
+        .write(async |tx| buffer.append(tx, &stalled, now).await.map(|_| ()))
+        .await
+        .unwrap();
+    harness.handle.bus.publish(buffer);
+
+    let runs = until_runs(&fake, &web, 2, 2).await;
+    assert!(runs[1].flag("--resume").is_some(), "{:?}", runs[1].args);
+    let turns = user_turns(&runs[1]);
+    assert!(
+        turns[0].contains("web-worker shows no activity on T-1 for 5 min"),
+        "{}",
+        turns[0]
+    );
+    assert!(
+        harness.handle.workers.is_dormant(&name(&api)),
+        "the notice was not for api"
+    );
+    assert_eq!(fake.runs_of(&api).len(), 1);
 }
 
 #[tokio::test]

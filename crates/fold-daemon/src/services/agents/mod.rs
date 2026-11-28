@@ -16,7 +16,7 @@ use crate::live::LiveState;
 use crate::push::PushTargets;
 use crate::services::events::{EventBuffer, EventBus};
 use crate::services::projects::{Lease, ProjectError};
-use crate::services::reviews::ReviewError;
+use crate::services::reviews::{ReviewError, ReviewService};
 use crate::services::tasks::{TaskError, renew_leases};
 use crate::services::workspaces::WorkspaceLocks;
 
@@ -34,6 +34,7 @@ mod overview;
 pub mod peers;
 mod presence;
 mod push;
+mod takeover;
 mod workers;
 
 pub use context::{
@@ -44,13 +45,15 @@ pub use cost::{ProjectCost, cost_totals};
 pub use fold_core::worker_folders::{FolderDecision, FolderKeep};
 pub use folders::{WorkerFolder, collect_worker_folders};
 pub use needs_you::{
-    NeedsYouAction, NeedsYouItem, NeedsYouKind, Screen, needs_you, with_folder_attention,
+    NeedsYouAction, NeedsYouGroup, NeedsYouItem, NeedsYouKind, Screen, for_the_main_agent,
+    needs_you, with_folder_attention,
 };
 pub use overview::{
     AgentAttention, AgentOverview, ClaimSummary, MAX_OVERVIEW_EVENTS, OverviewFilter,
     ProcessSummary, ProposalSummary, SessionSummary, WorkerOverview, WorkspaceSummary, waits_for,
 };
 pub use presence::SeenPresence;
+pub use takeover::{MainConnection, MainSessions, TAKEN_OVER};
 pub use workers::{
     DEFAULT_RESUME_GAP, DEFAULT_RESUME_GROUP, Launcher, MCP_RETRY_TURN, PAUSE_TURN, PauseState,
     ProjectAccount, QueueEntry, QueuedWorkerStart, RESTART_TURN, RestartOutcome, ResumeGroups,
@@ -141,8 +144,12 @@ pub struct AgentService {
     push: PushTargets,
     live: Option<LiveState>,
     workers: Option<Supervisor>,
+    /// The live adapter connections of the project's interactive main sessions (`ProjectHandle::main_sessions`).
+    main_sessions: Arc<MainSessions>,
     /// The project's workspace locks (`ProjectHandle::workspace_locks`): a start that gives a task worker a released workspace waits for a sync, restore or record there to finish.
     ops: Arc<WorkspaceLocks>,
+    /// The project's review service, through which a stop, a park and a pause cancel the check runs nobody reads any more. Without it they cancel none.
+    reviews: Option<ReviewService>,
 }
 
 impl std::fmt::Debug for AgentService {
@@ -164,7 +171,23 @@ impl AgentService {
             live: None,
             workers: None,
             ops: Arc::new(WorkspaceLocks::default()),
+            main_sessions: Arc::default(),
+            reviews: None,
         }
+    }
+
+    /// Lets a stop, a park and a pause cancel the open check runs they leave without a reader, through the cancel command of `reviews`.
+    #[must_use]
+    pub fn with_reviews(mut self, reviews: ReviewService) -> Self {
+        self.reviews = Some(reviews);
+        self
+    }
+
+    /// Shares the project's live main connections, so a main handshake of any session can take over another.
+    #[must_use]
+    pub fn with_main_sessions(mut self, main_sessions: Arc<MainSessions>) -> Self {
+        self.main_sessions = main_sessions;
+        self
     }
 
     #[must_use]
@@ -270,26 +293,7 @@ impl AgentService {
             return Err(FoldError::from(denied).into());
         }
         let session_id = ctx.session_id;
-        let unsupervised = ctx.peer == SessionPeer::Unsupervised;
-        let role = if unsupervised {
-            let mut conn = self
-                .store
-                .read()
-                .acquire()
-                .await
-                .map_err(StoreError::from)?;
-            agents::find_worker_process(&mut conn, name)
-                .await?
-                .map(|row| row.role)
-        } else {
-            None
-        };
-        // A session from outside every worker's process tree is an interactive main agent when it asks for the tag in its handshake, as `fld claude`'s session does, or when it names the supervised main, whose agent holds the tag; the supervised main's own adapter runs inside its process tree. A worker of another role never holds the tag, and the tag rule refuses it in the registration.
-        let interactive_main = unsupervised
-            && match role {
-                None => origin == TagOrigin::Handshake && tags.iter().any(Tag::is_main),
-                Some(role) => role == fold_core::Role::Main,
-            };
+        let interactive_main = self.is_interactive_main(ctx, name, tags, origin).await?;
         let gate = self.workers.as_ref().filter(|_| interactive_main);
         if let Some(supervisor) = gate {
             supervisor.enter_interactive_main(session_id, name)?;
@@ -315,6 +319,32 @@ impl AgentService {
         ctx.agent = Some(name.clone());
         self.push.restore(name, started_at).await;
         Ok(registered)
+    }
+
+    /// Whether the session `ctx`, registering as `name` with `tags` through `origin`, is an interactive main agent. A session from outside every worker's process tree is one when it asks for the tag in its handshake, as `fld claude`'s session does, or when it names the supervised main, whose agent holds the tag; the supervised main's own adapter runs inside its process tree. A worker of another role never holds the tag, and the tag rule refuses it in the registration.
+    async fn is_interactive_main(
+        &self,
+        ctx: &SessionContext,
+        name: &AgentName,
+        tags: &[Tag],
+        origin: TagOrigin,
+    ) -> Result<bool, AgentError> {
+        if ctx.peer != SessionPeer::Unsupervised {
+            return Ok(false);
+        }
+        let mut conn = self
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        let role = agents::find_worker_process(&mut conn, name)
+            .await?
+            .map(|row| row.role);
+        Ok(match role {
+            None => origin == TagOrigin::Handshake && tags.iter().any(Tag::is_main),
+            Some(role) => role == fold_core::Role::Main,
+        })
     }
 
     /// [`AgentService::register_agent`] for the `register_agent` tool, whose tags the session names itself: it never gives the `main` tag to an agent that lacks it (`policy::can_take_main_tag`).
@@ -481,6 +511,7 @@ impl AgentService {
             })
             .await?;
         self.bus.publish(buffer);
+        self.main_sessions.leave(ctx.session_id);
         if let Some(supervisor) = &self.workers {
             supervisor.leave_interactive_main(ctx.session_id);
         }
@@ -488,6 +519,14 @@ impl AgentService {
             self.push.clear_registered_by(&agent, started_at).await;
         }
         Ok(())
+    }
+
+    /// Returns once fold waits to stop the worker of `agent` because its work is done; never without a supervisor.
+    pub async fn until_work_done(&self, agent: &AgentName) {
+        match &self.workers {
+            Some(supervisor) => supervisor.until_finishing(agent).await,
+            None => std::future::pending::<()>().await,
+        }
     }
 
     /// Ends every session still open at daemon start, because no adapter survives a restart. Returns how many sessions it ended.

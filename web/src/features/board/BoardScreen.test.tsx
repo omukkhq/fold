@@ -282,6 +282,8 @@ describe("BoardScreen", () => {
         checks_failed: false,
         revision: null,
         review_plan: null,
+        queue: null,
+        waits_for: null,
         review_claim: null,
       };
       first.activity = { path: "src/routes/login.tsx", at: Date.now() };
@@ -373,6 +375,8 @@ describe("BoardScreen", () => {
       checks_failed: false,
       revision: null,
       review_plan: null,
+      queue: null,
+      waits_for: null,
     };
     setup(
       boardView([

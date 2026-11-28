@@ -63,6 +63,24 @@ function holdNext(write: (...args: never[]) => Promise<unknown>) {
 
 const HOLD = { reason: "Wait for the logo", set_by: "web-lead", set_at: 0 };
 
+describe("the held-through group", () => {
+  it("names each held task as a link, next to the manual hold", async () => {
+    const task = taskView("T-2", { held_by: ["T-9", "T-3"], hold: HOLD });
+    mount(<TaskSide slug="demo" task={task} live={null} now={0} />);
+    const group = await screen.findByRole("region", { name: "Held through" });
+    const links = within(group).getAllByRole("link");
+    expect(links.map((link) => link.textContent)).toEqual(["T-3", "T-9"]);
+    expect(links[0]?.getAttribute("href")).toBe("/p/demo/t/T-3");
+    expect(screen.getByRole("region", { name: "On hold" })).toBeTruthy();
+  });
+
+  it("is absent without a held task", async () => {
+    mount(<TaskSide slug="demo" task={taskView("T-2")} live={null} now={0} />);
+    await screen.findByRole("region", { name: "Links" });
+    expect(screen.queryByRole("region", { name: "Held through" })).toBeNull();
+  });
+});
+
 describe("the hold group", () => {
   it("puts a task on hold with a reason", async () => {
     const task = taskView("T-2", { can_set_hold: true });

@@ -22,7 +22,7 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use crate::services::agents::{AgentService, SessionContext};
@@ -239,6 +239,12 @@ impl FoldServer {
             (events::WAIT_FOR_EVENTS, Some(worker)) => {
                 events::wait_for_events(self, worker, arguments, context).await?
             }
+            (reviews::SUBMIT_MAIN_CHANGE, Some(_)) => {
+                match reviews::submit_main_change_tool(self, arguments, context).await? {
+                    Some(value) => value,
+                    None => return Ok(None),
+                }
+            }
             (messages::ACKNOWLEDGE_MESSAGE, Some(_)) => {
                 messages::acknowledge_message(self, arguments).await?
             }
@@ -318,9 +324,7 @@ impl FoldServer {
             .iter()
             .filter(|s| s.before_call() == before_call)
         {
-            let part = source.part();
-            let count = source.count(&session).await;
-            counts = counts.with(part, counts.get(part) + count);
+            counts = counts.plus(source.count(&session).await);
         }
         counts
     }
@@ -392,12 +396,86 @@ fn domain_of(tool: &str) -> Option<Domain> {
 
 /// The arguments as the tool's input type. The message never repeats the arguments.
 pub(crate) fn parse<T: for<'de> Deserialize<'de>>(arguments: &JsonObject) -> Result<T, FoldError> {
-    serde_json::from_value(Value::Object(arguments.clone())).map_err(|_| {
-        FoldError::new(
+    serde_path_to_error::deserialize(Value::Object(arguments.clone())).map_err(|error| {
+        let field = shape_field("", &error);
+        let mut refusal = FoldError::new(
             codes::INVALID_REQUEST,
             "the arguments do not match the tool's input schema",
         )
+        .with_hint("call the tool again with arguments of its input schema; details.field names the key that is wrong, missing or unknown");
+        if !field.is_empty() {
+            refusal = refusal.with_details([("field", json!(field))]);
+        }
+        refusal
     })
+}
+
+/// Whether `detail` asks for the full form of `tool`. `short_form` says what the short form holds, for the hint.
+pub(crate) fn full_detail(
+    detail: Option<&str>,
+    tool: &str,
+    short_form: &str,
+) -> Result<bool, FoldError> {
+    match detail {
+        None => Ok(false),
+        Some("full") => Ok(true),
+        Some(_) => Err(
+            FoldError::new(codes::INVALID_REQUEST, "detail is full or left out")
+                .with_details([("field", json!("detail"))])
+                .with_hint(format!(
+                    "call {tool} with detail full, or leave detail out for {short_form}"
+                )),
+        ),
+    }
+}
+
+/// The longest key a shape error names.
+const MAX_SHAPE_KEY_CHARS: usize = 64;
+
+/// Whether a key of the agent's input may appear in a shape error: at most [`MAX_SHAPE_KEY_CHARS`] characters of a-z, 0-9 and _, the form of every schema field name, so a key that holds the agent's text is never echoed.
+fn shape_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= MAX_SHAPE_KEY_CHARS
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+/// The path below `root` of the value a deserialization refused, such as `intent.parts[0].files`: the wrong value, the missing field or the unknown key. A key that [`shape_key`] refuses ends the path at its parent.
+pub(crate) fn shape_field(
+    root: &str,
+    error: &serde_path_to_error::Error<serde_json::Error>,
+) -> String {
+    fn push_key(field: &mut String, key: &str) {
+        if !field.is_empty() {
+            field.push('.');
+        }
+        field.push_str(key);
+    }
+    let mut field = root.to_owned();
+    for segment in error.path().iter() {
+        match segment {
+            serde_path_to_error::Segment::Seq { index } => field.push_str(&format!("[{index}]")),
+            serde_path_to_error::Segment::Map { key } if shape_key(key) => {
+                push_key(&mut field, key);
+            }
+            _ => return field,
+        }
+    }
+    let message = error.inner().to_string();
+    let named = ["missing field `", "unknown field `"]
+        .iter()
+        .find_map(|start| message.strip_prefix(start))
+        .and_then(|rest| rest.split_once('`'))
+        .map(|(key, _)| key);
+    // serde_path_to_error puts an unknown key in the path already, a missing field never.
+    if let Some(key) = named.filter(|key| shape_key(key))
+        && field != *key
+        && !field.ends_with(&format!(".{key}"))
+    {
+        push_key(&mut field, key);
+    }
+    field
 }
 
 /// Every tool of a fold session as `tools/list` gives it before the loading marks; the review tools only with `reviews`.

@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use fold_core::{
-    AgentEventFacts, AgentName, Event, EventActor, EventFilter, EventType, MessageId, NewEvent,
-    ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId,
+    AgentEventFacts, AgentName, Event, EventActor, EventFilter, EventType, LIFECYCLE, MessageId,
+    NewEvent, ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId,
 };
 use sqlx::{SqliteConnection, SqliteExecutor, SqlitePool};
 
@@ -286,7 +286,7 @@ pub async fn read_reaching(
     rows.into_iter().map(EventRecord::into_event).collect()
 }
 
-/// How many events with `seq > after` concern `agent`, counted up to `cap` and no further: the event has one of `types`, or carries one of `tasks` or `proposals`, and no worker of `agent` performed it. With the agent's facts as `tasks`, `proposals` and `types`, it is the rule of `fold_core::concerns` in SQL, so the count never loads the events. A worker actor is the agent's name or a name under `agent/`, the range from `agent/` up to `agent0` that [`newest_by_agent`] also reads.
+/// How many events with `seq > after` concern `agent`, counted up to `cap` and no further: the event has one of `types`, or carries one of `tasks` or `proposals`, and no worker of `agent` performed it. With the agent's facts as `tasks`, `proposals` and `types`, it is the rule of `fold_core::concerns` in SQL, so the count never loads the events. Lifecycle types are left out even when they match. A worker actor is the agent's name or a name under `agent/`, the range from `agent/` up to `agent0` that [`newest_by_agent`] also reads.
 pub async fn count_concerning(
     executor: impl SqliteExecutor<'_>,
     after: u64,
@@ -301,11 +301,13 @@ pub async fn count_concerning(
     let tasks = json_list(tasks.iter(), |t| t.to_db().into());
     let proposals = json_list(proposals.iter(), |p| p.to_db().into());
     let types = json_list(types.iter(), |t| t.as_str().into());
+    let lifecycle = json_list(LIFECYCLE.iter(), |t| (*t).into());
     let cap = i64::try_from(cap).unwrap_or(i64::MAX);
     let count = sqlx::query_scalar!(
         r#"SELECT COUNT(*) AS "count!: i64" FROM (
                SELECT 1 FROM events
                WHERE seq > ?1
+                 AND type NOT IN (SELECT value FROM json_each(?7))
                  AND NOT (actor = ?2 OR (actor >= ?2 || '/' AND actor < ?2 || '0'))
                  AND (type IN (SELECT value FROM json_each(?5))
                       OR task_id IN (SELECT value FROM json_each(?3))
@@ -317,7 +319,8 @@ pub async fn count_concerning(
         tasks,
         proposals,
         types,
-        cap
+        cap,
+        lifecycle
     )
     .fetch_one(executor)
     .await?;

@@ -133,6 +133,7 @@ async fn every_project_has_the_area_main_without_a_lead_and_keeps_its_label() {
         "UPDATE areas SET instructions = 'draw' WHERE name = 'main'",
         "UPDATE areas SET model = 'opus' WHERE name = 'main'",
         "INSERT INTO area_mcp_servers (area_id, position, name) VALUES ((SELECT id FROM areas WHERE name = 'main'), 0, 'fold')",
+        "INSERT INTO area_deny_commands (area_id, position, rule) VALUES ((SELECT id FROM areas WHERE name = 'main'), 0, 'Bash(psql:*)')",
     ] {
         let refused = exec(&store, sql).await.unwrap_err();
         assert!(
@@ -179,6 +180,10 @@ async fn an_area_profile_changes_while_its_lead_stays_set_once() {
         instructions: Some("draw screens in Pencil".to_owned()),
         model: Some("opus".to_owned()),
         mcp: Some(vec!["pencil".to_owned(), "fold".to_owned()]),
+        deny_commands: Some(vec![
+            "Bash(psql:*)".to_owned(),
+            "Bash(docker exec:*)".to_owned(),
+        ]),
     };
     store
         .write(async |tx| agents::set_area_profile(tx, area, &design).await)
@@ -209,6 +214,21 @@ async fn an_area_profile_changes_while_its_lead_stays_set_once() {
         count(&store, "SELECT count(*) FROM area_mcp_servers").await,
         1
     );
+    assert_eq!(
+        count(&store, "SELECT count(*) FROM area_deny_commands").await,
+        0,
+        "a profile without denied commands clears them"
+    );
+    let denies = AreaProfile {
+        deny_commands: Some(vec!["Bash(ssh:*)".to_owned(), "Bash(psql:*)".to_owned()]),
+        ..fewer.clone()
+    };
+    store
+        .write(async |tx| agents::set_area_profile(tx, area, &denies).await)
+        .await
+        .unwrap();
+    let listed = led_areas(&store).await;
+    assert_eq!(listed[0].profile, denies, "the rules keep their order");
 
     let cleared = exec(
         &store,
@@ -230,6 +250,16 @@ async fn an_area_profile_changes_while_its_lead_stays_set_once() {
     assert_eq!(
         twice.constraint().as_deref(),
         Some("area_mcp_servers.area_id, area_mcp_servers.name")
+    );
+    let rule_twice = exec(
+        &store,
+        "INSERT INTO area_deny_commands (area_id, position, rule) VALUES ((SELECT id FROM areas WHERE name = 'web'), 5, 'Bash(psql:*)')",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        rule_twice.constraint().as_deref(),
+        Some("area_deny_commands.area_id, area_deny_commands.rule")
     );
     let blank = exec(
         &store,
@@ -1573,5 +1603,57 @@ async fn a_refused_login_keeps_its_newest_refusal_until_it_is_cleared() {
         )
         .await
         .is_err()
+    );
+}
+
+#[tokio::test]
+async fn a_reviewer_gets_each_area_of_its_proposals_once_in_name_order_without_main() {
+    let (_dir, store) = seeded().await;
+    for statement in [
+        "INSERT INTO areas (id, name, label_id, created_by, created_at) VALUES (11, 'web', 11, 'main', 0), (12, 'api', 12, 'main', 0)",
+        "INSERT INTO tasks (id, number, title, created_by, created_at, updated_at) VALUES (3, 3, 'three', 'fold', 0, 0), (4, 4, 'four', 'fold', 0, 0)",
+        "INSERT INTO task_labels (task_id, label_id) VALUES (2, 12), (3, 11), (4, (SELECT id FROM labels WHERE name = 'main'))",
+        "INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (2, 4, 1, 5, 'p', 0, 0), (3, 5, 3, 5, 'p', 0, 0), (4, 6, 4, 5, 'p', 0, 0)",
+    ] {
+        exec(&store, statement).await.unwrap();
+    }
+    let reviewer = process(&store, 4, Role::Reviewer, None, "s4").await;
+    let other = process(&store, 3, Role::Reviewer, None, "s3").await;
+    let none = agents::areas_of_bound_proposals(store.read(), reviewer)
+        .await
+        .unwrap();
+    assert!(none.is_empty());
+    store
+        .write(async |tx| {
+            for number in [4, 3, 5, 6] {
+                agents::bind_proposal(tx, reviewer, ProposalId::from_number(number).unwrap())
+                    .await?;
+            }
+            agents::bind_proposal(tx, other, ProposalId::from_number(4).unwrap()).await?;
+            Ok::<_, fold_store::StoreError>(())
+        })
+        .await
+        .unwrap();
+    let names = |areas: Vec<fold_core::AreaName>| {
+        areas
+            .iter()
+            .map(|area| area.as_str().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names(
+            agents::areas_of_bound_proposals(store.read(), reviewer)
+                .await
+                .unwrap()
+        ),
+        ["api", "web"]
+    );
+    assert_eq!(
+        names(
+            agents::areas_of_bound_proposals(store.read(), other)
+                .await
+                .unwrap()
+        ),
+        ["web"]
     );
 }

@@ -355,6 +355,30 @@ function versionKeys(slug: string, event: StoredEvent): QueryKey[] {
     : [];
 }
 
+/** A hold set or cleared changes `held_by` of every task that waits on the held one, not only of the task the event names. */
+const HOLD_CHANGES: ReadonlySet<string> = new Set([
+  "task.hold_set",
+  "task.hold_cleared",
+]);
+
+/** The events that add a proposal to the integration queue or take it out, or that change what a proposal in it waits for. */
+const QUEUE_MOVES: ReadonlySet<string> = new Set([
+  "proposal.version_added",
+  "proposal.human_edited",
+  "proposal.review_again_requested",
+  "proposal.reviewer_fixed",
+  "proposal.closed",
+  "proposal.integrated",
+  "review.submitted",
+]);
+
+/**
+ * An approved proposal's place in the integration queue and the reason it waits depend on every other proposal and on the review batches, so an event that moves one of them changes the queue text of every proposal page, every list row and every board card, which shows the queue of its proposal.
+ */
+function queueKeys(slug: string): QueryKey[] {
+  return [keys.proposals(slug), keys.proposalPages(slug), keys.board(slug)];
+}
+
 function invalidationKeys(
   slug: string,
   type: string,
@@ -392,6 +416,15 @@ function invalidationKeys(
     case "task": {
       // Needs you lists human tasks in To do and tasks on hold, which any task event can add or remove; the human review mark also decides which proposals wait for the human. A change of the labels can move the task to another area, whose lead reads its feedback.
       const readers = task === null ? [] : [keys.taskReaders(slug, task)];
+      if (HOLD_CHANGES.has(type)) {
+        return [
+          board,
+          keys.tasks(slug),
+          ...taskKey,
+          ...readers,
+          keys.needsYou(slug),
+        ];
+      }
       return type === "task.human_review_set" ||
         type === "task.human_review_cleared"
         ? [
@@ -400,10 +433,15 @@ function invalidationKeys(
             ...readers,
             keys.needsYou(slug),
             keys.proposals(slug),
+            keys.proposalPages(slug),
           ]
         : [board, ...taskKey, ...readers, keys.needsYou(slug)];
     }
     case "dependency":
+      // A dependency edge changes which held tasks every dependent waits on, so each open task read is stale.
+      return type === "dependency.added" || type === "dependency.removed"
+        ? [board, keys.tasks(slug), ...taskKey]
+        : [board, ...taskKey];
     case "checklist":
       return [board, ...taskKey];
     case "claim":
@@ -427,8 +465,9 @@ function invalidationKeys(
       return [
         keys.proposals(slug),
         ...proposalKey,
-        ...taskKey,
+        ...(QUEUE_MOVES.has(type) ? queueKeys(slug) : []),
         board,
+        ...taskKey,
         keys.reviewBatches(slug),
         keys.needsYou(slug),
         ...(type === "proposal.integrated" ? [repository] : []),
@@ -443,13 +482,20 @@ function invalidationKeys(
           ...taskKey,
         ];
       }
+      // A ready batch takes its turn in the integration queue before the single proposals do.
       return type.startsWith("review.batch_")
-        ? [keys.reviewBatches(slug), keys.workers(slug), ...proposalKey]
+        ? [
+            keys.reviewBatches(slug),
+            keys.workers(slug),
+            ...proposalKey,
+            ...queueKeys(slug),
+          ]
         : [
             keys.proposals(slug),
             ...proposalKey,
-            ...taskKey,
+            ...(QUEUE_MOVES.has(type) ? queueKeys(slug) : []),
             board,
+            ...taskKey,
             keys.reviewBatches(slug),
             keys.needsYou(slug),
           ];
@@ -477,11 +523,15 @@ function invalidationKeys(
       ];
     }
     case "integration":
+      // A queued, unqueued, held or ended integration moves every proposal behind it; a pull names no proposal and no batch.
       return [
+        board,
+        ...(proposal === null && typeof event.data.batch !== "string"
+          ? []
+          : queueKeys(slug)),
         ...(proposal === null ? [] : [keys.proposals(slug), ...proposalKey]),
         ...taskKey,
         repository,
-        board,
         // A batch's queued integration and each member's integration change what the batch screen says about its integration.
         ...(typeof event.data.batch === "string"
           ? [keys.reviewBatches(slug)]

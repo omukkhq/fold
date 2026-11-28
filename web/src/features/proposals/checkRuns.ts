@@ -4,6 +4,7 @@ import type {
   CheckRunReason,
   ProposalSummary,
 } from "@/api/proposals";
+import { actorSegment, type Segments } from "@/people/segments";
 
 const REASONS: Record<CheckRunReason, string> = {
   check_failed: "a required check failed",
@@ -17,11 +18,30 @@ const REASONS: Record<CheckRunReason, string> = {
   fold_failed:
     "fold could not run the checks; the version keeps its place, so integrate again once the fault is fixed",
   killed: "a check was killed: out of memory or by a signal",
+  no_build_slot:
+    "No build slot was free on the machine for too long; the code was not at fault.",
+  cancelled: "fold stopped the run because someone cancelled it.",
 };
 
 /** The sentence for why a run failed or stopped. */
 export function reasonText(reason: CheckRunReason): string {
   return REASONS[reason];
+}
+
+/** The line under a run header that says why it ended: who cancelled a cancelled run when the daemon names them, else the sentence for the reason. Null for a run with no reason. */
+export function runReasonLine(run: CheckRun): Segments | null {
+  if (run.reason === null) return null;
+  if (run.reason === "cancelled" && run.cancelled_by) {
+    return ["Cancelled by ", actorSegment(run.cancelled_by)];
+  }
+  return [reasonText(run.reason)];
+}
+
+/** The line under a run header while the running run waits for a slot of the machine's build gate; its timeout starts once it has one. Null while it does not wait or has ended. */
+export function waitLine(run: CheckRun): string | null {
+  if (run.state !== "running") return null;
+  if (run.waiting_for_build_slot_since == null) return null;
+  return "Waits for a free build slot on the machine.";
 }
 
 function seconds(ms: number): string {

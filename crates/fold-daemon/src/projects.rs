@@ -25,9 +25,9 @@ use crate::services::projects::{
     FoldSkills, GitAttention, ProjectError, RemoteContext, ToolWindows, keep_fold_skills_out,
     load_config,
 };
-use crate::services::reviews::ReviewService;
 use crate::services::reviews::checks::{CheckPermits, CheckRunner, recover_check_runs};
-use crate::services::tasks::TaskService;
+use crate::services::reviews::{IntegrationLock, ReviewService};
+use crate::services::tasks::{TaskService, follow_task_watches};
 use crate::services::workspaces::{
     BatchMergeCache, CarryCache, WorkspaceLocks, WorkspaceService, follow_closed_workspaces,
     follow_stall_turns,
@@ -48,8 +48,8 @@ pub struct ProjectHandle {
     pub presence: SeenPresence,
     /// Reads the claim lease from the project's configuration on each use, so every transport applies the same lease; the footer's near-stale count reads it again only when the file changed.
     pub tasks: TaskService,
-    /// Held for the whole integration procedure, so a proposal integration and a pull integration never run at the same time. Every review service of the project shares it.
-    pub integration: Arc<tokio::sync::Mutex<()>>,
+    /// Held for the whole integration procedure, so a proposal integration and a pull integration never run at the same time; a direct change takes first place in its queue. Every review service of the project shares it.
+    pub integration: Arc<IntegrationLock>,
     /// Held for a whole garbage collection run, so a second run is refused instead of queued.
     pub gc: tokio::sync::Mutex<()>,
     /// Keeps the sweep away from objects that are about to be named. A reused object must not be deleted between its refresh and the row that names it, and the sweep cannot see a row that is not committed. So every path that writes or refreshes objects and then records a row naming them holds this shared from its first object write until that transaction commits, and writes or refreshes each object less than the grace period before the row names it. The sweep holds it exclusive while it lists, checks and deletes objects. It is an `Arc` so a guard can move into blocking work and outlive an aborted caller.
@@ -76,6 +76,8 @@ pub struct ProjectHandle {
     pub batch_merges: Arc<BatchMergeCache>,
     /// The Claude Code inbox sockets of the project's agents. They live in memory only, so a restarted daemon has none until the session-start hooks run again.
     pub push: PushTargets,
+    /// The live adapter connections of the interactive main sessions, which a new main handshake takes over.
+    pub main_sessions: Arc<crate::services::agents::MainSessions>,
     push_task: PushTask,
     /// The Claude Code processes of the project's worker agents.
     pub workers: Supervisor,
@@ -91,6 +93,8 @@ pub struct ProjectHandle {
     stall_turns: ProjectTask,
     /// Gives each workspace its watch or its rest on the timer scan again after each start or end of a worker process or a session.
     watch_owners: ProjectTask,
+    /// Reports the watched tasks that become Done.
+    task_watches: ProjectTask,
     /// Runs the queued worker starts when a place frees.
     queued_starts: ProjectTask,
     /// The device and inode of the database file this handle opened. SQLite keeps reading a file that was deleted, so only this tells the handle's database from a new one at the same path.
@@ -240,6 +244,11 @@ impl ProjectHandle {
             bus.subscribe(),
         ));
         let watch_owners = ProjectTask::spawn(follow_watch_owners(live.clone(), bus.subscribe()));
+        let task_watches = ProjectTask::spawn(follow_task_watches(
+            tasks.clone(),
+            bus.clone(),
+            bus.subscribe(),
+        ));
         let presence = SeenPresence::new();
         let queue_service = AgentService::new(store.clone(), bus.clone(), clock.clone())
             .with_project_config(paths.clone())
@@ -268,7 +277,7 @@ impl ProjectHandle {
             bus,
             presence,
             tasks,
-            integration: Arc::new(tokio::sync::Mutex::new(())),
+            integration: Arc::new(IntegrationLock::default()),
             gc: tokio::sync::Mutex::new(()),
             objects,
             remote_lock,
@@ -282,6 +291,7 @@ impl ProjectHandle {
             carries: Arc::new(CarryCache::default()),
             batch_merges: Arc::new(BatchMergeCache::default()),
             push,
+            main_sessions: Arc::default(),
             push_task,
             workers,
             checks: CheckRunner::default().with_project(&row.slug),
@@ -290,6 +300,7 @@ impl ProjectHandle {
             cleanup_due,
             stall_turns,
             watch_owners,
+            task_watches,
             queued_starts,
             database_file,
         })
@@ -391,7 +402,7 @@ impl ProjectHandle {
         }
     }
 
-    /// Waits up to `timeout` for the commit writer, the push delivery, the removal of closed workspace directories, the stall decisions and the watch moves to end after [`EventBus::close`], all at the same time, then aborts them, so none outlives the project's database.
+    /// Waits up to `timeout` for the commit writer, the push delivery, the removal of closed workspace directories, the stall decisions, the watch moves and the task watches to end after [`EventBus::close`], all at the same time, then aborts them, so none outlives the project's database.
     pub async fn stop_tasks(&self, timeout: Duration) {
         tokio::join!(
             self.auto_commit.stopped(timeout),
@@ -399,6 +410,7 @@ impl ProjectHandle {
             self.workspace_cleanup.stopped(timeout),
             self.stall_turns.stopped(timeout),
             self.watch_owners.stopped(timeout),
+            self.task_watches.stopped(timeout),
             self.queued_starts.stopped(timeout),
         );
     }
@@ -408,7 +420,7 @@ impl ProjectHandle {
         self.cleanup_due.notify_one();
     }
 
-    /// The agent service of this project: its store, bus, clock, configured lease, seen presence and push targets.
+    /// The agent service of this project: its store, bus, clock, configured lease, seen presence, push targets and the review service of its check cancels.
     pub fn agents(&self) -> AgentService {
         AgentService::new(self.store.clone(), self.bus.clone(), self.clock.clone())
             .with_project_config(self.paths.clone())
@@ -417,6 +429,20 @@ impl ProjectHandle {
             .with_live(self.live.clone())
             .with_workers(self.workers.clone())
             .with_workspace_locks(self.workspace_locks.clone())
+            .with_main_sessions(self.main_sessions.clone())
+            .with_reviews(self.cancel_reviews())
+    }
+
+    /// The review service that the agent service cancels check runs with: it shares the project's check runner, and it needs no registry, because a cancel tells only the worker of the run.
+    fn cancel_reviews(&self) -> ReviewService {
+        ReviewService::new(
+            self.store.clone(),
+            self.bus.clone(),
+            self.clock.clone(),
+            WorkspaceService::for_project(self),
+            self.integration.clone(),
+        )
+        .with_checks(self.checks.clone())
     }
 
     /// Every item that waits for a human, oldest first: the stored items with the stalls, the project folder's items and, with `notify`, the notice targets fold turned off. The web app's Needs you, the notices and the main agent's `get_needs_you` read this one list, so they name the same items.
@@ -438,7 +464,7 @@ impl ProjectHandle {
         ))
     }
 
-    /// [`ProjectHandle::needs_you`] for the main agent or a human; another agent is `main_agent_required`, as for every agent's open asks.
+    /// [`ProjectHandle::needs_you`] as the main agent reads it ([`crate::services::agents::for_the_main_agent`]), for the main agent or a human; another agent is `main_agent_required`, as for every agent's open asks.
     pub async fn needs_you_for(
         &self,
         actor: &Actor,
@@ -448,7 +474,9 @@ impl ProjectHandle {
             .await
             .map_err(crate::services::error::from_store)?;
         fold_core::policy::can_list_open_asks(actor, standing)?;
-        self.needs_you(notify).await
+        Ok(crate::services::agents::for_the_main_agent(
+            self.needs_you(notify).await?,
+        ))
     }
 
     /// The message service of this project, which reaches the humans of `registry`.
@@ -464,15 +492,7 @@ impl ProjectHandle {
 
     /// The review service of this project. Every transport builds it here, per request or session, so it always shares the project's integration mutex, object lock and workspace locks, and knows the humans of `registry`.
     pub fn reviews(&self, registry: &Store) -> ReviewService {
-        ReviewService::new(
-            self.store.clone(),
-            self.bus.clone(),
-            self.clock.clone(),
-            WorkspaceService::for_project(self),
-            self.integration.clone(),
-        )
-        .with_registry(registry.clone())
-        .with_checks(self.checks.clone())
+        self.cancel_reviews().with_registry(registry.clone())
     }
 
     /// The handle with its check runs taking `permits`, the ones every project of the daemon shares.

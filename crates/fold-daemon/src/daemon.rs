@@ -8,6 +8,7 @@ use std::time::Duration;
 use axum::Router;
 use fold_core::{Clock, FoldError, Timestamp, codes};
 use fold_store::{Store, StoreError};
+use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -179,6 +180,7 @@ impl Daemon {
             pid: std::process::id(),
             started_by,
         };
+        raise_open_file_limit();
         let launcher = launcher
             .with_own_binary()
             .with_tools(crate::mcp::tool_schema_hashes());
@@ -485,6 +487,44 @@ async fn remove_stale_socket(path: &Path) -> Result<(), DaemonError> {
 }
 
 /// Creates the private directories and takes the exclusive lock that makes this the only daemon on the host. The lock, not the socket, decides.
+/// Raises the soft open-file limit to the hard one, so parallel workspace creates, checkouts and check runs do not run out of file handles at the common soft default of 1024, and logs the limits. A failure only logs: the daemon runs with the limit it got.
+pub(crate) fn raise_open_file_limit() {
+    let before = getrlimit(Resource::Nofile);
+    let Some(raised) = raised_open_file_limit(before) else {
+        tracing::info!(
+            soft = ?before.current,
+            hard = ?before.maximum,
+            "the open-file limit stays as it is"
+        );
+        return;
+    };
+    match setrlimit(Resource::Nofile, raised) {
+        Ok(()) => tracing::info!(
+            soft = ?raised.current,
+            hard = ?raised.maximum,
+            "raised the open-file limit"
+        ),
+        Err(error) => tracing::warn!(
+            soft = ?before.current,
+            hard = ?before.maximum,
+            errno = error.raw_os_error(),
+            "the open-file limit could not be raised"
+        ),
+    }
+}
+
+/// The limit with the soft value at the hard value, or `None` when it is there already or the hard limit is unlimited: Linux refuses an unlimited soft value for open files, which the kernel caps at `nr_open`.
+fn raised_open_file_limit(limit: Rlimit) -> Option<Rlimit> {
+    let hard = limit.maximum?;
+    match limit.current {
+        Some(soft) if soft >= hard => None,
+        _ => Some(Rlimit {
+            current: Some(hard),
+            maximum: Some(hard),
+        }),
+    }
+}
+
 fn prepare_runtime_dir(config: &DaemonConfig) -> Result<File, DaemonError> {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
     let make = |path: &Path| {
@@ -518,5 +558,36 @@ fn prepare_runtime_dir(config: &DaemonConfig) -> Result<File, DaemonError> {
             context: "lock the daemon lock file",
             source,
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn limit(current: Option<u64>, maximum: Option<u64>) -> Rlimit {
+        Rlimit { current, maximum }
+    }
+
+    #[test]
+    fn the_soft_open_file_limit_goes_up_to_the_hard_one() {
+        let raised = raised_open_file_limit(limit(Some(1024), Some(524_288)));
+        assert_eq!(raised, Some(limit(Some(524_288), Some(524_288))));
+    }
+
+    #[test]
+    fn a_limit_at_its_hard_value_or_unlimited_stays() {
+        assert_eq!(raised_open_file_limit(limit(Some(4096), Some(4096))), None);
+        assert_eq!(raised_open_file_limit(limit(Some(1024), None)), None);
+        assert_eq!(raised_open_file_limit(limit(None, None)), None);
+    }
+
+    #[test]
+    fn raising_leaves_the_soft_limit_at_the_hard_one() {
+        raise_open_file_limit();
+        let now = getrlimit(Resource::Nofile);
+        if now.maximum.is_some() {
+            assert_eq!(now.current, now.maximum);
+        }
     }
 }

@@ -109,14 +109,14 @@ async fn run(
         .with_hint("ask a human to run `fld record`")
         .into());
     };
-    let config = load_config(&handle.paths).await?;
     let _remote = handle.remote_lock.clone().lock_owned().await;
     let _folder = handle.folder_lock.clone().lock_owned().await;
+    let config = load_config(&handle.paths).await?;
     let mut unstash = None;
     loop {
         let (followed, from_branch) = sync(handle, git, false).await?;
         if let Some(BranchState::Moved(moved)) = &followed.branch {
-            return Err(head_moved(&config.git.branch, moved).into());
+            return Err(head_moved(&config.git.branch, moved, followed.branch_present).into());
         }
         if let Some(BranchState::Ahead { tip, .. }) = &followed.branch {
             // The human's commits conflict with main and wait for the main agent, so the folder holds them on top of nothing fold knows.
@@ -388,7 +388,7 @@ pub(super) async fn withdraw_waiting(
     handle: &ProjectHandle,
     actor: &Actor,
 ) -> Result<(), ProjectError> {
-    let _serial = handle.integration.clone().lock_owned().await;
+    let _serial = handle.integration.lock().await;
     let waiting = {
         let mut conn = handle
             .store
@@ -646,7 +646,7 @@ pub(crate) async fn integrate_change(
     );
     let (base_tree, human_tree) = (change.base_tree, change.tree);
     for _ in 0..ATTEMPTS {
-        let serial = handle.integration.clone().lock_owned().await;
+        let serial = handle.integration.lock().await;
         let head = workspaces::head(handle.store.read())
             .await?
             .ok_or(StoreError::Corrupt("refs.main"))?;
@@ -877,7 +877,7 @@ async fn waiting_change(
 }
 
 /// The branch or `HEAD` shows a change fold did not make, so the folder's files are not the branch's that fold left.
-pub(super) fn head_moved(branch: &str, moved: &Moved) -> FoldError {
+pub(super) fn head_moved(branch: &str, moved: &Moved, present: bool) -> FoldError {
     let found = match moved {
         Moved::OtherBranch(Some(other)) => format!(
             "the project folder has the branch {other} checked out, not the project's Git branch {branch}"
@@ -891,7 +891,10 @@ pub(super) fn head_moved(branch: &str, moved: &Moved) -> FoldError {
         Moved::Stash => "the project folder has a stash that fold did not make".to_owned(),
     };
     FoldError::new(codes::INVALID_REQUEST, found)
-        .with_hint(format!("{}, then `fld record` again", moved.hint(branch)))
+        .with_hint(format!(
+            "{}, then `fld record` again",
+            super::branch::moved_hint(branch, moved, present)
+        ))
         .with_details([
             ("reason", json!("head_moved")),
             ("moved", json!(moved.reason())),
@@ -937,7 +940,7 @@ mod tests {
             ),
             (Moved::Stash, "`git stash pop`"),
         ] {
-            let error = head_moved("main", &moved);
+            let error = head_moved("main", &moved, true);
             assert_eq!(error.code(), codes::INVALID_REQUEST);
             let shown = error.hint().unwrap();
             assert!(shown.contains(hint), "{moved:?}");

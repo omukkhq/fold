@@ -92,9 +92,10 @@ async fn run(
     remote: Option<&str>,
 ) -> Result<PullOutcome, ProjectError> {
     super::require_git_sync(&handle.store, "fld pull").await?;
+    let remote_guard = handle.remote_lock.clone().lock_owned().await;
+    // Read under the remote lock, which a rename of the branch holds while it rewrites the config.
     let config = load_config(&handle.paths).await?;
     let local = config.git.branch.clone();
-    let remote_guard = handle.remote_lock.clone().lock_owned().await;
     let fold_dir = handle.paths.fold_dir();
     let mirror = handle.paths.git_dir();
     let (held, map) = {
@@ -197,7 +198,7 @@ async fn run(
         handle.integration.clone(),
     );
     for _ in 0..ATTEMPTS {
-        let serial = handle.integration.clone().lock_owned().await;
+        let serial = handle.integration.lock().await;
         let head = workspaces::head(handle.store.read())
             .await?
             .ok_or(StoreError::Corrupt("refs.main"))?;

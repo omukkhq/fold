@@ -23,6 +23,17 @@ fn advance(harness: &Harness, by: Duration) {
     harness.project.clock().advance(by).unwrap();
 }
 
+/// A ready task of area web, so a daemon start owes `web-lead` a turn.
+async fn web_work(harness: &Harness) {
+    harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Draw the footer", "labels": ["ui"]}),
+        )
+        .await;
+}
+
 /// How many of `agents` a start ran again: each ran once before the daemon stopped.
 fn resumed(fake: &FakeClaude, agents: &[String]) -> usize {
     agents
@@ -39,7 +50,7 @@ async fn until_resumed(fake: &FakeClaude, agents: &[String], count: usize) {
     .await;
 }
 
-/// Starts a lead for each of `count` new areas and gives their names.
+/// Starts a lead for each of `count` new areas, each with a ready task of its own so a daemon start owes the lead a turn, and gives their names.
 async fn zone_leads(harness: &Harness, count: usize) -> Vec<String> {
     let mut leads = Vec::new();
     for n in 1..=count {
@@ -49,6 +60,13 @@ async fn zone_leads(harness: &Harness, count: usize) -> Vec<String> {
             .await;
         harness
             .call(MAIN, "define_area", json!({"name": zone, "label": zone}))
+            .await;
+        harness
+            .call(
+                MAIN,
+                "create_task",
+                json!({"title": format!("Pave {zone}"), "labels": [zone]}),
+            )
             .await;
         harness
             .call(
@@ -106,6 +124,7 @@ async fn a_daemon_start_resumes_workers_a_group_at_a_time() {
     let fake = FakeClaude::new("result");
     let mut harness = task_worker_for(&fake, &["Draw the page"], WorkerState::Idle).await;
     let work = harness.start_work(TASK_WORKER, "T-1").await;
+    web_work(&harness).await;
     let mut agents = vec!["web-lead".to_owned()];
     agents.extend(zone_leads(&harness, 8).await);
     agents.push(TASK_WORKER.to_owned());
@@ -188,6 +207,7 @@ async fn the_resumes_fold_owes_go_in_the_first_group() {
         )
         .await;
     let other = other["worker"]["name"].as_str().unwrap().to_owned();
+    web_work(&harness).await;
     let mut rows = vec!["web-lead".to_owned(), other];
     rows.extend(zone_leads(&harness, 5).await);
     for agent in &rows {

@@ -16,6 +16,7 @@ use toml_edit::{DocumentMut, Item, Table, TableLike, Value as TomlValue, value};
 use super::super::{AgentError, AgentService};
 use crate::services::events::EventBuffer;
 use crate::services::projects::Lease;
+use crate::support::config_io;
 
 /// The limits before and after a change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,13 +80,6 @@ fn limits_json(limits: WorkerLimits) -> Value {
         "reviewer": limits.reviewer,
         "max_per_area": limits.max_per_area,
     })
-}
-
-pub(super) fn config_io(error: &std::io::Error) -> FoldError {
-    FoldError::new(
-        codes::WORKSPACE_IO,
-        format!("cannot read or write config.toml: {}", error.kind()),
-    )
 }
 
 pub(super) fn joined<T>(

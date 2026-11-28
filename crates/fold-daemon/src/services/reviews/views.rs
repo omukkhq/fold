@@ -2,7 +2,7 @@ use fold_core::claims::is_stale;
 use fold_core::merge::{Conflict, ReportFile};
 use fold_core::policy::{GateState, IntegrateInput, ProposalFacts, gate_report};
 use fold_core::reviews::lanes::LanePlace;
-use fold_core::reviews::{deciding_approval, last_verdict_version};
+use fold_core::reviews::{Verdict, deciding_approval, last_verdict_version};
 use fold_core::{
     Actor, ChangesetId, FoldError, ProposalId, ReviewBatchId, RevisionId, TaskDescription, TaskId,
     TaskStatus, TaskTitle, codes,
@@ -21,6 +21,7 @@ use super::conflicts::{ConflictedReason, conflicted_reason};
 use super::integrate::caller_facts;
 use super::plans::{ProposalPlan, RelatedTaskView, proposal_plan, related_plan_tasks};
 use super::proposals::{ProposalDetail, proposal_detail, proposal_not_found};
+use super::queue::QueueStanding;
 use super::{ReviewError, ReviewService};
 use crate::services::workspaces::StateRef;
 
@@ -81,6 +82,8 @@ pub struct ProposalView {
     pub lane: Option<LanePlace>,
     /// Why the open proposal is flagged `conflicted` on its current version; `None` when it is not.
     pub conflicted_reason: Option<ConflictedReason>,
+    /// The place of the open proposal in the automatic integration queue, or why it waits; `None` unless its latest verdict on the current version is an approval.
+    pub queue: Option<QueueStanding>,
 }
 
 impl ReviewService {
@@ -178,6 +181,14 @@ impl ReviewService {
             .await?
             .into_iter()
             .find(|place| place.proposal == proposal);
+        // Only an open proposal whose latest verdict is an approval has a standing, so the others skip the read.
+        let queue = if detail.summary.state == ProposalState::Open
+            && detail.summary.latest_verdict == Some(Verdict::Approve)
+        {
+            self.integration_queue().await?.standing(proposal).cloned()
+        } else {
+            None
+        };
         let comparison = self
             .workspaces
             .compare_states(
@@ -211,6 +222,7 @@ impl ReviewService {
             integrated,
             lane,
             conflicted_reason,
+            queue,
         })
     }
 }
@@ -238,6 +250,18 @@ pub fn direct_conflicted(changeset: ChangesetId, conflicts: &[Conflict]) -> Fold
 
 /// The refusal a transport reports for an integration that conflicted. The details name each path and its kind only, never a hunk, because an error detail carries no file content; the full report is read with the proposal.
 pub fn integration_conflicted(proposal: ProposalId, conflicts: &[Conflict]) -> FoldError {
+    // Only a lane's refresh records a conflicted integration without a conflicting file.
+    if conflicts.is_empty() {
+        return FoldError::new(
+            codes::INTEGRATION_CONFLICTED,
+            format!("{proposal} needs its lane's refresh on the new main and was not integrated"),
+        )
+        .with_details([
+            ("proposal", json!(proposal.to_string())),
+            ("files", json!([])),
+        ])
+        .with_hint("call get_proposal: conflicted_reason lane_refresh names the lane and its refresh; the reviewer that approved the version redoes it in a review checkout merged onto main with submit_review_fix, or the review lead starts a reviewer for it");
+    }
     let files: Vec<_> = conflicts
         .iter()
         .map(ReportFile::from)
@@ -255,4 +279,27 @@ pub fn integration_conflicted(proposal: ProposalId, conflicts: &[Conflict]) -> F
         ("files", json!(files)),
     ])
     .with_hint("call get_proposal to read the conflict report; the reviewer that approved the version fixes it in a review checkout merged onto main with submit_review_fix, or the review lead starts a reviewer for it")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_integration_without_a_conflicting_file_names_the_lane_refresh() {
+        let proposal = ProposalId::from_number(2).unwrap();
+        let refresh = integration_conflicted(proposal, &[]);
+        assert_eq!(refresh.code(), codes::INTEGRATION_CONFLICTED);
+        assert_eq!(
+            refresh.message(),
+            "P-2 needs its lane's refresh on the new main and was not integrated"
+        );
+        assert!(
+            refresh
+                .hint()
+                .is_some_and(|hint| hint.contains("lane_refresh")),
+            "{refresh:?}"
+        );
+        assert!(!refresh.message().contains("conflicts"), "{refresh:?}");
+    }
 }

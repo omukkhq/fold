@@ -1,8 +1,10 @@
 pub mod account;
+pub mod checks;
 pub mod confirm;
 pub mod cost;
 pub mod folder_status;
 pub mod gc;
+pub mod git;
 pub mod log;
 pub mod notify;
 pub mod pause;

@@ -12,6 +12,7 @@ pub mod areas;
 pub mod claims;
 pub mod container;
 pub mod dag;
+pub mod holds;
 mod plan;
 pub mod readiness;
 pub mod requests;

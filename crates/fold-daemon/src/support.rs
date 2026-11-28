@@ -27,6 +27,25 @@ pub(crate) fn remove_daemon_context(command: &mut tokio::process::Command) {
     }
 }
 
+/// The variables that point `git` at a repository whatever folder it runs in.
+pub(crate) const GIT_REPO_ENV: [&str; 2] = ["GIT_DIR", "GIT_WORK_TREE"];
+
+/// Stops `git` in `command` from finding a repository at `fold_dir` or above, so in a workspace or a review checkout, which has no `.git` of its own, it fails with "not a git repository" instead of acting on the project's own repository. A repository inside the folder, such as one a test makes, is still found.
+pub(crate) fn confine_git(command: &mut tokio::process::Command, fold_dir: &std::path::Path) {
+    for name in GIT_REPO_ENV {
+        command.env_remove(name);
+    }
+    command.env("GIT_CEILING_DIRECTORIES", fold_dir);
+}
+
+/// The error for a failed read or write of `.fold/config.toml`.
+pub(crate) fn config_io(error: &std::io::Error) -> fold_core::FoldError {
+    fold_core::FoldError::new(
+        fold_core::codes::WORKSPACE_IO,
+        format!("cannot read or write .fold/config.toml: {}", error.kind()),
+    )
+}
+
 /// What a lock call gives, also when an earlier holder panicked. The state behind every lock of the daemon stays valid after a panic, so the next holder continues instead of the daemon failing for good.
 pub(crate) fn unpoisoned<T>(result: LockResult<T>) -> T {
     result.unwrap_or_else(PoisonError::into_inner)
@@ -98,6 +117,56 @@ mod tests {
         }
         assert!(names.contains(&"PATH"));
         assert!(seen.contains("HOME=/home/kept"));
+    }
+
+    fn git(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env_remove("GIT_CEILING_DIRECTORIES")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn git_below_the_fold_folder_finds_no_repository_above_it() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(git(root.path(), &["init", "-q"]).status.success());
+        let fold_dir = root.path().join(".fold");
+        let workspace = fold_dir.join("ws/t-1");
+        std::fs::create_dir_all(workspace.join("sub")).unwrap();
+        let open = git(&workspace, &["rev-parse", "--show-toplevel"]);
+        assert!(open.status.success());
+
+        let confined = |dir: &std::path::Path| {
+            let mut command = tokio::process::Command::new("git");
+            command
+                .args(["rev-parse", "--show-toplevel"])
+                .current_dir(dir)
+                .env("GIT_DIR", root.path().join(".git"))
+                .env("GIT_WORK_TREE", root.path());
+            confine_git(&mut command, &fold_dir);
+            command
+        };
+        for dir in [workspace.clone(), workspace.join("sub")] {
+            let output = confined(&dir).output().await.unwrap();
+            assert!(!output.status.success(), "{dir:?}");
+            assert!(String::from_utf8_lossy(&output.stderr).contains("not a git repository"));
+        }
+
+        let inner = workspace.join("inner");
+        std::fs::create_dir_all(&inner).unwrap();
+        assert!(git(&inner, &["init", "-q"]).status.success());
+        let output = confined(&inner).output().await.unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            std::path::Path::new(String::from_utf8(output.stdout).unwrap().trim())
+                .canonicalize()
+                .unwrap(),
+            inner.canonicalize().unwrap()
+        );
     }
 
     #[tokio::test]

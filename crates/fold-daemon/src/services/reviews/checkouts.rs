@@ -14,6 +14,7 @@ use serde_json::json;
 
 pub use fold_store::workspaces::CheckoutTarget;
 
+use super::checks::SetupState;
 use super::proposals::require_open;
 use super::verdicts::require_version;
 use super::{ReviewError, ReviewService};
@@ -22,6 +23,7 @@ use crate::services::events::EventBuffer;
 use crate::services::tasks::worker_row;
 use crate::services::workspaces::{
     ArchiveReason, WorkspaceError, WorkspaceRef, WorkspaceView, archive_in_tx,
+    is_out_of_handles_error,
 };
 
 /// A review checkout with the proposal version its files hold.
@@ -30,6 +32,8 @@ pub struct ReviewCheckout {
     pub workspace: WorkspaceView,
     pub proposal: ProposalId,
     pub version: u32,
+    /// Whether fold runs the checks' `[setup]` in the checkout: only in a checkout this call made.
+    pub setup: SetupState,
 }
 
 /// An active review checkout as the project's list shows it.
@@ -191,7 +195,9 @@ impl ReviewService {
             }
         };
         self.bus.publish(buffer);
-        self.checkout(id, proposal, version).await
+        let mut made = self.checkout(id, proposal, version).await?;
+        made.setup = self.start_setup(id, Some(tree)).await;
+        Ok(made)
     }
 
     /// Every active review checkout of the project with the proposal versions it holds, oldest first: the checkouts of one proposal and those of a review batch. It reads only.
@@ -266,6 +272,7 @@ impl ReviewService {
             workspace,
             proposal,
             version,
+            setup: SetupState::None,
         })
     }
 }
@@ -299,6 +306,7 @@ async fn find_worker(store: &Store, actor: &AgentActor) -> Result<WorkerRow, Rev
 /// `checkout_failed` with the code of what stopped the write. A refusal that is not about the files keeps its own code.
 fn checkout_failed(proposal: ProposalId, error: WorkspaceError) -> ReviewError {
     match error {
+        WorkspaceError::Fold(cause) if is_out_of_handles_error(&cause) => cause.into(),
         WorkspaceError::Fold(cause) => FoldError::new(
             codes::CHECKOUT_FAILED,
             format!("the checkout of {proposal} could not be written"),

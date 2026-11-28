@@ -245,6 +245,33 @@ pub fn index_to(git: &Git, paths: &ProjectPaths, commit: &CommitId) -> Result<()
     }
 }
 
+/// Renames the local branch `from` of `repo` to `to` with `git branch -m`, which moves `HEAD` along when it names `from`, keeps the reflog and the branch's config, and refuses when `to` exists. The working tree and the index stay as they are. Blocking.
+pub fn rename_branch(git: &Git, repo: &Path, from: &str, to: &str) -> Result<(), FoldError> {
+    check_branch(from)?;
+    check_branch(to)?;
+    let status = git.status(repo, &["branch", "-m", "--", from, to], "branch -m")?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(failed("branch -m", status))
+    }
+}
+
+/// The Git operation that waits half-done in the repository whose Git directory is `git_dir`, by the file Git leaves for it: `merge`, `rebase`, `cherry-pick`, `revert` or `bisect`; `None` when no operation waits.
+pub fn operation_in_progress(git_dir: &Path) -> Option<&'static str> {
+    [
+        ("MERGE_HEAD", "merge"),
+        ("rebase-merge", "rebase"),
+        ("rebase-apply", "rebase"),
+        ("CHERRY_PICK_HEAD", "cherry-pick"),
+        ("REVERT_HEAD", "revert"),
+        ("BISECT_LOG", "bisect"),
+    ]
+    .into_iter()
+    .find(|(file, _)| git_dir.join(file).exists())
+    .map(|(_, operation)| operation)
+}
+
 /// The branch `HEAD` of `repo` names, or `None` when `HEAD` is detached. Blocking.
 pub fn checked_out_branch(git: &Git, repo: &Path) -> Result<Option<String>, FoldError> {
     // `-q` exits 1, with nothing on stderr, for a detached `HEAD`.

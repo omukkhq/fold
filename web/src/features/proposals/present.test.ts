@@ -537,6 +537,23 @@ describe("a lane check failure", () => {
     ).toContain("lane migrations moved");
   });
 
+  it("shows a lane's refresh as an agent wait, not a conflict", () => {
+    const refresh = {
+      kind: "lane_refresh" as const,
+      lane: "migrations",
+      refresh: "redo the migration",
+      fixer: "reviewer",
+    };
+    const pill = reviewPill(conflicted, { reason: refresh });
+    expect(pill).toMatchObject({ tone: "neutral", icon: "waiting" });
+    expect(pill.text).toBe(
+      "Lane migrations asks for a refresh: redo the migration · @reviewer redoes it",
+    );
+    expect(reviewPill({ ...conflicted, conflicted_reason: refresh }).icon).toBe(
+      "waiting",
+    );
+  });
+
   it("keeps a merge conflict as it was, with or without its reason", () => {
     const merge = { kind: "merge_conflict" as const, fixer: "reviewer" };
     expect(reviewPill(conflicted, { reason: merge }).text).toBe("Conflict");

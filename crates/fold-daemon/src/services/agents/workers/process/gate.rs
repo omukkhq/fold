@@ -5,10 +5,10 @@ use fold_store::reviews::checks::{self, CheckRunRow};
 use fold_store::{StoreError, agents};
 use serde_json::{Value, json};
 
-use super::resume::{self, SessionStart};
+use super::resume::SessionStart;
 use super::{Input, Supervisor, lock};
 use crate::services::agents::AgentError;
-use crate::services::agents::workers::is_paused_refusal;
+use crate::services::agents::workers::{is_limit_refusal, is_paused_refusal};
 use crate::services::events::EventBuffer;
 
 /// The run a `checks.finished` event ends when the checks of a worker's `create_proposal` or `update_proposal` did not pass, so its author's task worker has work again.
@@ -88,7 +88,10 @@ impl Supervisor {
         let Some(process) = process else {
             return Ok(());
         };
-        if process.role != Role::TaskWorker || process.state.is_running() {
+        if process.role != Role::TaskWorker
+            || process.state.is_running()
+            || self.held_by_park(&process).await?
+        {
             return Ok(());
         }
         let failed: Vec<String> = checks::list_results(read, run, false)
@@ -98,10 +101,10 @@ impl Supervisor {
             .map(|result| result.check.unwrap_or_else(|| "setup".to_owned()))
             .collect();
         let turn = gate_turn(&row, &failed);
-        let watch = match self.resume(&agent, turn.clone(), &[row.task]).await {
+        let watch = match self.resume(&agent, turn.clone(), &[row.task_run()?]).await {
             Ok(watch) => watch,
             // The run stays owed, and the resume of the pause or the next free place serves it.
-            Err(error) if is_paused_refusal(&error) || resume::is_limit_refusal(&error) => {
+            Err(error) if is_paused_refusal(&error) || is_limit_refusal(&error) => {
                 return Ok(());
             }
             // A start outside this path came first; the task worker takes this turn as its next one.
@@ -180,7 +183,9 @@ fn gate_turn(run: &CheckRunRow, failed: &[String]) -> String {
     };
     format!(
         "The checks of {} ({}) did not pass, so {made}: {why}. Read fold's message, or call get_check_run with {} for the logs. Fix the work in your task workspace, call run_checks, then call {again} again.",
-        run.task, run.id, run.id
+        run.subject(),
+        run.id,
+        run.id
     )
 }
 
@@ -230,7 +235,7 @@ mod tests {
             id: CheckRunId::from_number(4).unwrap(),
             stage: Stage::Proposal,
             purpose: Purpose::CreateProposal,
-            task: TaskId::from_number(12).unwrap(),
+            task: TaskId::from_number(12),
             workspace: WorkspaceId::from_number(3),
             worker: None,
             proposal: None,
@@ -246,6 +251,7 @@ mod tests {
             created_at: Timestamp::from_millis(0).unwrap(),
             finished_at: Some(Timestamp::from_millis(1).unwrap()),
             batch: None,
+            changeset: None,
         };
         let text = gate_turn(&run, &["unit".to_owned()]);
         assert!(

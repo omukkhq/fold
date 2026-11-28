@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
@@ -8,7 +8,7 @@ use fold_core::reviews::batches::{
     batch_readiness, batch_wait_cutoff, member_standing, waits_on_comment,
 };
 use fold_core::reviews::checks::RunReason;
-use fold_core::reviews::lanes::group_held;
+use fold_core::reviews::lanes::{LanePlace, group_held};
 use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{
     Actor, AddressedAs, CheckRunId, EventActor, FoldError, IdKind, IntegrationId, MessageBody,
@@ -23,7 +23,8 @@ use serde_json::{Value, json};
 
 use super::batches::batch_not_found;
 use super::checks::{
-    Integrating, IntegrationChecks, PassedRun, VersionRun, fold_failed_refusal, next_version_run,
+    Checked, Integrating, IntegrationChecks, PassedRun, VersionRun, fold_failed_refusal,
+    next_version_run,
 };
 use super::integrate::{
     ATTEMPTS, Commit, HumanResolution, Integrated, IntegrationOutcome, IntegrationRequest, Plan,
@@ -146,6 +147,10 @@ pub(super) struct BatchHolds {
     pub held: HashSet<ProposalId>,
     /// In number order.
     pub ready: Vec<ReviewBatchId>,
+    /// The batch that holds each member of `held` that a batch holds.
+    pub by_batch: HashMap<ProposalId, ReviewBatchId>,
+    /// The places of the lane members, which hold the members behind each front.
+    pub lanes: Vec<LanePlace>,
 }
 
 /// One member as the batch's procedure merges and publishes it.
@@ -393,6 +398,7 @@ impl ReviewService {
             for member in batches::members(&mut *read, open.id).await? {
                 if member.is_open() {
                     holds.held.insert(member.proposal);
+                    holds.by_batch.insert(member.proposal, open.id);
                 }
             }
         }
@@ -404,6 +410,7 @@ impl ReviewService {
             for member in &standing.members {
                 if readiness.holds(&standing.members, member.proposal) {
                     holds.held.insert(member.proposal);
+                    holds.by_batch.insert(member.proposal, batch);
                 }
             }
             let BatchReadiness::Final { members: ready } = readiness else {
@@ -436,6 +443,7 @@ impl ReviewService {
             holds.ready.push(batch);
         }
         read.commit().await.map_err(StoreError::from)?;
+        holds.lanes = places;
         Ok(holds)
     }
 
@@ -527,7 +535,7 @@ impl ReviewService {
         Ok(told)
     }
 
-    /// Integrates the approved members of a submitted batch together, by an agent that decides reviews or a named human, once every member has its final state for the batch. A member that went back to its author, was taken out, ended, or waits for a human or for a member that is not in the integration is left out and integrates later on its own rules. The integration is one turn of the project's integration mutex: the members merge onto main in dependency order, the integration checks run once on the whole merge, and on a pass one transaction publishes one revision per member and completes each task. A member that conflicts integrates on its own after the others, which gives its conflict alone to the reviewer that approved it; a failed check run integrates the members one at a time, each with its own run. When the project has integration checks, the batch waits in the integration queue and the answer is `Queued`. Integrating one member alone with `integrate_proposal` stays possible.
+    /// Integrates the approved members of a submitted batch together, by an agent that decides reviews or a named human, once every member has its final state for the batch. A member that went back to its author, was taken out, ended, or waits for a human or for a member that is not in the integration is left out and integrates later on its own rules. The integration is one turn of the project's integration mutex: the members merge onto main in dependency order, the integration checks run once on the whole merge, and on a pass one transaction publishes one revision per member and completes each task. A member that conflicts, or whose `[[serial]]` lane names a `refresh` and moved since its base on main or through an earlier member, integrates on its own after the others, which gives its conflict or the lane's refresh alone to the reviewer that approved it; a failed check run integrates the members one at a time, each with its own run. When the project has integration checks, the batch waits in the integration queue and the answer is `Queued`. Integrating one member alone with `integrate_proposal` stays possible.
     ///
     /// Refusals: `review_batch_not_found`; `invalid_request` with the reason `batch_not_submitted` for an open or closed batch, `batch_waiting` while a member has no final state (details list them), `batch_integrated` once the batch's turn ended, and `integration_queued` while a request of the batch waits; `update_checks_running` while the author's update or a reviewer's fix of a member that integrates runs the checks of its next version; and the caller gates of `integrate_proposal` for each member, such as `author_cannot_integrate` for the agent that wrote a member's current version.
     pub async fn integrate_review_batch(
@@ -732,6 +740,12 @@ impl ReviewService {
                 set_aside.push(member);
                 continue;
             }
+            // `tree` holds main and the members merged before this one, so a lane that either moved since the member's base is due; the member's own turn records the refresh.
+            if self.refresh_due(member.proposal, tree).await?.is_some() {
+                aside.insert(member.task);
+                set_aside.push(member);
+                continue;
+            }
             match self
                 .workspaces
                 .merge_for_integration(&locks, member.base_tree, tree, member.tree)
@@ -765,7 +779,10 @@ impl ReviewService {
             batch: Some(batch),
             members: &versions,
         };
-        match self.integration_checks(actor, at, carried).await? {
+        match self
+            .integration_checks(actor, Checked::Proposal(at), carried)
+            .await?
+        {
             IntegrationChecks::None | IntegrationChecks::Passed => {}
             IntegrationChecks::Failed(run) => {
                 let mut members: Vec<MemberPlan> = merged.into_iter().map(|(m, _)| m).collect();
@@ -910,6 +927,7 @@ impl ReviewService {
                 },
             })
             .collect::<Vec<_>>();
+        self.find_queue_conflicts_later(previous);
         tracing::info!(batch = %batch, members = revisions.len(), revision = %previous, "review batch integrated");
         Ok(Attempted::Published {
             revisions,

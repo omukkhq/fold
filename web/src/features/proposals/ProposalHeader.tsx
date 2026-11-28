@@ -1,4 +1,4 @@
-import { ChevronRight, Hourglass } from "lucide-react";
+import { ChevronRight, Hourglass, ListOrdered } from "lucide-react";
 import type { ProposalDetail } from "@/api/proposals";
 import { HrefLink } from "@/app/HrefLink";
 import { Id } from "@/components/id/Id";
@@ -10,6 +10,7 @@ import { IdLink } from "@/components/id/IdLink";
 import { laneText } from "./laneState";
 import { planWait } from "./planWait";
 import { reviewPill, versionText } from "./present";
+import { queueWait } from "./queueWait";
 import { ReviewPill } from "./ReviewPill";
 
 /** The proposal's title with its one state chip and three facts: the author, the task and the version. The base, the size and the review claim are on the About card. */
@@ -31,6 +32,7 @@ export function ProposalHeader({
   const summary = proposal.summary;
   const lane = laneText(proposal.lane);
   const wait = planWait(proposal.review_plan, summary.id, now);
+  const queued = queueWait(proposal, now);
   return (
     <header className="flex flex-col gap-8 px-16 pt-20 md:px-24">
       <nav aria-label="Breadcrumb">
@@ -89,6 +91,23 @@ export function ProposalHeader({
           <Hourglass aria-hidden="true" size={14} className="mt-4 shrink-0" />
           <span>
             <span className="font-semibold">{wait.title}</span> · {wait.detail}
+          </span>
+        </p>
+      )}
+      {queued === null ? null : (
+        <p
+          data-queue-wait={queued.state}
+          className={cn(
+            "flex max-w-measure items-start gap-8 self-start rounded-s px-12 py-6 text-14 leading-normal",
+            queued.state === "person"
+              ? "bg-warn-soft text-warn"
+              : "bg-fill text-text",
+          )}
+        >
+          <ListOrdered aria-hidden="true" size={14} className="mt-4 shrink-0" />
+          <span>
+            <span className="font-semibold">{queued.title}</span>
+            {queued.detail === "" ? null : ` · ${queued.detail}`}
           </span>
         </p>
       )}
