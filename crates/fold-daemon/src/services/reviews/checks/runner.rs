@@ -160,13 +160,12 @@ impl Default for CheckPermits {
     }
 }
 
-/// The background runs of one project: each holds a machine-wide permit while its commands run. Dropping the project's runner, or [`CheckRunner::shutdown`], aborts the runs, and each command's process is killed with its task.
+/// The background runs of one project: each holds a machine-wide permit while its commands run. Only [`CheckRunner::shutdown`] aborts the runs, and each command's process is killed with its task; a drop of the project's runner aborts none, because each running run holds a clone of the runner.
 #[derive(Debug, Clone, Default)]
 pub struct CheckRunner {
     /// The slug of the project, which the peer checks compare with the project of a socket session.
     project: String,
     permits: CheckPermits,
-    limits: RunLimits,
     tasks: Arc<Mutex<JoinSet<()>>>,
     /// Held while fold's check directory is brought to a tree and while checks run in it.
     check_dir: Arc<tokio::sync::Mutex<()>>,
@@ -451,7 +450,6 @@ impl CheckRunner {
         Self {
             project: String::new(),
             permits,
-            limits: RunLimits::default(),
             tasks: Arc::default(),
             check_dir: Arc::default(),
             dir_work: Arc::default(),
@@ -532,15 +530,8 @@ impl CheckRunner {
         }
     }
 
-    /// The runner with other command limits, for tests.
-    #[must_use]
-    pub fn with_limits(mut self, limits: RunLimits) -> Self {
-        self.limits = limits;
-        self
-    }
-
     pub fn limits(&self) -> RunLimits {
-        self.limits
+        RunLimits::default()
     }
 
     pub fn permits(&self) -> &CheckPermits {
@@ -1502,6 +1493,56 @@ mod tests {
         ] {
             assert_eq!(gate_line(other), None, "{other:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_stderr_line_over_the_gate_line_limit_is_no_gate_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let (start, end) = SLOT_WAIT_LINE;
+        let line = format!("{start}{}{end}", "9".repeat(GATE_LINE_LIMIT));
+        assert!(line.len() >= GATE_LINE_LIMIT);
+        let limits = RunLimits {
+            build_slot_wait: Duration::from_millis(200),
+            ..quick()
+        };
+        let results = run_commands(
+            dir.path(),
+            vec![spec(
+                "long",
+                &format!("echo '{line}' >&2; sleep 1; echo ran"),
+            )],
+            limits,
+            &clock(),
+        )
+        .await;
+        assert_eq!(results[0].outcome, Outcome::Passed);
+        assert!(!results[0].no_build_slot);
+    }
+
+    #[tokio::test]
+    async fn a_background_process_that_holds_the_pipe_ends_the_command_after_the_drain_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let started = std::time::Instant::now();
+        let results = tokio::time::timeout(
+            DRAIN_WAIT * 4,
+            run_commands(
+                dir.path(),
+                vec![spec(
+                    "leaves",
+                    "setsid sh -c 'echo $$ > held.pid; exec sleep 60' & until [ -s held.pid ]; do sleep 0.01; done; echo done",
+                )],
+                quick(),
+                &clock(),
+            ),
+        )
+        .await
+        .expect("the command ends after the drain wait");
+        let elapsed = started.elapsed();
+        let held = std::fs::read_to_string(dir.path().join("held.pid")).unwrap();
+        let _ = std::process::Command::new("kill").arg(held.trim()).status();
+        assert_eq!(results[0].outcome, Outcome::Passed);
+        assert!(String::from_utf8_lossy(&results[0].log).contains("done"));
+        assert!(elapsed >= DRAIN_WAIT, "{elapsed:?}");
     }
 
     #[tokio::test]
