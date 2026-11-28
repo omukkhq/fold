@@ -1711,34 +1711,37 @@ fn only_notices_that_say_no_action_is_needed_wait_in_the_digest() {
         next_tool,
         needs_no_action: false,
     };
-    let settled = notice(
-        "fold: human:ana marked m-30 answered outside your session; it does not wait for the user now. Call get_thread.",
-        "get_thread",
-    );
-    assert!(push::needs_no_action(
+    let settled = Notice {
+        needs_no_action: true,
+        ..notice(
+            "fold: human:ana marked m-30 answered. Call get_thread.",
+            "get_thread",
+        )
+    };
+    assert!(fold_core::push::needs_no_action(
         &event(types::MESSAGE_ASK_CLOSED),
         &settled
     ));
-    assert!(push::needs_no_action(
+    assert!(fold_core::push::needs_no_action(
         &event(types::PROJECT_RESUMED),
         &notice(RESUMED, "list_workers")
     ));
-    assert!(!push::needs_no_action(
+    assert!(!fold_core::push::needs_no_action(
         &event(types::INTEGRATION_SUCCEEDED),
         &notice("fold: P-3 integrated as r9. Call get_inbox.", "get_inbox")
     ));
-    assert!(!push::needs_no_action(
+    assert!(!fold_core::push::needs_no_action(
         &event(types::REQUEST_APPROVED),
         &notice(
             "fold: RQ-4 approved as T-9. Call get_ready_tasks.",
             "get_ready_tasks"
         )
     ));
-    assert!(!push::needs_no_action(
+    assert!(!fold_core::push::needs_no_action(
         &event(types::MESSAGE_SENT),
         &notice("fold: message m-3 arrived. Call get_inbox.", "get_inbox")
     ));
-    assert!(!push::needs_no_action(
+    assert!(!fold_core::push::needs_no_action(
         &event(types::TASK_STATUS_CHANGED),
         &notice(
             "fold: T-4 is ready and has no area. Call update_task.",

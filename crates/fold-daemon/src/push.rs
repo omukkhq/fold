@@ -12,7 +12,8 @@ use std::time::Duration;
 use fold_core::carry::MAX_CARRIED_LEN;
 use fold_core::events::types;
 use fold_core::push::{
-    MAX_NOTICE_LEN, MAX_REQUEST_NOTICE_LEN, Notice, PushContext, is_pushed, notice_for, request_of,
+    MAX_NOTICE_LEN, MAX_REQUEST_NOTICE_LEN, Notice, PushContext, is_pushed, needs_no_action,
+    notice_for, request_of,
 };
 use fold_core::requests::{Requester, deputy};
 use fold_core::{
@@ -52,9 +53,6 @@ pub const DIGEST_TICK: Duration = Duration::from_secs(30);
 
 /// The most notices one digest names; it counts the rest.
 pub const DIGEST_ITEMS: usize = 20;
-
-/// The text with which the notice of a human's act on a Needs you item says that its item no longer waits for the user.
-const SETTLED: &str = "outside your session; it does not wait for the user now";
 
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -1322,7 +1320,7 @@ pub fn run(store: Store, clock: Arc<dyn Clock>, bus: &EventBus, targets: PushTar
     ))
 }
 
-/// It ends once the project's bus closes. A notice to a main agent that needs no action waits in the agent's digest ([`needs_no_action`]); every [`DIGEST_TICK`] the digests that waited long enough by `clock` go out alone.
+/// It ends once the project's bus closes. A notice to a main agent that needs no action waits in the agent's digest ([`fold_core::push::needs_no_action`]); every [`DIGEST_TICK`] the digests that waited long enough by `clock` go out alone.
 async fn deliver_events(
     store: Store,
     clock: Arc<dyn Clock>,
@@ -1378,15 +1376,6 @@ async fn deliver_events(
             longest_notice(&event),
         );
     }
-}
-
-/// Whether a notice to a main agent needs no action, so it waits in the agent's digest: a human's act on an item that waited for the user outside the main agent's session, and a pause or resume of the agents. A notice that carries messages never does: the messages need an answer, and its post records them.
-pub fn needs_no_action(event: &Event, notice: &Notice) -> bool {
-    if notice.carrier_head().is_some() {
-        return false;
-    }
-    let kind = event.event_type;
-    kind == types::PROJECT_PAUSED || kind == types::PROJECT_RESUMED || notice.text.contains(SETTLED)
 }
 
 /// The agent of a worker row's `started_by`, an event actor such as `web-lead`; `None` for a human and for fold.
