@@ -1530,6 +1530,7 @@ fn proposal(text: &str) -> Result<ProposalId, ApiError> {
     get,
     path = "/api/v1/projects/{slug}/proposals",
     operation_id = "list_proposals",
+    extensions(("x-fold-takes-human" = json!("optional"))),
     params(
         ("slug" = String, Path, description = "The project slug"),
         ProposalListQuery,
@@ -1739,7 +1740,7 @@ pub struct AskAuthorBody {
     request_body = AskAuthorBody,
     responses(
         (status = 201, description = "The stored question", body = MessageView),
-        (status = 400, description = "`invalid_request`: an empty body, some but not all of the four line fields, or a malformed request; `invalid_path` or `invalid_id`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request`: an empty body, some but not all of the four line fields, or a malformed request; `invalid_path`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found`: no such proposal or version, or `project_not_found`", body = ErrorEnvelope),
         (status = 422, description = "`unknown_comment_path` or `invalid_comment_range`: the lines are not in the file on that side", body = ErrorEnvelope),

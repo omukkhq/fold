@@ -305,6 +305,7 @@ pub struct FeedbackRequest {
     get,
     path = "/api/v1/projects/{slug}/messages",
     operation_id = "list_messages",
+    extensions(("x-fold-takes-human" = json!("optional"))),
     params(
         ("slug" = String, Path, description = "The project slug"),
         ListMessagesParams,
@@ -314,7 +315,7 @@ pub struct FeedbackRequest {
         (status = 400, description = "`invalid_request`, `invalid_id` or `invalid_name`: a filter is malformed", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`: `mine` is set and the request names no human", body = ErrorEnvelope),
         (status = 404, description = "`project_not_found`", body = ErrorEnvelope),
-        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]

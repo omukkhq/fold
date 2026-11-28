@@ -10667,7 +10667,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description The project failed to open */
+            /** @description `project_unavailable` */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -11582,7 +11582,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12284,7 +12284,7 @@ export interface operations {
                     "application/json": components["schemas"]["MessageView"];
                 };
             };
-            /** @description `invalid_request`: an empty body, some but not all of the four line fields, or a malformed request; `invalid_path` or `invalid_id` */
+            /** @description `invalid_request`: an empty body, some but not all of the four line fields, or a malformed request; `invalid_path`, `invalid_id` or `invalid_name` */
             400: {
                 headers: {
                     [name: string]: unknown;

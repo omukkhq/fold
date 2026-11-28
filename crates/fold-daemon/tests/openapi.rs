@@ -157,7 +157,8 @@ fn every_route_that_takes_a_human_declares_the_worker_peer_refusal() {
         for (method, operation) in item.as_object().unwrap() {
             let names_human = operation["responses"]["401"]["description"]
                 .as_str()
-                .is_some_and(|text| text.starts_with("`human_name_required`"));
+                .is_some_and(|text| text.starts_with("`human_name_required`"))
+                || operation.get("x-fold-takes-human").is_some();
             let refused = operation["responses"]["403"]["description"]
                 .as_str()
                 .is_some_and(|text| text.contains("`worker_peer_refused`"));
@@ -179,6 +180,82 @@ fn every_route_that_takes_a_human_declares_the_worker_peer_refusal() {
             .as_str()
             .unwrap()
             .contains("`worker_peer_refused`")
+    );
+}
+
+/// Reads the handlers' sources, so a route that takes an `Option<Human>` cannot lack the declaration however it is marked.
+#[test]
+fn every_handler_with_an_optional_human_declares_the_worker_peer_refusal() {
+    let doc = doc_json();
+    let mut sources = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/http")];
+    let mut optional_routes = Vec::new();
+    while let Some(path) = sources.pop() {
+        if path.is_dir() {
+            sources.extend(
+                std::fs::read_dir(&path)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path()),
+            );
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for route in text.split("#[utoipa::path(").skip(1) {
+            let Some((_, signature)) = route.split_once("pub async fn ") else {
+                continue;
+            };
+            let signature = signature.split(") ->").next().unwrap();
+            if !signature.contains("Option<Human>") {
+                continue;
+            }
+            let operation_id = route
+                .split_once("operation_id = \"")
+                .and_then(|(_, rest)| rest.split_once('"'))
+                .map(|(id, _)| id.to_owned())
+                .unwrap_or_else(|| panic!("{}: a route without an operation_id", path.display()));
+            optional_routes.push(operation_id);
+        }
+    }
+    assert!(optional_routes.len() >= 2, "{optional_routes:?}");
+    for operation_id in optional_routes {
+        let declared = doc["paths"]
+            .as_object()
+            .unwrap()
+            .values()
+            .flat_map(|item| item.as_object().unwrap().values())
+            .find(|operation| operation["operationId"] == operation_id.as_str())
+            .unwrap_or_else(|| panic!("{operation_id} is not in the document"));
+        let refused = declared["responses"]["403"]["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("`worker_peer_refused`"));
+        assert!(refused, "{operation_id} takes an Option<Human>");
+    }
+}
+
+#[test]
+fn error_texts_name_the_codes_of_three_routes() {
+    let doc = doc_json();
+    let text = |path: &str, method: &str, status: &str| {
+        doc["paths"][path][method]["responses"][status]["description"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    for (path, method) in [
+        ("/api/v1/projects/{slug}/proposals", "get"),
+        ("/api/v1/projects/{slug}/messages", "get"),
+    ] {
+        assert!(text(path, method, "403").contains("`worker_peer_refused`"));
+    }
+    assert!(
+        text("/api/v1/projects/{slug}/messages", "get", "503").contains("`project_unavailable`")
+    );
+    assert!(
+        text(
+            "/api/v1/projects/{slug}/proposals/{id}/questions",
+            "post",
+            "400"
+        )
+        .contains("`invalid_name`")
     );
 }
 
