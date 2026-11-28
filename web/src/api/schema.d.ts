@@ -5553,7 +5553,7 @@ export interface components {
             path: string;
             /** @description What the checkout's files hold. */
             target: components["schemas"]["ReviewCheckoutTarget"];
-            /** @description The review worker that owns the checkout, such as `review/ci`. */
+            /** @description The review worker that owns the checkout, such as `reviewer-3`. */
             worker: string | null;
             /** @example ws-12 */
             workspace: string;
@@ -11564,7 +11564,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProposalList"];
                 };
             };
-            /** @description `invalid_request`: the query string is not valid */
+            /** @description `invalid_name` or `invalid_request`: the human name or the query string is not valid */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -14391,7 +14391,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description The project failed to open */
+            /** @description `project_unavailable`: the project failed to open */
             503: {
                 headers: {
                     [name: string]: unknown;

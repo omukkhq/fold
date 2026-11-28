@@ -1536,7 +1536,7 @@ fn proposal(text: &str) -> Result<ProposalId, ApiError> {
     ),
     responses(
         (status = 200, description = "The proposals", body = ProposalList),
-        (status = 400, description = "`invalid_request`: the query string is not valid", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_name` or `invalid_request`: the human name or the query string is not valid", body = ErrorEnvelope),
         (status = 404, description = "`project_not_found`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -1993,7 +1993,7 @@ pub struct ReviewCheckoutView {
     pub path: String,
     /// What the checkout's files hold.
     pub target: ReviewCheckoutTarget,
-    /// The review worker that owns the checkout, such as `review/ci`.
+    /// The review worker that owns the checkout, such as `reviewer-3`.
     #[schema(required = true)]
     pub worker: Option<String>,
     /// The base revision: the version's base for a proposal checkout, the revision of main the members were merged onto for a batch checkout.
@@ -2076,7 +2076,7 @@ pub struct ReviewCheckoutList {
     responses(
         (status = 200, description = "The active review checkouts", body = ReviewCheckoutList),
         (status = 404, description = "`project_not_found`: the slug is not registered", body = ErrorEnvelope),
-        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`: the project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]

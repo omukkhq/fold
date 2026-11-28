@@ -947,6 +947,45 @@ async fn a_conflicting_integration_answers_integration_conflicted() {
     assert_eq!(row["conflicted"], true, "{}", list.body);
 }
 
+#[tokio::test]
+async fn list_proposals_refuses_a_malformed_human_name() {
+    let fx = with_p1().await;
+    let request = Request::builder()
+        .header(CLIENT_HEADER, "test")
+        .header("x-fold-human", "not a name!")
+        .method(Method::GET)
+        .uri(format!("{BASE}/proposals"))
+        .body(Body::empty())
+        .unwrap();
+    let response = socket_router(fx.state.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"]["code"], "invalid_name", "{body}");
+}
+
+#[test]
+fn the_declared_errors_name_what_the_routes_return() {
+    let doc = serde_json::to_value(openapi()).unwrap();
+    let list = &doc["paths"]["/api/v1/projects/{slug}/proposals"]["get"]["responses"];
+    assert!(
+        list["400"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("invalid_name")
+    );
+    let checkouts = &doc["paths"]["/api/v1/projects/{slug}/reviews/checkouts"]["get"]["responses"];
+    assert!(
+        checkouts["503"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("project_unavailable")
+    );
+}
+
 #[test]
 fn the_openapi_document_declares_every_route_and_error_schema() {
     let doc = serde_json::to_value(openapi()).unwrap();
