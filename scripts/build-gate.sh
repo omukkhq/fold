@@ -4,7 +4,7 @@
 #
 # - Build output goes to this tree's own target/, which overrides a shared target-dir in ~/.cargo/config.toml. Cargo gives a workspace crate the same build hash in every copy of the tree, so a shared folder would let one workspace link the fold crates another workspace built, and parallel builds would wait on its one lock.
 # - sccache, when installed, caches compilations. A hit needs the same absolute paths, so it serves later builds of the same tree, such as the integration checks in .fold/checks/main, and not a first build in a new workspace.
-# - FOLD_GATE_SLOTS, FOLD_GATE_JOBS, FOLD_GATE_TEST_THREADS and FOLD_GATE_MIN_FREE_GB override the defaults, which come from the processors and the memory of the machine.
+# - FOLD_GATE_SLOTS, FOLD_GATE_JOBS, FOLD_GATE_TEST_THREADS and FOLD_GATE_MIN_FREE_GB override the defaults, which come from the processors and the memory of the machine and, for the test threads, from the slots in use when the command starts.
 set -u
 
 tree=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -34,14 +34,11 @@ jobs_default=$(( cpus * 3 / 2 / slots ))
 [ "$jobs_default" -le 8 ] || jobs_default=8
 [ "$jobs_default" -ge 2 ] || jobs_default=2
 jobs=${FOLD_GATE_JOBS:-$jobs_default}
-test_threads=${FOLD_GATE_TEST_THREADS:-$jobs}
 min_free_gb=${FOLD_GATE_MIN_FREE_GB:-20}
 
 export CARGO_TARGET_DIR="$tree/target"
 export CARGO_INCREMENTAL=0
 export CARGO_BUILD_JOBS="$jobs"
-export NEXTEST_TEST_THREADS="$test_threads"
-export VITEST_MAX_WORKERS="$test_threads"
 export FOLD_GATE_HELD=1
 
 if [ -z "${RUSTC_WRAPPER:-}" ] && command -v sccache >/dev/null 2>&1; then
@@ -62,6 +59,8 @@ while [ "$(free_gb)" -lt "$min_free_gb" ]; do
 done
 
 if ! command -v flock >/dev/null 2>&1; then
+  export NEXTEST_TEST_THREADS="${FOLD_GATE_TEST_THREADS:-$jobs}"
+  export VITEST_MAX_WORKERS="$NEXTEST_TEST_THREADS"
   exec nice -n 10 "$@"
 fi
 
@@ -73,7 +72,19 @@ while :; do
   for i in $(seq 1 "$slots"); do
     exec {fd}>"$locks/slot-$i.lock"
     if flock -n "$fd"; then
-      echo "build-gate: slot taken" >&2
+      # Most fold tests wait on SQLite and files rather than the processors, so a command that starts while few slots are in use shares the processors between those slots instead of keeping its slot's share. A command that starts later never lowers the threads of one that already runs.
+      busy=1
+      for j in $(seq 1 "$slots"); do
+        [ "$j" -eq "$i" ] && continue
+        exec {probe}>"$locks/slot-$j.lock"
+        flock -n "$probe" || busy=$(( busy + 1 ))
+        exec {probe}>&-
+      done
+      test_threads=$(( cpus / busy > jobs ? cpus / busy : jobs ))
+      test_threads=${FOLD_GATE_TEST_THREADS:-$test_threads}
+      export NEXTEST_TEST_THREADS="$test_threads"
+      export VITEST_MAX_WORKERS="$test_threads"
+      echo "build-gate: slot taken, ${busy} of ${slots} in use, ${test_threads} test threads" >&2
       # The command inherits the locked descriptor, so the slot stays held until the command and everything it started have ended.
       exec nice -n 10 "$@"
     fi
