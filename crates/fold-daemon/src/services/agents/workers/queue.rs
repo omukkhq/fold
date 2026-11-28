@@ -14,7 +14,7 @@ use serde_json::json;
 use tokio::sync::broadcast::{self, error::RecvError, error::TryRecvError};
 
 use super::limits::{Turn, check_running};
-use super::{AgentError, AgentService, StartWorker, StartedWorker, binding_area};
+use super::{AgentError, AgentService, StartWorker, StartedWorker, binding_area, is_limit_refusal};
 use crate::services::events::{BusMessage, EventBuffer, EventBus};
 use crate::services::messages::tell_actor_in_tx;
 use crate::services::projects::load_config;
@@ -86,11 +86,6 @@ pub(super) fn queued_run(
         None if agent_exists => QueuedRun::Drop(DropReason::Cancelled),
         None => QueuedRun::Start,
     }
-}
-
-/// Whether the worker limits, or a resume fold owes first, refused a start.
-pub(super) fn is_limit_refusal(error: &AgentError) -> bool {
-    matches!(error, AgentError::Fold(error) if error.code() == codes::WORKER_LIMIT_REACHED)
 }
 
 /// Whether a refusal of the worker limits names a limit of 0, which no stop frees a place under.

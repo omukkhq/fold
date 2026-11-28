@@ -5,10 +5,10 @@ use fold_store::reviews::checks::{self, CheckRunRow};
 use fold_store::{StoreError, agents};
 use serde_json::{Value, json};
 
-use super::resume::{self, SessionStart};
+use super::resume::SessionStart;
 use super::{Input, Supervisor, lock};
 use crate::services::agents::AgentError;
-use crate::services::agents::workers::is_paused_refusal;
+use crate::services::agents::workers::{is_limit_refusal, is_paused_refusal};
 use crate::services::events::EventBuffer;
 
 /// The run a `checks.finished` event ends when the checks of a worker's `create_proposal` or `update_proposal` did not pass, so its author's task worker has work again.
@@ -104,7 +104,7 @@ impl Supervisor {
         let watch = match self.resume(&agent, turn.clone(), &[row.task]).await {
             Ok(watch) => watch,
             // The run stays owed, and the resume of the pause or the next free place serves it.
-            Err(error) if is_paused_refusal(&error) || resume::is_limit_refusal(&error) => {
+            Err(error) if is_paused_refusal(&error) || is_limit_refusal(&error) => {
                 return Ok(());
             }
             // A start outside this path came first; the task worker takes this turn as its next one.

@@ -11,8 +11,9 @@ use serde_json::json;
 use toml_edit::{DocumentMut, value};
 
 use super::super::{AgentError, AgentService, accounts};
-use super::limits::{REWRITE, config_io, joined, replace, restore};
+use super::limits::{REWRITE, joined, replace, restore};
 use crate::services::events::EventBuffer;
+use crate::support::config_io;
 
 /// The project's account and the accounts of the host it can choose, by name only: `default`, Claude Code's own login, first while that login is on the host, then the host's accounts in name order.
 #[derive(Debug, Clone, PartialEq, Eq)]

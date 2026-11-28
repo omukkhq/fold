@@ -21,7 +21,7 @@ use crate::services::agents::AgentError;
 use crate::services::agents::claude::{ClaudeMessage, SystemMessage};
 use crate::services::agents::workers::limits::{Turn, check_running};
 use crate::services::agents::workers::{
-    is_paused_refusal, new_session, not_supervised, refuse_while_paused,
+    is_limit_refusal, is_paused_refusal, new_session, not_supervised, refuse_while_paused,
 };
 use crate::services::events::EventBuffer;
 use crate::services::messages::tell_lead_in_tx;
@@ -992,11 +992,6 @@ impl Supervisor {
         self.launch(&row, false, Some(turn)).await?;
         Ok(())
     }
-}
-
-/// A start that the worker limits refused.
-pub(super) fn is_limit_refusal(error: &AgentError) -> bool {
-    matches!(error, AgentError::Fold(error) if error.code() == codes::WORKER_LIMIT_REACHED)
 }
 
 fn resumed_event(

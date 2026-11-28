@@ -1,8 +1,8 @@
-use std::path::Path;
 use std::sync::Arc;
 
 use fold_core::config::check_branch;
 use fold_core::{Actor, FoldError, ProjectPaths, codes, policy};
+use fold_vcs::atomic::write_atomic;
 use fold_vcs::git::Git;
 use fold_vcs::git_remote::{
     Moved, branch_ref, checked_out_branch, operation_in_progress, rename_branch as git_rename,
@@ -15,6 +15,7 @@ use super::folder_status::folder_status_locked;
 use super::remote::blocking;
 use super::{ProjectError, load_config, require_git_sync};
 use crate::projects::ProjectHandle;
+use crate::support::config_io;
 
 /// The command a person runs to make another branch the project's Git branch.
 pub const RENAME_COMMAND: &str = "fld git branch";
@@ -217,7 +218,7 @@ fn write_branch(paths: &ProjectPaths, branch: &str) -> Result<(), FoldError> {
         Err(error) => return Err(config_io(&error)),
     };
     let written = with_branch(&text, branch)?;
-    write_atomic(&path, &written)
+    write_atomic(&path, written.as_bytes()).map_err(|error| config_io(&error))
 }
 
 /// `text` with `[git] branch` set to `branch`.
@@ -237,22 +238,6 @@ fn with_branch(text: &str, branch: &str) -> Result<String, FoldError> {
     };
     git.insert("branch", value(branch));
     Ok(document.to_string())
-}
-
-fn write_atomic(path: &Path, text: &str) -> Result<(), FoldError> {
-    let temporary = path.with_extension("toml.tmp");
-    std::fs::write(&temporary, text).map_err(|error| config_io(&error))?;
-    std::fs::File::open(&temporary)
-        .and_then(|file| file.sync_all())
-        .map_err(|error| config_io(&error))?;
-    std::fs::rename(&temporary, path).map_err(|error| config_io(&error))
-}
-
-fn config_io(error: &std::io::Error) -> FoldError {
-    FoldError::new(
-        codes::WORKSPACE_IO,
-        format!("cannot read or write .fold/config.toml: {}", error.kind()),
-    )
 }
 
 #[cfg(test)]

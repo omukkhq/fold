@@ -152,6 +152,11 @@ pub(super) fn is_paused_refusal(error: &AgentError) -> bool {
     matches!(error, AgentError::Fold(error) if error.code() == codes::PROJECT_PAUSED)
 }
 
+/// Whether `error` is a start that the worker limits refused.
+pub(super) fn is_limit_refusal(error: &AgentError) -> bool {
+    matches!(error, AgentError::Fold(error) if error.code() == codes::WORKER_LIMIT_REACHED)
+}
+
 fn area_not_found(area: &AreaName) -> AgentError {
     area_missing(area).into()
 }

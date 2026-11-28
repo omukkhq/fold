@@ -38,6 +38,14 @@ pub(crate) fn confine_git(command: &mut tokio::process::Command, fold_dir: &std:
     command.env("GIT_CEILING_DIRECTORIES", fold_dir);
 }
 
+/// The error for a failed read or write of `.fold/config.toml`.
+pub(crate) fn config_io(error: &std::io::Error) -> fold_core::FoldError {
+    fold_core::FoldError::new(
+        fold_core::codes::WORKSPACE_IO,
+        format!("cannot read or write .fold/config.toml: {}", error.kind()),
+    )
+}
+
 /// What a lock call gives, also when an earlier holder panicked. The state behind every lock of the daemon stays valid after a panic, so the next holder continues instead of the daemon failing for good.
 pub(crate) fn unpoisoned<T>(result: LockResult<T>) -> T {
     result.unwrap_or_else(PoisonError::into_inner)
