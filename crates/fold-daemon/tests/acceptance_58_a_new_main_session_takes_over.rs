@@ -118,6 +118,7 @@ async fn acceptance_58_with_keep_others_both_main_sessions_stay_connected_and_ge
         agent: main_name(),
         text: "fold: task T-1 is ready.".to_owned(),
         next_tool: "get_task",
+        needs_no_action: false,
     };
     handle.push.deliver(&[notice], 1);
     assert!(next_notice(&mut first_inbox).await.contains("T-1 is ready"));
@@ -246,6 +247,7 @@ async fn acceptance_58_a_replayed_handshake_after_a_restart_never_takes_over_a_n
         agent: main_name(),
         text: "fold: task T-1 is ready.".to_owned(),
         next_tool: "get_task",
+        needs_no_action: false,
     };
     handle.push.deliver(&[notice], 1);
     assert!(next_notice(&mut a_inbox).await.contains("T-1 is ready"));
@@ -358,6 +360,7 @@ async fn acceptance_58_a_taken_over_process_that_starts_a_new_conversation_gets_
         agent: main_name(),
         text: "fold: task T-1 is ready.".to_owned(),
         next_tool: "get_task",
+        needs_no_action: false,
     };
     handle.push.deliver(&[notice], 2);
     assert!(next_notice(&mut new_inbox).await.contains("T-1 is ready"));

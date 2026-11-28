@@ -945,6 +945,7 @@ fn notice(agent: &str, message: u32) -> Notice {
         agent: name(agent),
         text: inbox_text(message),
         next_tool: "get_inbox",
+        needs_no_action: false,
     }
 }
 
@@ -1708,6 +1709,7 @@ fn only_notices_that_say_no_action_is_needed_wait_in_the_digest() {
         agent: name("main"),
         text: text.to_owned(),
         next_tool,
+        needs_no_action: false,
     };
     let settled = notice(
         "fold: human:ana marked m-30 answered outside your session; it does not wait for the user now. Call get_thread.",
