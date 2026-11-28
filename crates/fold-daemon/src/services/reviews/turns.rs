@@ -5,7 +5,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard, watch};
 /// Which place in the integration queue a caller takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnKind {
-    /// A direct change of the main agent: it has no review and no checks, so it goes before every integration that waits.
+    /// A direct change of the main agent: the user approved it in the main agent's conversation and the main agent waits for its answer, so it goes before every integration that waits.
     First,
     /// Every other integration: a proposal, automatic or queued by hand, a review batch, a pull, a record, a reset or an untrack.
     Queued,

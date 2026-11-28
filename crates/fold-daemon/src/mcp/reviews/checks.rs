@@ -246,6 +246,10 @@ pub fn run_json(view: &CheckRunView) -> Value {
     if let Some(batch) = run.batch {
         line["batch"] = json!(batch);
     }
+    if let Some(changeset) = run.changeset {
+        line["purpose"] = json!(run.purpose.as_str());
+        line["changeset"] = json!(changeset);
+    }
     if let Some(since) = view.waiting_for_memory {
         line["waiting_for"] = json!("memory");
         line["waiting_since"] = json!(since.as_millis());

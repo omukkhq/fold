@@ -23,7 +23,8 @@ use serde_json::{Value, json};
 
 use super::batches::batch_not_found;
 use super::checks::{
-    Integrating, IntegrationChecks, PassedRun, VersionRun, fold_failed_refusal, next_version_run,
+    Checked, Integrating, IntegrationChecks, PassedRun, VersionRun, fold_failed_refusal,
+    next_version_run,
 };
 use super::integrate::{
     ATTEMPTS, Commit, HumanResolution, Integrated, IntegrationOutcome, IntegrationRequest, Plan,
@@ -778,7 +779,10 @@ impl ReviewService {
             batch: Some(batch),
             members: &versions,
         };
-        match self.integration_checks(actor, at, carried).await? {
+        match self
+            .integration_checks(actor, Checked::Proposal(at), carried)
+            .await?
+        {
             IntegrationChecks::None | IntegrationChecks::Passed => {}
             IntegrationChecks::Failed(run) => {
                 let mut members: Vec<MemberPlan> = merged.into_iter().map(|(m, _)| m).collect();

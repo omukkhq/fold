@@ -525,7 +525,7 @@ pub fn tools() -> Vec<Tool> {
     tools.extend(plans::tools());
     tools.push(Tool::new(
         SUBMIT_MAIN_CHANGE,
-        "Main agent only, and only after the user's explicit OK to the diff and summary you showed. Integrate the newest changeset of your main workspace onto main as one revision and one Git commit with your message, with no task, proposal or review; the main workspace then closes. integration_conflicted means main moved: details list the files; call sync_workspace, resolve them, call record_changes, show the user the new diff and submit again.",
+        "Main agent only, and only after the user's explicit OK to the diff and summary you showed. Integrate the newest changeset of your main workspace onto main as one revision and one Git commit with your message, with no task, proposal or review; the main workspace then closes. It waits for the integration that runs, then runs the project's integration checks on the merge with main, as for a proposal, so the call can take as long as those checks. result checks_failed means main did not move and the main workspace stays open: read the run with get_check_run (fold also sends you a message that names the changeset), fix the change there, call record_changes, show the user the new diff and submit again. integration_conflicted means main moved: details list the files; call sync_workspace, resolve them, call record_changes, show the user the new diff and submit again.",
         schema_for_type::<SubmitMainChangeInput>(),
     ));
     tools.push(Tool::new(
@@ -567,7 +567,6 @@ pub async fn call(
         GET_REVIEW_COMMENTS => get_review_comments(reviews, arguments).await?,
         INTEGRATE_PROPOSAL => integrate_proposal(reviews, &actor, arguments).await?,
         REQUIRE_HUMAN_REVIEW => require_human_review(reviews, &actor, arguments).await?,
-        SUBMIT_MAIN_CHANGE => submit_main_change(reviews, &actor, arguments).await?,
         SUBMIT_REVIEW_FIX => submit_review_fix(reviews, &actor, arguments).await?,
         _ => match batches::run(reviews, tool, &actor, arguments).await? {
             Some(value) => value,
@@ -1407,6 +1406,22 @@ async fn integrate_proposal(
     }
 }
 
+/// `submit_main_change`, which waits for the integration checks inside the call: a cancelled call stops waiting, and once its turn is held the integration goes on and fold sends the main agent its result.
+pub async fn submit_main_change_tool(
+    server: &FoldServer,
+    arguments: &JsonObject,
+    context: &rmcp::service::RequestContext<rmcp::RoleServer>,
+) -> Result<Option<Value>, FoldError> {
+    let Some(reviews) = &server.reviews else {
+        return Ok(None);
+    };
+    let actor = server.actor().await?;
+    tokio::select! {
+        value = submit_main_change(reviews, &actor, arguments) => value.map(Some),
+        () = context.ct.cancelled() => Ok(Some(json!({"cancelled": true}))),
+    }
+}
+
 async fn submit_main_change(
     reviews: &ReviewService,
     actor: &Actor,
@@ -1432,6 +1447,11 @@ async fn submit_main_change(
             "revision": revision,
         })),
         DirectOutcome::Conflicted(conflicts) => Err(direct_conflicted(changeset, &conflicts)),
+        DirectOutcome::ChecksFailed { run } => Ok(json!({
+            "changeset": changeset,
+            "result": "checks_failed",
+            "run": run,
+        })),
     }
 }
 

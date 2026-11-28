@@ -723,19 +723,19 @@ async fn write_message(
     })
 }
 
-/// Sends `body` from `fold` to `recipients` inside the caller's transaction, linked to `task` and, when it has one, `proposal`, so a command can tell the agents concerned about what it just did in the same commit. The caller knows each recipient worker exists and publishes the buffer after the commit.
+/// Sends `body` from `fold` to `recipients` inside the caller's transaction, linked to `task` and `proposal` when it has them, so a command can tell the agents concerned about what it just did in the same commit. A direct change of the main agent has neither. The caller knows each recipient worker exists and publishes the buffer after the commit.
 pub(crate) async fn send_from_fold_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     recipients: Vec<Recipient>,
-    links: (TaskId, Option<ProposalId>),
+    links: (impl Into<Option<TaskId>>, Option<ProposalId>),
     body: &MessageBody,
     now: Timestamp,
 ) -> Result<MessageView, MessageError> {
     let draft = Draft {
         actor: &Actor::System,
         sender: &Sender::Fold,
-        task: Some(links.0),
+        task: links.0.into(),
         proposal: links.1,
         request: None,
         join: None,

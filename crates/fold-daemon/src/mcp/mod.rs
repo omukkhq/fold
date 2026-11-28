@@ -239,6 +239,12 @@ impl FoldServer {
             (events::WAIT_FOR_EVENTS, Some(worker)) => {
                 events::wait_for_events(self, worker, arguments, context).await?
             }
+            (reviews::SUBMIT_MAIN_CHANGE, Some(_)) => {
+                match reviews::submit_main_change_tool(self, arguments, context).await? {
+                    Some(value) => value,
+                    None => return Ok(None),
+                }
+            }
             (messages::ACKNOWLEDGE_MESSAGE, Some(_)) => {
                 messages::acknowledge_message(self, arguments).await?
             }

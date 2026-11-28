@@ -36,7 +36,10 @@ mod runner;
 mod setup;
 
 pub use cancel::CancelTarget;
-pub(crate) use integration::{Integrating, IntegrationChecks, PassedRun, fold_failed_refusal};
+pub(crate) use integration::{
+    Checked, DirectIntegrating, Integrating, IntegrationChecks, PassedRun,
+    direct_fold_failed_refusal, fold_failed_refusal,
+};
 pub(crate) use runner::HeldRequest;
 pub(super) use runner::{CancelRequest, CancelWatch};
 pub use runner::{
@@ -1051,6 +1054,9 @@ pub(super) async fn end_run_with_in_tx(
         "reason": verdict.reason.map(RunReason::as_str),
         "version": run.version,
     });
+    if let Some(changeset) = run.changeset {
+        data["changeset"] = json!(changeset.to_string());
+    }
     if let (Some(data), Some(extra)) = (data.as_object_mut(), extra.as_object()) {
         data.extend(extra.clone());
     }

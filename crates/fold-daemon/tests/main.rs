@@ -84,6 +84,7 @@ mod acceptance_72_an_area_denies_commands;
 mod acceptance_73_a_lane_refresh_goes_to_its_reviewer;
 mod acceptance_74_a_batch_member_goes_back_for_its_lane_refresh;
 mod acceptance_75_a_direct_change_goes_first;
+mod acceptance_76_a_direct_change_runs_the_integration_checks;
 mod acceptance_7_conflicting_proposals;
 mod acceptance_8_restart_recovery;
 mod acceptance_9_offline;
