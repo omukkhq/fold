@@ -558,7 +558,7 @@ impl TaskService {
         Some(Activity { path, at })
     }
 
-    /// Whether the files of the live workspace differ from the tree of the open proposal's newest version, as the live state compared them on its last scan: content, never times, so an automatic checkpoint of unchanged files is no edit. `None` without an open proposal, or while the live state does not hold the workspace or has not compared it with that proposal.
+    /// Whether the files of the live workspace differ from the tree of the open proposal's newest version and, after a reviewer's version, from the tree of the author's own newest version, as the live state compared them on its last scan: content, never times, so an automatic checkpoint of unchanged files is no edit. `None` without an open proposal, or while the live state does not hold the workspace or has not compared it with that proposal.
     fn edits_after_version(
         &self,
         workspace: Option<WorkspaceId>,

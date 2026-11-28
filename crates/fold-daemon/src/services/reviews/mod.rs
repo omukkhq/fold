@@ -67,6 +67,7 @@ pub use plans::{
     ReviewPlanView, proposal_plan, proposal_plans, related_plan_tasks,
 };
 pub(crate) use plans::{mark_plan_started, refuse_planned, settle_plans, take_plan_for_start};
+pub(crate) use proposals::is_human_edit;
 pub(crate) use proposals::proposal_missing;
 pub use proposals::{
     DEFAULT_PROPOSAL_LIST, MAX_PROPOSAL_LIST, ProposalDetail, ProposalFilter, ProposalListing,

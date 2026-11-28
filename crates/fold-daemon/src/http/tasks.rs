@@ -308,7 +308,7 @@ pub struct BoardCard {
     /// The last tracked edit in the live workspace; null without a live workspace and before its first edit.
     #[schema(required = true)]
     pub activity: Option<BoardActivity>,
-    /// Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them.
+    /// Whether the files of the live workspace differ from the tree of the open proposal's newest version and, while a reviewer made that version in its review checkout, from the tree of the author's own newest version: false while every file is the same as one of them, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them.
     #[schema(required = true)]
     pub edits_after_version: Option<bool>,
     /// The check run in progress for the task: an integration run of its proposal on the merged tree, else a proposal-stage run in its workspace, whose worker waits for the result and is not stalled while it goes. Null while no run goes.
@@ -621,7 +621,7 @@ pub struct TaskView {
     /// The last tracked edit in the live workspace; null without a live workspace and before its first edit.
     #[schema(required = true)]
     pub activity: Option<BoardActivity>,
-    /// Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them.
+    /// Whether the files of the live workspace differ from the tree of the open proposal's newest version and, while a reviewer made that version in its review checkout, from the tree of the author's own newest version: false while every file is the same as one of them, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them.
     #[schema(required = true)]
     pub edits_after_version: Option<bool>,
     /// The check run that goes in the live workspace; its worker waits for the result and is not stalled while it goes. Null while no run goes.

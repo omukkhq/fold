@@ -235,6 +235,7 @@ mod session_push;
 mod shutdown_failpoints;
 mod socket_peers;
 mod sse_stream;
+mod stall_after_review_fix;
 mod supervised_main;
 mod takeover;
 mod task_read;

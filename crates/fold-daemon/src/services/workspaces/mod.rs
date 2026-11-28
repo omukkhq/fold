@@ -258,7 +258,7 @@ impl WorkspaceService {
         }
     }
 
-    /// Gives the live state of `workspace` its open proposal, the tree of the proposal's newest version to compare the working files against, and its checkpoints after the commit of a proposal command.
+    /// Gives the live state of `workspace` its open proposal, the version trees to compare the working files against (see [`crate::live::compared_trees`]), and its checkpoints after the commit of a proposal command.
     pub(crate) async fn proposal_changed(
         &self,
         workspace: WorkspaceId,
@@ -267,17 +267,17 @@ impl WorkspaceService {
         let Some(live) = &self.live else {
             return;
         };
-        let tree = match proposal {
+        let trees = match proposal {
             Some(proposal) => match reviews::list_versions(self.store.read(), proposal).await {
-                Ok(mut versions) => versions.pop().map(|version| version.tree),
+                Ok(versions) => crate::live::compared_trees(versions),
                 Err(error) => {
                     tracing::warn!(workspace = %workspace, code = error.log_code(), "the version tree was not read");
-                    None
+                    Vec::new()
                 }
             },
-            None => None,
+            None => Vec::new(),
         };
-        live.set_proposal(workspace, proposal, tree).await;
+        live.set_proposal(workspace, proposal, trees).await;
         live.reload_checkpoints(workspace).await;
     }
 

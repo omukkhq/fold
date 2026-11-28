@@ -2393,7 +2393,7 @@ export interface components {
              * @description UTC milliseconds of the completion record; null until the task is Done.
              */
             completed_at: number | null;
-            /** @description Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them. */
+            /** @description Whether the files of the live workspace differ from the tree of the open proposal's newest version and, while a reviewer made that version in its review checkout, from the tree of the author's own newest version: false while every file is the same as one of them, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them. */
             edits_after_version: boolean | null;
             /** @description The held tasks this task waits on, directly or through other open tasks, as public task ids sorted by number. Calculated on each read; left out when none. */
             held_by?: string[];
@@ -4008,7 +4008,7 @@ export interface components {
             base: string;
             check_run: components["schemas"]["LiveCheckRun"] | null;
             checkpoints: components["schemas"]["CheckpointSummary"][];
-            /** @description Whether the working files differ from the tree of the open proposal's newest version: false while every file is the same, true from the first file that differs. Null without an open proposal. */
+            /** @description Whether the working files differ from the tree of the open proposal's newest version and, while that version is one a reviewer made in its review checkout, from the tree of the author's own newest version: false while every file is the same as one of them, true from the first file that differs. A reviewer's version leaves the author's workspace with the files it sent, which are no edit. Null without an open proposal. */
             edits_after_version: boolean | null;
             files: components["schemas"]["ChangedFile"][];
             /**
@@ -6215,7 +6215,7 @@ export interface components {
             dependencies: components["schemas"]["TaskEdge"][];
             /** @description Markdown. */
             description: string;
-            /** @description Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them. */
+            /** @description Whether the files of the live workspace differ from the tree of the open proposal's newest version and, while a reviewer made that version in its review checkout, from the tree of the author's own newest version: false while every file is the same as one of them, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them. */
             edits_after_version: boolean | null;
             /** @description The held tasks this task waits on, directly or through other open tasks, as public task ids sorted by number. Calculated on each read; left out when none. */
             held_by?: string[];

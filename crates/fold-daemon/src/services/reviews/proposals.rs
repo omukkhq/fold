@@ -759,7 +759,7 @@ pub(super) async fn mark_checks_change(
 }
 
 /// A version a human wrote is a human edit: only a human edit names a human as its author.
-pub(super) fn is_human_edit(created_by: &str) -> bool {
+pub(crate) fn is_human_edit(created_by: &str) -> bool {
     EventActor::parse(created_by).is_ok_and(|author| author.is_human())
 }
 
