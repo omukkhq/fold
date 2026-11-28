@@ -64,6 +64,15 @@ impl Scene {
 
     /// [`Scene::with`], then main gets a `fold-checks.toml` whose one integration check runs `run`: a change of the checks file waits for a human, so `ops` brings it in as P-6 of T-6, which the main agent approves and `tanim` integrates as `r2`.
     async fn with_checks(run: &str, extra: impl Fn(u32, &std::path::Path)) -> Self {
+        Self::with_main_checks(&checks_text(run), &[], extra).await
+    }
+
+    /// [`Scene::with_checks`] with `checks` as the whole `fold-checks.toml` of P-6, which also adds each of `files` to main.
+    async fn with_main_checks(
+        checks: &str,
+        files: &[(&str, &str)],
+        extra: impl Fn(u32, &std::path::Path),
+    ) -> Self {
         let scene = Self::with(extra).await;
         let fx = &scene.fx;
         give_role(&fx.handle.store, "ops", Role::AreaLead, Some("ops")).await;
@@ -81,7 +90,13 @@ impl Scene {
             .unwrap();
         let ops = fx.agent("ops").await;
         fx.workspaces().create_workspace(&ops, t(6)).await.unwrap();
-        checks_file(&fx.project.paths().root().join(".fold/ws/t-6"), run);
+        let dir = fx.project.paths().root().join(".fold/ws/t-6");
+        std::fs::write(dir.join("fold-checks.toml"), checks).unwrap();
+        for (path, text) in files {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
         fx.reviews()
             .create_proposal_covering(&ops, t(6), "Checks", Some("tests pass"))
             .await
@@ -260,12 +275,8 @@ impl Scene {
 }
 
 /// A `fold-checks.toml` with one integration check that runs `run` on the merged tree.
-fn checks_file(dir: &std::path::Path, run: &str) {
-    std::fs::write(
-        dir.join("fold-checks.toml"),
-        format!("[[check]]\nname = \"suite\"\nrun = \"{run}\"\nstage = \"integration\"\n"),
-    )
-    .unwrap();
+fn checks_text(run: &str) -> String {
+    format!("[[check]]\nname = \"suite\"\nrun = \"{run}\"\nstage = \"integration\"\n")
 }
 
 fn succeeded(members: &[MemberIntegration]) -> Vec<(ProposalId, RevisionId)> {
@@ -1240,4 +1251,187 @@ async fn without_automatic_integration_a_batch_with_no_member_left_ends_its_turn
         scene.fx.reviews().settle_batches_by_hand().await.unwrap(),
         0
     );
+}
+
+const SCHEMA_REFRESH: &str = "regenerate the schema on the current head";
+
+/// main's checks with the lane `schema` over `schema/*`, which names [`SCHEMA_REFRESH`] when `refresh` is true.
+fn schema_lane(refresh: bool) -> String {
+    let mut text = "[[serial]]\nname = \"schema\"\npaths = [\"schema/*\"]\n".to_owned();
+    if refresh {
+        text.push_str(&format!("refresh = \"{SCHEMA_REFRESH}\"\n"));
+    }
+    text
+}
+
+/// Writes `schema/m<task>.txt` into the workspace of each task of `tasks`, so its proposal is a member of the lane `schema`.
+fn schema_change(tasks: &'static [u32]) -> impl Fn(u32, &std::path::Path) {
+    move |task, dir| {
+        if tasks.contains(&task) {
+            std::fs::create_dir_all(dir.join("schema")).unwrap();
+            std::fs::write(dir.join(format!("schema/m{task}.txt")), "table\n").unwrap();
+        }
+    }
+}
+
+/// The data of each `integration.conflicted` event that names the lane's refresh.
+async fn refreshes(scene: &Scene) -> Vec<Value> {
+    scene
+        .events("integration.conflicted")
+        .await
+        .into_iter()
+        .map(|event| event.data)
+        .filter(|data| !data["refresh"].is_null())
+        .collect()
+}
+
+async fn assert_sent_back_for_refresh(scene: &Scene, proposal: u32) {
+    let found = refreshes(scene).await;
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["proposal"], p(proposal).to_string());
+    assert_eq!(found[0]["lane"], "schema");
+    assert_eq!(found[0]["refresh"], SCHEMA_REFRESH);
+    assert_eq!(found[0]["files"], 0);
+    let summary = scene
+        .fx
+        .reviews()
+        .get_proposal(p(proposal), None)
+        .await
+        .unwrap()
+        .summary;
+    assert!(summary.conflicted, "P-{proposal} went to its reviewer");
+    assert_eq!(scene.status(proposal).await, TaskStatus::Review);
+    assert_eq!(
+        scene
+            .count("SELECT COUNT(*) FROM check_runs WHERE stage = 'integration'")
+            .await,
+        0,
+        "no integration run starts"
+    );
+}
+
+#[tokio::test]
+async fn a_batch_member_whose_lane_moved_on_main_goes_back_for_its_refresh_and_the_rest_integrate()
+{
+    // P-6 adds schema/base.txt with the lane, so main has changed a path of the lane since P-2's base.
+    let scene = Scene::with_main_checks(
+        &schema_lane(true),
+        &[("schema/base.txt", "base\n")],
+        schema_change(&[2]),
+    )
+    .await;
+    let batch = scene.batch(&[2, 3, 4]).await;
+    scene.review(batch, &[2, 3, 4], &[]).await;
+
+    let outcome = scene
+        .fx
+        .reviews()
+        .integrate_review_batch(&human("tanim"), batch)
+        .await
+        .unwrap();
+    let BatchIntegration::Together { members } = outcome else {
+        panic!("expected the members together, got {outcome:?}");
+    };
+    assert_eq!(succeeded(&members), [(p(3), r(3)), (p(4), r(4))]);
+    assert!(matches!(
+        members.last().unwrap(),
+        MemberIntegration {
+            proposal,
+            outcome: IntegrationOutcome::Conflicted(files)
+        } if *proposal == p(2) && files.is_empty()
+    ));
+    assert_eq!(
+        scene.integrations().await,
+        [(6, 2, None), (3, 3, Some(1)), (4, 4, Some(1))]
+    );
+    assert_sent_back_for_refresh(&scene, 2).await;
+    assert_consistent(&scene.fx.project).await;
+}
+
+#[tokio::test]
+async fn a_member_that_needs_a_member_sent_back_for_its_refresh_waits() {
+    let scene = Scene::with_main_checks(
+        &schema_lane(true),
+        &[("schema/base.txt", "base\n")],
+        schema_change(&[2]),
+    )
+    .await;
+    scene
+        .fx
+        .handle
+        .tasks
+        .add_dependency(&human("tanim"), t(3), t(2))
+        .await
+        .unwrap();
+    let batch = scene.batch(&[2, 3, 4]).await;
+    scene.review(batch, &[2, 3, 4], &[]).await;
+
+    let outcome = scene
+        .fx
+        .reviews()
+        .integrate_review_batch(&human("tanim"), batch)
+        .await
+        .unwrap();
+    let BatchIntegration::Together { members } = outcome else {
+        panic!("expected the members together, got {outcome:?}");
+    };
+    assert_eq!(succeeded(&members), [(p(4), r(3))]);
+    assert!(
+        members.iter().all(|member| member.proposal != p(3)),
+        "P-3 waits for T-2: {members:?}"
+    );
+    assert_eq!(scene.integrations().await, [(6, 2, None), (4, 3, Some(1))]);
+    assert_eq!(scene.state(3).await, ProposalState::Open);
+    assert_sent_back_for_refresh(&scene, 2).await;
+    assert_consistent(&scene.fx.project).await;
+}
+
+#[tokio::test]
+async fn a_batch_member_after_an_earlier_member_of_its_lane_goes_back_for_its_refresh() {
+    let scene = Scene::with_main_checks(&schema_lane(true), &[], schema_change(&[2, 3])).await;
+    let batch = scene.batch(&[2, 3, 4]).await;
+    scene.review(batch, &[2, 3, 4], &[]).await;
+
+    let outcome = scene
+        .fx
+        .reviews()
+        .integrate_review_batch(&human("tanim"), batch)
+        .await
+        .unwrap();
+    let BatchIntegration::Together { members } = outcome else {
+        panic!("expected the members together, got {outcome:?}");
+    };
+    assert_eq!(succeeded(&members), [(p(2), r(3)), (p(4), r(4))]);
+    assert_eq!(members.len(), 3, "{members:?}");
+    assert_sent_back_for_refresh(&scene, 3).await;
+    assert_consistent(&scene.fx.project).await;
+}
+
+#[tokio::test]
+async fn a_batch_whose_lane_names_no_refresh_integrates_together_after_main_moved_in_it() {
+    let scene = Scene::with_main_checks(
+        &schema_lane(false),
+        &[("schema/base.txt", "base\n")],
+        schema_change(&[2, 3]),
+    )
+    .await;
+    let batch = scene.batch(&[2, 3]).await;
+    scene.review(batch, &[2, 3], &[]).await;
+
+    let outcome = scene
+        .fx
+        .reviews()
+        .integrate_review_batch(&human("tanim"), batch)
+        .await
+        .unwrap();
+    let BatchIntegration::Together { members } = outcome else {
+        panic!("expected the members together, got {outcome:?}");
+    };
+    assert_eq!(succeeded(&members), [(p(2), r(3)), (p(3), r(4))]);
+    assert!(scene.events("integration.conflicted").await.is_empty());
+    assert_eq!(
+        scene.integrations().await,
+        [(6, 2, None), (2, 3, Some(1)), (3, 4, Some(1))]
+    );
+    assert_consistent(&scene.fx.project).await;
 }

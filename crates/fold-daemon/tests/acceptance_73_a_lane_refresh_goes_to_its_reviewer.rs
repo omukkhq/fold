@@ -14,10 +14,10 @@ use crate::common::acceptance::{HUMAN, Harness, SLUG};
 use crate::worker_resume::{REVIEWER, TASK_WORKER, until_runs, until_state};
 use crate::workers_support::FakeClaude;
 
-const REFRESH: &str = "put the migration on the current head";
+pub(crate) const REFRESH: &str = "put the migration on the current head";
 
 /// main's checks: the lane `migrations` with a `refresh`, and an integration check that refuses two migrations on the same parent.
-const CHECKS: &str = r#"
+pub(crate) const CHECKS: &str = r#"
 [[serial]]
 name    = "migrations"
 paths   = ["alembic/versions/*.py"]
@@ -29,7 +29,7 @@ run   = "test -z \"$(cat alembic/versions/*.py | grep '^down' | sort | uniq -d)\
 stage = "integration"
 "#;
 
-async fn refresh_events(harness: &Harness) -> Vec<Value> {
+pub(crate) async fn refresh_events(harness: &Harness) -> Vec<Value> {
     harness
         .events()
         .await
@@ -40,7 +40,7 @@ async fn refresh_events(harness: &Harness) -> Vec<Value> {
 }
 
 /// The integration check runs of `proposal` as the HTTP proposal detail lists them.
-async fn integration_runs(harness: &Harness, proposal: &str) -> (Value, Vec<Value>) {
+pub(crate) async fn integration_runs(harness: &Harness, proposal: &str) -> (Value, Vec<Value>) {
     let (code, page) = harness
         .http(
             Method::GET,

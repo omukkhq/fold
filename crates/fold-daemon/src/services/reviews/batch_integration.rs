@@ -534,7 +534,7 @@ impl ReviewService {
         Ok(told)
     }
 
-    /// Integrates the approved members of a submitted batch together, by an agent that decides reviews or a named human, once every member has its final state for the batch. A member that went back to its author, was taken out, ended, or waits for a human or for a member that is not in the integration is left out and integrates later on its own rules. The integration is one turn of the project's integration mutex: the members merge onto main in dependency order, the integration checks run once on the whole merge, and on a pass one transaction publishes one revision per member and completes each task. A member that conflicts integrates on its own after the others, which gives its conflict alone to the reviewer that approved it; a failed check run integrates the members one at a time, each with its own run. When the project has integration checks, the batch waits in the integration queue and the answer is `Queued`. Integrating one member alone with `integrate_proposal` stays possible.
+    /// Integrates the approved members of a submitted batch together, by an agent that decides reviews or a named human, once every member has its final state for the batch. A member that went back to its author, was taken out, ended, or waits for a human or for a member that is not in the integration is left out and integrates later on its own rules. The integration is one turn of the project's integration mutex: the members merge onto main in dependency order, the integration checks run once on the whole merge, and on a pass one transaction publishes one revision per member and completes each task. A member that conflicts, or whose `[[serial]]` lane names a `refresh` and moved since its base on main or through an earlier member, integrates on its own after the others, which gives its conflict or the lane's refresh alone to the reviewer that approved it; a failed check run integrates the members one at a time, each with its own run. When the project has integration checks, the batch waits in the integration queue and the answer is `Queued`. Integrating one member alone with `integrate_proposal` stays possible.
     ///
     /// Refusals: `review_batch_not_found`; `invalid_request` with the reason `batch_not_submitted` for an open or closed batch, `batch_waiting` while a member has no final state (details list them), `batch_integrated` once the batch's turn ended, and `integration_queued` while a request of the batch waits; `update_checks_running` while the author's update or a reviewer's fix of a member that integrates runs the checks of its next version; and the caller gates of `integrate_proposal` for each member, such as `author_cannot_integrate` for the agent that wrote a member's current version.
     pub async fn integrate_review_batch(
@@ -735,6 +735,12 @@ impl ReviewService {
         let mut aside: BTreeSet<TaskId> = BTreeSet::new();
         for member in members {
             if member.waits_for.iter().any(|task| aside.contains(task)) {
+                aside.insert(member.task);
+                set_aside.push(member);
+                continue;
+            }
+            // `tree` holds main and the members merged before this one, so a lane that either moved since the member's base is due; the member's own turn records the refresh.
+            if self.refresh_due(member.proposal, tree).await?.is_some() {
                 aside.insert(member.task);
                 set_aside.push(member);
                 continue;
