@@ -1,4 +1,4 @@
-use fold_core::{Actor, CheckRunId, FoldError, codes};
+use fold_core::{Actor, CheckRunId, FoldError};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::super::error::from_review;
-use super::super::parse;
+use super::super::{full_detail, parse};
 use super::{id, task_id, version};
 use crate::services::reviews::ReviewService;
 use crate::services::reviews::checks::{
@@ -174,19 +174,11 @@ async fn get_check_run(
         &input.run,
         "pass a check run id such as cr-4; get_proposal lists the runs of a proposal",
     )?;
-    let full = match input.detail.as_deref() {
-        None => false,
-        Some("full") => true,
-        Some(_) => {
-            return Err(
-                FoldError::new(codes::INVALID_REQUEST, "detail is full or left out")
-                    .with_details([("field", json!("detail"))])
-                    .with_hint(
-                        "call get_check_run with detail full, or leave detail out for the failed commands only",
-                    ),
-            );
-        }
-    };
+    let full = full_detail(
+        input.detail.as_deref(),
+        "get_check_run",
+        "the failed commands only",
+    )?;
     let (tail_lines, tail_chars) = if full {
         (RESULT_TAIL_LINES, RESULT_TAIL_CHARS)
     } else {

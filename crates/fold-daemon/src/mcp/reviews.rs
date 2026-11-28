@@ -22,8 +22,8 @@ use serde_json::{Value, json};
 
 use super::FoldServer;
 use super::error::from_review;
-use super::parse;
 use super::workspaces::{file_diff_value, file_line};
+use super::{full_detail, parse};
 use crate::services::reviews::{
     ChangeRange, CommentInput, CommentLocation, CommentView, ConflictedReason,
     DEFAULT_PROPOSAL_LIST, DirectChange, DirectOutcome, FixOutcome, IntegrationOutcome,
@@ -462,12 +462,12 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_PROPOSALS,
-            "List proposals with their task, author, whose turn it is, the review claim holder and the human review mark. A member of a serial lane of main's fold-checks.toml has lane: its name, its position (1 is the front, null before its first approval) and held, the reason \"lane <name>, position <n>\" while it waits behind the front. An open proposal whose latest verdict is an approval has queue (position from 1 in the order the automatic integration takes the turns, integrating_now, ahead: the proposal or review batch one place ahead, estimated_start in UTC milliseconds or null without integration run history, and batch when it integrates with a review batch) or waits_for (reason: automatic_off, config_invalid, main_checks_invalid, conflict, checks_failed, lane with lane and position, batch with batch, fold_failed_checks, next_version_run, prerequisites with prerequisites, human_review with reviewer, or not_approved).",
+            "List proposals with their task, author, whose turn it is, the review claim holder and the human review mark. A member of a serial lane of main's fold-checks.toml has lane: its name, its position (1 is the front, null before its first approval) and held, the reason \"lane <name>, position <n>\" while it waits behind the front. An open proposal whose latest verdict is an approval has queue (position from 1 in the order the automatic integration takes the turns, integrating_now, ahead: the proposal or review batch one place ahead, estimated_start in UTC milliseconds or null without integration run history, and batch when it integrates with a review batch) or waits_for (reason: automatic_off, config_invalid, main_checks_invalid, conflict, checks_failed, lane with lane and position, lane_refresh with lane, batch with batch, fold_failed_checks, next_version_run, prerequisites with prerequisites, human_review with reviewer, or not_approved).",
             schema_for_type::<ListProposalsInput>(),
         ),
         Tool::new(
             GET_PROPOSAL,
-            "Read one proposal: versions, the intent of the version (its summary of how the change works and the parts of the diff with their files; check every hunk against its part), the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related open proposals without a review, each with its proposal, and the related tasks that can still open proposals, strongest link first, with the create_review_plan or start_worker call that has one reviewer review them together), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report with its files, conflicted_reason while the proposal is flagged (kind merge_conflict or lane_checks_failed, fixer: the reviewer that fixes it, null when the review lead got it; before_turn true when fold found the conflict by its test-merge after another integration moved main, before the proposal's own turn), lane for a member of a serial lane of main's fold-checks.toml (name, position from 1 at the front in the order of first approval, null before one, and held, the reason \"lane <name>, position <n>\" while only the front may integrate), the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. An open proposal whose latest verdict is an approval has queue (position from 1 in the order the automatic integration takes the turns, integrating_now, ahead: the proposal or review batch one place ahead, estimated_start in UTC milliseconds or null without integration run history, and batch when it integrates with a review batch) or waits_for (reason: automatic_off, config_invalid, main_checks_invalid, conflict, checks_failed, lane with lane and position, batch with batch, fold_failed_checks, next_version_run, prerequisites with prerequisites, human_review with reviewer, or not_approved). The short form gives evidence_chars for the evidence, the intent's summary with each part's name and file_count, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the whole intent (what each part does, its files, contracts, decisions and not_changed), the task description and every whole body, such as before a review or when the task description matters.",
+            "Read one proposal: versions, the intent of the version (its summary of how the change works and the parts of the diff with their files; check every hunk against its part), the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related open proposals without a review, each with its proposal, and the related tasks that can still open proposals, strongest link first, with the create_review_plan or start_worker call that has one reviewer review them together), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report with its files, conflicted_reason while the proposal is flagged (kind merge_conflict, lane_refresh with lane, refresh, fixer and before_turn, or lane_checks_failed with lane, run and fixer; fixer: the reviewer that fixes it, null when the review lead got it; before_turn true when fold found the conflict by its test-merge after another integration moved main, before the proposal's own turn), lane for a member of a serial lane of main's fold-checks.toml (name, position from 1 at the front in the order of first approval, null before one, and held, the reason \"lane <name>, position <n>\" while only the front may integrate), the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. An open proposal whose latest verdict is an approval has queue (position from 1 in the order the automatic integration takes the turns, integrating_now, ahead: the proposal or review batch one place ahead, estimated_start in UTC milliseconds or null without integration run history, and batch when it integrates with a review batch) or waits_for (reason: automatic_off, config_invalid, main_checks_invalid, conflict, checks_failed, lane with lane and position, lane_refresh with lane, batch with batch, fold_failed_checks, next_version_run, prerequisites with prerequisites, human_review with reviewer, or not_approved). The short form gives evidence_chars for the evidence, the intent's summary with each part's name and file_count, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the whole intent (what each part does, its files, contracts, decisions and not_changed), the task description and every whole body, such as before a review or when the task description matters.",
             schema_for_type::<GetProposalInput>(),
         ),
         Tool::new(
@@ -1070,7 +1070,7 @@ async fn get_proposal(
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let input: GetProposalInput = parse(arguments)?;
-    let full = full_detail(input.detail.as_deref())?;
+    let full = full_detail(input.detail.as_deref(), "get_proposal", "the short form")?;
     let view = reviews
         .view_proposal(actor, proposal_id(&input.id)?, input.version)
         .await
@@ -1137,21 +1137,6 @@ async fn get_proposal_diff(
     value["since"] = json!(since.map(version));
     value["last_reviewed"] = json!(last.map(version));
     Ok(value)
-}
-
-/// Whether `detail` asks for the full form of `get_proposal`.
-fn full_detail(detail: Option<&str>) -> Result<bool, FoldError> {
-    match detail {
-        None => Ok(false),
-        Some("full") => Ok(true),
-        Some(_) => Err(
-            FoldError::new(codes::INVALID_REQUEST, "detail is full or left out")
-                .with_details([("field", json!("detail"))])
-                .with_hint(
-                    "call get_proposal with detail full, or leave detail out for the short form",
-                ),
-        ),
-    }
 }
 
 fn comparison_value(proposal: ProposalId, comparison: &StateComparison) -> Value {

@@ -404,6 +404,25 @@ pub(crate) fn parse<T: for<'de> Deserialize<'de>>(arguments: &JsonObject) -> Res
     })
 }
 
+/// Whether `detail` asks for the full form of `tool`. `short_form` says what the short form holds, for the hint.
+pub(crate) fn full_detail(
+    detail: Option<&str>,
+    tool: &str,
+    short_form: &str,
+) -> Result<bool, FoldError> {
+    match detail {
+        None => Ok(false),
+        Some("full") => Ok(true),
+        Some(_) => Err(
+            FoldError::new(codes::INVALID_REQUEST, "detail is full or left out")
+                .with_details([("field", json!("detail"))])
+                .with_hint(format!(
+                    "call {tool} with detail full, or leave detail out for {short_form}"
+                )),
+        ),
+    }
+}
+
 /// The longest key a shape error names.
 const MAX_SHAPE_KEY_CHARS: usize = 64;
 

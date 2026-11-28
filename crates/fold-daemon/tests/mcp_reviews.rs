@@ -1228,6 +1228,53 @@ async fn every_input_field_has_a_description() {
 }
 
 #[tokio::test]
+async fn proposal_tool_descriptions_name_the_lane_refresh_reasons() {
+    let fx = Fixture::new().await;
+    let client = connect(&fx, "frontend").await;
+    let tools = client.list_all_tools().await.unwrap();
+    for name in ["list_proposals", "get_proposal"] {
+        let tool = tools.iter().find(|tool| tool.name == name).unwrap();
+        let description = tool.description.as_deref().unwrap();
+        assert!(description.contains("lane_refresh with lane"), "{name}");
+    }
+    let get = tools
+        .iter()
+        .find(|tool| tool.name == "get_proposal")
+        .unwrap();
+    let description = get.description.as_deref().unwrap();
+    assert!(
+        description.contains("lane_refresh with lane, refresh, fixer and before_turn"),
+        "{description}"
+    );
+}
+
+#[tokio::test]
+async fn a_bad_detail_is_refused_with_the_tool_named_in_the_hint() {
+    let fx = Fixture::new().await;
+    let client = connect(&fx, "frontend").await;
+    for (tool, arguments, short_form) in [
+        ("get_proposal", json!({"id": "P-1"}), "the short form"),
+        ("get_task_graph", json!({}), "the short form"),
+        (
+            "get_check_run",
+            json!({"run": "cr-1"}),
+            "the failed commands only",
+        ),
+    ] {
+        let mut arguments = arguments;
+        arguments["detail"] = json!("brief");
+        let error = err(&client, tool, arguments).await;
+        assert_eq!(error["code"], "invalid_request", "{tool}");
+        assert_eq!(error["message"], "detail is full or left out", "{tool}");
+        assert_eq!(
+            error["hint"],
+            format!("call {tool} with detail full, or leave detail out for {short_form}"),
+            "{tool}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn proposal_tools_need_a_review_service() {
     let fx = Fixture::new().await;
     let agents = fx.agents();

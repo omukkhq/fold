@@ -15,8 +15,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::error::{from_agent, from_task};
-use super::parse;
 use super::{FoldServer, FooterCounts, FooterPart, FooterSource, footer};
+use super::{full_detail, parse};
 use crate::services::agents::{AgentService, SessionContext};
 use crate::services::tasks::{
     ChecklistItemPatch, ClaimView, Claimed, CreateTask, DetailEdge, ItemContent, LabelView,
@@ -638,19 +638,7 @@ async fn run(
 async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let tasks = &server.tasks;
     let input: GetTaskGraphInput = parse(arguments)?;
-    let full = match input.detail.as_deref() {
-        None => false,
-        Some("full") => true,
-        Some(_) => {
-            return Err(
-                FoldError::new(codes::INVALID_REQUEST, "detail is full or left out")
-                    .with_details([("field", json!("detail"))])
-                    .with_hint(
-                        "call get_task_graph with detail full, or leave detail out for the short form",
-                    ),
-            );
-        }
-    };
+    let full = full_detail(input.detail.as_deref(), "get_task_graph", "the short form")?;
     let area = input.area.as_deref().map(AreaName::parse).transpose()?;
     let graph = tasks
         .graph_in(input.include_done, area.as_ref())
