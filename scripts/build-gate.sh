@@ -69,6 +69,8 @@ case "${FOLD_GATE_STAGE:-}" in
       [ -n "$caught" ] || break
     done
     if [ "$use_sccache" = 1 ]; then
+      # The server's counts end with it, so the run's own log is the only record of its hit rate.
+      sccache --show-stats 2>/dev/null | awk '/^Cache hits \(Rust\)/ { h = $NF } /^Cache misses \(Rust\)/ { m = $NF } END { printf "build-gate: sccache Rust: %d hits, %d misses\n", h, m }' >&2
       sccache --stop-server >/dev/null 2>&1 || kill -KILL "$server" 2>/dev/null
       wait "$server" 2>/dev/null
     fi
