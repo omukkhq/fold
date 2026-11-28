@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 /// The fixed count always puts the unread part on the footer line; real counts can add to it.
 const FOOTER: &str = "fold: ";
 
-const REVIEW_TOOLS: [&str; 19] = [
+const REVIEW_TOOLS: [&str; 20] = [
     "create_proposal",
     "list_proposals",
     "get_proposal",
@@ -39,6 +39,7 @@ const REVIEW_TOOLS: [&str; 19] = [
     "run_checks",
     "get_check_run",
     "cancel_check_run",
+    "list_flaky_checks",
     "set_review_scope",
 ];
 
@@ -1738,4 +1739,94 @@ async fn every_proposal_version_tool_requires_an_intent_and_get_proposal_shows_i
     .await;
     assert_eq!(blank["code"], "invalid_intent");
     assert_eq!(blank["details"]["reason"], "empty");
+}
+
+/// A check that fails on its first run and passes on every later one, through a mark file outside the workspace.
+#[cfg(test)]
+fn flaky_checks_file(mark: &std::path::Path) -> String {
+    let mark = mark.display();
+    format!(
+        "[[check]]\nname = \"unit\"\nrun = \"if [ -e '{mark}' ]; then exit 0; fi; touch '{mark}'; exit 1\"\n"
+    )
+}
+
+#[tokio::test]
+async fn a_failure_that_passes_on_the_same_files_is_marked_flaky_with_an_event() {
+    let fx = Fixture::new().await;
+    let marks = tempfile::tempdir().unwrap();
+    let frontend = connect(&fx, "frontend").await;
+    ok(&frontend, "create_workspace", json!({"task": "T-1"})).await;
+    fx.write(
+        1,
+        "fold-checks.toml",
+        &flaky_checks_file(&marks.path().join("mark")),
+    );
+    let first = ok(&frontend, "run_checks", json!({"task": "T-1"})).await;
+    let failed = ended_run(&frontend, &first["run"]).await;
+    assert_eq!(failed["state"], "failed");
+    assert!(failed["results"][0].get("flaky").is_none(), "{failed}");
+    let second = ok(&frontend, "run_checks", json!({"task": "T-1"})).await;
+    assert_eq!(
+        ended_run(&frontend, &second["run"]).await["state"],
+        "passed"
+    );
+
+    let marked = ok(&frontend, "get_check_run", json!({"run": first["run"]})).await;
+    assert_eq!(marked["results"][0]["name"], "unit");
+    assert_eq!(marked["results"][0]["flaky"], true, "{marked}");
+    let events = ok(
+        &frontend,
+        "get_events",
+        json!({"after": 0, "types": ["checks.flaky"]}),
+    )
+    .await;
+    let events = events["events"].as_array().unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["task"], "T-1");
+    assert_eq!(
+        events[0]["data"],
+        json!({"run": first["run"], "passed_run": second["run"], "checks": ["unit"]})
+    );
+
+    let listed = ok(&frontend, "list_flaky_checks", json!({})).await;
+    assert_eq!(
+        listed,
+        json!({"days": 14, "checks": [{"check": "unit", "count": 1, "runs": [first["run"]]}]})
+    );
+    let bad = err(&frontend, "list_flaky_checks", json!({"days": 0})).await;
+    assert_eq!(bad["code"], "invalid_request");
+    assert_eq!(bad["details"]["field"], "days");
+}
+
+#[tokio::test]
+async fn a_pass_on_changed_files_marks_no_failure_flaky() {
+    let fx = Fixture::new().await;
+    let marks = tempfile::tempdir().unwrap();
+    let frontend = connect(&fx, "frontend").await;
+    ok(&frontend, "create_workspace", json!({"task": "T-1"})).await;
+    fx.write(
+        1,
+        "fold-checks.toml",
+        &flaky_checks_file(&marks.path().join("mark")),
+    );
+    let first = ok(&frontend, "run_checks", json!({"task": "T-1"})).await;
+    assert_eq!(ended_run(&frontend, &first["run"]).await["state"], "failed");
+    fx.write(1, "src/lib.rs", "pub fn fixed() {}\n");
+    let second = ok(&frontend, "run_checks", json!({"task": "T-1"})).await;
+    assert_eq!(
+        ended_run(&frontend, &second["run"]).await["state"],
+        "passed"
+    );
+
+    let unmarked = ok(&frontend, "get_check_run", json!({"run": first["run"]})).await;
+    assert!(unmarked["results"][0].get("flaky").is_none(), "{unmarked}");
+    let events = ok(
+        &frontend,
+        "get_events",
+        json!({"after": 0, "types": ["checks.flaky"]}),
+    )
+    .await;
+    assert_eq!(events["events"], json!([]));
+    let listed = ok(&frontend, "list_flaky_checks", json!({"days": 1})).await;
+    assert_eq!(listed, json!({"days": 1, "checks": []}));
 }

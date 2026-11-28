@@ -22,6 +22,7 @@ function result(fields: Partial<CheckResult> = {}): CheckResult {
     log_bytes: 9,
     log: "all good\n",
     truncated: false,
+    flaky: false,
     ...fields,
   };
 }

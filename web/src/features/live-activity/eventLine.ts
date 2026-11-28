@@ -1021,6 +1021,10 @@ const SPECS: Record<EventType, Spec> = {
     icon: ListChecks,
     text: checksFinishedText,
   },
+  "checks.flaky": {
+    icon: ListChecks,
+    text: (e) => `marked failed checks of ${taskOf(e)} as flaky`,
+  },
   "integration.queued": {
     icon: ListChecks,
     text: (e) => `queued the integration of ${queuedOf(e)}`,

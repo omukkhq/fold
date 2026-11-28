@@ -838,6 +838,22 @@ describe("invalidation rules", () => {
     }
   });
 
+  it("refreshes the earlier failed run and the proposal pages when a pass marks its checks flaky", () => {
+    invalidated = [];
+    applyEvent(
+      client,
+      slug,
+      ev("checks.flaky", {
+        task: "T-2",
+        proposal: "P-4",
+        data: { run: "cr-3", passed_run: "cr-5", checks: ["unit"] },
+      }),
+    );
+    expect(hit(keys.checkRun(slug, "cr-3"))).toBe(true);
+    expect(hit(keys.proposal(slug, "P-4"))).toBe(true);
+    expect(hit(keys.proposals(slug))).toBe(true);
+  });
+
   it("refreshes the workers, their questions and the needs-you list for worker events", () => {
     applyEvent(client, slug, ev("worker.permission_asked"));
     for (const key of [

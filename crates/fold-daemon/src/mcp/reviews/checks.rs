@@ -10,12 +10,13 @@ use super::super::parse;
 use super::{id, task_id, version};
 use crate::services::reviews::ReviewService;
 use crate::services::reviews::checks::{
-    BUILD_SLOT, CancelTarget, CheckRunView, RUN_SLOT, Started, log_tail,
+    BUILD_SLOT, CancelTarget, CheckRunView, FLAKY_DAYS_DEFAULT, RUN_SLOT, Started, log_tail,
 };
 
 pub const RUN_CHECKS: &str = "run_checks";
 pub const GET_CHECK_RUN: &str = "get_check_run";
 pub const CANCEL_CHECK_RUN: &str = "cancel_check_run";
+pub const LIST_FLAKY_CHECKS: &str = "list_flaky_checks";
 
 /// The most lines of a failed result's log that `get_check_run` returns with `detail: full`.
 const RESULT_TAIL_LINES: usize = 200;
@@ -48,6 +49,14 @@ pub struct GetCheckRunInput {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
+pub struct ListFlakyChecksInput {
+    /// The window in days back from now, 1 to 365. Leave it out for 14.
+    #[serde(default)]
+    pub days: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 pub struct CancelCheckRunInput {
     /// The running check run to cancel, such as cr-4, from run_checks, a result message or get_proposal.
     pub run: String,
@@ -62,13 +71,18 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_CHECK_RUN,
-            "Read one check run: its stage, state and reason, and each command that failed with its outcome, exit code, duration and the end of its log (the last 60 lines, at most 3000 characters), with not_shown counting the other commands; pass detail full for every command and the last 200 lines of each failed log. A running run with waiting_for memory holds its permit and waits until the machine has enough free memory to start its commands; with waiting_for check, it waits before the command of waiting_check until fewer runs than that check's max_parallel run it; with waiting_for run_slot, it waits at position (1 is next) until fewer runs of the project than [runs] max_parallel_runs of fold-checks.toml run; with waiting_for build_slot, a command waits for a slot of the machine's build gate, and its timeout starts once it has one.",
+            "Read one check run: its stage, state and reason, and each command that failed with its outcome, exit code, duration, flaky true when a later run of the same check on the same tree passed, and the end of its log (the last 60 lines, at most 3000 characters), with not_shown counting the other commands; pass detail full for every command and the last 200 lines of each failed log. A running run with waiting_for memory holds its permit and waits until the machine has enough free memory to start its commands; with waiting_for check, it waits before the command of waiting_check until fewer runs than that check's max_parallel run it; with waiting_for run_slot, it waits at position (1 is next) until fewer runs of the project than [runs] max_parallel_runs of fold-checks.toml run; with waiting_for build_slot, a command waits for a slot of the machine's build gate, and its timeout starts once it has one.",
             schema_for_type::<GetCheckRunInput>(),
         ),
         Tool::new(
             CANCEL_CHECK_RUN,
             "Cancel a running check run: fold ends the process group of its running command, or its wait for memory or a run slot, starts no later check, and ends the run as failed with reason cancelled. The worker that asked for the run gets fold's message as for any end. The worker that asked for the run, the lead of its task's area and the main agent may cancel it; others get check_cancel_denied. A run that ended first gives check_run_ended, and an integration run is not cancelled.",
             schema_for_type::<CancelCheckRunInput>(),
+        ),
+        Tool::new(
+            LIST_FLAKY_CHECKS,
+            "List the project's flaky checks: a check whose failure passed in a later run on the same tree, by the number of such failures in the runs of the last days days (14 when left out), the most first, with the failed runs. Read a run with get_check_run, whose results mark each flaky failure. A flaky check gets a create_request to fix its test, not a silent rerun.",
+            schema_for_type::<ListFlakyChecksInput>(),
         ),
     ]
 }
@@ -84,6 +98,7 @@ pub async fn run(
         RUN_CHECKS => run_checks(reviews, actor, arguments).await?,
         GET_CHECK_RUN => get_check_run(reviews, arguments).await?,
         CANCEL_CHECK_RUN => cancel_check_run(reviews, actor, arguments).await?,
+        LIST_FLAKY_CHECKS => list_flaky_checks(reviews, arguments).await?,
         _ => return Ok(None),
     };
     Ok(Some(value))
@@ -132,6 +147,22 @@ async fn cancel_check_run(
         .await
         .map_err(from_review)?;
     Ok(json!({"run": run, "state": "failed", "reason": "cancelled"}))
+}
+
+async fn list_flaky_checks(
+    reviews: &ReviewService,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: ListFlakyChecksInput = parse(arguments)?;
+    let days = input.days.unwrap_or(FLAKY_DAYS_DEFAULT);
+    let checks = reviews.flaky_checks(days).await.map_err(from_review)?;
+    Ok(json!({
+        "days": days,
+        "checks": checks
+            .iter()
+            .map(|check| json!({"check": check.check, "count": check.count, "runs": check.runs}))
+            .collect::<Vec<_>>(),
+    }))
 }
 
 async fn get_check_run(
@@ -187,6 +218,9 @@ async fn get_check_run(
                     "exit_code": result.exit_code,
                     "duration_ms": result.duration_ms,
                 });
+                if view.flaky.contains(&result.position) {
+                    line["flaky"] = json!(true);
+                }
                 if result.outcome.is_failure() {
                     line["log_tail"] = json!(log_tail(&result.log, tail_lines, tail_chars));
                     line["log_bytes"] = json!(result.log_bytes);

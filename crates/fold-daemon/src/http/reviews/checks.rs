@@ -3,23 +3,27 @@ use axum::extract::{Path, State};
 use fold_core::reviews::checks::{Outcome, RunReason, RunState, Stage};
 use fold_core::{CheckRunId, TaskId};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::super::Project;
 use super::super::actor::Human;
-use super::super::error::{ApiError, ApiJson, ErrorEnvelope};
+use super::super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use super::super::tasks::id;
 use super::service;
 use crate::daemon::AppState;
 pub use crate::live::CheckPurpose;
-use crate::services::reviews::checks::{CancelTarget, CheckRunView, VersionRun};
+use crate::services::reviews::checks::{
+    CancelTarget, CheckRunView, FLAKY_DAYS_DEFAULT, VersionRun,
+};
+use fold_store::reviews::checks::FlakyCheck as FlakyCheckRow;
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(get_check_run))
         .routes(routes!(cancel_check_runs))
+        .routes(routes!(list_flaky_checks))
 }
 
 /// When a check runs.
@@ -166,6 +170,8 @@ pub struct CheckResult {
     pub log: String,
     /// The stored log is the end of a longer output.
     pub truncated: bool,
+    /// The command failed, and a later run of the same check on the same tree passed: the failure is flaky, not the change's.
+    pub flaky: bool,
 }
 
 /// One run of a project's checks by fold.
@@ -230,6 +236,7 @@ impl From<CheckRunView> for CheckRun {
                 .results
                 .into_iter()
                 .map(|result| CheckResult {
+                    flaky: view.flaky.contains(&result.position),
                     setup: result.check.is_none(),
                     name: result.check.unwrap_or_else(|| "setup".to_owned()),
                     required: result.required,
@@ -337,5 +344,76 @@ pub async fn cancel_check_runs(
         .await?;
     Ok(Json(CancelledCheckRuns {
         cancelled: cancelled.iter().map(ToString::to_string).collect(),
+    }))
+}
+
+/// The window of the flaky checks.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct FlakyChecksQuery {
+    /// The number of days back from now, 1 to 365; 14 when left out.
+    #[serde(default)]
+    pub days: Option<u32>,
+}
+
+/// One check whose failures a later pass of the same check on the same tree made flaky.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct FlakyCheck {
+    /// The check's name in fold-checks.toml.
+    #[schema(example = "test")]
+    pub check: String,
+    /// The number of its flaky failures in the window.
+    pub count: u32,
+    /// The runs of those failures, oldest first.
+    #[schema(example = json!(["cr-4", "cr-9"]))]
+    pub runs: Vec<String>,
+}
+
+/// The flaky checks of a window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct FlakyChecks {
+    /// The window in days.
+    pub days: u32,
+    /// The most flaky failures first, then by name; empty when no check failed flakily.
+    pub checks: Vec<FlakyCheck>,
+}
+
+impl From<FlakyCheckRow> for FlakyCheck {
+    fn from(row: FlakyCheckRow) -> Self {
+        Self {
+            check: row.check,
+            count: row.count,
+            runs: row.runs.iter().map(ToString::to_string).collect(),
+        }
+    }
+}
+
+/// The checks of the project that failed and later passed on the same tree, by the number of such flaky failures in the runs of the last `days` days.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/checks/flaky",
+    operation_id = "list_flaky_checks",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        FlakyChecksQuery,
+    ),
+    responses(
+        (status = 200, description = "The flaky checks", body = FlakyChecks),
+        (status = 400, description = "`invalid_request`: days is not 1 to 365", body = ErrorEnvelope),
+        (status = 404, description = "`project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn list_flaky_checks(
+    State(state): State<AppState>,
+    project: Project,
+    ApiQuery(query): ApiQuery<FlakyChecksQuery>,
+) -> Result<Json<FlakyChecks>, ApiError> {
+    let days = query.days.unwrap_or(FLAKY_DAYS_DEFAULT);
+    let checks = service(&state, &project).flaky_checks(days).await?;
+    Ok(Json(FlakyChecks {
+        days,
+        checks: checks.into_iter().map(FlakyCheck::from).collect(),
     }))
 }

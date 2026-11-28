@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use fold_core::events::{EventFilter, types};
 use fold_core::object::ObjectHash;
 use fold_core::reviews::ProposalIntent;
@@ -8,7 +10,9 @@ use fold_core::{
     Actor, AddressedAs, CheckRunId, Clock, EventActor, FoldError, IdKind, MessageBody, NewEvent,
     ProposalId, Recipient, Target, TaskId, Timestamp, WorkerName, WorkspaceId, codes, policy,
 };
-use fold_store::reviews::checks::{self, CheckResultRow, CheckRunRow, NewCheckResult, NewCheckRun};
+use fold_store::reviews::checks::{
+    self, CheckResultRow, CheckRunRow, FlakyCheck, NewCheckResult, NewCheckRun, NewlyFlaky,
+};
 use fold_store::tasks::claims;
 use fold_store::workspaces::{self, WorkspaceRow, WorkspaceState};
 use fold_store::{SqliteConnection, Store, StoreError, WriteTx, counters, events, tasks};
@@ -44,6 +48,12 @@ pub use setup::SetupState;
 /// The most lines of a failed command's log a result message carries.
 const TAIL_LINES: usize = 30;
 
+/// The window of `list_flaky_checks` when the caller gives none.
+pub const FLAKY_DAYS_DEFAULT: u32 = 14;
+
+/// The longest window of `list_flaky_checks`.
+pub const FLAKY_DAYS_MAX: u32 = 365;
+
 /// The most characters of a failed command's log a result message carries.
 const TAIL_CHARS: usize = 3000;
 
@@ -53,6 +63,8 @@ pub struct CheckRunView {
     pub run: CheckRunRow,
     /// In run order; each log is empty unless the read asked for logs.
     pub results: Vec<CheckResultRow>,
+    /// The positions of the failed results that a later pass of the same check on the same tree made flaky.
+    pub flaky: Vec<u32>,
     /// Since when the running run holds its permit and waits for free memory before its commands start.
     pub waiting_for_memory: Option<Timestamp>,
     /// The check whose `max_parallel` the running run waits for before that check's command starts, and since when.
@@ -192,6 +204,7 @@ impl ReviewService {
             .await?
             .ok_or_else(|| run_not_found(run))?;
         let results = checks::list_results(&mut *read, run, logs).await?;
+        let flaky = checks::flaky_positions(&mut *read, run).await?;
         let cancelled_by = cancelled_by(&mut read, &row).await?;
         read.commit().await.map_err(StoreError::from)?;
         let waiting_for_memory = self.checks.waiting_for_memory(run);
@@ -201,12 +214,35 @@ impl ReviewService {
         Ok(CheckRunView {
             run: row,
             results,
+            flaky,
             waiting_for_memory,
             waiting_for_check,
             waiting_for_run_slot,
             waiting_for_build_slot,
             cancelled_by,
         })
+    }
+
+    /// The checks with flaky failures in the runs of the last `days` days, the most flaky first, then by name. `days` is 1 to [`FLAKY_DAYS_MAX`]; a window that reaches before the clock's start counts every run.
+    pub async fn flaky_checks(&self, days: u32) -> Result<Vec<FlakyCheck>, ReviewError> {
+        if !(1..=FLAKY_DAYS_MAX).contains(&days) {
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                format!("days is 1 to {FLAKY_DAYS_MAX}"),
+            )
+            .with_details([("field", json!("days"))])
+            .with_hint(
+                "call list_flaky_checks again with days from 1 to 365, or leave it out for 14",
+            )
+            .into());
+        }
+        let window = Duration::from_secs(u64::from(days) * 86_400);
+        let since = self
+            .clock
+            .now()
+            .checked_sub(window)
+            .unwrap_or(Timestamp::EPOCH);
+        Ok(checks::flaky_checks(self.store.read(), since).await?)
     }
 
     /// The task workspace a worker runs checks in: the task is open and of a kind with a proposal, and the actor's worker owns its active workspace.
@@ -726,6 +762,7 @@ impl ReviewService {
         let mut views = Vec::with_capacity(runs.len());
         for run in runs {
             let results = checks::list_results(&mut *conn, run.id, false).await?;
+            let flaky = checks::flaky_positions(&mut *conn, run.id).await?;
             let waiting_for_memory = runner.waiting_for_memory(run.id);
             let waiting_for_check = runner.waiting_for_check(run.id);
             let waiting_for_run_slot = runner.waiting_for_run_slot(run.id);
@@ -734,6 +771,7 @@ impl ReviewService {
             views.push(CheckRunView {
                 run,
                 results,
+                flaky,
                 waiting_for_memory,
                 waiting_for_check,
                 waiting_for_run_slot,
@@ -992,8 +1030,12 @@ pub(super) async fn end_run_with_in_tx(
         };
         checks::insert_result(tx, run.id, &new).await?;
     }
+    let newly_flaky = checks::newly_flaky(tx.conn(), run.id).await?;
     if !checks::finish_run(tx, run.id, verdict.state, verdict.reason, now).await? {
         return Ok(false);
+    }
+    for flaky in &newly_flaky {
+        append_flaky(tx, buffer, run, flaky, now).await?;
     }
     let renewal = claims::renew_for_run(tx, run.id, now).await?;
     crate::services::tasks::append_renewed::<ReviewError>(tx, buffer, &renewal, now).await?;
@@ -1020,6 +1062,32 @@ pub(super) async fn end_run_with_in_tx(
     let event = event.data(data)?;
     buffer.append(tx, &event, now).await?;
     Ok(true)
+}
+
+/// Appends `checks.flaky` for an earlier run whose failed checks the passes of `run` made flaky. The data holds run ids and check names only.
+async fn append_flaky(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    run: &CheckRunRow,
+    flaky: &NewlyFlaky,
+    now: Timestamp,
+) -> Result<(), ReviewError> {
+    let mut event = NewEvent::new(types::CHECKS_FLAKY, EventActor::fold())?
+        .task(run.task)
+        .revision(run.base);
+    if let Some(workspace) = run.workspace {
+        event = event.workspace(workspace);
+    }
+    if let Some(proposal) = run.proposal {
+        event = event.proposal(proposal);
+    }
+    let event = event.data(json!({
+        "run": flaky.run.to_string(),
+        "passed_run": run.id.to_string(),
+        "checks": flaky.checks,
+    }))?;
+    buffer.append(tx, &event, now).await?;
+    Ok(())
 }
 
 /// Sends `body` from fold to the worker that asked for the run, linked to its task and proposal.

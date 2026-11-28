@@ -434,6 +434,23 @@ export interface paths {
         patch: operations["update_checklist_item"];
         trace?: never;
     };
+    "/api/v1/projects/{slug}/checks/flaky": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The checks of the project that failed and later passed on the same tree, by the number of such flaky failures in the runs of the last `days` days. */
+        get: operations["list_flaky_checks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/cost": {
         parameters: {
             query?: never;
@@ -2533,6 +2550,8 @@ export interface components {
             duration_ms: number;
             /** Format: int32 */
             exit_code: number | null;
+            /** @description The command failed, and a later run of the same check on the same tree passed: the failure is flaky, not the change's. */
+            flaky: boolean;
             /** @description The stored end of the output, as text. Empty on a proposal view, which leaves the logs out. */
             log: string;
             /**
@@ -3172,7 +3191,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "workspace.watch_restored" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed" | "review.plan_created" | "review.plan_changed" | "review.plan_joined" | "review.plan_left" | "review.plan_wait_ended" | "review.plan_started" | "review.plan_ended" | "review.batch_integrated" | "review.batch_waiting" | "review.batch_wait_ended" | "review.batch_ready" | "notify.target_changed" | "folder.agent_changed" | "folder.agent_change_cleared" | "shared.changed" | "shared.changes_dismissed" | "shared.paths_changed" | "stash.discarded" | "worker.stalled" | "workers.account_changed" | "worker.waiting" | "worker.wait_ended" | "claim.needs_person" | "worker.parked" | "claim.renewed" | "request.escalated" | "worker.start_queued" | "worker.queued_start_dropped";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "workspace.watch_restored" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed" | "review.plan_created" | "review.plan_changed" | "review.plan_joined" | "review.plan_left" | "review.plan_wait_ended" | "review.plan_started" | "review.plan_ended" | "review.batch_integrated" | "review.batch_waiting" | "review.batch_wait_ended" | "review.batch_ready" | "notify.target_changed" | "folder.agent_changed" | "folder.agent_change_cleared" | "shared.changed" | "shared.changes_dismissed" | "shared.paths_changed" | "stash.discarded" | "worker.stalled" | "workers.account_changed" | "worker.waiting" | "worker.wait_ended" | "claim.needs_person" | "worker.parked" | "claim.renewed" | "request.escalated" | "worker.start_queued" | "worker.queued_start_dropped" | "checks.flaky";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -3323,6 +3342,37 @@ export interface components {
         };
         /** @enum {string} */
         FileWarningReason: "unstable" | "too_large" | "special" | "unreadable" | "changed_during_snapshot";
+        /** @description One check whose failures a later pass of the same check on the same tree made flaky. */
+        FlakyCheck: {
+            /**
+             * @description The check's name in fold-checks.toml.
+             * @example test
+             */
+            check: string;
+            /**
+             * Format: int32
+             * @description The number of its flaky failures in the window.
+             */
+            count: number;
+            /**
+             * @description The runs of those failures, oldest first.
+             * @example [
+             *       "cr-4",
+             *       "cr-9"
+             *     ]
+             */
+            runs: string[];
+        };
+        /** @description The flaky checks of a window. */
+        FlakyChecks: {
+            /** @description The most flaky failures first, then by name; empty when no check failed flakily. */
+            checks: components["schemas"]["FlakyCheck"][];
+            /**
+             * Format: int32
+             * @description The window in days.
+             */
+            days: number;
+        };
         /**
          * @description What keeps the project folder from following main, or the human's changes off main. `head_moved`: the Git branch or HEAD shows a change fold did not make. `commits_waiting`: the Git branch holds commits of the human's that fold has not recorded yet. `unstash_open`: an unstash stopped part-way and waits to be finished. `unstash_conflicted`: the conflict markers of `fld unstash` wait in the files. `human_change`: a change of the human's conflicts with main and waits for the main agent. `folder_held`: paths main changed hold changes of the human's that no revision records.
          * @enum {string}
@@ -9062,6 +9112,86 @@ export interface operations {
                 };
             };
             /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_flaky_checks: {
+        parameters: {
+            query?: {
+                /** @description The number of days back from now, 1 to 365; 14 when left out. */
+                days?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The flaky checks */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FlakyChecks"];
+                };
+            };
+            /** @description `invalid_request`: days is not 1 to 365 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
             503: {
                 headers: {
                     [name: string]: unknown;

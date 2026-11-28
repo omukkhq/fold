@@ -842,6 +842,9 @@ describe("eventLine", () => {
     expect(eventLine(event("checks.finished", { task: null })).text).toBe(
       "ended the checks of a task",
     );
+    expect(eventLine(event("checks.flaky")).text).toBe(
+      "marked failed checks of T-12 as flaky",
+    );
   });
 
   it("names the proposal of a queued integration and of its end", () => {

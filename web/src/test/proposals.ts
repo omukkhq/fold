@@ -317,6 +317,7 @@ export function checkResult(
     log_bytes: 9,
     log: "all good\n",
     truncated: false,
+    flaky: false,
     ...fields,
   };
 }

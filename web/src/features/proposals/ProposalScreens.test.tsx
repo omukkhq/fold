@@ -2603,6 +2603,7 @@ describe("Checks", () => {
     log_bytes: 8,
     log: "",
     truncated: false,
+    flaky: false,
   };
   function checkRun(
     id: string,

@@ -625,6 +625,127 @@ pub async fn list_results(
         .collect()
 }
 
+/// The failed results that the flaky rule matches, joined to each later pass that makes them flaky, followed by the tail of each read.
+///
+/// The flaky rule: a result of kind `check` with outcome `failed` or `timed_out` is flaky when a later run (a higher `check_runs.number`) of the same `tree_hash` has a `passed` result of the same check name. A setup result is never flaky. The aliases are `s` and `c` for the failed result and its run, `l` and `lr` for the later pass and its run; a failed result has one row for each later pass.
+macro_rules! flaky_results {
+    ($select:literal, $tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query!(
+            $select
+                + " FROM check_results s
+                    JOIN check_runs c ON c.id = s.run_id
+                    JOIN check_runs lr ON lr.tree_hash = c.tree_hash AND lr.number > c.number
+                    JOIN check_results l ON l.run_id = lr.id AND l.kind = 'check'
+                         AND l.name = s.name AND l.outcome = 'passed'
+                    WHERE s.kind = 'check' AND s.outcome IN ('failed', 'timed_out') "
+                + $tail
+            $(, $arg)*
+        )
+    };
+}
+
+/// One earlier run whose failed results a run's passes made flaky.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewlyFlaky {
+    /// The earlier run that failed.
+    pub run: CheckRunId,
+    /// The checks of `run` that failed there and passed later, by name.
+    pub checks: Vec<String>,
+}
+
+/// One check that failed flakily in the window of [`flaky_checks`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlakyCheck {
+    pub check: String,
+    /// The number of its flaky failures.
+    pub count: u32,
+    /// The runs of those failures, oldest first.
+    pub runs: Vec<CheckRunId>,
+}
+
+/// The positions of the results of `run` that are flaky by the rule of [`flaky_results`], in run order.
+pub async fn flaky_positions(
+    executor: impl SqliteExecutor<'_>,
+    run: CheckRunId,
+) -> Result<Vec<u32>, StoreError> {
+    let number = run.to_db();
+    let raw = flaky_results!(
+        r#"SELECT DISTINCT s.position AS "position!: i64""#,
+        "AND c.number = ?1 ORDER BY s.position",
+        number
+    )
+    .fetch_all(executor)
+    .await?;
+    raw.into_iter()
+        .map(|row| count(row.position, "check_results.position"))
+        .collect()
+}
+
+/// The earlier failed results that the passes of `run` make flaky by the rule of [`flaky_results`], and that no pass of another run made flaky already, grouped by their run, oldest first. Called in the write that stores the results of `run`, so each flaky failure is reported once, also when runs end out of order.
+pub async fn newly_flaky(
+    executor: impl SqliteExecutor<'_>,
+    run: CheckRunId,
+) -> Result<Vec<NewlyFlaky>, StoreError> {
+    let number = run.to_db();
+    let raw = flaky_results!(
+        r#"SELECT c.number AS "run!: i64", s.name AS "name!: String""#,
+        "AND c.tree_hash = (SELECT x.tree_hash FROM check_runs x WHERE x.number = ?1)
+         GROUP BY s.id HAVING MIN(lr.number) = ?1 AND MAX(lr.number) = ?1
+         ORDER BY c.number, s.position",
+        number
+    )
+    .fetch_all(executor)
+    .await?;
+    let mut found: Vec<NewlyFlaky> = Vec::new();
+    for row in raw {
+        let run =
+            CheckRunId::try_from_db(row.run).ok_or(StoreError::Corrupt("check_runs.number"))?;
+        match found.last_mut() {
+            Some(last) if last.run == run => last.checks.push(row.name),
+            _ => found.push(NewlyFlaky {
+                run,
+                checks: vec![row.name],
+            }),
+        }
+    }
+    Ok(found)
+}
+
+/// The checks with flaky failures, by the rule of [`flaky_results`], in runs created at or after `since`: the most flaky failures first, then by name.
+pub async fn flaky_checks(
+    executor: impl SqliteExecutor<'_>,
+    since: Timestamp,
+) -> Result<Vec<FlakyCheck>, StoreError> {
+    let since = since.as_millis();
+    let raw = flaky_results!(
+        r#"SELECT DISTINCT s.id AS "id!: i64", s.name AS "name!: String", c.number AS "run!: i64""#,
+        "AND c.created_at >= ?1 ORDER BY s.name, c.number, s.id",
+        since
+    )
+    .fetch_all(executor)
+    .await?;
+    let mut found: Vec<FlakyCheck> = Vec::new();
+    for row in raw {
+        let run =
+            CheckRunId::try_from_db(row.run).ok_or(StoreError::Corrupt("check_runs.number"))?;
+        match found.last_mut() {
+            Some(last) if last.check == row.name => {
+                last.count = last.count.saturating_add(1);
+                if last.runs.last() != Some(&run) {
+                    last.runs.push(run);
+                }
+            }
+            _ => found.push(FlakyCheck {
+                check: row.name,
+                count: 1,
+                runs: vec![run],
+            }),
+        }
+    }
+    found.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.check.cmp(&b.check)));
+    Ok(found)
+}
+
 /// One integration that waits in a project's queue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegrationRequestRow {

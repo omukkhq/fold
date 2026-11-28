@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT s.id AS \"id!: i64\", s.name AS \"name!: String\", c.number AS \"run!: i64\" FROM check_results s\n                    JOIN check_runs c ON c.id = s.run_id\n                    JOIN check_runs lr ON lr.tree_hash = c.tree_hash AND lr.number > c.number\n                    JOIN check_results l ON l.run_id = lr.id AND l.kind = 'check'\n                         AND l.name = s.name AND l.outcome = 'passed'\n                    WHERE s.kind = 'check' AND s.outcome IN ('failed', 'timed_out') AND c.created_at >= ?1 ORDER BY s.name, c.number, s.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "check_results",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "name!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "check_results",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "run!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "check_runs",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "eaa180676ec83dcf1355bb9cad1871a2a9467128a80727b529b30d97a6976ca5"
+}

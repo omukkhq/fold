@@ -1361,6 +1361,82 @@ async fn an_approved_proposal_shows_its_queue_place_or_why_it_waits() {
     );
 }
 
+/// Starts the checks of T-1 for `author` and waits until the run ended.
+#[cfg(test)]
+async fn ended_http_run(fx: &Fixture, author: &fold_core::Actor) -> String {
+    let started = fx.reviews().run_checks(author, t(1)).await.unwrap();
+    let fold_daemon::services::reviews::checks::Started::Running { run, .. } = started else {
+        panic!("expected a run");
+    };
+    fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
+        let answer = send(fx, Method::GET, &format!("/check-runs/{run}"), None, None).await;
+        if answer.body["state"] == "running" {
+            Err(answer.body)
+        } else {
+            Ok(())
+        }
+    })
+    .await;
+    run.to_string()
+}
+
+#[tokio::test]
+async fn the_flaky_checks_are_listed_with_their_runs_and_marked_on_the_run() {
+    let fx = Fixture::new().await;
+    let marks = tempfile::tempdir().unwrap();
+    let mark = marks.path().join("mark");
+    let author = fx.agent("frontend").await;
+    fx.workspaces()
+        .create_workspace(&author, t(1))
+        .await
+        .unwrap();
+    fx.write(
+        1,
+        "fold-checks.toml",
+        &format!(
+            "[[check]]\nname = \"unit\"\nrun = \"if [ -e '{0}' ]; then exit 0; fi; touch '{0}'; exit 1\"\n",
+            mark.display()
+        ),
+    );
+    let empty = send(&fx, Method::GET, "/checks/flaky", None, None).await;
+    assert_eq!(empty.status, StatusCode::OK, "{}", empty.body);
+    assert_eq!(empty.body, json!({"days": 14, "checks": []}));
+
+    let failed = ended_http_run(&fx, &author).await;
+    let passed = ended_http_run(&fx, &author).await;
+    let listed = send(&fx, Method::GET, "/checks/flaky?days=3", None, None).await;
+    assert_eq!(listed.status, StatusCode::OK, "{}", listed.body);
+    assert_eq!(
+        listed.body,
+        json!({"days": 3, "checks": [{"check": "unit", "count": 1, "runs": [failed]}]})
+    );
+    let run = send(
+        &fx,
+        Method::GET,
+        &format!("/check-runs/{failed}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(run.body["results"][0]["outcome"], "failed");
+    assert_eq!(run.body["results"][0]["flaky"], true);
+    let run = send(
+        &fx,
+        Method::GET,
+        &format!("/check-runs/{passed}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(run.body["results"][0]["flaky"], false);
+
+    let bad = send(&fx, Method::GET, "/checks/flaky?days=400", None, None).await;
+    assert_eq!(
+        (bad.status, bad.code()),
+        (StatusCode::BAD_REQUEST, "invalid_request")
+    );
+}
+
 /// The `proposal` of the board card of `task`.
 #[cfg(test)]
 fn board_proposal(board: &Value, task: &str) -> Value {

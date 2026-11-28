@@ -185,6 +185,7 @@ define_event_types! {
     REQUEST_ESCALATED = "request.escalated",
     WORKER_START_QUEUED = "worker.start_queued",
     WORKER_QUEUED_START_DROPPED = "worker.queued_start_dropped",
+    CHECKS_FLAKY = "checks.flaky",
 }
 
 /// Types that record what the machinery does, not what the work needs: sessions, workers, claims, checkpoints, workspace upkeep and acknowledgements. They never concern an agent, even on one of its tasks.

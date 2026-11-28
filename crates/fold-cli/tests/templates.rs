@@ -90,7 +90,7 @@ fn skill_identifiers() -> BTreeSet<String> {
         .collect()
 }
 
-const FOLD_TOOLS: [&str; 104] = [
+const FOLD_TOOLS: [&str; 105] = [
     "register_agent",
     "list_agents",
     "define_area",
@@ -183,6 +183,7 @@ const FOLD_TOOLS: [&str; 104] = [
     "run_checks",
     "get_check_run",
     "cancel_check_run",
+    "list_flaky_checks",
     "set_review_scope",
     "restart_worker",
     "mark_answered",
@@ -1451,7 +1452,7 @@ const REFERENCE_SECTIONS: [&str; 8] = [
 ];
 
 /// Backticked names of the reference that are neither tools, codes, config or checks keys nor run states, but the values and fields it explains.
-const REFERENCE_NAMES: [&str; 13] = [
+const REFERENCE_NAMES: [&str; 14] = [
     "session_days",
     "check_runs",
     "check_memory_gb",
@@ -1465,6 +1466,7 @@ const REFERENCE_NAMES: [&str; 13] = [
     "needs_confirmation",
     "held_by",
     "not_shown",
+    "passed_run",
 ];
 
 /// Every key of `.fold/config.toml` as `(section, key)`, from the serialised form of a config that sets every optional key, so a new field of the config structs fails the reference test until the reference shows it. A section of named tables, such as `[remotes.<name>]`, is its name with a `.` after it.
